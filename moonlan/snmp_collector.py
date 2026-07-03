@@ -31,6 +31,7 @@ log = logging.getLogger(__name__)
 OID_SYS_NAME = "1.3.6.1.2.1.1.5.0"
 OID_SYS_DESCR = "1.3.6.1.2.1.1.1.0"
 OID_IF_DESCR = "1.3.6.1.2.1.2.2.1.2"          # ifDescr.<ifIndex>
+OID_IF_NAME = "1.3.6.1.2.1.31.1.1.1.1"        # ifName.<ifIndex>
 OID_IF_OPER_STATUS = "1.3.6.1.2.1.2.2.1.8"    # 1=up, 2=down
 OID_IF_HIGH_SPEED = "1.3.6.1.2.1.31.1.1.1.15" # Мбит/с
 OID_BRIDGE_ADDRESS = "1.3.6.1.2.1.17.1.1.0"   # dot1dBaseBridgeAddress
@@ -127,10 +128,16 @@ class SnmpCollector:
         if bridge_mac is not None:
             data.bridge_mac = _fmt_mac(bytes(bridge_mac))
 
-        # Интерфейсы
+        # Интерфейсы. Название порта — ifName; ifDescr лишь запасной вариант:
+        # D-Link кладёт в ifDescr модель и прошивку целиком.
         async for suffix, value in self._walk(host, OID_IF_DESCR):
             if_index = suffix[0]
             data.ports[if_index] = PortInfo(if_index=if_index, name=str(value))
+        async for suffix, value in self._walk(host, OID_IF_NAME):
+            port = data.ports.get(suffix[0])
+            name = str(value).strip()
+            if port and name:
+                port.name = name
         async for suffix, value in self._walk(host, OID_IF_OPER_STATUS):
             port = data.ports.get(suffix[0])
             if port:
