@@ -14,6 +14,7 @@ from fastapi.staticfiles import StaticFiles
 
 from . import __version__, demo
 from .config import Config, load_config
+from .db import Database
 from .snmp_collector import SnmpCollector
 from .topology import TopologyState, build_topology
 
@@ -23,6 +24,8 @@ WEB_DIR = Path(__file__).resolve().parent.parent / "web"
 
 state = TopologyState()
 config: Config = load_config()
+# В демо-режиме БД держим в памяти, чтобы не засорять реальную
+db = Database(":memory:" if config.demo else config.db_path)
 
 
 async def run_scan() -> None:
@@ -43,6 +46,9 @@ async def run_scan() -> None:
                 await asyncio.gather(*(collector.collect(ip) for ip in config.switches))
             )
         switches, links, hosts = build_topology(collected)
+        new_macs = await asyncio.to_thread(db.upsert_hosts, hosts)
+        if new_macs:
+            log.info("Новых MAC: %d", len(new_macs))
         state.update(switches, links, hosts)
         log.info(
             "Опрос завершён: коммутаторов %d, связей %d, хостов %d",
