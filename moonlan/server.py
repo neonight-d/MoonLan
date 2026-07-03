@@ -34,6 +34,7 @@ async def run_scan() -> None:
         return
     state.scanning = True
     try:
+        collector: SnmpCollector | None = None
         if config.demo:
             collected = demo.demo_network()
         else:
@@ -49,6 +50,8 @@ async def run_scan() -> None:
         new_macs = await asyncio.to_thread(db.upsert_hosts, hosts)
         if new_macs:
             log.info("Новых MAC: %d", len(new_macs))
+        if collector is not None and config.routers:
+            await update_ips(collector)
         state.update(switches, links, hosts)
         log.info(
             "Опрос завершён: коммутаторов %d, связей %d, хостов %d",
@@ -56,6 +59,18 @@ async def run_scan() -> None:
         )
     finally:
         state.scanning = False
+
+
+async def update_ips(collector: SnmpCollector) -> None:
+    """Опрашивает ARP-таблицы маршрутизаторов и проставляет хостам IP."""
+    tables = await asyncio.gather(
+        *(collector.collect_arp(ip) for ip in config.routers)
+    )
+    merged: dict[str, str] = {}
+    for table in tables:  # при конфликте побеждает последняя запись
+        merged.update(table)
+    if merged:
+        await asyncio.to_thread(db.set_ips, merged)
 
 
 async def periodic_scan() -> None:

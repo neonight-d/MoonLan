@@ -38,6 +38,7 @@ OID_BRIDGE_ADDRESS = "1.3.6.1.2.1.17.1.1.0"   # dot1dBaseBridgeAddress
 OID_PORT_IFINDEX = "1.3.6.1.2.1.17.1.4.1.2"   # dot1dBasePortIfIndex.<port>
 OID_FDB_PORT = "1.3.6.1.2.1.17.4.3.1.2"       # dot1dTpFdbPort.<6 байт MAC>
 OID_Q_FDB_PORT = "1.3.6.1.2.1.17.7.1.2.2.1.2" # dot1qTpFdbPort.<fdbId>.<6 байт MAC>
+OID_ARP_PHYS = "1.3.6.1.2.1.4.22.1.2"         # ipNetToMediaPhysAddress.<ifIndex>.<IP>
 
 
 @dataclass
@@ -171,3 +172,19 @@ class SnmpCollector:
             data.sys_name, host, len(data.ports), len(data.fdb),
         )
         return data
+
+    async def collect_arp(self, host: str) -> dict[str, str]:
+        """ARP-таблица устройства (маршрутизатора): MAC -> IP.
+
+        Индекс ipNetToMediaPhysAddress — <ifIndex>.<4 октета IP>,
+        значение — MAC (6 байт).
+        """
+        arp: dict[str, str] = {}
+        async for suffix, value in self._walk(host, OID_ARP_PHYS):
+            raw = bytes(value)
+            if len(raw) != 6:
+                continue
+            ip = ".".join(str(octet) for octet in suffix[-4:])
+            arp[_fmt_mac(raw)] = ip
+        log.info("ARP с %s: записей %d", host, len(arp))
+        return arp

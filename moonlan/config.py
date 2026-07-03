@@ -24,6 +24,7 @@ class Config:
     listen_port: int = 8080
     snmp: SnmpConfig = field(default_factory=SnmpConfig)
     switches: list[str] = field(default_factory=list)
+    routers: list[str] = field(default_factory=list)
     scan_interval_minutes: int = 10
     db_path: str = "moonlan.db"
     demo: bool = False
@@ -52,6 +53,7 @@ def load_config(path: Path | None = None) -> Config:
         )
 
         cfg.switches = [str(s) for s in raw.get("switches", [])]
+        cfg.routers = [str(r) for r in raw.get("routers", [])]
         cfg.scan_interval_minutes = int(raw.get("scan_interval_minutes", 10))
         cfg.db_path = str(raw.get("db_path", cfg.db_path))
 
