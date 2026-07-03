@@ -16,6 +16,7 @@
     </div>
     <div class="toolbar">
       <span id="scan-status" class="status"></span>
+      <button id="journal-btn">Журнал</button>
       <button id="rescan">Опросить сеть</button>
     </div>
   </header>
@@ -38,6 +39,11 @@
       <div id="details" class="hidden">
         <button id="details-close" title="Закрыть">×</button>
         <div id="details-body"></div>
+      </div>
+      <div id="journal" class="hidden">
+        <button id="journal-close" title="Закрыть">×</button>
+        <h3>Журнал событий</h3>
+        <ul id="journal-list"></ul>
       </div>
       <div id="empty-state" class="hidden">
         <p>Схема пока пуста.</p>

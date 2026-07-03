@@ -1,4 +1,4 @@
-/* MoonLan web UI, v0.1 */
+/* MoonLan web UI, v0.3 */
 
 const els = {
   network: document.getElementById("network"),
@@ -12,19 +12,51 @@ const els = {
   details: document.getElementById("details"),
   detailsBody: document.getElementById("details-body"),
   detailsClose: document.getElementById("details-close"),
+  journal: document.getElementById("journal"),
+  journalBtn: document.getElementById("journal-btn"),
+  journalList: document.getElementById("journal-list"),
+  journalClose: document.getElementById("journal-close"),
   emptyState: document.getElementById("empty-state"),
 };
 
 let network = null;
+let nodesDs = null;
+let edgesDs = null;
 let topology = { switches: [], links: [], hosts: [] };
+
+const REFRESH_MS = 30000;
 
 const colors = {
   moon: "#e8e4d5",
   link: "#7fb4d9",
   text: "#d7dee9",
   dim: "#8593a8",
+  ok: "#7fc98f",
   panel: "#141c2c",
 };
+
+const EVENT_NAMES = {
+  new_mac: "Новое устройство",
+  host_down: "Хост недоступен",
+  host_up: "Хост снова в сети",
+};
+const EVENT_CLASSES = { new_mac: "ev-new", host_down: "ev-down", host_up: "ev-up" };
+
+/* Подпись хоста: имя, иначе IP, иначе MAC */
+function hostLabel(h) {
+  return h.name || h.ip || h.mac;
+}
+
+/* Класс индикатора: живой / не отвечает / нет IP (ping невозможен) */
+function statusClass(h) {
+  if (!h.ip) return "noip";
+  return h.ping_up ? "up" : "down";
+}
+
+function statusColor(h) {
+  if (!h.ip) return colors.link;
+  return h.ping_up ? colors.ok : colors.dim;
+}
 
 async function loadTopology() {
   const res = await fetch("/api/topology");
@@ -40,14 +72,25 @@ async function loadTopology() {
   );
 }
 
-function li(main, sub, onClick) {
+function li(main, sub, dotClass, onClick) {
   const item = document.createElement("li");
+  if (dotClass) {
+    const dot = document.createElement("span");
+    dot.className = "dot " + dotClass;
+    item.append(dot);
+  }
+  const text = document.createElement("div");
+  text.className = "li-text";
   const name = document.createElement("span");
   name.textContent = main;
-  const extra = document.createElement("span");
-  extra.className = "sub";
-  extra.textContent = sub;
-  item.append(name, extra);
+  text.append(name);
+  if (sub) {
+    const extra = document.createElement("span");
+    extra.className = "sub";
+    extra.textContent = sub;
+    text.append(extra);
+  }
+  item.append(text);
   item.dataset.search = (main + " " + sub).toLowerCase();
   item.addEventListener("click", onClick);
   return item;
@@ -56,13 +99,18 @@ function li(main, sub, onClick) {
 function renderSidebar() {
   els.switchList.replaceChildren(
     ...topology.switches.map((sw) =>
-      li(sw.name, sw.ip, () => focusNode("sw:" + sw.ip))
+      li(sw.name, sw.ip, sw.ping_up ? "up" : "down", () =>
+        focusNode("sw:" + sw.ip)
+      )
     )
   );
   els.hostList.replaceChildren(
     ...topology.hosts.map((h) =>
-      li(h.name || h.mac, h.switch + " / " + h.port, () =>
-        focusNode("host:" + h.mac)
+      li(
+        hostLabel(h),
+        [h.ip, h.mac].filter(Boolean).join(" · "),
+        statusClass(h),
+        () => focusNode("host:" + h.mac)
       )
     )
   );
@@ -71,7 +119,7 @@ function renderSidebar() {
   applySearchFilter();
 }
 
-function renderGraph() {
+function buildGraphData() {
   const nodes = [];
   const edges = [];
 
@@ -93,6 +141,7 @@ function renderGraph() {
 
   for (const link of topology.links) {
     edges.push({
+      id: "link:" + link.a + "|" + link.b,
       from: "sw:" + link.a,
       to: "sw:" + link.b,
       label: link.speed_mbps ? link.speed_mbps / 1000 + " Гбит/с" : "",
@@ -103,15 +152,17 @@ function renderGraph() {
   }
 
   for (const host of topology.hosts) {
+    const c = statusColor(host);
     nodes.push({
       id: "host:" + host.mac,
-      label: host.name || host.mac,
+      label: hostLabel(host),
       shape: "dot",
       size: 9,
-      color: { background: colors.link, border: colors.link },
+      color: { background: c, border: c },
       font: { color: colors.dim, size: 11, face: "ui-monospace" },
     });
     edges.push({
+      id: "hostedge:" + host.mac,
       from: "sw:" + host.switch,
       to: "host:" + host.mac,
       color: { color: colors.link, opacity: 0.35 },
@@ -119,25 +170,43 @@ function renderGraph() {
     });
   }
 
-  const data = {
-    nodes: new vis.DataSet(nodes),
-    edges: new vis.DataSet(edges),
-  };
-  const options = {
-    physics: {
-      solver: "forceAtlas2Based",
-      forceAtlas2Based: { gravitationalConstant: -60, springLength: 90 },
-      stabilization: { iterations: 200 },
-    },
-    interaction: { hover: true },
-  };
+  return { nodes, edges };
+}
 
-  if (network) network.destroy();
-  network = new vis.Network(els.network, data, options);
-  network.on("click", (params) => {
-    if (params.nodes.length) showDetails(params.nodes[0]);
-    else hideDetails();
-  });
+function renderGraph() {
+  const { nodes, edges } = buildGraphData();
+
+  if (!network) {
+    nodesDs = new vis.DataSet(nodes);
+    edgesDs = new vis.DataSet(edges);
+    const options = {
+      physics: {
+        solver: "forceAtlas2Based",
+        forceAtlas2Based: { gravitationalConstant: -60, springLength: 90 },
+        stabilization: { iterations: 200 },
+      },
+      interaction: { hover: true },
+    };
+    network = new vis.Network(
+      els.network,
+      { nodes: nodesDs, edges: edgesDs },
+      options
+    );
+    network.on("click", (params) => {
+      if (params.nodes.length) showDetails(params.nodes[0]);
+      else hideDetails();
+    });
+    return;
+  }
+
+  // Тихое обновление: меняем данные в DataSet, не пересоздавая Network,
+  // чтобы не сбрасывать позиции узлов и камеру
+  const nodeIds = new Set(nodes.map((n) => n.id));
+  const edgeIds = new Set(edges.map((e) => e.id));
+  nodesDs.remove(nodesDs.getIds().filter((id) => !nodeIds.has(id)));
+  edgesDs.remove(edgesDs.getIds().filter((id) => !edgeIds.has(id)));
+  nodesDs.update(nodes);
+  edgesDs.update(edges);
 }
 
 function focusNode(id) {
@@ -145,6 +214,14 @@ function focusNode(id) {
   network.focus(id, { scale: 1.2, animation: true });
   network.selectNodes([id]);
   showDetails(id);
+}
+
+function fmtTime(ts) {
+  return ts ? new Date(ts * 1000).toLocaleString() : "—";
+}
+
+function fmtDate(ts) {
+  return ts ? new Date(ts * 1000).toLocaleDateString() : "—";
 }
 
 function showDetails(nodeId) {
@@ -156,22 +233,64 @@ function showDetails(nodeId) {
       <dt>IP-адрес</dt><dd>${sw.ip}</dd>
       <dt>MAC моста</dt><dd>${sw.mac || "—"}</dd>
       <dt>Порты (активно/всего)</dt><dd>${sw.ports_up} / ${sw.ports_total}</dd>
+      <dt>Отвечал</dt><dd>${fmtTime(sw.last_ping_ok)}</dd>
       <dt>Описание</dt><dd>${sw.descr || "—"}</dd></dl>`;
   } else {
     const host = topology.hosts.find((h) => "host:" + h.mac === nodeId);
     if (!host) return;
-    html = `<h3>${host.name || "Устройство"}</h3><dl>
+    html = `<h3>${hostLabel(host)}</h3><dl>
+      <dt>Имя</dt><dd>${host.name || "—"}</dd>
+      <dt>IP-адрес</dt><dd>${host.ip || "—"}</dd>
       <dt>MAC-адрес</dt><dd>${host.mac}</dd>
       <dt>Коммутатор</dt><dd>${host.switch}</dd>
-      <dt>Порт</dt><dd>${host.port}</dd></dl>`;
+      <dt>Порт</dt><dd>${host.port}</dd>
+      <dt>Отвечал</dt><dd>${fmtTime(host.last_ping_ok)}</dd>
+      <dt>Впервые замечен</dt><dd>${fmtDate(host.first_seen)}</dd></dl>`;
   }
   els.detailsBody.innerHTML = html;
   els.details.classList.remove("hidden");
+  els.journal.classList.add("hidden");
 }
 
 function hideDetails() {
   els.details.classList.add("hidden");
 }
+
+/* ---------- журнал ---------- */
+
+async function toggleJournal() {
+  if (!els.journal.classList.contains("hidden")) {
+    els.journal.classList.add("hidden");
+    return;
+  }
+  const res = await fetch("/api/journal?limit=100");
+  const data = await res.json();
+  els.journalList.replaceChildren(
+    ...data.events.map((ev) => {
+      const item = document.createElement("li");
+      const time = document.createElement("span");
+      time.className = "ev-time";
+      time.textContent = fmtTime(ev.ts);
+      const type = document.createElement("span");
+      type.className = EVENT_CLASSES[ev.event] || "";
+      type.textContent = EVENT_NAMES[ev.event] || ev.event;
+      const host = document.createElement("span");
+      host.className = "ev-host";
+      host.textContent = ev.name || ev.ip || ev.mac;
+      item.append(time, type, host);
+      return item;
+    })
+  );
+  if (!data.events.length) {
+    const empty = document.createElement("li");
+    empty.textContent = "Событий пока нет";
+    els.journalList.append(empty);
+  }
+  hideDetails();
+  els.journal.classList.remove("hidden");
+}
+
+/* ---------- поиск и опрос ---------- */
 
 function applySearchFilter() {
   const q = els.search.value.trim().toLowerCase();
@@ -201,5 +320,10 @@ async function rescan() {
 els.search.addEventListener("input", applySearchFilter);
 els.rescan.addEventListener("click", rescan);
 els.detailsClose.addEventListener("click", hideDetails);
+els.journalBtn.addEventListener("click", toggleJournal);
+els.journalClose.addEventListener("click", () =>
+  els.journal.classList.add("hidden")
+);
 
 loadTopology();
+setInterval(loadTopology, REFRESH_MS);

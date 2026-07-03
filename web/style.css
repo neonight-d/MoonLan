@@ -103,12 +103,25 @@ main { flex: 1; display: flex; min-height: 0; }
   cursor: pointer;
   font-size: 0.9rem;
   display: flex;
-  justify-content: space-between;
+  align-items: baseline;
   gap: 8px;
 }
 .device-list li:hover { background: var(--bg-hover); }
+.device-list .li-text { display: flex; flex-direction: column; min-width: 0; }
+.device-list .li-text > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .device-list .sub { color: var(--text-dim); font-family: ui-monospace, monospace; font-size: 0.8rem; }
 .device-list li.hidden-by-search { display: none; }
+
+/* Индикатор состояния (ping) */
+.dot {
+  width: 8px; height: 8px;
+  border-radius: 50%;
+  flex: none;
+  align-self: center;
+}
+.dot.up { background: var(--ok); }
+.dot.down { background: var(--text-dim); }
+.dot.noip { background: var(--link); }
 
 #map-panel { flex: 1; position: relative; min-width: 0; }
 #network { position: absolute; inset: 0; }
@@ -133,6 +146,40 @@ main { flex: 1; display: flex; min-height: 0; }
   position: absolute; top: 6px; right: 8px;
   border: none; font-size: 1.1rem; padding: 2px 6px;
 }
+
+/* ---------- журнал событий ---------- */
+
+#journal {
+  position: absolute;
+  top: 14px; right: 14px;
+  width: 360px;
+  max-height: calc(100% - 28px);
+  overflow-y: auto;
+  background: var(--bg-panel);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 14px;
+  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.5);
+}
+#journal h3 { margin: 0 0 8px; font-size: 1rem; color: var(--moon); }
+#journal-close {
+  position: absolute; top: 6px; right: 8px;
+  border: none; font-size: 1.1rem; padding: 2px 6px;
+}
+#journal-list { list-style: none; margin: 0; padding: 0; font-size: 0.85rem; }
+#journal-list li {
+  padding: 7px 0;
+  border-top: 1px solid var(--line);
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+#journal-list li:first-child { border-top: none; }
+#journal-list .ev-time { color: var(--text-dim); font-size: 0.78rem; }
+#journal-list .ev-host { font-family: ui-monospace, monospace; color: var(--text-dim); }
+#journal-list .ev-new  { color: var(--link); }
+#journal-list .ev-down { color: var(--warn); }
+#journal-list .ev-up   { color: var(--ok); }
 
 #empty-state {
   position: absolute; inset: 0;
