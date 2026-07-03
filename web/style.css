@@ -1,0 +1,150 @@
+/* MoonLan — ночная тема: тёмное небо, лунный свет */
+
+:root {
+  --bg: #0e1420;          /* ночное небо */
+  --bg-panel: #141c2c;
+  --bg-hover: #1c2739;
+  --line: #26324a;
+  --text: #d7dee9;
+  --text-dim: #8593a8;
+  --moon: #e8e4d5;        /* лунный свет — главный акцент */
+  --link: #7fb4d9;        /* связи и интерактив */
+  --ok: #7fc98f;
+  --warn: #d9a86b;
+  font-size: 15px;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg);
+  color: var(--text);
+  font-family: system-ui, "Segoe UI", sans-serif;
+}
+
+/* ---------- шапка ---------- */
+
+header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 10px 18px;
+  border-bottom: 1px solid var(--line);
+  background: var(--bg-panel);
+}
+
+.brand { display: flex; align-items: center; gap: 10px; }
+
+.moon {
+  width: 22px; height: 22px; border-radius: 50%;
+  background: radial-gradient(circle at 35% 35%, var(--moon), #b9b39c 70%);
+  box-shadow: 0 0 14px rgba(232, 228, 213, 0.45);
+}
+
+h1 { margin: 0; font-size: 1.15rem; letter-spacing: 0.04em; }
+.tagline { color: var(--text-dim); font-size: 0.85rem; }
+
+.toolbar { display: flex; align-items: center; gap: 12px; }
+.status { color: var(--text-dim); font-size: 0.85rem; }
+
+button {
+  background: transparent;
+  color: var(--moon);
+  border: 1px solid var(--moon);
+  border-radius: 6px;
+  padding: 6px 14px;
+  font-size: 0.9rem;
+  cursor: pointer;
+}
+button:hover { background: rgba(232, 228, 213, 0.1); }
+button:focus-visible { outline: 2px solid var(--link); outline-offset: 2px; }
+
+/* ---------- две панели ---------- */
+
+main { flex: 1; display: flex; min-height: 0; }
+
+#sidebar {
+  width: 300px;
+  min-width: 240px;
+  border-right: 1px solid var(--line);
+  background: var(--bg-panel);
+  overflow-y: auto;
+  padding: 14px;
+}
+
+#search {
+  width: 100%;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--bg);
+  color: var(--text);
+  margin-bottom: 14px;
+}
+#search:focus-visible { outline: 2px solid var(--link); }
+
+#sidebar h2 {
+  font-size: 0.8rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--text-dim);
+  margin: 14px 0 6px;
+}
+.count { color: var(--moon); }
+
+.device-list { list-style: none; margin: 0; padding: 0; }
+.device-list li {
+  padding: 7px 9px;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 0.9rem;
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+}
+.device-list li:hover { background: var(--bg-hover); }
+.device-list .sub { color: var(--text-dim); font-family: ui-monospace, monospace; font-size: 0.8rem; }
+.device-list li.hidden-by-search { display: none; }
+
+#map-panel { flex: 1; position: relative; min-width: 0; }
+#network { position: absolute; inset: 0; }
+
+/* ---------- панель деталей ---------- */
+
+#details {
+  position: absolute;
+  top: 14px; right: 14px;
+  width: 280px;
+  background: var(--bg-panel);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 14px;
+  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.5);
+}
+#details h3 { margin: 0 0 8px; font-size: 1rem; color: var(--moon); }
+#details dl { margin: 0; font-size: 0.85rem; }
+#details dt { color: var(--text-dim); margin-top: 8px; }
+#details dd { margin: 2px 0 0; font-family: ui-monospace, monospace; word-break: break-all; }
+#details-close {
+  position: absolute; top: 6px; right: 8px;
+  border: none; font-size: 1.1rem; padding: 2px 6px;
+}
+
+#empty-state {
+  position: absolute; inset: 0;
+  display: flex; flex-direction: column;
+  align-items: center; justify-content: center;
+  color: var(--text-dim); text-align: center; padding: 0 40px;
+}
+#empty-state code { color: var(--moon); }
+
+.hidden { display: none !important; }
+
+@media (max-width: 720px) {
+  main { flex-direction: column; }
+  #sidebar { width: 100%; max-height: 40vh; border-right: none; border-bottom: 1px solid var(--line); }
+}

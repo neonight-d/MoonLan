@@ -1,0 +1,53 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>MoonLan — карта сети</title>
+  <link rel="stylesheet" href="style.css">
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/vis-network/9.1.9/standalone/umd/vis-network.min.js"></script>
+</head>
+<body>
+  <header>
+    <div class="brand">
+      <span class="moon" aria-hidden="true"></span>
+      <h1>MoonLan</h1>
+      <span class="tagline">карта локальной сети</span>
+    </div>
+    <div class="toolbar">
+      <span id="scan-status" class="status"></span>
+      <button id="rescan">Опросить сеть</button>
+    </div>
+  </header>
+
+  <main>
+    <aside id="sidebar">
+      <input id="search" type="search" placeholder="Поиск: имя, IP или MAC…" autocomplete="off">
+      <section>
+        <h2>Коммутаторы <span id="switch-count" class="count"></span></h2>
+        <ul id="switch-list" class="device-list"></ul>
+      </section>
+      <section>
+        <h2>Устройства <span id="host-count" class="count"></span></h2>
+        <ul id="host-list" class="device-list"></ul>
+      </section>
+    </aside>
+
+    <section id="map-panel">
+      <div id="network"></div>
+      <div id="details" class="hidden">
+        <button id="details-close" title="Закрыть">×</button>
+        <div id="details-body"></div>
+      </div>
+      <div id="empty-state" class="hidden">
+        <p>Схема пока пуста.</p>
+        <p>Укажите коммутаторы в <code>config.yaml</code> и нажмите
+           «Опросить сеть», либо запустите сервис с
+           <code>MOONLAN_DEMO=1</code>, чтобы увидеть демо-сеть.</p>
+      </div>
+    </section>
+  </main>
+
+  <script src="app.js"></script>
+</body>
+</html>
