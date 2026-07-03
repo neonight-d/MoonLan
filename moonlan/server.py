@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import socket
 import time
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -52,6 +53,8 @@ async def run_scan() -> None:
             log.info("Новых MAC: %d", len(new_macs))
         if collector is not None and config.routers:
             await update_ips(collector)
+        if not config.demo:
+            await resolve_names()
         state.update(switches, links, hosts)
         log.info(
             "Опрос завершён: коммутаторов %d, связей %d, хостов %d",
@@ -71,6 +74,44 @@ async def update_ips(collector: SnmpCollector) -> None:
         merged.update(table)
     if merged:
         await asyncio.to_thread(db.set_ips, merged)
+
+
+# mac -> unix time последней попытки обратного DNS
+_dns_attempts: dict[str, float] = {}
+DNS_RETRY_SECONDS = 3600
+DNS_TIMEOUT = 1.0
+
+
+async def _reverse_dns(ip: str) -> str:
+    try:
+        name, _, _ = await asyncio.wait_for(
+            asyncio.to_thread(socket.gethostbyaddr, ip), timeout=DNS_TIMEOUT
+        )
+        return name
+    except (OSError, asyncio.TimeoutError):
+        return ""
+
+
+async def resolve_names() -> None:
+    """Обратный DNS для хостов с IP без имени, не чаще раза в час на хост."""
+    now = time.time()
+    candidates = [
+        (mac, ip)
+        for mac, ip in await asyncio.to_thread(db.hosts_without_name)
+        if now - _dns_attempts.get(mac, 0) >= DNS_RETRY_SECONDS
+    ]
+    if not candidates:
+        return
+    for mac, _ in candidates:
+        _dns_attempts[mac] = now
+    names = await asyncio.gather(*(_reverse_dns(ip) for _, ip in candidates))
+    resolved = 0
+    for (mac, _), name in zip(candidates, names):
+        if name:
+            await asyncio.to_thread(db.set_name, mac, name)
+            resolved += 1
+    if resolved:
+        log.info("Обратный DNS: имён получено %d из %d", resolved, len(candidates))
 
 
 async def periodic_scan() -> None:
