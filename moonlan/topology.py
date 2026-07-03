@@ -64,7 +64,9 @@ class TopologyState:
                 if q in haystack:
                     found.append({"type": "switch", **sw})
             for host in self.hosts:
-                haystack = f"{host['mac']} {host.get('name', '')}".lower()
+                haystack = (
+                    f"{host['mac']} {host.get('name', '')} {host.get('ip', '')}"
+                ).lower()
                 if q in haystack:
                     found.append({"type": "host", **host})
         return found

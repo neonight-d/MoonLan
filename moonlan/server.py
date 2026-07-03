@@ -58,6 +58,7 @@ async def run_scan() -> None:
             await update_ips(collector)
         if not config.demo:
             await resolve_names()
+        _merge_db_fields(hosts, await asyncio.to_thread(db.hosts_by_mac))
         state.update(switches, links, hosts)
         log.info(
             "Опрос завершён: коммутаторов %d, связей %d, хостов %d",
@@ -65,6 +66,17 @@ async def run_scan() -> None:
         )
     finally:
         state.scanning = False
+
+
+def _merge_db_fields(hosts: list[dict], db_hosts: dict[str, dict]) -> None:
+    """Дополняет хосты топологии полями из БД (IP, имя, состояние ping)."""
+    for h in hosts:
+        row = db_hosts.get(h["mac"], {})
+        h["ip"] = row.get("ip", "")
+        h["name"] = row.get("name", "")
+        h["ping_up"] = bool(row.get("ping_up", 0))
+        h["last_ping_ok"] = row.get("last_ping_ok", 0)
+        h["first_seen"] = row.get("first_seen", 0)
 
 
 async def update_ips(collector: SnmpCollector) -> None:
@@ -190,7 +202,26 @@ app = FastAPI(title="MoonLan", version=__version__, lifespan=lifespan)
 
 @app.get("/api/topology")
 async def api_topology() -> JSONResponse:
-    return JSONResponse(state.as_dict())
+    topo = state.as_dict()
+    # Свежие данные из БД: ping обновляется чаще, чем идёт опрос SNMP
+    db_hosts = await asyncio.to_thread(db.hosts_by_mac)
+    hosts = [dict(h) for h in topo["hosts"]]
+    _merge_db_fields(hosts, db_hosts)
+    topo["hosts"] = hosts
+    topo["switches"] = [
+        {
+            **sw,
+            "ping_up": switch_ping.get(sw["ip"], {}).get("ping_up", False),
+            "last_ping_ok": switch_ping.get(sw["ip"], {}).get("last_ping_ok", 0),
+        }
+        for sw in topo["switches"]
+    ]
+    return JSONResponse(topo)
+
+
+@app.get("/api/journal")
+async def api_journal(limit: int = Query(default=100, ge=1, le=1000)) -> dict:
+    return {"events": await asyncio.to_thread(db.journal, limit)}
 
 
 @app.post("/api/scan")
