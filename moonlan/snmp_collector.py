@@ -5,7 +5,8 @@
 - список интерфейсов, скорость, статус     (IF-MIB)
 - базовый MAC моста                        (BRIDGE-MIB, dot1dBaseBridgeAddress)
 - соответствие bridge-port -> ifIndex      (BRIDGE-MIB, dot1dBasePortIfIndex)
-- таблица пересылки MAC -> bridge-port     (BRIDGE-MIB, dot1dTpFdbPort)
+- таблица пересылки MAC -> bridge-port     (BRIDGE-MIB, dot1dTpFdbPort;
+                                            Q-BRIDGE-MIB, dot1qTpFdbPort)
 """
 
 from __future__ import annotations
@@ -35,6 +36,7 @@ OID_IF_HIGH_SPEED = "1.3.6.1.2.1.31.1.1.1.15" # Мбит/с
 OID_BRIDGE_ADDRESS = "1.3.6.1.2.1.17.1.1.0"   # dot1dBaseBridgeAddress
 OID_PORT_IFINDEX = "1.3.6.1.2.1.17.1.4.1.2"   # dot1dBasePortIfIndex.<port>
 OID_FDB_PORT = "1.3.6.1.2.1.17.4.3.1.2"       # dot1dTpFdbPort.<6 байт MAC>
+OID_Q_FDB_PORT = "1.3.6.1.2.1.17.7.1.2.2.1.2" # dot1qTpFdbPort.<fdbId>.<6 байт MAC>
 
 
 @dataclass
@@ -143,15 +145,19 @@ class SnmpCollector:
         async for suffix, value in self._walk(host, OID_PORT_IFINDEX):
             port_to_ifindex[suffix[0]] = int(value)
 
-        # Таблица MAC-адресов
-        async for suffix, value in self._walk(host, OID_FDB_PORT):
-            bridge_port = int(value)
-            if bridge_port == 0:  # 0 — MAC самого коммутатора / CPU
-                continue
-            mac = ":".join(f"{octet:02x}" for octet in suffix[-6:])
-            if_index = port_to_ifindex.get(bridge_port)
-            if if_index is not None:
-                data.fdb[mac] = if_index
+        # Таблица MAC-адресов: BRIDGE-MIB и Q-BRIDGE-MIB (у Q-BRIDGE в
+        # суффиксе перед MAC стоит fdbId, поэтому берём последние 6 байт)
+        for fdb_oid in (OID_FDB_PORT, OID_Q_FDB_PORT):
+            async for suffix, value in self._walk(host, fdb_oid):
+                bridge_port = int(value)
+                if bridge_port == 0:  # 0 — MAC самого коммутатора / CPU
+                    continue
+                mac = ":".join(f"{octet:02x}" for octet in suffix[-6:])
+                if mac in data.fdb:
+                    continue
+                if_index = port_to_ifindex.get(bridge_port)
+                if if_index is not None:
+                    data.fdb[mac] = if_index
 
         log.info(
             "%s (%s): портов %d, MAC-адресов %d",
