@@ -13,7 +13,7 @@ from fastapi import FastAPI, Query
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 
-from . import __version__, demo
+from . import __version__, demo, pinger
 from .config import Config, load_config
 from .db import Database
 from .snmp_collector import SnmpCollector
@@ -27,6 +27,9 @@ state = TopologyState()
 config: Config = load_config()
 # В демо-режиме БД держим в памяти, чтобы не засорять реальную
 db = Database(":memory:" if config.demo else config.db_path)
+
+# Состояние ping коммутаторов (они не в таблице hosts): ip -> {ping_up, last_ping_ok}
+switch_ping: dict[str, dict] = {}
 
 
 async def run_scan() -> None:
@@ -124,6 +127,42 @@ async def periodic_scan() -> None:
         await asyncio.sleep(interval * 60 if interval > 0 else 3600)
 
 
+async def run_ping() -> None:
+    """Один цикл ping: все хосты с IP и все коммутаторы."""
+    now = time.time()
+    if config.demo:
+        # Реальный ping не выполняем: обновляем время ответа живых хостов
+        await asyncio.to_thread(db.touch_ping_ok, now)
+        for sw in state.as_dict()["switches"]:
+            switch_ping[sw["ip"]] = {"ping_up": True, "last_ping_ok": now}
+        return
+
+    targets = await asyncio.to_thread(db.hosts_with_ip)
+    ips = [ip for _, ip in targets] + list(config.switches)
+    if not ips:
+        return
+    results = await pinger.ping_many(ips)
+    await asyncio.to_thread(
+        db.update_ping, {mac: results[ip] for mac, ip in targets}, now
+    )
+    for ip in config.switches:
+        prev = switch_ping.get(ip, {})
+        up = results.get(ip, False)
+        switch_ping[ip] = {
+            "ping_up": up,
+            "last_ping_ok": now if up else prev.get("last_ping_ok", 0),
+        }
+
+
+async def periodic_ping() -> None:
+    while True:
+        try:
+            await run_ping()
+        except Exception:
+            log.exception("Ошибка ping-мониторинга")
+        await asyncio.sleep(max(config.ping_interval_seconds, 1))
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     logging.basicConfig(
@@ -137,9 +176,13 @@ async def lifespan(app: FastAPI):
             "В config.yaml не указано ни одного коммутатора. "
             "Добавьте адреса в раздел switches или запустите с MOONLAN_DEMO=1."
         )
-    task = asyncio.create_task(periodic_scan())
+    tasks = [
+        asyncio.create_task(periodic_scan()),
+        asyncio.create_task(periodic_ping()),
+    ]
     yield
-    task.cancel()
+    for task in tasks:
+        task.cancel()
 
 
 app = FastAPI(title="MoonLan", version=__version__, lifespan=lifespan)
