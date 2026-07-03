@@ -54,12 +54,16 @@ async def run_scan() -> None:
         new_macs = await asyncio.to_thread(db.upsert_hosts, hosts)
         if new_macs:
             log.info("Новых MAC: %d", len(new_macs))
-        if collector is not None and config.routers:
-            await update_ips(collector)
-        if not config.demo:
+        if config.demo:
+            await asyncio.to_thread(demo.enrich_db, db, hosts)
+        else:
+            if collector is not None and config.routers:
+                await update_ips(collector)
             await resolve_names()
         _merge_db_fields(hosts, await asyncio.to_thread(db.hosts_by_mac))
         state.update(switches, links, hosts)
+        if config.demo:
+            await run_ping()  # сразу проставить состояние ping коммутаторам
         log.info(
             "Опрос завершён: коммутаторов %d, связей %d, хостов %d",
             len(switches), len(links), len(hosts),

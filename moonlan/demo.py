@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import random
+import time
 
+from .db import Database
 from .snmp_collector import PortInfo, SwitchData
 
 random.seed(7)  # чтобы демо-сеть была одинаковой при каждом запуске
@@ -66,3 +68,34 @@ def demo_network() -> list[SwitchData]:
         connect_host(core, port + 2)
 
     return switches
+
+
+_journal_seeded = False
+
+
+def enrich_db(db: Database, hosts: list[dict]) -> None:
+    """Данные v0.3 для демо: IP, имена, состояние ping, события журнала.
+
+    Показывает все состояния UI: зелёный (отвечает), серый (не отвечает),
+    синий (без IP — ping невозможен), хосты с именем и без.
+    """
+    global _journal_seeded
+    now = time.time()
+
+    for i, host in enumerate(hosts):
+        mac = host["mac"]
+        if i % 5 == 4:
+            continue  # у части хостов IP так и не определился
+        db.set_ips({mac: f"10.0.99.{10 + i}"})
+        if i % 3 != 2:  # у части хостов имени нет — только IP
+            db.set_name(mac, f"pc-{i + 1:02d}.demo.lan")
+        if i in (1, 6):  # пара выключенных: отвечали 15 минут назад
+            db.set_ping_state(mac, up=False, last_ok=now - 15 * 60)
+        else:
+            db.set_ping_state(mac, up=True, last_ok=now)
+
+    if not _journal_seeded and len(hosts) > 6:
+        _journal_seeded = True
+        db.add_event(now - 40 * 60, "host_down", hosts[6]["mac"], "10.0.99.16")
+        db.add_event(now - 15 * 60, "host_down", hosts[1]["mac"], "pc-02.demo.lan")
+        db.add_event(now - 5 * 60, "host_up", hosts[3]["mac"], "pc-04.demo.lan")
