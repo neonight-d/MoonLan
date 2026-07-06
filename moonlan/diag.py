@@ -1,12 +1,14 @@
 """SNMP diagnostics for a switch: how MoonLan sees the device.
 
 Usage:  python -m moonlan.diag <ip> [--community public] [--timeout 2]
+        python -m moonlan.diag --topology
 
 Community and timeout default to the values from config.yaml. The tool
 writes nothing to the database and does not need the running service.
 The output is meant for debugging topology inference: unmapped
 bridge-ports, LAG-MIB support, visibility of neighboring switches in
-the FDB.
+the FDB. --topology polls every switch from config.yaml and prints the
+inferred tree: the root, the branch split, the uplinks and the links.
 """
 
 from __future__ import annotations
@@ -17,6 +19,7 @@ import sys
 from collections import Counter
 
 from .config import load_config
+from .topology import infer_tree, normalized_fdb, switch_sightings
 from .snmp_collector import (
     PHYSICAL_IF_TYPES,
     OID_BRIDGE_ADDRESS,
@@ -199,28 +202,110 @@ async def run_diag(
             )
 
 
+async def run_topology_view(community: str, timeout: int, cfg) -> None:
+    """Section 8: poll every configured switch and print the inferred tree."""
+    _section("8. Topology view")
+    if not cfg.switches:
+        sys.exit("no switches in config.yaml")
+    collector = SnmpCollector(community=community, timeout=timeout)
+    print(f"polling {len(cfg.switches)} switches from config.yaml…")
+    collected = list(
+        await asyncio.gather(*(collector.collect(ip) for ip in cfg.switches))
+    )
+    # Like the server: add the management-IP MAC from the routers' ARP
+    if cfg.routers:
+        merged: dict[str, str] = {}
+        for table in await asyncio.gather(
+            *(collector.collect_arp(ip) for ip in cfg.routers)
+        ):
+            merged.update(table)
+        ip_to_mac = {ip: mac for mac, ip in merged.items()}
+        for sw in collected:
+            mac = ip_to_mac.get(sw.ip)
+            if mac:
+                sw.own_macs.add(mac)
+
+    switches = [sw for sw in collected if sw.reachable]
+    for sw in collected:
+        if not sw.reachable:
+            print(f"{sw.ip}: does not respond to SNMP — excluded")
+    if not switches:
+        sys.exit("no reachable switches")
+
+    by_ip = {sw.ip: sw for sw in switches}
+    fdb = normalized_fdb(switches)
+    switches_on_port, sees = switch_sightings(switches, fdb)
+    links, uplinks, info = infer_tree(switches, switches_on_port, sees)
+
+    def label(ip: str) -> str:
+        sw = by_ip.get(ip)
+        return f"{sw.sys_name} ({ip})" if sw and sw.sys_name else ip
+
+    def port_name(ip: str, port) -> str:
+        if port is None:
+            return "?"
+        sw = by_ip[ip]
+        p = sw.ports.get(port)
+        return p.name if p and p.name else str(port)
+
+    root_ip = info["root"]
+    print(f"root: {label(root_ip)}, "
+          f"sees {len(sees[root_ip])} of {len(switches) - 1} switches")
+    print("branches by root port:")
+    if not info["branches"]:
+        print("  none")
+    for port, members in sorted(info["branches"].items()):
+        names = ", ".join(label(ip) for ip in members)
+        print(f"  {port_name(root_ip, port)}: {names}")
+    print("uplinks:")
+    for ip, port in sorted(uplinks.items()):
+        print(f"  {label(ip)}: {port_name(ip, port)}")
+    print("links:")
+    if not links:
+        print("  none")
+    for link in links:
+        trunk = "  (LAG trunk)" if link["lag"] and link["lag"].get("trunk") else ""
+        lacp = (
+            f"  (LACP ×{link['lag']['count']})"
+            if link["lag"] and link["lag"].get("count", 0) > 1
+            else ""
+        )
+        print(
+            f"  {label(link['a'])} [{link['a_port']}] — "
+            f"{label(link['b'])} [{link['b_port']}]{trunk}{lacp}"
+        )
+    if info["unplaced"]:
+        print("unplaced (not visible from the root):")
+        for ip in info["unplaced"]:
+            print(f"  {label(ip)}")
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(
         prog="python -m moonlan.diag",
         description="SNMP diagnostics for a switch (read-only, does not touch the DB)",
     )
-    parser.add_argument("ip", help="switch IP address")
+    parser.add_argument("ip", nargs="?", help="switch IP address")
     parser.add_argument(
         "--community", help="SNMP community (defaults to config.yaml)"
     )
     parser.add_argument(
         "--timeout", type=int, help="SNMP timeout in seconds (defaults to config.yaml)"
     )
-    args = parser.parse_args()
-    cfg = load_config()
-    asyncio.run(
-        run_diag(
-            args.ip,
-            args.community or cfg.snmp.community,
-            args.timeout or cfg.snmp.timeout,
-            cfg.switches,
-        )
+    parser.add_argument(
+        "--topology", action="store_true",
+        help="poll all switches from config.yaml and print the inferred topology",
     )
+    args = parser.parse_args()
+    if not args.topology and not args.ip:
+        parser.error("an ip is required unless --topology is given")
+    cfg = load_config()
+    community = args.community or cfg.snmp.community
+    timeout = args.timeout or cfg.snmp.timeout
+    if args.topology:
+        asyncio.run(run_topology_view(community, timeout, cfg))
+    else:
+        asyncio.run(run_diag(args.ip, community, timeout, cfg.switches))
 
 
 if __name__ == "__main__":
