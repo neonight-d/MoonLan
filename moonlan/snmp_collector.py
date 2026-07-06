@@ -31,6 +31,7 @@ log = logging.getLogger(__name__)
 OID_SYS_NAME = "1.3.6.1.2.1.1.5.0"
 OID_SYS_DESCR = "1.3.6.1.2.1.1.1.0"
 OID_IF_DESCR = "1.3.6.1.2.1.2.2.1.2"          # ifDescr.<ifIndex>
+OID_IF_PHYS_ADDRESS = "1.3.6.1.2.1.2.2.1.6"   # ifPhysAddress.<ifIndex>
 OID_IF_NAME = "1.3.6.1.2.1.31.1.1.1.1"        # ifName.<ifIndex>
 OID_IF_OPER_STATUS = "1.3.6.1.2.1.2.2.1.8"    # 1=up, 2=down
 OID_IF_HIGH_SPEED = "1.3.6.1.2.1.31.1.1.1.15" # Мбит/с
@@ -62,6 +63,10 @@ class SwitchData:
     sys_name: str = ""
     sys_descr: str = ""
     bridge_mac: str = ""
+    # Все MAC, под которыми коммутатор может быть виден в чужих FDB:
+    # базовый MAC моста, MAC интерфейсов (ifPhysAddress), MAC management-IP
+    # из ARP (добавляется в server.py). bridge_mac остаётся для отображения.
+    own_macs: set[str] = field(default_factory=set)
     ports: dict[int, PortInfo] = field(default_factory=dict)   # ifIndex -> порт
     fdb: dict[str, int] = field(default_factory=dict)          # MAC -> ifIndex
     lag_members: dict[int, int] = field(default_factory=dict)  # ifIndex члена -> ifIndex агрегата
@@ -135,6 +140,14 @@ class SnmpCollector:
         bridge_mac = await self._get(host, OID_BRIDGE_ADDRESS)
         if bridge_mac is not None:
             data.bridge_mac = _fmt_mac(bytes(bridge_mac))
+            data.own_macs.add(data.bridge_mac)
+
+        # MAC всех интерфейсов: реальные кадры коммутатор отправляет с них,
+        # а не с базового MAC моста
+        async for _suffix, value in self._walk(host, OID_IF_PHYS_ADDRESS):
+            raw = bytes(value)
+            if len(raw) == 6 and any(raw):
+                data.own_macs.add(_fmt_mac(raw))
 
         # Интерфейсы. Название порта — ifName; ifDescr лишь запасной вариант:
         # D-Link кладёт в ifDescr модель и прошивку целиком.

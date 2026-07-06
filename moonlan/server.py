@@ -38,7 +38,7 @@ async def run_scan() -> None:
         return
     state.scanning = True
     try:
-        collector: SnmpCollector | None = None
+        arp: dict[str, str] = {}
         if config.demo:
             collected = demo.demo_network()
         else:
@@ -50,6 +50,15 @@ async def run_scan() -> None:
             collected = list(
                 await asyncio.gather(*(collector.collect(ip) for ip in config.switches))
             )
+            if config.routers:
+                arp = await collect_arp(collector)
+            # MAC management-IP коммутатора — тоже его MAC: под ним
+            # коммутатор виден в FDB соседей
+            ip_to_mac = {ip: mac for mac, ip in arp.items()}
+            for sw in collected:
+                mac = ip_to_mac.get(sw.ip)
+                if mac:
+                    sw.own_macs.add(mac)
         switches, links, hosts, pseudo_switches, vlan_names = build_topology(
             collected, config.unmanaged_threshold
         )
@@ -59,8 +68,8 @@ async def run_scan() -> None:
         if config.demo:
             await asyncio.to_thread(demo.enrich_db, db, hosts)
         else:
-            if collector is not None and config.routers:
-                await update_ips(collector)
+            if arp:
+                await asyncio.to_thread(db.set_ips, arp)
             await resolve_names()
         _merge_db_fields(hosts, await asyncio.to_thread(db.hosts_by_mac))
         state.update(switches, links, hosts, pseudo_switches, vlan_names)
@@ -85,16 +94,15 @@ def _merge_db_fields(hosts: list[dict], db_hosts: dict[str, dict]) -> None:
         h["first_seen"] = row.get("first_seen", 0)
 
 
-async def update_ips(collector: SnmpCollector) -> None:
-    """Опрашивает ARP-таблицы маршрутизаторов и проставляет хостам IP."""
+async def collect_arp(collector: SnmpCollector) -> dict[str, str]:
+    """Объединённая ARP-таблица всех маршрутизаторов: MAC -> IP."""
     tables = await asyncio.gather(
         *(collector.collect_arp(ip) for ip in config.routers)
     )
     merged: dict[str, str] = {}
     for table in tables:  # при конфликте побеждает последняя запись
         merged.update(table)
-    if merged:
-        await asyncio.to_thread(db.set_ips, merged)
+    return merged
 
 
 # mac -> unix time последней попытки обратного DNS
