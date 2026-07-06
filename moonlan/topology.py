@@ -5,14 +5,16 @@
 1. LACP: ifIndex физических портов-членов агрегата приводится к ifIndex
    агрегата, поэтому агрегат участвует во всех расчётах (связи, uplink,
    привязка хостов) как один логический порт.
-2. Прямые связи. Для пары коммутаторов (A, B) берём порт pA, где A видит
-   базовый MAC B, и порт pB, где B видит A. Обозначим S(A, p) — множество
-   базовых MAC *других опрошенных коммутаторов*, видимых в FDB A на порту p.
-   Связь A(pA)—B(pB) прямая тогда и только тогда, когда
-   S(A, pA) ∩ S(B, pB) = ∅: через два порта, смотрящих друг на друга,
-   не должен быть виден один и тот же третий коммутатор. Это отсекает
-   ложные связи «луч — луч» в звезде, где каждый луч видит все остальные
-   лучи через центр.
+2. Прямые связи. Коммутатор опознаётся в чужих FDB по любому MAC из
+   own_macs (базовый MAC моста, MAC интерфейсов, MAC management-IP), а не
+   только по dot1dBaseBridgeAddress: реальные кадры уходят с MAC
+   интерфейсов. Для пары (A, B) берём порт pA, где A видит B, и порт pB,
+   где B видит A. Обозначим S(A, p) — множество *других опрошенных
+   коммутаторов*, видимых в FDB A на порту p. Связь A(pA)—B(pB) прямая
+   тогда и только тогда, когда S(A, pA) ∩ S(B, pB) = ∅: через два порта,
+   смотрящих друг на друга, не должен быть виден один и тот же третий
+   коммутатор. Это отсекает ложные связи «луч — луч» в звезде, где каждый
+   луч видит все остальные лучи через центр.
 3. Uplink-порты: порт, где виден любой другой коммутатор, либо порт
    с подозрительно большим числом MAC (> UPLINK_MAC_THRESHOLD) — за таким
    почти наверняка другой коммутатор, пусть даже неуправляемый.
@@ -147,7 +149,12 @@ def build_topology(
 ) -> tuple[list[dict], list[dict], list[dict], list[dict], dict[int, str]]:
     """Превращает данные опроса в узлы и связи для схемы."""
     switches = [sw for sw in collected if sw.reachable]
-    mac_to_switch = {sw.bridge_mac: sw for sw in switches if sw.bridge_mac}
+    # Любой MAC из own_macs опознаёт коммутатор; bridge_mac — на случай,
+    # если own_macs не заполнен (например, старые данные)
+    mac_to_switch: dict[str, SwitchData] = {}
+    for sw in switches:
+        for mac in sw.own_macs | ({sw.bridge_mac} if sw.bridge_mac else set()):
+            mac_to_switch.setdefault(mac, sw)
     # FDB с приведением членов LACP к логическому порту-агрегату
     fdb = {
         sw.ip: {
@@ -157,27 +164,30 @@ def build_topology(
         for sw in switches
     }
 
-    # S(A, p): чужие базовые MAC по портам; sees[A][mac B] — порт, где A видит B
-    switch_macs_on_port: dict[str, dict[int, set[str]]] = {}
+    # S(A, p): какие коммутаторы видны на каждом порту A;
+    # sees[A][B] — порт, где A видит B (если на нескольких — где чаще)
+    switches_on_port: dict[str, dict[int, set[str]]] = {}
     sees: dict[str, dict[str, int]] = {}
     for sw in switches:
         per_port: dict[int, set[str]] = {}
-        where: dict[str, int] = {}
+        sightings: dict[str, Counter] = {}
         for mac, if_index in fdb[sw.ip].items():
-            if mac in mac_to_switch and mac != sw.bridge_mac:
-                per_port.setdefault(if_index, set()).add(mac)
-                where[mac] = if_index
-        switch_macs_on_port[sw.ip] = per_port
-        sees[sw.ip] = where
+            neighbor = mac_to_switch.get(mac)
+            if neighbor is None or neighbor.ip == sw.ip:
+                continue
+            per_port.setdefault(if_index, set()).add(neighbor.ip)
+            sightings.setdefault(neighbor.ip, Counter())[if_index] += 1
+        switches_on_port[sw.ip] = per_port
+        sees[sw.ip] = {
+            ip: counts.most_common(1)[0][0] for ip, counts in sightings.items()
+        }
 
-    # 1. Прямые связи: пересечение множеств чужих MAC должно быть пустым
+    # 1. Прямые связи: пересечение множеств видимых коммутаторов пусто
     links: list[dict] = []
     for i, a in enumerate(switches):
         for b in switches[i + 1:]:
-            if not a.bridge_mac or not b.bridge_mac:
-                continue
-            pa = sees[a.ip].get(b.bridge_mac)
-            pb = sees[b.ip].get(a.bridge_mac)
+            pa = sees[a.ip].get(b.ip)
+            pb = sees[b.ip].get(a.ip)
             if pa is None and pb is None:
                 continue
             if pa is None or pb is None:
@@ -187,14 +197,14 @@ def build_topology(
                     seen.ip, blind.ip, blind.ip, seen.ip,
                 )
                 continue
-            if switch_macs_on_port[a.ip][pa] & switch_macs_on_port[b.ip][pb]:
+            if switches_on_port[a.ip][pa] & switches_on_port[b.ip][pb]:
                 continue  # через эти порты виден третий коммутатор — связь не прямая
             links.append(_make_link(a, pa, b, pb))
 
     # 2. Uplink-порты: виден другой коммутатор или слишком много MAC
     uplink_ports: dict[str, set[int]] = {}
     for sw in switches:
-        uplink_ports[sw.ip] = set(switch_macs_on_port[sw.ip])
+        uplink_ports[sw.ip] = set(switches_on_port[sw.ip])
         for if_index, count in Counter(fdb[sw.ip].values()).items():
             if count > UPLINK_MAC_THRESHOLD:
                 uplink_ports[sw.ip].add(if_index)
