@@ -14,7 +14,11 @@
    тогда и только тогда, когда S(A, pA) ∩ S(B, pB) = ∅: через два порта,
    смотрящих друг на друга, не должен быть виден один и тот же третий
    коммутатор. Это отсекает ложные связи «луч — луч» в звезде, где каждый
-   луч видит все остальные лучи через центр.
+   луч видит все остальные лучи через центр. Если видимость односторонняя
+   (B не видит A нигде), применяется правило исключения: B — прямой сосед
+   A на pA, если среди коммутаторов S(A, pA) нет такого D, «за» которым
+   находится B (D видит B на порту, где не видит A). Такая связь строится
+   с b_port = «?».
 3. Uplink-порты: порт, где виден любой другой коммутатор, либо порт
    с подозрительно большим числом MAC (> UPLINK_MAC_THRESHOLD) — за таким
    почти наверняка другой коммутатор, пусть даже неуправляемый.
@@ -117,17 +121,18 @@ def _lag_info(sw: SwitchData, agg_index: int) -> tuple[list[str], int]:
     return names, speed
 
 
-def _make_link(a: SwitchData, pa: int, b: SwitchData, pb: int) -> dict:
+def _make_link(a: SwitchData, pa: int, b: SwitchData, pb: int | None) -> dict:
+    """Связь A(pA)—B(pB); pb=None — порт B неизвестен (односторонняя видимость)."""
     link = {
         "a": a.ip,
         "b": b.ip,
         "a_port": _port_name(a, pa),
-        "b_port": _port_name(b, pb),
+        "b_port": _port_name(b, pb) if pb is not None else "?",
         "speed_mbps": 0,
         "lag": None,
     }
     a_members, a_speed = _lag_info(a, pa)
-    b_members, b_speed = _lag_info(b, pb)
+    b_members, b_speed = _lag_info(b, pb) if pb is not None else ([], 0)
     if a_members or b_members:
         members = a_members or b_members
         link["lag"] = {
@@ -138,9 +143,51 @@ def _make_link(a: SwitchData, pa: int, b: SwitchData, pb: int) -> dict:
         }
         link["speed_mbps"] = a_speed or b_speed
     else:
-        port = a.ports.get(pa) or b.ports.get(pb)
+        port = a.ports.get(pa) or (b.ports.get(pb) if pb is not None else None)
         link["speed_mbps"] = port.speed_mbps if port else 0
     return link
+
+
+def _one_way_link(
+    a: SwitchData,
+    pa: int | None,
+    b: SwitchData,
+    pb: int | None,
+    sees: dict[str, dict[str, int]],
+    switches_on_port: dict[str, dict[int, set[str]]],
+) -> dict | None:
+    """Запасной алгоритм: связь при односторонней видимости.
+
+    viewer видит target на порту p, target не видит viewer нигде.
+    target — прямой сосед, если среди других коммутаторов S(viewer, p)
+    нет такого D, «за» которым находится target: D видит target на порту,
+    на котором D не видит viewer.
+    """
+    viewer, port, target = (a, pa, b) if pb is None else (b, pb, a)
+    candidates = switches_on_port[viewer.ip].get(port, set())
+
+    def behind(d_ip: str) -> bool:
+        viewer_port = sees[d_ip].get(viewer.ip)
+        return any(
+            target.ip in ips and p != viewer_port
+            for p, ips in switches_on_port[d_ip].items()
+        )
+
+    direct = target.ip in candidates and not any(
+        d_ip != target.ip and behind(d_ip) for d_ip in candidates
+    )
+    if not direct:
+        log.warning(
+            "FDB неполна: %s видит %s, но %s не видит %s, и прямого соседа "
+            "определить не удалось — связь не строится",
+            viewer.ip, target.ip, target.ip, viewer.ip,
+        )
+        return None
+    log.info(
+        "Связь %s—%s построена по односторонней видимости (%s не видит %s)",
+        viewer.ip, target.ip, target.ip, viewer.ip,
+    )
+    return _make_link(viewer, port, target, None)
 
 
 def build_topology(
@@ -191,11 +238,9 @@ def build_topology(
             if pa is None and pb is None:
                 continue
             if pa is None or pb is None:
-                blind, seen = (a, b) if pa is None else (b, a)
-                log.warning(
-                    "FDB неполна: %s видит %s, но %s не видит %s — связь не строится",
-                    seen.ip, blind.ip, blind.ip, seen.ip,
-                )
+                link = _one_way_link(a, pa, b, pb, sees, switches_on_port)
+                if link:
+                    links.append(link)
                 continue
             if switches_on_port[a.ip][pa] & switches_on_port[b.ip][pb]:
                 continue  # через эти порты виден третий коммутатор — связь не прямая

@@ -1,10 +1,12 @@
 """Демо-режим: виртуальная сеть, чтобы посмотреть MoonLan без коммутаторов.
 
-Звезда из четырёх коммутаторов: ядро и три луча. Демонстрирует все
-возможности v0.4: корректные прямые связи (лучи видят друг друга через
+Звезда из пяти коммутаторов: ядро и четыре луча. Демонстрирует все
+возможности v0.4.x: корректные прямые связи (лучи видят друг друга через
 ядро, но ложных связей между ними нет), LACP-агрегат 2×1G между ядром
 и первым лучом, неуправляемый коммутатор с пятью хостами за одним
-портом второго луча, PVID и имена VLAN на портах.
+портом второго луча, PVID и имена VLAN на портах. Лучи видят ядро под
+интерфейсным MAC, а не под базовым (проверка own_macs); четвёртый луч
+не видит ядро вовсе — связь строится по односторонней видимости.
 """
 
 from __future__ import annotations
@@ -31,20 +33,28 @@ def _switch(ip: str, name: str, mac_octet: int) -> SwitchData:
         sys_descr="MoonLan demo switch, 26 ports",
         bridge_mac=f"02:4d:4c:00:00:{mac_octet:02x}",
     )
+    # Как у реальных коммутаторов: кроме базового MAC есть интерфейсный,
+    # и в чужих FDB устройство видно именно под ним
+    sw.own_macs = {sw.bridge_mac, f"02:4d:4c:00:01:{mac_octet:02x}"}
     for i in range(1, 27):
         sw.ports[i] = PortInfo(if_index=i, name=f"Gi0/{i}", oper_up=False, speed_mbps=1000)
     sw.vlan_names = dict(VLAN_NAMES)
     return sw
 
 
+def _iface_mac(sw: SwitchData) -> str:
+    return next(m for m in sw.own_macs if m != sw.bridge_mac)
+
+
 def demo_network() -> list[SwitchData]:
-    """Звезда: ядро + три луча, LACP, pseudo-коммутатор, VLAN."""
+    """Звезда: ядро + четыре луча, LACP, pseudo-коммутатор, VLAN."""
     core = _switch("10.0.0.10", "core-sw", 1)
     ray1 = _switch("10.0.0.21", "access-sw-1", 2)
     ray2 = _switch("10.0.0.22", "access-sw-2", 3)
     ray3 = _switch("10.0.0.23", "access-sw-3", 4)
-    switches = [core, ray1, ray2, ray3]
-    rays = [ray1, ray2, ray3]
+    ray4 = _switch("10.0.0.24", "access-sw-4", 5)
+    switches = [core, ray1, ray2, ray3, ray4]
+    rays = [ray1, ray2, ray3, ray4]
 
     # LACP 2×1G между ядром (порты 1 и 25) и первым лучом (порты 25 и 26)
     for sw, members in ((core, (1, 25)), (ray1, (25, 26))):
@@ -57,15 +67,18 @@ def demo_network() -> list[SwitchData]:
 
     # Магистрали ядро—лучи: у ядра порт на каждый луч, у луча — аплинк 24
     # (у ray1 аплинк — агрегат). FDB заполняем так, как выглядит реальная
-    # звезда: каждый видит базовые MAC всех остальных, лучи — через аплинк.
-    core_port_to_ray = {ray1.ip: 1, ray2.ip: 2, ray3.ip: 3}
-    for ray in (ray2, ray3):
+    # звезда: ядро видит базовые MAC лучей, лучи видят ядро под
+    # интерфейсным MAC (проверка own_macs), друг друга — через аплинк.
+    # ray4 не видит ядро вовсе — проверка односторонней видимости.
+    core_port_to_ray = {ray1.ip: 1, ray2.ip: 2, ray3.ip: 3, ray4.ip: 4}
+    for ray in (ray2, ray3, ray4):
         core.ports[core_port_to_ray[ray.ip]].oper_up = True
         ray.ports[24].oper_up = True
     for ray in rays:
         uplink = 25 if ray is ray1 else 24
         core.fdb[ray.bridge_mac] = core_port_to_ray[ray.ip]
-        ray.fdb[core.bridge_mac] = uplink
+        if ray is not ray4:
+            ray.fdb[_iface_mac(core)] = uplink
         for other in rays:
             if other is not ray:
                 ray.fdb[other.bridge_mac] = uplink
@@ -89,6 +102,8 @@ def demo_network() -> list[SwitchData]:
         connect_host(ray2, 5, 8)
     for port in range(1, 7):
         connect_host(ray3, port, 1 if port % 2 else 8)
+    for port in range(1, 4):
+        connect_host(ray4, port, 1)
     for port in (12, 13, 14):
         connect_host(core, port, 11)
 
