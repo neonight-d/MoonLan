@@ -50,7 +50,7 @@ async def run_scan() -> None:
             collected = list(
                 await asyncio.gather(*(collector.collect(ip) for ip in config.switches))
             )
-        switches, links, hosts = build_topology(collected)
+        switches, links, hosts, vlan_names = build_topology(collected)
         new_macs = await asyncio.to_thread(db.upsert_hosts, hosts)
         if new_macs:
             log.info("Новых MAC: %d", len(new_macs))
@@ -61,7 +61,7 @@ async def run_scan() -> None:
                 await update_ips(collector)
             await resolve_names()
         _merge_db_fields(hosts, await asyncio.to_thread(db.hosts_by_mac))
-        state.update(switches, links, hosts)
+        state.update(switches, links, hosts, vlan_names)
         if config.demo:
             await run_ping()  # сразу проставить состояние ping коммутаторам
         log.info(

@@ -45,15 +45,23 @@ class TopologyState:
     switches: list[dict] = field(default_factory=list)
     links: list[dict] = field(default_factory=list)
     hosts: list[dict] = field(default_factory=list)
+    vlan_names: dict[int, str] = field(default_factory=dict)
     last_scan: float = 0.0
     scanning: bool = False
     _lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
 
-    def update(self, switches: list[dict], links: list[dict], hosts: list[dict]) -> None:
+    def update(
+        self,
+        switches: list[dict],
+        links: list[dict],
+        hosts: list[dict],
+        vlan_names: dict[int, str],
+    ) -> None:
         with self._lock:
             self.switches = switches
             self.links = links
             self.hosts = hosts
+            self.vlan_names = vlan_names
             self.last_scan = time.time()
 
     def as_dict(self) -> dict:
@@ -62,6 +70,7 @@ class TopologyState:
                 "switches": self.switches,
                 "links": self.links,
                 "hosts": self.hosts,
+                "vlan_names": self.vlan_names,
                 "last_scan": self.last_scan,
                 "scanning": self.scanning,
             }
@@ -124,7 +133,9 @@ def _make_link(a: SwitchData, pa: int, b: SwitchData, pb: int) -> dict:
     return link
 
 
-def build_topology(collected: Iterable[SwitchData]) -> tuple[list[dict], list[dict], list[dict]]:
+def build_topology(
+    collected: Iterable[SwitchData],
+) -> tuple[list[dict], list[dict], list[dict], dict[int, str]]:
     """Превращает данные опроса в узлы и связи для схемы."""
     switches = [sw for sw in collected if sw.reachable]
     mac_to_switch = {sw.bridge_mac: sw for sw in switches if sw.bridge_mac}
@@ -199,6 +210,7 @@ def build_topology(collected: Iterable[SwitchData]) -> tuple[list[dict], list[di
             "mac": mac,
             "switch": sw_ip,
             "port": _port_name(sw, if_index),
+            "vlan": sw.port_pvid.get(if_index, 0),
             "name": "",  # имена и IP добавляются из БД (ARP/DNS)
         })
 
@@ -211,4 +223,11 @@ def build_topology(collected: Iterable[SwitchData]) -> tuple[list[dict], list[di
         "ports_up": sum(1 for p in sw.ports.values() if p.oper_up),
     } for sw in switches]
 
-    return switch_dicts, links, hosts
+    # Имена VLAN со всех коммутаторов (при совпадении ID первый выигрывает)
+    vlan_names: dict[int, str] = {}
+    for sw in switches:
+        for vlan_id, name in sw.vlan_names.items():
+            if name:
+                vlan_names.setdefault(vlan_id, name)
+
+    return switch_dicts, links, hosts, vlan_names

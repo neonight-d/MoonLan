@@ -47,6 +47,13 @@ function hostLabel(h) {
   return h.name || h.ip || h.mac;
 }
 
+/* «11 (ipmi)» — ID VLAN и имя, если известно */
+function vlanLabel(v) {
+  if (!v) return "—";
+  const name = (topology.vlan_names || {})[v];
+  return name ? v + " (" + name + ")" : String(v);
+}
+
 function fmtSpeed(mbps) {
   if (!mbps) return "";
   return mbps >= 1000 ? mbps / 1000 + " Гбит/с" : mbps + " Мбит/с";
@@ -89,7 +96,7 @@ async function loadTopology() {
   );
 }
 
-function li(main, sub, dotClass, onClick) {
+function li(main, sub, dotClass, onClick, searchText) {
   const item = document.createElement("li");
   if (dotClass) {
     const dot = document.createElement("span");
@@ -108,7 +115,7 @@ function li(main, sub, dotClass, onClick) {
     text.append(extra);
   }
   item.append(text);
-  item.dataset.search = (main + " " + sub).toLowerCase();
+  item.dataset.search = (searchText || main + " " + sub).toLowerCase();
   item.addEventListener("click", onClick);
   return item;
 }
@@ -125,9 +132,13 @@ function renderSidebar() {
     ...topology.hosts.map((h) =>
       li(
         hostLabel(h),
-        [h.ip, h.mac].filter(Boolean).join(" · "),
+        [h.ip, h.mac, h.vlan ? "VLAN " + h.vlan : ""]
+          .filter(Boolean)
+          .join(" · "),
         statusClass(h),
-        () => focusNode("host:" + h.mac)
+        () => focusNode("host:" + h.mac),
+        // VLAN в поиск не включаем
+        [hostLabel(h), h.ip, h.mac].filter(Boolean).join(" ")
       )
     )
   );
@@ -267,6 +278,7 @@ function showDetails(nodeId) {
       <dt>MAC-адрес</dt><dd>${host.mac}</dd>
       <dt>Коммутатор</dt><dd>${host.switch}</dd>
       <dt>Порт</dt><dd>${host.port}</dd>
+      <dt>VLAN</dt><dd>${vlanLabel(host.vlan)}</dd>
       <dt>Отвечал</dt><dd>${fmtTime(host.last_ping_ok)}</dd>
       <dt>Впервые замечен</dt><dd>${fmtDate(host.first_seen)}</dd></dl>`;
   }

@@ -27,7 +27,8 @@ CREATE TABLE IF NOT EXISTS hosts (
     first_seen REAL NOT NULL,             -- unix time
     last_seen  REAL NOT NULL,             -- последний раз виден в FDB
     last_ping_ok REAL DEFAULT 0,          -- последний успешный ping
-    ping_up    INTEGER DEFAULT 0          -- 1 = отвечает сейчас
+    ping_up    INTEGER DEFAULT 0,         -- 1 = отвечает сейчас
+    vlan       INTEGER DEFAULT 0          -- PVID порта, на котором найден хост
 );
 CREATE TABLE IF NOT EXISTS journal (
     id      INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -46,6 +47,18 @@ class Database:
         self._lock = threading.Lock()
         with self._lock, self._conn:
             self._conn.executescript(_SCHEMA)
+            self._migrate()
+
+    def _migrate(self) -> None:
+        """Дотягивает схему старой БД: добавляет недостающие колонки."""
+        columns = {
+            row[1] for row in self._conn.execute("PRAGMA table_info(hosts)")
+        }
+        if "vlan" not in columns:
+            self._conn.execute(
+                "ALTER TABLE hosts ADD COLUMN vlan INTEGER DEFAULT 0"
+            )
+            log.info("Миграция БД: добавлена колонка hosts.vlan")
 
     def close(self) -> None:
         with self._lock:
@@ -63,15 +76,15 @@ class Database:
         with self._lock, self._conn:
             for h in hosts:
                 cur = self._conn.execute(
-                    "UPDATE hosts SET last_seen = ?, switch_ip = ?, port = ? "
+                    "UPDATE hosts SET last_seen = ?, switch_ip = ?, port = ?, vlan = ? "
                     "WHERE mac = ?",
-                    (now, h["switch"], h["port"], h["mac"]),
+                    (now, h["switch"], h["port"], h.get("vlan", 0), h["mac"]),
                 )
                 if cur.rowcount == 0:
                     self._conn.execute(
-                        "INSERT INTO hosts (mac, switch_ip, port, first_seen, last_seen) "
-                        "VALUES (?, ?, ?, ?, ?)",
-                        (h["mac"], h["switch"], h["port"], now, now),
+                        "INSERT INTO hosts (mac, switch_ip, port, vlan, first_seen, last_seen) "
+                        "VALUES (?, ?, ?, ?, ?, ?)",
+                        (h["mac"], h["switch"], h["port"], h.get("vlan", 0), now, now),
                     )
                     self._conn.execute(
                         "INSERT INTO journal (ts, event, mac, details) VALUES (?, ?, ?, ?)",

@@ -41,6 +41,8 @@ OID_Q_FDB_PORT = "1.3.6.1.2.1.17.7.1.2.2.1.2" # dot1qTpFdbPort.<fdbId>.<6 бай
 OID_ARP_PHYS = "1.3.6.1.2.1.4.22.1.2"         # ipNetToMediaPhysAddress.<ifIndex>.<IP>
 # dot3adAggPortAttachedAggID.<ifIndex члена> -> ifIndex агрегата (IEEE8023-LAG-MIB)
 OID_LAG_ATTACHED_ID = "1.2.840.10006.300.43.1.2.1.1.13"
+OID_PVID = "1.3.6.1.2.1.17.7.1.4.5.1.1"       # dot1qPvid.<bridge-port>
+OID_VLAN_NAME = "1.3.6.1.2.1.17.7.1.4.3.1.1"  # dot1qVlanStaticName.<VLAN ID>
 
 
 @dataclass
@@ -63,6 +65,8 @@ class SwitchData:
     ports: dict[int, PortInfo] = field(default_factory=dict)   # ifIndex -> порт
     fdb: dict[str, int] = field(default_factory=dict)          # MAC -> ifIndex
     lag_members: dict[int, int] = field(default_factory=dict)  # ifIndex члена -> ifIndex агрегата
+    port_pvid: dict[int, int] = field(default_factory=dict)    # ifIndex -> PVID (untagged VLAN)
+    vlan_names: dict[int, str] = field(default_factory=dict)   # VLAN ID -> имя
 
 
 def _fmt_mac(raw: bytes) -> str:
@@ -162,6 +166,14 @@ class SnmpCollector:
         port_to_ifindex: dict[int, int] = {}
         async for suffix, value in self._walk(host, OID_PORT_IFINDEX):
             port_to_ifindex[suffix[0]] = int(value)
+
+        # VLAN: PVID портов (Q-BRIDGE-MIB, индекс — bridge-port) и имена VLAN
+        async for suffix, value in self._walk(host, OID_PVID):
+            if_index = port_to_ifindex.get(suffix[0])
+            if if_index is not None:
+                data.port_pvid[if_index] = int(value)
+        async for suffix, value in self._walk(host, OID_VLAN_NAME):
+            data.vlan_names[suffix[-1]] = str(value).strip()
 
         # Таблица MAC-адресов: BRIDGE-MIB и Q-BRIDGE-MIB (у Q-BRIDGE в
         # суффиксе перед MAC стоит fdbId, поэтому берём последние 6 байт)
