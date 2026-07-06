@@ -17,7 +17,7 @@ from . import __version__, demo, pinger
 from .config import Config, load_config
 from .db import Database
 from .snmp_collector import SnmpCollector
-from .topology import TopologyState, build_topology
+from .topology import FdbStability, TopologyState, build_topology
 
 log = logging.getLogger("moonlan")
 
@@ -30,6 +30,9 @@ db = Database(":memory:" if config.demo else config.db_path)
 
 # Состояние ping коммутаторов (они не в таблице hosts): ip -> {ping_up, last_ping_ok}
 switch_ping: dict[str, dict] = {}
+
+# Объединение FDB с прошлыми опросами: защита связей от старения таблиц
+fdb_stability = FdbStability()
 
 
 async def run_scan() -> None:
@@ -60,7 +63,9 @@ async def run_scan() -> None:
                 if mac:
                     sw.own_macs.add(mac)
         switches, links, hosts, pseudo_switches, vlan_names = build_topology(
-            collected, config.unmanaged_threshold
+            collected,
+            config.unmanaged_threshold,
+            fdb_stability=None if config.demo else fdb_stability,
         )
         new_macs = await asyncio.to_thread(db.upsert_hosts, hosts)
         if new_macs:

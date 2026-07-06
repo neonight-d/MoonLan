@@ -108,6 +108,32 @@ class TopologyState:
         return found
 
 
+class FdbStability:
+    """Сглаживание старения FDB между опросами.
+
+    MAC соседа может выпасть из FDB к моменту опроса, из-за чего набор
+    связей «мигает». Запись из прошлых опросов живёт ttl циклов, пока не
+    подтверждена свежими данными; при подтверждении срок сбрасывается.
+    Объединённая FDB используется только для вычисления связей и
+    uplink-портов; привязка хостов и last_seen — по свежим данным.
+    """
+
+    def __init__(self, ttl: int = 3):
+        self.ttl = ttl
+        # ip -> mac -> [if_index, осталось опросов]
+        self._cache: dict[str, dict[str, list[int]]] = {}
+
+    def merge(self, sw_ip: str, fresh: dict[str, int]) -> dict[str, int]:
+        cache = self._cache.setdefault(sw_ip, {})
+        for mac in list(cache):
+            cache[mac][1] -= 1
+            if cache[mac][1] < 0:  # прожила ttl неподтверждённых опросов
+                del cache[mac]
+        for mac, if_index in fresh.items():
+            cache[mac] = [if_index, self.ttl]
+        return {mac: entry[0] for mac, entry in cache.items()}
+
+
 def _port_name(sw: SwitchData, if_index: int) -> str:
     port = sw.ports.get(if_index)
     return port.name if port and port.name else str(if_index)
@@ -193,6 +219,7 @@ def _one_way_link(
 def build_topology(
     collected: Iterable[SwitchData],
     unmanaged_threshold: int = UNMANAGED_THRESHOLD,
+    fdb_stability: FdbStability | None = None,
 ) -> tuple[list[dict], list[dict], list[dict], list[dict], dict[int, str]]:
     """Превращает данные опроса в узлы и связи для схемы."""
     switches = [sw for sw in collected if sw.reachable]
@@ -211,6 +238,13 @@ def build_topology(
         for sw in switches
     }
 
+    # Для связей и uplink-портов — FDB, объединённая с прошлыми опросами
+    # (защита от старения); привязка хостов ниже идёт по свежей fdb
+    if fdb_stability is not None:
+        link_fdb = {sw.ip: fdb_stability.merge(sw.ip, fdb[sw.ip]) for sw in switches}
+    else:
+        link_fdb = fdb
+
     # S(A, p): какие коммутаторы видны на каждом порту A;
     # sees[A][B] — порт, где A видит B (если на нескольких — где чаще)
     switches_on_port: dict[str, dict[int, set[str]]] = {}
@@ -218,7 +252,7 @@ def build_topology(
     for sw in switches:
         per_port: dict[int, set[str]] = {}
         sightings: dict[str, Counter] = {}
-        for mac, if_index in fdb[sw.ip].items():
+        for mac, if_index in link_fdb[sw.ip].items():
             neighbor = mac_to_switch.get(mac)
             if neighbor is None or neighbor.ip == sw.ip:
                 continue
@@ -250,7 +284,7 @@ def build_topology(
     uplink_ports: dict[str, set[int]] = {}
     for sw in switches:
         uplink_ports[sw.ip] = set(switches_on_port[sw.ip])
-        for if_index, count in Counter(fdb[sw.ip].values()).items():
+        for if_index, count in Counter(link_fdb[sw.ip].values()).items():
             if count > UPLINK_MAC_THRESHOLD:
                 uplink_ports[sw.ip].add(if_index)
 
