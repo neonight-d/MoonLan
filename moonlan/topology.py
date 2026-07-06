@@ -1,13 +1,19 @@
 """Построение топологии сети из данных, собранных с коммутаторов.
 
-Алгоритм v0.1 (упрощённый, но рабочий для типовых сетей):
+Алгоритм v0.4:
 
-1. Uplink-порты. Если на порту коммутатора A виден базовый MAC
-   коммутатора B — это магистраль A—B. Дополнительно порт считается
-   магистральным, если за ним видно подозрительно много MAC-адресов
-   (по умолчанию > 8): за таким портом почти наверняка другой
-   коммутатор, пусть даже неуправляемый.
-2. Конечные устройства. MAC-адреса на остальных портах — хосты.
+1. Прямые связи. Для пары коммутаторов (A, B) берём порт pA, где A видит
+   базовый MAC B, и порт pB, где B видит A. Обозначим S(A, p) — множество
+   базовых MAC *других опрошенных коммутаторов*, видимых в FDB A на порту p.
+   Связь A(pA)—B(pB) прямая тогда и только тогда, когда
+   S(A, pA) ∩ S(B, pB) = ∅: через два порта, смотрящих друг на друга,
+   не должен быть виден один и тот же третий коммутатор. Это отсекает
+   ложные связи «луч — луч» в звезде, где каждый луч видит все остальные
+   лучи через центр.
+2. Uplink-порты: порт, где виден любой другой коммутатор, либо порт
+   с подозрительно большим числом MAC (> UPLINK_MAC_THRESHOLD) — за таким
+   почти наверняка другой коммутатор, пусть даже неуправляемый.
+3. Конечные устройства. MAC-адреса на остальных портах — хосты.
    Один и тот же MAC может быть виден с нескольких коммутаторов;
    хост привязывается к тому порту, где кроме него меньше всего
    других MAC (это и есть порт непосредственного подключения).
@@ -15,12 +21,16 @@
 
 from __future__ import annotations
 
+import logging
 import threading
 import time
+from collections import Counter
 from dataclasses import dataclass, field
 from typing import Iterable
 
 from .snmp_collector import SwitchData
+
+log = logging.getLogger(__name__)
 
 UPLINK_MAC_THRESHOLD = 8
 
@@ -72,39 +82,68 @@ class TopologyState:
         return found
 
 
+def _port_name(sw: SwitchData, if_index: int) -> str:
+    port = sw.ports.get(if_index)
+    return port.name if port and port.name else str(if_index)
+
+
+def _make_link(a: SwitchData, pa: int, b: SwitchData, pb: int) -> dict:
+    port = a.ports.get(pa) or b.ports.get(pb)
+    return {
+        "a": a.ip,
+        "b": b.ip,
+        "a_port": _port_name(a, pa),
+        "b_port": _port_name(b, pb),
+        "speed_mbps": port.speed_mbps if port else 0,
+        "lag": None,
+    }
+
+
 def build_topology(collected: Iterable[SwitchData]) -> tuple[list[dict], list[dict], list[dict]]:
     """Превращает данные опроса в узлы и связи для схемы."""
     switches = [sw for sw in collected if sw.reachable]
     mac_to_switch = {sw.bridge_mac: sw for sw in switches if sw.bridge_mac}
+    fdb = {sw.ip: dict(sw.fdb) for sw in switches}
 
-    uplink_ports: dict[str, set[int]] = {sw.ip: set() for sw in switches}
+    # S(A, p): чужие базовые MAC по портам; sees[A][mac B] — порт, где A видит B
+    switch_macs_on_port: dict[str, dict[int, set[str]]] = {}
+    sees: dict[str, dict[str, int]] = {}
+    for sw in switches:
+        per_port: dict[int, set[str]] = {}
+        where: dict[str, int] = {}
+        for mac, if_index in fdb[sw.ip].items():
+            if mac in mac_to_switch and mac != sw.bridge_mac:
+                per_port.setdefault(if_index, set()).add(mac)
+                where[mac] = if_index
+        switch_macs_on_port[sw.ip] = per_port
+        sees[sw.ip] = where
+
+    # 1. Прямые связи: пересечение множеств чужих MAC должно быть пустым
     links: list[dict] = []
-    seen_pairs: set[frozenset[str]] = set()
-
-    # 1. Магистрали по базовым MAC соседних коммутаторов
-    for sw in switches:
-        for mac, if_index in sw.fdb.items():
-            neighbor = mac_to_switch.get(mac)
-            if neighbor is None or neighbor.ip == sw.ip:
+    for i, a in enumerate(switches):
+        for b in switches[i + 1:]:
+            if not a.bridge_mac or not b.bridge_mac:
                 continue
-            uplink_ports[sw.ip].add(if_index)
-            pair = frozenset((sw.ip, neighbor.ip))
-            if pair not in seen_pairs:
-                seen_pairs.add(pair)
-                port = sw.ports.get(if_index)
-                links.append({
-                    "a": sw.ip,
-                    "b": neighbor.ip,
-                    "a_port": port.name if port else str(if_index),
-                    "speed_mbps": port.speed_mbps if port else 0,
-                })
+            pa = sees[a.ip].get(b.bridge_mac)
+            pb = sees[b.ip].get(a.bridge_mac)
+            if pa is None and pb is None:
+                continue
+            if pa is None or pb is None:
+                blind, seen = (a, b) if pa is None else (b, a)
+                log.warning(
+                    "FDB неполна: %s видит %s, но %s не видит %s — связь не строится",
+                    seen.ip, blind.ip, blind.ip, seen.ip,
+                )
+                continue
+            if switch_macs_on_port[a.ip][pa] & switch_macs_on_port[b.ip][pb]:
+                continue  # через эти порты виден третий коммутатор — связь не прямая
+            links.append(_make_link(a, pa, b, pb))
 
-    # 2. Порты со слишком большим числом MAC — тоже магистрали
+    # 2. Uplink-порты: виден другой коммутатор или слишком много MAC
+    uplink_ports: dict[str, set[int]] = {}
     for sw in switches:
-        macs_per_port: dict[int, int] = {}
-        for if_index in sw.fdb.values():
-            macs_per_port[if_index] = macs_per_port.get(if_index, 0) + 1
-        for if_index, count in macs_per_port.items():
+        uplink_ports[sw.ip] = set(switch_macs_on_port[sw.ip])
+        for if_index, count in Counter(fdb[sw.ip].values()).items():
             if count > UPLINK_MAC_THRESHOLD:
                 uplink_ports[sw.ip].add(if_index)
 
@@ -112,25 +151,23 @@ def build_topology(collected: Iterable[SwitchData]) -> tuple[list[dict], list[di
     best_location: dict[str, tuple[int, str, int]] = {}  # mac -> (macs_on_port, sw_ip, ifIndex)
     switch_macs = set(mac_to_switch)
     for sw in switches:
-        macs_per_port: dict[int, int] = {}
-        for if_index in sw.fdb.values():
-            macs_per_port[if_index] = macs_per_port.get(if_index, 0) + 1
-        for mac, if_index in sw.fdb.items():
+        macs_per_port = Counter(fdb[sw.ip].values())
+        for mac, if_index in fdb[sw.ip].items():
             if mac in switch_macs or if_index in uplink_ports[sw.ip]:
                 continue
             candidate = (macs_per_port[if_index], sw.ip, if_index)
             if mac not in best_location or candidate < best_location[mac]:
                 best_location[mac] = candidate
 
+    switch_by_ip = {sw.ip: sw for sw in switches}
     hosts = []
     for mac, (_, sw_ip, if_index) in sorted(best_location.items()):
-        sw = next(s for s in switches if s.ip == sw_ip)
-        port = sw.ports.get(if_index)
+        sw = switch_by_ip[sw_ip]
         hosts.append({
             "mac": mac,
             "switch": sw_ip,
-            "port": port.name if port else str(if_index),
-            "name": "",  # имена и IP появятся в v0.3 (ARP/DNS/Ping)
+            "port": _port_name(sw, if_index),
+            "name": "",  # имена и IP добавляются из БД (ARP/DNS)
         })
 
     switch_dicts = [{
