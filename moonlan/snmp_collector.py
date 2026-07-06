@@ -189,7 +189,11 @@ class SnmpCollector:
             data.vlan_names[suffix[-1]] = str(value).strip()
 
         # Таблица MAC-адресов: BRIDGE-MIB и Q-BRIDGE-MIB (у Q-BRIDGE в
-        # суффиксе перед MAC стоит fdbId, поэтому берём последние 6 байт)
+        # суффиксе перед MAC стоит fdbId, поэтому берём последние 6 байт).
+        # Записи с bridge-портов, которых нет в dot1dBasePortIfIndex
+        # (так выглядят LACP-транки у некоторых D-Link), не отбрасываются:
+        # им назначается синтетический порт с ifIndex = -bridge_port.
+        unmapped: dict[int, int] = {}
         for fdb_oid in (OID_FDB_PORT, OID_Q_FDB_PORT):
             async for suffix, value in self._walk(host, fdb_oid):
                 bridge_port = int(value)
@@ -199,8 +203,23 @@ class SnmpCollector:
                 if mac in data.fdb:
                     continue
                 if_index = port_to_ifindex.get(bridge_port)
-                if if_index is not None:
-                    data.fdb[mac] = if_index
+                if if_index is None:
+                    if_index = -bridge_port
+                    unmapped[bridge_port] = unmapped.get(bridge_port, 0) + 1
+                    if if_index not in data.ports:
+                        data.ports[if_index] = PortInfo(
+                            if_index=if_index,
+                            name=f"bridge-port {bridge_port}",
+                        )
+                data.fdb[mac] = if_index
+        if unmapped:
+            log.debug(
+                "%s: FDB на несмаппленных bridge-портах: %s",
+                host,
+                "; ".join(
+                    f"порт {p}: {n} MAC" for p, n in sorted(unmapped.items())
+                ),
+            )
 
         log.info(
             "%s (%s): портов %d, MAC-адресов %d",

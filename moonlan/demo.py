@@ -70,12 +70,21 @@ def demo_network() -> list[SwitchData]:
     # звезда: ядро видит базовые MAC лучей, лучи видят ядро под
     # интерфейсным MAC (проверка own_macs), друг друга — через аплинк.
     # ray4 не видит ядро вовсе — проверка односторонней видимости.
+    # У ray3 FDB аплинка лежит на несмаппленном bridge-порту (ifIndex -24) —
+    # так коллектор сохраняет транки, которых нет в dot1dBasePortIfIndex.
+    ray3_trunk = -24
+    ray3.ports[ray3_trunk] = PortInfo(if_index=ray3_trunk, name="bridge-port 24")
     core_port_to_ray = {ray1.ip: 1, ray2.ip: 2, ray3.ip: 3, ray4.ip: 4}
     for ray in (ray2, ray3, ray4):
         core.ports[core_port_to_ray[ray.ip]].oper_up = True
         ray.ports[24].oper_up = True
     for ray in rays:
-        uplink = 25 if ray is ray1 else 24
+        if ray is ray1:
+            uplink = 25
+        elif ray is ray3:
+            uplink = ray3_trunk
+        else:
+            uplink = 24
         core.fdb[ray.bridge_mac] = core_port_to_ray[ray.ip]
         if ray is not ray4:
             ray.fdb[_iface_mac(core)] = uplink
