@@ -139,6 +139,7 @@ main { flex: 1; display: flex; min-height: 0; }
   box-shadow: 0 6px 24px rgba(0, 0, 0, 0.5);
 }
 #details h3 { margin: 0 0 8px; font-size: 1rem; color: var(--moon); }
+#details .hint { margin: 0 0 6px; font-size: 0.82rem; color: var(--text-dim); }
 #details dl { margin: 0; font-size: 0.85rem; }
 #details dt { color: var(--text-dim); margin-top: 8px; }
 #details dd { margin: 2px 0 0; font-family: ui-monospace, monospace; word-break: break-all; }

@@ -28,6 +28,7 @@ class Config:
     scan_interval_minutes: int = 10
     ping_interval_seconds: int = 60
     db_path: str = "moonlan.db"
+    unmanaged_threshold: int = 3  # хостов на порту; 0 — отключить pseudo-коммутаторы
     demo: bool = False
 
 
@@ -60,6 +61,9 @@ def load_config(path: Path | None = None) -> Config:
             raw.get("ping_interval_seconds", cfg.ping_interval_seconds)
         )
         cfg.db_path = str(raw.get("db_path", cfg.db_path))
+        cfg.unmanaged_threshold = int(
+            raw.get("unmanaged_threshold", cfg.unmanaged_threshold)
+        )
 
     if os.environ.get("MOONLAN_DEMO") == "1":
         cfg.demo = True

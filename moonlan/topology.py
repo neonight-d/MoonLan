@@ -20,6 +20,9 @@
    Один и тот же MAC может быть виден с нескольких коммутаторов;
    хост привязывается к тому порту, где кроме него меньше всего
    других MAC (это и есть порт непосредственного подключения).
+5. Неуправляемые коммутаторы. Если на не-uplink порту найдено больше
+   unmanaged_threshold хостов, за портом почти наверняка коммутатор
+   без SNMP или точка доступа: хосты группируются под pseudo-узлом.
 """
 
 from __future__ import annotations
@@ -36,6 +39,7 @@ from .snmp_collector import SwitchData
 log = logging.getLogger(__name__)
 
 UPLINK_MAC_THRESHOLD = 8
+UNMANAGED_THRESHOLD = 3  # хостов на порту; больше — рисуем pseudo-коммутатор
 
 
 @dataclass
@@ -45,6 +49,7 @@ class TopologyState:
     switches: list[dict] = field(default_factory=list)
     links: list[dict] = field(default_factory=list)
     hosts: list[dict] = field(default_factory=list)
+    pseudo_switches: list[dict] = field(default_factory=list)
     vlan_names: dict[int, str] = field(default_factory=dict)
     last_scan: float = 0.0
     scanning: bool = False
@@ -55,12 +60,14 @@ class TopologyState:
         switches: list[dict],
         links: list[dict],
         hosts: list[dict],
+        pseudo_switches: list[dict],
         vlan_names: dict[int, str],
     ) -> None:
         with self._lock:
             self.switches = switches
             self.links = links
             self.hosts = hosts
+            self.pseudo_switches = pseudo_switches
             self.vlan_names = vlan_names
             self.last_scan = time.time()
 
@@ -70,6 +77,7 @@ class TopologyState:
                 "switches": self.switches,
                 "links": self.links,
                 "hosts": self.hosts,
+                "pseudo_switches": self.pseudo_switches,
                 "vlan_names": self.vlan_names,
                 "last_scan": self.last_scan,
                 "scanning": self.scanning,
@@ -135,7 +143,8 @@ def _make_link(a: SwitchData, pa: int, b: SwitchData, pb: int) -> dict:
 
 def build_topology(
     collected: Iterable[SwitchData],
-) -> tuple[list[dict], list[dict], list[dict], dict[int, str]]:
+    unmanaged_threshold: int = UNMANAGED_THRESHOLD,
+) -> tuple[list[dict], list[dict], list[dict], list[dict], dict[int, str]]:
     """Превращает данные опроса в узлы и связи для схемы."""
     switches = [sw for sw in collected if sw.reachable]
     mac_to_switch = {sw.bridge_mac: sw for sw in switches if sw.bridge_mac}
@@ -204,15 +213,34 @@ def build_topology(
 
     switch_by_ip = {sw.ip: sw for sw in switches}
     hosts = []
+    hosts_per_port: dict[tuple[str, int], list[dict]] = {}
     for mac, (_, sw_ip, if_index) in sorted(best_location.items()):
         sw = switch_by_ip[sw_ip]
-        hosts.append({
+        host = {
             "mac": mac,
             "switch": sw_ip,
             "port": _port_name(sw, if_index),
             "vlan": sw.port_pvid.get(if_index, 0),
             "name": "",  # имена и IP добавляются из БД (ARP/DNS)
-        })
+        }
+        hosts.append(host)
+        hosts_per_port.setdefault((sw_ip, if_index), []).append(host)
+
+    # 5. Много хостов на не-uplink порту — за ним неуправляемый коммутатор
+    pseudo_switches: list[dict] = []
+    if unmanaged_threshold > 0:
+        for (sw_ip, if_index), port_hosts in sorted(hosts_per_port.items()):
+            if len(port_hosts) <= unmanaged_threshold:
+                continue
+            pseudo_id = f"pseudo:{sw_ip}:{if_index}"
+            for host in port_hosts:
+                host["via"] = pseudo_id
+            pseudo_switches.append({
+                "id": pseudo_id,
+                "switch": sw_ip,
+                "port": _port_name(switch_by_ip[sw_ip], if_index),
+                "host_count": len(port_hosts),
+            })
 
     switch_dicts = [{
         "ip": sw.ip,
@@ -230,4 +258,4 @@ def build_topology(
             if name:
                 vlan_names.setdefault(vlan_id, name)
 
-    return switch_dicts, links, hosts, vlan_names
+    return switch_dicts, links, hosts, pseudo_switches, vlan_names

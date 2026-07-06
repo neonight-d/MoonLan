@@ -180,6 +180,31 @@ function buildGraphData() {
     });
   }
 
+  for (const ps of topology.pseudo_switches || []) {
+    nodes.push({
+      id: ps.id,
+      label: "Коммутатор без SNMP",
+      shape: "square",
+      size: 14,
+      color: {
+        background: "#3a4356",
+        border: colors.dim,
+        highlight: { background: "#4a5468", border: colors.moon },
+      },
+      shapeProperties: { borderDashes: [4, 4] },
+      borderWidth: 2,
+      font: { color: colors.dim, size: 11 },
+    });
+    edges.push({
+      id: "psedge:" + ps.id,
+      from: "sw:" + ps.switch,
+      to: ps.id,
+      dashes: [4, 4],
+      color: { color: colors.dim, opacity: 0.7 },
+      width: 2,
+    });
+  }
+
   for (const host of topology.hosts) {
     const c = statusColor(host);
     nodes.push({
@@ -192,7 +217,7 @@ function buildGraphData() {
     });
     edges.push({
       id: "hostedge:" + host.mac,
-      from: "sw:" + host.switch,
+      from: host.via || "sw:" + host.switch,
       to: "host:" + host.mac,
       color: { color: colors.link, opacity: 0.35 },
       width: 1,
@@ -269,6 +294,15 @@ function showDetails(nodeId) {
       <dt>Порты (активно/всего)</dt><dd>${sw.ports_up} / ${sw.ports_total}</dd>
       <dt>Отвечал</dt><dd>${fmtTime(sw.last_ping_ok)}</dd>
       <dt>Описание</dt><dd>${sw.descr || "—"}</dd></dl>`;
+  } else if (nodeId.startsWith("pseudo:")) {
+    const ps = (topology.pseudo_switches || []).find((p) => p.id === nodeId);
+    if (!ps) return;
+    html = `<h3>Коммутатор без SNMP</h3>
+      <p class="hint">За этим портом виден неуправляемый коммутатор
+      или точка доступа (${ps.host_count} устройств).</p><dl>
+      <dt>Коммутатор</dt><dd>${ps.switch}</dd>
+      <dt>Порт</dt><dd>${ps.port}</dd>
+      <dt>Устройств за портом</dt><dd>${ps.host_count}</dd></dl>`;
   } else {
     const host = topology.hosts.find((h) => "host:" + h.mac === nodeId);
     if (!host) return;
