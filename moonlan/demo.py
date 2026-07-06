@@ -1,15 +1,18 @@
 """Demo mode: a virtual network to explore MoonLan without switches.
 
-A star of five switches: a core and four rays. Demonstrates every
-v0.4.x feature: accurate direct links (the rays see each other through
-the core, but there are no false links between them), a 2×1G LACP
-aggregate between the core and the first ray, an unmanaged switch with
-five hosts behind one port of the second ray, port PVIDs and VLAN names.
-The rays see the core under an interface MAC rather than the bridge MAC
-(own_macs check); the fourth ray does not see the core at all — its link
-is built from one-way visibility. The third ray keeps its uplink FDB on
-an unmapped bridge-port, the way the collector stores trunks missing
-from dot1dBasePortIfIndex.
+A star of five switches that reproduces the real-world scenario the
+tree algorithm was built for:
+
+- the core sees every ray, each on its own port (one of them on a
+  synthetic bridge-port — a D-Link-style LAG trunk missing from
+  dot1dBasePortIfIndex);
+- the rays do NOT see the core at all (permanent one-way visibility);
+- rays see stray interface MACs of other rays through the core — the
+  branch invariant must prevent false ray-to-ray links;
+- a 2×1G LACP aggregate (IEEE8023-LAG-MIB) between the core and the
+  first ray;
+- an unmanaged switch with five hosts behind one port of the second ray;
+- port PVIDs and VLAN names.
 """
 
 from __future__ import annotations
@@ -49,18 +52,26 @@ def _iface_mac(sw: SwitchData) -> str:
     return next(m for m in sw.own_macs if m != sw.bridge_mac)
 
 
+def _synthetic_port(sw: SwitchData, bridge_port: int) -> int:
+    """A trunk bridge-port missing from dot1dBasePortIfIndex."""
+    if_index = -bridge_port
+    sw.ports[if_index] = PortInfo(
+        if_index=if_index, name=f"bridge-port {bridge_port}", is_physical=False
+    )
+    return if_index
+
+
 def demo_network() -> list[SwitchData]:
-    """A star: core + four rays, LACP, a pseudo-switch, VLANs."""
+    """A star: core + four rays, LACP, a LAG trunk, a pseudo-switch, VLANs."""
     core = _switch("10.0.0.10", "core-sw", 1)
     ray1 = _switch("10.0.0.21", "access-sw-1", 2)
     ray2 = _switch("10.0.0.22", "access-sw-2", 3)
     ray3 = _switch("10.0.0.23", "access-sw-3", 4)
     ray4 = _switch("10.0.0.24", "access-sw-4", 5)
     switches = [core, ray1, ray2, ray3, ray4]
-    rays = [ray1, ray2, ray3, ray4]
 
-    # A 2×1G LACP between the core (ports 1 and 25) and the first ray
-    # (ports 25 and 26)
+    # A 2×1G LACP aggregate (IEEE8023-LAG-MIB) between the core
+    # (ports 1 and 25) and the first ray (ports 25 and 26)
     for sw, members in ((core, (1, 25)), (ray1, (25, 26))):
         sw.ports[LAG_IFINDEX] = PortInfo(
             if_index=LAG_IFINDEX, name="Po1", oper_up=True, speed_mbps=2000,
@@ -70,35 +81,30 @@ def demo_network() -> list[SwitchData]:
         for m in members:
             sw.ports[m].oper_up = True
 
-    # Core-to-ray trunks: the core has one port per ray, each ray uplinks
-    # on port 24 (ray1 uplinks through the aggregate). The FDB is filled
-    # the way a real star looks: the core sees the rays' bridge MACs, the
-    # rays see the core under its interface MAC (own_macs check) and each
-    # other through their uplinks. ray4 does not see the core at all —
-    # the one-way visibility check. ray3 keeps its uplink FDB on an
-    # unmapped bridge-port (ifIndex -24) — the way the collector stores
-    # trunks missing from dot1dBasePortIfIndex.
-    ray3_trunk = -24
-    ray3.ports[ray3_trunk] = PortInfo(
-        if_index=ray3_trunk, name="bridge-port 24", is_physical=False
-    )
-    core_port_to_ray = {ray1.ip: 1, ray2.ip: 2, ray3.ip: 3, ray4.ip: 4}
-    for ray in (ray2, ray3, ray4):
+    # The core sees every ray on its own port. The trunk to ray3 lives
+    # on a synthetic bridge-port on BOTH sides — the way D-Link exposes
+    # LAG trunks without IEEE8023-LAG-MIB. The rays do not see the core.
+    core_trunk_to_ray3 = _synthetic_port(core, 3)
+    ray3_trunk = _synthetic_port(ray3, 24)
+    core_port_to_ray = {
+        ray1.ip: 1,               # LACP member -> normalized to Po1
+        ray2.ip: 2,
+        ray3.ip: core_trunk_to_ray3,
+        ray4.ip: 4,
+    }
+    for ray in (ray2, ray4):
         core.ports[core_port_to_ray[ray.ip]].oper_up = True
         ray.ports[24].oper_up = True
-    for ray in rays:
-        if ray is ray1:
-            uplink = 25
-        elif ray is ray3:
-            uplink = ray3_trunk
-        else:
-            uplink = 24
+    for ray in (ray1, ray2, ray3, ray4):
         core.fdb[ray.bridge_mac] = core_port_to_ray[ray.ip]
-        if ray is not ray4:
-            ray.fdb[_iface_mac(core)] = uplink
-        for other in rays:
-            if other is not ray:
-                ray.fdb[other.bridge_mac] = uplink
+
+    # Stray MACs of other rays leak through the core onto the rays'
+    # uplinks: they reveal each ray's uplink port, and the branch
+    # invariant must keep them from becoming false ray-to-ray links.
+    ray1.fdb[_iface_mac(ray3)] = 25          # LACP member -> Po1
+    ray2.fdb[_iface_mac(ray4)] = 24
+    ray3.fdb[_iface_mac(ray2)] = ray3_trunk  # synthetic uplink
+    # ray4 sees nobody at all -> its link port stays "?"
 
     def connect_host(sw: SwitchData, port: int, vlan: int) -> str:
         mac = _rand_mac()
