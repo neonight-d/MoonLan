@@ -1,8 +1,8 @@
-"""Хранилище SQLite: хосты и журнал событий.
+"""SQLite storage: hosts and the event journal.
 
-Стандартный sqlite3 без ORM. Методы синхронные; из асинхронного кода
-их следует вызывать через asyncio.to_thread. Одно соединение делится
-между потоками (check_same_thread=False), доступ сериализуется Lock'ом.
+Plain sqlite3, no ORM. All methods are synchronous; call them from
+async code via asyncio.to_thread. A single connection is shared between
+threads (check_same_thread=False), access is serialized with a Lock.
 """
 
 from __future__ import annotations
@@ -19,16 +19,16 @@ DEFAULT_DB_PATH = Path("moonlan.db")
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS hosts (
-    mac        TEXT PRIMARY KEY,          -- нижний регистр, через двоеточие
+    mac        TEXT PRIMARY KEY,          -- lowercase, colon-separated
     ip         TEXT DEFAULT '',
-    name       TEXT DEFAULT '',           -- из обратного DNS
+    name       TEXT DEFAULT '',           -- from reverse DNS
     switch_ip  TEXT DEFAULT '',
     port       TEXT DEFAULT '',
     first_seen REAL NOT NULL,             -- unix time
-    last_seen  REAL NOT NULL,             -- последний раз виден в FDB
-    last_ping_ok REAL DEFAULT 0,          -- последний успешный ping
-    ping_up    INTEGER DEFAULT 0,         -- 1 = отвечает сейчас
-    vlan       INTEGER DEFAULT 0          -- PVID порта, на котором найден хост
+    last_seen  REAL NOT NULL,             -- last seen in FDB
+    last_ping_ok REAL DEFAULT 0,          -- last successful ping
+    ping_up    INTEGER DEFAULT 0,         -- 1 = replying right now
+    vlan       INTEGER DEFAULT 0          -- PVID of the port the host is on
 );
 CREATE TABLE IF NOT EXISTS journal (
     id      INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -50,7 +50,7 @@ class Database:
             self._migrate()
 
     def _migrate(self) -> None:
-        """Дотягивает схему старой БД: добавляет недостающие колонки."""
+        """Brings an old database up to date: adds missing columns."""
         columns = {
             row[1] for row in self._conn.execute("PRAGMA table_info(hosts)")
         }
@@ -58,18 +58,18 @@ class Database:
             self._conn.execute(
                 "ALTER TABLE hosts ADD COLUMN vlan INTEGER DEFAULT 0"
             )
-            log.info("Миграция БД: добавлена колонка hosts.vlan")
+            log.info("DB migration: added hosts.vlan column")
 
     def close(self) -> None:
         with self._lock:
             self._conn.close()
 
-    # ---------- хосты ----------
+    # ---------- hosts ----------
 
     def upsert_hosts(self, hosts: list[dict]) -> list[str]:
-        """Обновляет хосты после опроса FDB; возвращает впервые увиденные MAC.
+        """Updates hosts after an FDB poll; returns MACs seen for the first time.
 
-        Для новых MAC пишет событие new_mac в журнал.
+        Writes a new_mac journal event for every new MAC.
         """
         now = time.time()
         new_macs: list[str] = []
@@ -92,7 +92,7 @@ class Database:
                     )
                     new_macs.append(h["mac"])
         for mac in new_macs:
-            log.info("Новый MAC-адрес: %s", mac)
+            log.info("New MAC address: %s", mac)
         return new_macs
 
     def set_ips(self, mac_to_ip: dict[str, str]) -> None:
@@ -114,7 +114,7 @@ class Database:
         return {row["mac"]: dict(row) for row in rows}
 
     def hosts_with_ip(self) -> list[tuple[str, str]]:
-        """Пары (mac, ip) всех хостов с известным IP."""
+        """(mac, ip) pairs of all hosts with a known IP."""
         with self._lock:
             rows = self._conn.execute(
                 "SELECT mac, ip FROM hosts WHERE ip != ''"
@@ -122,7 +122,7 @@ class Database:
         return [(row["mac"], row["ip"]) for row in rows]
 
     def hosts_without_name(self) -> list[tuple[str, str]]:
-        """Пары (mac, ip) хостов с IP, но без имени — кандидаты на обратный DNS."""
+        """(mac, ip) pairs of hosts with an IP but no name — reverse DNS candidates."""
         with self._lock:
             rows = self._conn.execute(
                 "SELECT mac, ip FROM hosts WHERE ip != '' AND name = ''"
@@ -132,11 +132,12 @@ class Database:
     # ---------- ping ----------
 
     def update_ping(self, results: dict[str, bool], ts: float) -> None:
-        """Применяет результаты ping (mac -> отвечает ли).
+        """Applies ping results (mac -> replied or not).
 
-        При смене состояния пишет host_up/host_down в журнал. Первый в жизни
-        хоста успешный ping событием не считается — иначе после запуска
-        журнал засоряется host_up по каждому живому хосту.
+        Writes host_up/host_down journal events on state changes. The very
+        first successful ping in a host's life is not an event — otherwise
+        the journal would be flooded with host_up for every live host
+        right after startup.
         """
         with self._lock, self._conn:
             for mac, up in results.items():
@@ -165,7 +166,7 @@ class Database:
                     )
 
     def set_ping_state(self, mac: str, up: bool, last_ok: float) -> None:
-        """Прямо выставляет состояние ping без записи в журнал (демо-режим)."""
+        """Sets the ping state directly, no journal event (demo mode)."""
         with self._lock, self._conn:
             self._conn.execute(
                 "UPDATE hosts SET ping_up = ?, last_ping_ok = ? WHERE mac = ?",
@@ -173,13 +174,13 @@ class Database:
             )
 
     def touch_ping_ok(self, ts: float) -> None:
-        """Обновляет last_ping_ok у живых хостов (демо-режим)."""
+        """Refreshes last_ping_ok of live hosts (demo mode)."""
         with self._lock, self._conn:
             self._conn.execute(
                 "UPDATE hosts SET last_ping_ok = ? WHERE ping_up = 1", (ts,)
             )
 
-    # ---------- журнал ----------
+    # ---------- journal ----------
 
     def add_event(self, ts: float, event: str, mac: str, details: str = "") -> None:
         with self._lock, self._conn:
@@ -189,7 +190,7 @@ class Database:
             )
 
     def journal(self, limit: int = 100) -> list[dict]:
-        """Последние события, новые сверху; к каждому — имя и IP хоста."""
+        """Latest events, newest first; each with the host's name and IP."""
         with self._lock:
             rows = self._conn.execute(
                 "SELECT j.id, j.ts, j.event, j.mac, j.details, h.name, h.ip "

@@ -1,11 +1,12 @@
-"""Диагностика коммутатора по SNMP: как MoonLan видит устройство.
+"""SNMP diagnostics for a switch: how MoonLan sees the device.
 
-Запуск:  python -m moonlan.diag <ip> [--community public] [--timeout 2]
+Usage:  python -m moonlan.diag <ip> [--community public] [--timeout 2]
 
-Community и timeout по умолчанию берутся из config.yaml. Утилита ничего
-не пишет в БД и не требует запущенного сервиса. Вывод предназначен для
-разбора проблем построения топологии: несмаппленные bridge-порты,
-поддержка LAG-MIB, видимость соседних коммутаторов в FDB.
+Community and timeout default to the values from config.yaml. The tool
+writes nothing to the database and does not need the running service.
+The output is meant for debugging topology inference: unmapped
+bridge-ports, LAG-MIB support, visibility of neighboring switches in
+the FDB.
 """
 
 from __future__ import annotations
@@ -44,7 +45,7 @@ def _section(title: str) -> None:
 async def _own_macs_light(
     collector: SnmpCollector, ip: str
 ) -> tuple[str | None, set[str]]:
-    """sysName и own_macs соседа (bridge MAC + ifPhysAddress), без FDB."""
+    """A neighbor's sysName and own_macs (bridge MAC + ifPhysAddress), no FDB."""
     sys_name = await collector._get(ip, OID_SYS_NAME)
     if sys_name is None:
         return None, set()
@@ -67,12 +68,12 @@ async def run_diag(
     sys_name = await collector._get(ip, OID_SYS_NAME)
     if sys_name is None:
         sys.exit(
-            f"{ip} не отвечает по SNMP. Проверьте community, timeout "
-            f"и доступность устройства."
+            f"{ip} does not respond to SNMP. Check the community, "
+            f"the timeout and device availability."
         )
 
-    # 1. Общие сведения
-    _section("1. Общие сведения")
+    # 1. General information
+    _section("1. General information")
     print(f"sysName:    {sys_name}")
     sys_descr = await collector._get(ip, OID_SYS_DESCR)
     print(f"sysDescr:   {sys_descr if sys_descr is not None else '—'}")
@@ -80,8 +81,8 @@ async def run_diag(
     bridge_mac = _fmt_mac(bytes(bridge)) if bridge is not None else ""
     print(f"bridge MAC: {bridge_mac or '—'}")
 
-    # 2. Интерфейсы
-    _section("2. Интерфейсы (ifTable)")
+    # 2. Interfaces
+    _section("2. Interfaces (ifTable)")
     if_types: dict[int, int] = {}
     if_names: dict[int, str] = {}
     if_oper: dict[int, int] = {}
@@ -98,8 +99,8 @@ async def run_diag(
     indexes = sorted(set(if_names) | set(if_types) | set(if_oper))
     physical = [i for i in indexes if if_types.get(i) == IF_TYPE_ETHERNET]
     print(
-        f"записей ifTable: {len(indexes)}, "
-        f"из них физических (ifType={IF_TYPE_ETHERNET}): {len(physical)}"
+        f"ifTable entries: {len(indexes)}, "
+        f"physical (ifType={IF_TYPE_ETHERNET}): {len(physical)}"
     )
     for i in indexes[:MAX_IF_ROWS]:
         oper = {1: "up", 2: "down"}.get(if_oper.get(i, 0), "?")
@@ -108,7 +109,7 @@ async def run_diag(
             f"oper {oper:<4}  {if_names.get(i, '')}"
         )
     if len(indexes) > MAX_IF_ROWS:
-        print(f"  … и ещё {len(indexes) - MAX_IF_ROWS} строк")
+        print(f"  … and {len(indexes) - MAX_IF_ROWS} more rows")
 
     # 3. dot1dBasePortIfIndex
     _section("3. dot1dBasePortIfIndex (bridge-port -> ifIndex)")
@@ -116,7 +117,7 @@ async def run_diag(
     async for suffix, value in collector._walk(ip, OID_PORT_IFINDEX):
         port_map[suffix[0]] = int(value)
     if not port_map:
-        print("таблица пуста")
+        print("the table is empty")
     for bridge_port in sorted(port_map):
         print(f"  bridge-port {bridge_port:>4} -> ifIndex {port_map[bridge_port]}")
 
@@ -129,33 +130,33 @@ async def run_diag(
         raw = bytes(value)
         if len(raw) == 6 and any(raw):
             own_macs.add(_fmt_mac(raw))
-    print(f"всего: {len(own_macs)} (MAC management-IP из ARP сюда не входит)")
+    print(f"total: {len(own_macs)} (the management-IP MAC from ARP is not included)")
     for mac in sorted(own_macs)[:10]:
         print(f"  {mac}")
     if len(own_macs) > 10:
-        print(f"  … и ещё {len(own_macs) - 10}")
+        print(f"  … and {len(own_macs) - 10} more")
 
     # 5. FDB
-    _section("5. FDB (таблица MAC-адресов)")
-    fdb: dict[str, int] = {}  # MAC -> bridge-port (первое вхождение)
+    _section("5. FDB (MAC address table)")
+    fdb: dict[str, int] = {}  # MAC -> bridge-port (first occurrence)
     for label, oid in (("BRIDGE-MIB", OID_FDB_PORT), ("Q-BRIDGE-MIB", OID_Q_FDB_PORT)):
         count = 0
         async for suffix, value in collector._walk(ip, oid):
             count += 1
             mac = ":".join(f"{octet:02x}" for octet in suffix[-6:])
             fdb.setdefault(mac, int(value))
-        print(f"{label}: {count} записей")
-    print(f"уникальных MAC: {len(fdb)}")
+        print(f"{label}: {count} entries")
+    print(f"unique MACs: {len(fdb)}")
     per_port = Counter(fdb.values())
     for bridge_port in sorted(per_port):
         if bridge_port == 0:
-            mapped = "порт 0 (CPU / сам коммутатор)"
+            mapped = "port 0 (CPU / the switch itself)"
         elif bridge_port in port_map:
             mapped = f"ifIndex {port_map[bridge_port]}"
         else:
-            mapped = "НЕТ в dot1dBasePortIfIndex (синтетический ifIndex "
+            mapped = "NOT in dot1dBasePortIfIndex (synthetic ifIndex "
             mapped += f"{-bridge_port})"
-        print(f"  bridge-port {bridge_port:>4}: {per_port[bridge_port]:>4} MAC, {mapped}")
+        print(f"  bridge-port {bridge_port:>4}: {per_port[bridge_port]:>4} MACs, {mapped}")
 
     # 6. LAG-MIB
     _section("6. IEEE8023-LAG-MIB (dot3adAggPortAttachedAggID)")
@@ -163,51 +164,51 @@ async def run_diag(
     async for suffix, value in collector._walk(ip, OID_LAG_ATTACHED_ID):
         lag[suffix[0]] = int(value)
     if not lag:
-        print("записей нет — LAG-MIB не поддерживается или недоступен")
+        print("no entries — LAG-MIB is not supported or not available")
     else:
-        print(f"записей: {len(lag)}")
+        print(f"entries: {len(lag)}")
         for member in sorted(lag):
             note = (
-                "  <- член агрегата"
+                "  <- aggregate member"
                 if lag[member] not in (0, member)
                 else ""
             )
             print(f"  ifIndex {member:>4} -> aggregate {lag[member]}{note}")
 
-    # 7. Другие коммутаторы из config.switches
-    _section("7. Другие коммутаторы из config.yaml в FDB этого устройства")
+    # 7. Other switches from config.switches
+    _section("7. Other switches from config.yaml in this device's FDB")
     others = [other for other in config_switches if other != ip]
     if not others:
-        print("в config.yaml нет других коммутаторов")
+        print("no other switches in config.yaml")
     for other_ip in others:
         other_name, other_macs = await _own_macs_light(collector, other_ip)
         if other_name is None:
-            print(f"{other_ip}: не отвечает по SNMP — пропущен")
+            print(f"{other_ip}: does not respond to SNMP — skipped")
             continue
         seen = {mac: fdb[mac] for mac in other_macs if mac in fdb}
         if seen:
             where = ", ".join(
-                f"{mac} на bridge-port {bp}" for mac, bp in sorted(seen.items())
+                f"{mac} on bridge-port {bp}" for mac, bp in sorted(seen.items())
             )
-            print(f"{other_ip} ({other_name}): ВИДЕН — {where}")
+            print(f"{other_ip} ({other_name}): VISIBLE — {where}")
         else:
             print(
-                f"{other_ip} ({other_name}): НЕ виден в FDB "
-                f"(проверено MAC: {len(other_macs)})"
+                f"{other_ip} ({other_name}): NOT visible in the FDB "
+                f"(MACs checked: {len(other_macs)})"
             )
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(
         prog="python -m moonlan.diag",
-        description="Диагностика коммутатора по SNMP (только чтение, БД не трогает)",
+        description="SNMP diagnostics for a switch (read-only, does not touch the DB)",
     )
-    parser.add_argument("ip", help="IP-адрес коммутатора")
+    parser.add_argument("ip", help="switch IP address")
     parser.add_argument(
-        "--community", help="SNMP community (по умолчанию из config.yaml)"
+        "--community", help="SNMP community (defaults to config.yaml)"
     )
     parser.add_argument(
-        "--timeout", type=int, help="таймаут SNMP в секундах (по умолчанию из config.yaml)"
+        "--timeout", type=int, help="SNMP timeout in seconds (defaults to config.yaml)"
     )
     args = parser.parse_args()
     cfg = load_config()

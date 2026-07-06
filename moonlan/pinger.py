@@ -1,7 +1,7 @@
-"""Ping-мониторинг через системную утилиту ping.
+"""Ping monitoring via the system ping utility.
 
-Raw-сокеты не используются, поэтому root не нужен. Параллельность
-ограничена семафором, чтобы не порождать сотни процессов разом.
+No raw sockets are used, so root is not required. Concurrency is
+limited by a semaphore to avoid spawning hundreds of processes at once.
 """
 
 from __future__ import annotations
@@ -15,7 +15,7 @@ _semaphore = asyncio.Semaphore(MAX_CONCURRENT)
 
 
 async def ping(ip: str) -> bool:
-    """Один ICMP-запрос; True, если хост ответил в течение секунды."""
+    """One ICMP request; True if the host replied within a second."""
     async with _semaphore:
         proc = await asyncio.create_subprocess_exec(
             "ping", "-c", "1", "-W", "1", ip,
@@ -26,7 +26,7 @@ async def ping(ip: str) -> bool:
 
 
 async def ping_many(ips: Iterable[str]) -> dict[str, bool]:
-    """Пингует все адреса параллельно; IP -> отвечает ли."""
+    """Pings all addresses in parallel; IP -> whether it replied."""
     unique = list(dict.fromkeys(ips))
     results = await asyncio.gather(*(ping(ip) for ip in unique))
     return dict(zip(unique, results))

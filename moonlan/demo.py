@@ -1,12 +1,15 @@
-"""Демо-режим: виртуальная сеть, чтобы посмотреть MoonLan без коммутаторов.
+"""Demo mode: a virtual network to explore MoonLan without switches.
 
-Звезда из пяти коммутаторов: ядро и четыре луча. Демонстрирует все
-возможности v0.4.x: корректные прямые связи (лучи видят друг друга через
-ядро, но ложных связей между ними нет), LACP-агрегат 2×1G между ядром
-и первым лучом, неуправляемый коммутатор с пятью хостами за одним
-портом второго луча, PVID и имена VLAN на портах. Лучи видят ядро под
-интерфейсным MAC, а не под базовым (проверка own_macs); четвёртый луч
-не видит ядро вовсе — связь строится по односторонней видимости.
+A star of five switches: a core and four rays. Demonstrates every
+v0.4.x feature: accurate direct links (the rays see each other through
+the core, but there are no false links between them), a 2×1G LACP
+aggregate between the core and the first ray, an unmanaged switch with
+five hosts behind one port of the second ray, port PVIDs and VLAN names.
+The rays see the core under an interface MAC rather than the bridge MAC
+(own_macs check); the fourth ray does not see the core at all — its link
+is built from one-way visibility. The third ray keeps its uplink FDB on
+an unmapped bridge-port, the way the collector stores trunks missing
+from dot1dBasePortIfIndex.
 """
 
 from __future__ import annotations
@@ -17,10 +20,10 @@ import time
 from .db import Database
 from .snmp_collector import PortInfo, SwitchData
 
-random.seed(7)  # чтобы демо-сеть была одинаковой при каждом запуске
+random.seed(7)  # keep the demo network identical between runs
 
 VLAN_NAMES = {1: "default", 8: "office", 11: "ipmi"}
-LAG_IFINDEX = 1000  # ifIndex логического порта Po1
+LAG_IFINDEX = 1000  # ifIndex of the logical port Po1
 
 
 def _rand_mac(prefix: str = "02:4d:4c") -> str:
@@ -33,8 +36,8 @@ def _switch(ip: str, name: str, mac_octet: int) -> SwitchData:
         sys_descr="MoonLan demo switch, 26 ports",
         bridge_mac=f"02:4d:4c:00:00:{mac_octet:02x}",
     )
-    # Как у реальных коммутаторов: кроме базового MAC есть интерфейсный,
-    # и в чужих FDB устройство видно именно под ним
+    # Like real switches: besides the bridge MAC there is an interface
+    # MAC, and that is what neighbors see in their FDB tables
     sw.own_macs = {sw.bridge_mac, f"02:4d:4c:00:01:{mac_octet:02x}"}
     for i in range(1, 27):
         sw.ports[i] = PortInfo(if_index=i, name=f"Gi0/{i}", oper_up=False, speed_mbps=1000)
@@ -47,7 +50,7 @@ def _iface_mac(sw: SwitchData) -> str:
 
 
 def demo_network() -> list[SwitchData]:
-    """Звезда: ядро + четыре луча, LACP, pseudo-коммутатор, VLAN."""
+    """A star: core + four rays, LACP, a pseudo-switch, VLANs."""
     core = _switch("10.0.0.10", "core-sw", 1)
     ray1 = _switch("10.0.0.21", "access-sw-1", 2)
     ray2 = _switch("10.0.0.22", "access-sw-2", 3)
@@ -56,7 +59,8 @@ def demo_network() -> list[SwitchData]:
     switches = [core, ray1, ray2, ray3, ray4]
     rays = [ray1, ray2, ray3, ray4]
 
-    # LACP 2×1G между ядром (порты 1 и 25) и первым лучом (порты 25 и 26)
+    # A 2×1G LACP between the core (ports 1 and 25) and the first ray
+    # (ports 25 and 26)
     for sw, members in ((core, (1, 25)), (ray1, (25, 26))):
         sw.ports[LAG_IFINDEX] = PortInfo(
             if_index=LAG_IFINDEX, name="Po1", oper_up=True, speed_mbps=2000,
@@ -66,13 +70,14 @@ def demo_network() -> list[SwitchData]:
         for m in members:
             sw.ports[m].oper_up = True
 
-    # Магистрали ядро—лучи: у ядра порт на каждый луч, у луча — аплинк 24
-    # (у ray1 аплинк — агрегат). FDB заполняем так, как выглядит реальная
-    # звезда: ядро видит базовые MAC лучей, лучи видят ядро под
-    # интерфейсным MAC (проверка own_macs), друг друга — через аплинк.
-    # ray4 не видит ядро вовсе — проверка односторонней видимости.
-    # У ray3 FDB аплинка лежит на несмаппленном bridge-порту (ifIndex -24) —
-    # так коллектор сохраняет транки, которых нет в dot1dBasePortIfIndex.
+    # Core-to-ray trunks: the core has one port per ray, each ray uplinks
+    # on port 24 (ray1 uplinks through the aggregate). The FDB is filled
+    # the way a real star looks: the core sees the rays' bridge MACs, the
+    # rays see the core under its interface MAC (own_macs check) and each
+    # other through their uplinks. ray4 does not see the core at all —
+    # the one-way visibility check. ray3 keeps its uplink FDB on an
+    # unmapped bridge-port (ifIndex -24) — the way the collector stores
+    # trunks missing from dot1dBasePortIfIndex.
     ray3_trunk = -24
     ray3.ports[ray3_trunk] = PortInfo(
         if_index=ray3_trunk, name="bridge-port 24", is_physical=False
@@ -100,17 +105,17 @@ def demo_network() -> list[SwitchData]:
         sw.ports[port].oper_up = True
         sw.fdb[mac] = port
         sw.port_pvid[port] = vlan
-        if sw is not core:  # ядро видит хосты лучей через свои магистрали
+        if sw is not core:  # the core sees ray hosts through its trunks
             core.fdb[mac] = core_port_to_ray[sw.ip]
         return mac
 
-    # Хосты: первый луч — офис, второй — офис + pseudo-коммутатор,
-    # третий — смешанный, в ядре — серверы в VLAN 11 (ipmi)
+    # Hosts: the first ray is an office, the second is an office plus a
+    # pseudo-switch, the third is mixed, the core hosts servers in VLAN 11
     for port in range(1, 9):
         connect_host(ray1, port, 1 if port <= 4 else 8)
     for port in range(1, 5):
         connect_host(ray2, port, 8)
-    for _ in range(5):  # 5 хостов на одном порту — неуправляемый коммутатор
+    for _ in range(5):  # 5 hosts on one port — an unmanaged switch
         connect_host(ray2, 5, 8)
     for port in range(1, 7):
         connect_host(ray3, port, 1 if port % 2 else 8)
@@ -126,10 +131,10 @@ _journal_seeded = False
 
 
 def enrich_db(db: Database, hosts: list[dict]) -> None:
-    """Данные v0.3 для демо: IP, имена, состояние ping, события журнала.
+    """v0.3 data for the demo: IPs, names, ping state, journal events.
 
-    Показывает все состояния UI: зелёный (отвечает), серый (не отвечает),
-    синий (без IP — ping невозможен), хосты с именем и без.
+    Shows every UI state: green (replying), grey (not replying),
+    blue (no IP — cannot ping), hosts with and without names.
     """
     global _journal_seeded
     now = time.time()
@@ -137,11 +142,11 @@ def enrich_db(db: Database, hosts: list[dict]) -> None:
     for i, host in enumerate(hosts):
         mac = host["mac"]
         if i % 5 == 4:
-            continue  # у части хостов IP так и не определился
+            continue  # some hosts never got an IP
         db.set_ips({mac: f"10.0.99.{10 + i}"})
-        if i % 3 != 2:  # у части хостов имени нет — только IP
+        if i % 3 != 2:  # some hosts have no name — only an IP
             db.set_name(mac, f"pc-{i + 1:02d}.demo.lan")
-        if i in (1, 6):  # пара выключенных: отвечали 15 минут назад
+        if i in (1, 6):  # a couple powered off: replied 15 minutes ago
             db.set_ping_state(mac, up=False, last_ok=now - 15 * 60)
         else:
             db.set_ping_state(mac, up=True, last_ok=now)

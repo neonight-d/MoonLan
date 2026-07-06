@@ -1,3 +1,3 @@
-"""MoonLan — построение карты локальной сети по данным SNMP."""
+"""MoonLan — builds a local network map from SNMP data."""
 
 __version__ = "0.4.2"

@@ -1,14 +1,14 @@
-/* MoonLan — ночная тема: тёмное небо, лунный свет */
+/* MoonLan — night theme: dark sky, moonlight */
 
 :root {
-  --bg: #0e1420;          /* ночное небо */
+  --bg: #0e1420;          /* night sky */
   --bg-panel: #141c2c;
   --bg-hover: #1c2739;
   --line: #26324a;
   --text: #d7dee9;
   --text-dim: #8593a8;
-  --moon: #e8e4d5;        /* лунный свет — главный акцент */
-  --link: #7fb4d9;        /* связи и интерактив */
+  --moon: #e8e4d5;        /* moonlight — the main accent */
+  --link: #7fb4d9;        /* links and interactive elements */
   --ok: #7fc98f;
   --warn: #d9a86b;
   font-size: 15px;
@@ -26,7 +26,7 @@ body {
   font-family: system-ui, "Segoe UI", sans-serif;
 }
 
-/* ---------- шапка ---------- */
+/* ---------- header ---------- */
 
 header {
   display: flex;
@@ -81,7 +81,7 @@ button {
 button:hover { background: rgba(232, 228, 213, 0.1); }
 button:focus-visible { outline: 2px solid var(--link); outline-offset: 2px; }
 
-/* ---------- две панели ---------- */
+/* ---------- two panels ---------- */
 
 main { flex: 1; display: flex; min-height: 0; }
 
@@ -130,7 +130,7 @@ main { flex: 1; display: flex; min-height: 0; }
 .device-list .sub { color: var(--text-dim); font-family: ui-monospace, monospace; font-size: 0.8rem; }
 .device-list li.hidden-by-search { display: none; }
 
-/* Индикатор состояния (ping) */
+/* Status indicator (ping) */
 .dot {
   width: 8px; height: 8px;
   border-radius: 50%;
@@ -144,7 +144,7 @@ main { flex: 1; display: flex; min-height: 0; }
 #map-panel { flex: 1; position: relative; min-width: 0; }
 #network { position: absolute; inset: 0; }
 
-/* ---------- панель деталей ---------- */
+/* ---------- details panel ---------- */
 
 #details {
   position: absolute;
@@ -166,7 +166,7 @@ main { flex: 1; display: flex; min-height: 0; }
   border: none; font-size: 1.1rem; padding: 2px 6px;
 }
 
-/* ---------- журнал событий ---------- */
+/* ---------- event journal ---------- */
 
 #journal {
   position: absolute;

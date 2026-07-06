@@ -1,4 +1,4 @@
-"""Загрузка конфигурации MoonLan из YAML-файла."""
+"""Loading the MoonLan configuration from a YAML file."""
 
 from __future__ import annotations
 
@@ -28,15 +28,15 @@ class Config:
     scan_interval_minutes: int = 10
     ping_interval_seconds: int = 60
     db_path: str = "moonlan.db"
-    unmanaged_threshold: int = 3  # хостов на порту; 0 — отключить pseudo-коммутаторы
+    unmanaged_threshold: int = 3  # hosts per port; 0 disables pseudo-switches
     demo: bool = False
 
 
 def load_config(path: Path | None = None) -> Config:
-    """Читает config.yaml; отсутствующие поля получают значения по умолчанию.
+    """Reads config.yaml; missing fields get default values.
 
-    Переменная окружения MOONLAN_DEMO=1 включает демо-режим
-    независимо от конфигурации.
+    The MOONLAN_DEMO=1 environment variable enables demo mode
+    regardless of the configuration.
     """
     cfg = Config()
     path = path or DEFAULT_CONFIG_PATH

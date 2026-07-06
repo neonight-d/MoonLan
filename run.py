@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Точка входа MoonLan: python run.py"""
+"""MoonLan entry point: python run.py"""
 
 import errno
 import socket
@@ -11,7 +11,7 @@ from moonlan.config import load_config
 
 
 def _ensure_port_free(host: str, port: int) -> None:
-    """Пробное занятие порта: uvicorn прячет OSError при bind внутри себя."""
+    """Trial bind: uvicorn hides the bind OSError inside itself."""
     try:
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
             sock.bind((host, port))
@@ -19,8 +19,8 @@ def _ensure_port_free(host: str, port: int) -> None:
         if exc.errno != errno.EADDRINUSE:
             raise
         sys.exit(
-            f"Порт {port} занят. Проверьте, не запущен ли MoonLan уже: "
-            f"ss -ltnp | grep {port}"
+            f"Port {port} is already in use. Check whether MoonLan is "
+            f"already running: ss -ltnp | grep {port}"
         )
 
 

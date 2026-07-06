@@ -1,4 +1,4 @@
-"""Веб-сервис MoonLan: REST API и статический веб-интерфейс."""
+"""MoonLan web service: REST API and the static web UI."""
 
 from __future__ import annotations
 
@@ -25,18 +25,18 @@ WEB_DIR = Path(__file__).resolve().parent.parent / "web"
 
 state = TopologyState()
 config: Config = load_config()
-# В демо-режиме БД держим в памяти, чтобы не засорять реальную
+# In demo mode the DB lives in memory so the real one is not polluted
 db = Database(":memory:" if config.demo else config.db_path)
 
-# Состояние ping коммутаторов (они не в таблице hosts): ip -> {ping_up, last_ping_ok}
+# Ping state of switches (they are not in the hosts table): ip -> {ping_up, last_ping_ok}
 switch_ping: dict[str, dict] = {}
 
-# Объединение FDB с прошлыми опросами: защита связей от старения таблиц
+# FDB merged with previous polls: protects links from MAC table aging
 fdb_stability = FdbStability()
 
 
 async def run_scan() -> None:
-    """Один цикл опроса всех коммутаторов и пересборки топологии."""
+    """One cycle of polling all switches and rebuilding the topology."""
     if state.scanning:
         return
     state.scanning = True
@@ -55,8 +55,8 @@ async def run_scan() -> None:
             )
             if config.routers:
                 arp = await collect_arp(collector)
-            # MAC management-IP коммутатора — тоже его MAC: под ним
-            # коммутатор виден в FDB соседей
+            # The MAC of the switch's management IP is also its MAC:
+            # neighbors see the switch under it in their FDB tables
             ip_to_mac = {ip: mac for mac, ip in arp.items()}
             for sw in collected:
                 mac = ip_to_mac.get(sw.ip)
@@ -69,7 +69,7 @@ async def run_scan() -> None:
         )
         new_macs = await asyncio.to_thread(db.upsert_hosts, hosts)
         if new_macs:
-            log.info("Новых MAC: %d", len(new_macs))
+            log.info("New MACs: %d", len(new_macs))
         if config.demo:
             await asyncio.to_thread(demo.enrich_db, db, hosts)
         else:
@@ -79,9 +79,9 @@ async def run_scan() -> None:
         _merge_db_fields(hosts, await asyncio.to_thread(db.hosts_by_mac))
         state.update(switches, links, hosts, pseudo_switches, vlan_names)
         if config.demo:
-            await run_ping()  # сразу проставить состояние ping коммутаторам
+            await run_ping()  # set the switches' ping state right away
         log.info(
-            "Опрос завершён: коммутаторов %d, связей %d, хостов %d",
+            "Scan finished: %d switches, %d links, %d hosts",
             len(switches), len(links), len(hosts),
         )
     finally:
@@ -89,7 +89,7 @@ async def run_scan() -> None:
 
 
 def _merge_db_fields(hosts: list[dict], db_hosts: dict[str, dict]) -> None:
-    """Дополняет хосты топологии полями из БД (IP, имя, состояние ping)."""
+    """Enriches topology hosts with DB fields (IP, name, ping state)."""
     for h in hosts:
         row = db_hosts.get(h["mac"], {})
         h["ip"] = row.get("ip", "")
@@ -100,17 +100,17 @@ def _merge_db_fields(hosts: list[dict], db_hosts: dict[str, dict]) -> None:
 
 
 async def collect_arp(collector: SnmpCollector) -> dict[str, str]:
-    """Объединённая ARP-таблица всех маршрутизаторов: MAC -> IP."""
+    """The merged ARP table of all routers: MAC -> IP."""
     tables = await asyncio.gather(
         *(collector.collect_arp(ip) for ip in config.routers)
     )
     merged: dict[str, str] = {}
-    for table in tables:  # при конфликте побеждает последняя запись
+    for table in tables:  # on conflict the last entry wins
         merged.update(table)
     return merged
 
 
-# mac -> unix time последней попытки обратного DNS
+# mac -> unix time of the last reverse DNS attempt
 _dns_attempts: dict[str, float] = {}
 DNS_RETRY_SECONDS = 3600
 DNS_TIMEOUT = 1.0
@@ -127,7 +127,7 @@ async def _reverse_dns(ip: str) -> str:
 
 
 async def resolve_names() -> None:
-    """Обратный DNS для хостов с IP без имени, не чаще раза в час на хост."""
+    """Reverse DNS for hosts with an IP but no name, at most once an hour per host."""
     now = time.time()
     candidates = [
         (mac, ip)
@@ -145,7 +145,7 @@ async def resolve_names() -> None:
             await asyncio.to_thread(db.set_name, mac, name)
             resolved += 1
     if resolved:
-        log.info("Обратный DNS: имён получено %d из %d", resolved, len(candidates))
+        log.info("Reverse DNS: got %d names out of %d", resolved, len(candidates))
 
 
 async def periodic_scan() -> None:
@@ -153,16 +153,16 @@ async def periodic_scan() -> None:
         try:
             await run_scan()
         except Exception:
-            log.exception("Ошибка при опросе сети")
+            log.exception("Network scan failed")
         interval = config.scan_interval_minutes
         await asyncio.sleep(interval * 60 if interval > 0 else 3600)
 
 
 async def run_ping() -> None:
-    """Один цикл ping: все хосты с IP и все коммутаторы."""
+    """One ping cycle: every host with an IP and every switch."""
     now = time.time()
     if config.demo:
-        # Реальный ping не выполняем: обновляем время ответа живых хостов
+        # No real pings: just refresh the reply time of live hosts
         await asyncio.to_thread(db.touch_ping_ok, now)
         for sw in state.as_dict()["switches"]:
             switch_ping[sw["ip"]] = {"ping_up": True, "last_ping_ok": now}
@@ -190,7 +190,7 @@ async def periodic_ping() -> None:
         try:
             await run_ping()
         except Exception:
-            log.exception("Ошибка ping-мониторинга")
+            log.exception("Ping monitoring failed")
         await asyncio.sleep(max(config.ping_interval_seconds, 1))
 
 
@@ -201,11 +201,11 @@ async def lifespan(app: FastAPI):
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
     )
     if config.demo:
-        log.info("MoonLan запущен в ДЕМО-режиме (виртуальная сеть)")
+        log.info("MoonLan started in DEMO mode (virtual network)")
     elif not config.switches:
         log.warning(
-            "В config.yaml не указано ни одного коммутатора. "
-            "Добавьте адреса в раздел switches или запустите с MOONLAN_DEMO=1."
+            "No switches are configured in config.yaml. Add addresses to "
+            "the switches section or start with MOONLAN_DEMO=1."
         )
     tasks = [
         asyncio.create_task(periodic_scan()),
@@ -222,7 +222,7 @@ app = FastAPI(title="MoonLan", version=__version__, lifespan=lifespan)
 @app.get("/api/topology")
 async def api_topology() -> JSONResponse:
     topo = state.as_dict()
-    # Свежие данные из БД: ping обновляется чаще, чем идёт опрос SNMP
+    # Fresh DB data: ping is updated more often than SNMP polls happen
     db_hosts = await asyncio.to_thread(db.hosts_by_mac)
     hosts = [dict(h) for h in topo["hosts"]]
     _merge_db_fields(hosts, db_hosts)
@@ -267,5 +267,5 @@ async def api_status() -> dict:
     }
 
 
-# Статика веб-интерфейса — в самом конце, чтобы не перекрывать /api/*
+# The static web UI comes last so it does not shadow /api/*
 app.mount("/", StaticFiles(directory=str(WEB_DIR), html=True), name="web")
