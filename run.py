@@ -14,6 +14,9 @@ def _ensure_port_free(host: str, port: int) -> None:
     """Trial bind: uvicorn hides the bind OSError inside itself."""
     try:
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+            # uvicorn binds with SO_REUSEADDR; without it the trial bind
+            # fails on lingering TIME_WAIT sockets of a just-stopped server
+            sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
             sock.bind((host, port))
     except OSError as exc:
         if exc.errno != errno.EADDRINUSE:
