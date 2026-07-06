@@ -123,12 +123,25 @@ function linkId(link) {
   return "link:" + link.a + "|" + link.b;
 }
 
-/* Link caption: "LACP 2×1 Gbit/s" for an aggregate, otherwise the speed */
+/* Link caption: "LACP 2×1 Gbit/s" for an aggregate, "LAG trunk" for a
+   trunk detected via synthetic bridge-ports, otherwise the speed */
 function linkLabel(link) {
   if (link.lag && link.lag.count > 1) {
     return t("lacp") + " " + link.lag.count + "×" + fmtSpeed(link.speed_mbps / link.lag.count);
   }
+  if (link.lag && link.lag.trunk) {
+    const speed = fmtSpeed(link.speed_mbps);
+    return speed ? t("lagTrunk") + " " + speed : t("lagTrunk");
+  }
   return fmtSpeed(link.speed_mbps);
+}
+
+/* Port name in the link card; synthetic trunk ports get a "(LAG)" mark */
+function linkPortLabel(link, port) {
+  if (link.lag && link.lag.trunk && port.startsWith("bridge-port")) {
+    return port + " (LAG)";
+  }
+  return port;
 }
 
 /* Status dot class: alive / silent / no IP (cannot ping) */
@@ -243,14 +256,15 @@ function buildGraphData() {
   }
 
   for (const link of topology.links) {
-    const isLag = link.lag && link.lag.count > 1;
+    const isLacp = link.lag && link.lag.count > 1;
+    const isTrunk = link.lag && link.lag.trunk;
     edges.push({
       id: linkId(link),
       from: "sw:" + link.a,
       to: "sw:" + link.b,
       label: linkLabel(link),
       color: { color: colors.moon, opacity: 0.8 },
-      width: isLag ? 5 : 3,
+      width: isLacp ? 5 : isTrunk ? 4 : 3,
       font: { color: colors.dim, size: 11, strokeWidth: 0 },
     });
   }
@@ -404,14 +418,17 @@ function showLinkDetails(edgeId) {
     return sw ? sw.name : ip;
   };
   let html = `<h3>${swName(link.a)} — ${swName(link.b)}</h3><dl>
-    <dt>${fmt("portOnSide", { name: swName(link.a) })}</dt><dd>${link.a_port}</dd>
-    <dt>${fmt("portOnSide", { name: swName(link.b) })}</dt><dd>${link.b_port}</dd>
-    <dt>${t("speed")}</dt><dd>${fmtSpeed(link.speed_mbps) || "—"}</dd>`;
-  if (link.lag) {
+    <dt>${fmt("portOnSide", { name: swName(link.a) })}</dt><dd>${linkPortLabel(link, link.a_port)}</dd>
+    <dt>${fmt("portOnSide", { name: swName(link.b) })}</dt><dd>${linkPortLabel(link, link.b_port)}</dd>`;
+  // trunk speed is unknown — do not show a meaningless dash row
+  if (!(link.lag && link.lag.trunk) || link.speed_mbps) {
+    html += `<dt>${t("speed")}</dt><dd>${fmtSpeed(link.speed_mbps) || "—"}</dd>`;
+  }
+  if (link.lag && link.lag.count > 1) {
     html += `<dt>${t("lagAggregate")}</dt><dd>${linkLabel(link)}</dd>`;
-    if (link.lag.a_members.length)
+    if ((link.lag.a_members || []).length)
       html += `<dt>${fmt("portsOf", { name: swName(link.a) })}</dt><dd>${link.lag.a_members.join(", ")}</dd>`;
-    if (link.lag.b_members.length)
+    if ((link.lag.b_members || []).length)
       html += `<dt>${fmt("portsOf", { name: swName(link.b) })}</dt><dd>${link.lag.b_members.join(", ")}</dd>`;
   }
   html += "</dl>";
