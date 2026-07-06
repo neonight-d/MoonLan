@@ -31,6 +31,7 @@ log = logging.getLogger(__name__)
 OID_SYS_NAME = "1.3.6.1.2.1.1.5.0"
 OID_SYS_DESCR = "1.3.6.1.2.1.1.1.0"
 OID_IF_DESCR = "1.3.6.1.2.1.2.2.1.2"          # ifDescr.<ifIndex>
+OID_IF_TYPE = "1.3.6.1.2.1.2.2.1.3"           # ifType.<ifIndex>; 6 = ethernetCsmacd
 OID_IF_PHYS_ADDRESS = "1.3.6.1.2.1.2.2.1.6"   # ifPhysAddress.<ifIndex>
 OID_IF_NAME = "1.3.6.1.2.1.31.1.1.1.1"        # ifName.<ifIndex>
 OID_IF_OPER_STATUS = "1.3.6.1.2.1.2.2.1.8"    # 1=up, 2=down
@@ -46,12 +47,16 @@ OID_PVID = "1.3.6.1.2.1.17.7.1.4.5.1.1"       # dot1qPvid.<bridge-port>
 OID_VLAN_NAME = "1.3.6.1.2.1.17.7.1.4.3.1.1"  # dot1qVlanStaticName.<VLAN ID>
 
 
+IF_TYPE_ETHERNET = 6  # ethernetCsmacd
+
+
 @dataclass
 class PortInfo:
     if_index: int
     name: str = ""
     oper_up: bool = False
     speed_mbps: int = 0
+    is_physical: bool = True  # ifType 6; агрегаты/CPU/VLAN-интерфейсы — False
 
 
 @dataclass
@@ -159,6 +164,10 @@ class SnmpCollector:
             name = str(value).strip()
             if port and name:
                 port.name = name
+        async for suffix, value in self._walk(host, OID_IF_TYPE):
+            port = data.ports.get(suffix[0])
+            if port:
+                port.is_physical = int(value) == IF_TYPE_ETHERNET
         async for suffix, value in self._walk(host, OID_IF_OPER_STATUS):
             port = data.ports.get(suffix[0])
             if port:
@@ -210,6 +219,7 @@ class SnmpCollector:
                         data.ports[if_index] = PortInfo(
                             if_index=if_index,
                             name=f"bridge-port {bridge_port}",
+                            is_physical=False,
                         )
                 data.fdb[mac] = if_index
         if unmapped:

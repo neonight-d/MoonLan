@@ -59,7 +59,8 @@ def demo_network() -> list[SwitchData]:
     # LACP 2×1G между ядром (порты 1 и 25) и первым лучом (порты 25 и 26)
     for sw, members in ((core, (1, 25)), (ray1, (25, 26))):
         sw.ports[LAG_IFINDEX] = PortInfo(
-            if_index=LAG_IFINDEX, name="Po1", oper_up=True, speed_mbps=2000
+            if_index=LAG_IFINDEX, name="Po1", oper_up=True, speed_mbps=2000,
+            is_physical=False,
         )
         sw.lag_members = {m: LAG_IFINDEX for m in members}
         for m in members:
@@ -73,7 +74,9 @@ def demo_network() -> list[SwitchData]:
     # У ray3 FDB аплинка лежит на несмаппленном bridge-порту (ifIndex -24) —
     # так коллектор сохраняет транки, которых нет в dot1dBasePortIfIndex.
     ray3_trunk = -24
-    ray3.ports[ray3_trunk] = PortInfo(if_index=ray3_trunk, name="bridge-port 24")
+    ray3.ports[ray3_trunk] = PortInfo(
+        if_index=ray3_trunk, name="bridge-port 24", is_physical=False
+    )
     core_port_to_ray = {ray1.ip: 1, ray2.ip: 2, ray3.ip: 3, ray4.ip: 4}
     for ray in (ray2, ray3, ray4):
         core.ports[core_port_to_ray[ray.ip]].oper_up = True

@@ -302,8 +302,12 @@ def build_topology(
         "name": sw.sys_name or sw.ip,
         "mac": sw.bridge_mac,
         "descr": sw.sys_descr,
-        "ports_total": len(sw.ports),
-        "ports_up": sum(1 for p in sw.ports.values() if p.oper_up),
+        # Только физические порты (ifType 6): агрегаты, CPU- и
+        # VLAN-интерфейсы не завышают счётчик
+        "ports_total": sum(1 for p in sw.ports.values() if p.is_physical),
+        "ports_up": sum(
+            1 for p in sw.ports.values() if p.is_physical and p.oper_up
+        ),
     } for sw in switches]
 
     # Имена VLAN со всех коммутаторов (при совпадении ID первый выигрывает)
