@@ -1,4 +1,4 @@
-/* MoonLan web UI, v0.3 */
+/* MoonLan web UI, v0.4 */
 
 const els = {
   network: document.getElementById("network"),
@@ -17,12 +17,17 @@ const els = {
   journalList: document.getElementById("journal-list"),
   journalClose: document.getElementById("journal-close"),
   emptyState: document.getElementById("empty-state"),
+  langRu: document.getElementById("lang-ru"),
+  langEn: document.getElementById("lang-en"),
 };
 
 let network = null;
 let nodesDs = null;
 let edgesDs = null;
-let topology = { switches: [], links: [], hosts: [] };
+let topology = { switches: [], links: [], hosts: [], pseudo_switches: [] };
+let isScanning = false;
+let shownDetails = null; // {type: "node"|"link", id} — to re-render on language switch
+let lastEvents = null; // cached journal events for re-render
 
 const REFRESH_MS = 30000;
 
@@ -35,19 +40,74 @@ const colors = {
   panel: "#141c2c",
 };
 
-const EVENT_NAMES = {
-  new_mac: "Новое устройство",
-  host_down: "Хост недоступен",
-  host_up: "Хост снова в сети",
-};
-const EVENT_CLASSES = { new_mac: "ev-new", host_down: "ev-down", host_up: "ev-up" };
+/* ---------- localization ---------- */
 
-/* Подпись хоста: имя, иначе IP, иначе MAC */
+const LANG_KEY = "moonlan-lang";
+let lang = localStorage.getItem(LANG_KEY);
+if (lang !== "ru" && lang !== "en") {
+  lang = (navigator.language || "").toLowerCase().startsWith("ru") ? "ru" : "en";
+}
+
+function t(key) {
+  return (I18N[lang] && I18N[lang][key]) || I18N.en[key] || key;
+}
+
+/* t() with {placeholder} substitution */
+function fmt(key, params) {
+  let s = t(key);
+  for (const [name, value] of Object.entries(params)) {
+    s = s.replace("{" + name + "}", value);
+  }
+  return s;
+}
+
+function locale() {
+  return lang === "ru" ? "ru-RU" : "en-US";
+}
+
+/* Fill in all static texts for the current language */
+function applyStatic() {
+  document.documentElement.lang = lang;
+  document.title = t("title");
+  for (const el of document.querySelectorAll("[data-i18n]")) {
+    el.textContent = t(el.dataset.i18n);
+  }
+  for (const el of document.querySelectorAll("[data-i18n-html]")) {
+    el.innerHTML = t(el.dataset.i18nHtml);
+  }
+  els.search.placeholder = t("searchPlaceholder");
+  els.detailsClose.title = t("close");
+  els.journalClose.title = t("close");
+  els.langRu.classList.toggle("active", lang === "ru");
+  els.langEn.classList.toggle("active", lang === "en");
+}
+
+function setLang(newLang) {
+  if (newLang === lang) return;
+  lang = newLang;
+  localStorage.setItem(LANG_KEY, lang);
+  applyStatic();
+  updateScanStatus();
+  renderSidebar();
+  renderGraph();
+  // re-render whatever panel is open
+  if (!els.details.classList.contains("hidden") && shownDetails) {
+    if (shownDetails.type === "link") showLinkDetails(shownDetails.id);
+    else showDetails(shownDetails.id);
+  }
+  if (!els.journal.classList.contains("hidden") && lastEvents) {
+    renderJournal(lastEvents);
+  }
+}
+
+/* ---------- helpers ---------- */
+
+/* Host caption: name, else IP, else MAC */
 function hostLabel(h) {
   return h.name || h.ip || h.mac;
 }
 
-/* «11 (ipmi)» — ID VLAN и имя, если известно */
+/* "11 (ipmi)" — VLAN ID plus name when known */
 function vlanLabel(v) {
   if (!v) return "—";
   const name = (topology.vlan_names || {})[v];
@@ -56,22 +116,22 @@ function vlanLabel(v) {
 
 function fmtSpeed(mbps) {
   if (!mbps) return "";
-  return mbps >= 1000 ? mbps / 1000 + " Гбит/с" : mbps + " Мбит/с";
+  return mbps >= 1000 ? mbps / 1000 + " " + t("gbps") : mbps + " " + t("mbps");
 }
 
 function linkId(link) {
   return "link:" + link.a + "|" + link.b;
 }
 
-/* Подпись связи: «LACP 2×1 Гбит/с» для агрегата, иначе скорость */
+/* Link caption: "LACP 2×1 Gbit/s" for an aggregate, otherwise the speed */
 function linkLabel(link) {
   if (link.lag && link.lag.count > 1) {
-    return "LACP " + link.lag.count + "×" + fmtSpeed(link.speed_mbps / link.lag.count);
+    return t("lacp") + " " + link.lag.count + "×" + fmtSpeed(link.speed_mbps / link.lag.count);
   }
   return fmtSpeed(link.speed_mbps);
 }
 
-/* Класс индикатора: живой / не отвечает / нет IP (ping невозможен) */
+/* Status dot class: alive / silent / no IP (cannot ping) */
 function statusClass(h) {
   if (!h.ip) return "noip";
   return h.ping_up ? "up" : "down";
@@ -82,18 +142,33 @@ function statusColor(h) {
   return h.ping_up ? colors.ok : colors.dim;
 }
 
+function fmtTime(ts) {
+  return ts ? new Date(ts * 1000).toLocaleString(locale()) : "—";
+}
+
+function fmtDate(ts) {
+  return ts ? new Date(ts * 1000).toLocaleDateString(locale()) : "—";
+}
+
+function updateScanStatus() {
+  if (isScanning) {
+    els.scanStatus.textContent = t("scanning");
+  } else {
+    els.scanStatus.textContent = topology.last_scan
+      ? t("scanPrefix") + new Date(topology.last_scan * 1000).toLocaleString(locale())
+      : t("noData");
+  }
+}
+
+/* ---------- data loading and rendering ---------- */
+
 async function loadTopology() {
   const res = await fetch("/api/topology");
   topology = await res.json();
   renderSidebar();
   renderGraph();
-  els.scanStatus.textContent = topology.last_scan
-    ? "Опрос: " + new Date(topology.last_scan * 1000).toLocaleString()
-    : "Данных пока нет";
-  els.emptyState.classList.toggle(
-    "hidden",
-    topology.switches.length > 0
-  );
+  updateScanStatus();
+  els.emptyState.classList.toggle("hidden", topology.switches.length > 0);
 }
 
 function li(main, sub, dotClass, onClick, searchText) {
@@ -137,7 +212,7 @@ function renderSidebar() {
           .join(" · "),
         statusClass(h),
         () => focusNode("host:" + h.mac),
-        // VLAN в поиск не включаем
+        // VLAN is intentionally excluded from search
         [hostLabel(h), h.ip, h.mac].filter(Boolean).join(" ")
       )
     )
@@ -183,7 +258,7 @@ function buildGraphData() {
   for (const ps of topology.pseudo_switches || []) {
     nodes.push({
       id: ps.id,
-      label: "Коммутатор без SNMP",
+      label: t("pseudoTitle"),
       shape: "square",
       size: 14,
       color: {
@@ -258,8 +333,8 @@ function renderGraph() {
     return;
   }
 
-  // Тихое обновление: меняем данные в DataSet, не пересоздавая Network,
-  // чтобы не сбрасывать позиции узлов и камеру
+  // Silent update: change data inside the DataSet without recreating
+  // the Network, so node positions and the camera are preserved
   const nodeIds = new Set(nodes.map((n) => n.id));
   const edgeIds = new Set(edges.map((e) => e.id));
   nodesDs.remove(nodesDs.getIds().filter((id) => !nodeIds.has(id)));
@@ -275,13 +350,7 @@ function focusNode(id) {
   showDetails(id);
 }
 
-function fmtTime(ts) {
-  return ts ? new Date(ts * 1000).toLocaleString() : "—";
-}
-
-function fmtDate(ts) {
-  return ts ? new Date(ts * 1000).toLocaleDateString() : "—";
-}
+/* ---------- detail cards ---------- */
 
 function showDetails(nodeId) {
   let html = "";
@@ -289,33 +358,33 @@ function showDetails(nodeId) {
     const sw = topology.switches.find((s) => "sw:" + s.ip === nodeId);
     if (!sw) return;
     html = `<h3>${sw.name}</h3><dl>
-      <dt>IP-адрес</dt><dd>${sw.ip}</dd>
-      <dt>MAC моста</dt><dd>${sw.mac || "—"}</dd>
-      <dt>Порты (активно/всего)</dt><dd>${sw.ports_up} / ${sw.ports_total}</dd>
-      <dt>Отвечал</dt><dd>${fmtTime(sw.last_ping_ok)}</dd>
-      <dt>Описание</dt><dd>${sw.descr || "—"}</dd></dl>`;
+      <dt>${t("ipAddr")}</dt><dd>${sw.ip}</dd>
+      <dt>${t("bridgeMac")}</dt><dd>${sw.mac || "—"}</dd>
+      <dt>${t("portsUpTotal")}</dt><dd>${sw.ports_up} / ${sw.ports_total}</dd>
+      <dt>${t("lastReply")}</dt><dd>${fmtTime(sw.last_ping_ok)}</dd>
+      <dt>${t("descr")}</dt><dd>${sw.descr || "—"}</dd></dl>`;
   } else if (nodeId.startsWith("pseudo:")) {
     const ps = (topology.pseudo_switches || []).find((p) => p.id === nodeId);
     if (!ps) return;
-    html = `<h3>Коммутатор без SNMP</h3>
-      <p class="hint">За этим портом виден неуправляемый коммутатор
-      или точка доступа (${ps.host_count} устройств).</p><dl>
-      <dt>Коммутатор</dt><dd>${ps.switch}</dd>
-      <dt>Порт</dt><dd>${ps.port}</dd>
-      <dt>Устройств за портом</dt><dd>${ps.host_count}</dd></dl>`;
+    html = `<h3>${t("pseudoTitle")}</h3>
+      <p class="hint">${fmt("pseudoHint", { n: ps.host_count })}</p><dl>
+      <dt>${t("switchLabel")}</dt><dd>${ps.switch}</dd>
+      <dt>${t("portLabel")}</dt><dd>${ps.port}</dd>
+      <dt>${t("devicesBehindPort")}</dt><dd>${ps.host_count}</dd></dl>`;
   } else {
     const host = topology.hosts.find((h) => "host:" + h.mac === nodeId);
     if (!host) return;
     html = `<h3>${hostLabel(host)}</h3><dl>
-      <dt>Имя</dt><dd>${host.name || "—"}</dd>
-      <dt>IP-адрес</dt><dd>${host.ip || "—"}</dd>
-      <dt>MAC-адрес</dt><dd>${host.mac}</dd>
-      <dt>Коммутатор</dt><dd>${host.switch}</dd>
-      <dt>Порт</dt><dd>${host.port}</dd>
-      <dt>VLAN</dt><dd>${vlanLabel(host.vlan)}</dd>
-      <dt>Отвечал</dt><dd>${fmtTime(host.last_ping_ok)}</dd>
-      <dt>Впервые замечен</dt><dd>${fmtDate(host.first_seen)}</dd></dl>`;
+      <dt>${t("name")}</dt><dd>${host.name || "—"}</dd>
+      <dt>${t("ipAddr")}</dt><dd>${host.ip || "—"}</dd>
+      <dt>${t("macAddr")}</dt><dd>${host.mac}</dd>
+      <dt>${t("switchLabel")}</dt><dd>${host.switch}</dd>
+      <dt>${t("portLabel")}</dt><dd>${host.port}</dd>
+      <dt>${t("vlan")}</dt><dd>${vlanLabel(host.vlan)}</dd>
+      <dt>${t("lastReply")}</dt><dd>${fmtTime(host.last_ping_ok)}</dd>
+      <dt>${t("firstSeen")}</dt><dd>${fmtDate(host.first_seen)}</dd></dl>`;
   }
+  shownDetails = { type: "node", id: nodeId };
   els.detailsBody.innerHTML = html;
   els.details.classList.remove("hidden");
   els.journal.classList.add("hidden");
@@ -323,9 +392,10 @@ function showDetails(nodeId) {
 
 function hideDetails() {
   els.details.classList.add("hidden");
+  shownDetails = null;
 }
 
-/* Карточка связи: порты обеих сторон, скорость, состав агрегата */
+/* Link card: ports of both ends, speed, aggregate members */
 function showLinkDetails(edgeId) {
   const link = topology.links.find((l) => linkId(l) === edgeId);
   if (!link) return;
@@ -334,23 +404,51 @@ function showLinkDetails(edgeId) {
     return sw ? sw.name : ip;
   };
   let html = `<h3>${swName(link.a)} — ${swName(link.b)}</h3><dl>
-    <dt>Порт со стороны ${swName(link.a)}</dt><dd>${link.a_port}</dd>
-    <dt>Порт со стороны ${swName(link.b)}</dt><dd>${link.b_port}</dd>
-    <dt>Скорость</dt><dd>${fmtSpeed(link.speed_mbps) || "—"}</dd>`;
+    <dt>${fmt("portOnSide", { name: swName(link.a) })}</dt><dd>${link.a_port}</dd>
+    <dt>${fmt("portOnSide", { name: swName(link.b) })}</dt><dd>${link.b_port}</dd>
+    <dt>${t("speed")}</dt><dd>${fmtSpeed(link.speed_mbps) || "—"}</dd>`;
   if (link.lag) {
-    html += `<dt>Агрегат (LACP)</dt><dd>${linkLabel(link)}</dd>`;
+    html += `<dt>${t("lagAggregate")}</dt><dd>${linkLabel(link)}</dd>`;
     if (link.lag.a_members.length)
-      html += `<dt>Порты ${swName(link.a)}</dt><dd>${link.lag.a_members.join(", ")}</dd>`;
+      html += `<dt>${fmt("portsOf", { name: swName(link.a) })}</dt><dd>${link.lag.a_members.join(", ")}</dd>`;
     if (link.lag.b_members.length)
-      html += `<dt>Порты ${swName(link.b)}</dt><dd>${link.lag.b_members.join(", ")}</dd>`;
+      html += `<dt>${fmt("portsOf", { name: swName(link.b) })}</dt><dd>${link.lag.b_members.join(", ")}</dd>`;
   }
   html += "</dl>";
+  shownDetails = { type: "link", id: edgeId };
   els.detailsBody.innerHTML = html;
   els.details.classList.remove("hidden");
   els.journal.classList.add("hidden");
 }
 
-/* ---------- журнал ---------- */
+/* ---------- journal ---------- */
+
+function renderJournal(events) {
+  els.journalList.replaceChildren(
+    ...events.map((ev) => {
+      const item = document.createElement("li");
+      const time = document.createElement("span");
+      time.className = "ev-time";
+      time.textContent = fmtTime(ev.ts);
+      const type = document.createElement("span");
+      type.className =
+        { new_mac: "ev-new", host_down: "ev-down", host_up: "ev-up" }[ev.event] || "";
+      // events arrive as codes; unknown codes are shown as-is
+      const translated = t("ev_" + ev.event);
+      type.textContent = translated === "ev_" + ev.event ? ev.event : translated;
+      const host = document.createElement("span");
+      host.className = "ev-host";
+      host.textContent = ev.name || ev.ip || ev.mac;
+      item.append(time, type, host);
+      return item;
+    })
+  );
+  if (!events.length) {
+    const empty = document.createElement("li");
+    empty.textContent = t("noEvents");
+    els.journalList.append(empty);
+  }
+}
 
 async function toggleJournal() {
   if (!els.journal.classList.contains("hidden")) {
@@ -359,32 +457,13 @@ async function toggleJournal() {
   }
   const res = await fetch("/api/journal?limit=100");
   const data = await res.json();
-  els.journalList.replaceChildren(
-    ...data.events.map((ev) => {
-      const item = document.createElement("li");
-      const time = document.createElement("span");
-      time.className = "ev-time";
-      time.textContent = fmtTime(ev.ts);
-      const type = document.createElement("span");
-      type.className = EVENT_CLASSES[ev.event] || "";
-      type.textContent = EVENT_NAMES[ev.event] || ev.event;
-      const host = document.createElement("span");
-      host.className = "ev-host";
-      host.textContent = ev.name || ev.ip || ev.mac;
-      item.append(time, type, host);
-      return item;
-    })
-  );
-  if (!data.events.length) {
-    const empty = document.createElement("li");
-    empty.textContent = "Событий пока нет";
-    els.journalList.append(empty);
-  }
+  lastEvents = data.events;
+  renderJournal(lastEvents);
   hideDetails();
   els.journal.classList.remove("hidden");
 }
 
-/* ---------- поиск и опрос ---------- */
+/* ---------- search and rescan ---------- */
 
 function applySearchFilter() {
   const q = els.search.value.trim().toLowerCase();
@@ -398,14 +477,16 @@ function applySearchFilter() {
 
 async function rescan() {
   els.rescan.disabled = true;
-  els.scanStatus.textContent = "Идёт опрос сети…";
+  isScanning = true;
+  updateScanStatus();
   await fetch("/api/scan", { method: "POST" });
-  // опрашиваем статус, пока сканирование не завершится
+  // poll the status until the scan finishes
   const timer = setInterval(async () => {
     const status = await (await fetch("/api/status")).json();
     if (!status.scanning) {
       clearInterval(timer);
       els.rescan.disabled = false;
+      isScanning = false;
       await loadTopology();
     }
   }, 1500);
@@ -418,6 +499,9 @@ els.journalBtn.addEventListener("click", toggleJournal);
 els.journalClose.addEventListener("click", () =>
   els.journal.classList.add("hidden")
 );
+els.langRu.addEventListener("click", () => setLang("ru"));
+els.langEn.addEventListener("click", () => setLang("en"));
 
+applyStatic();
 loadTopology();
 setInterval(loadTopology, REFRESH_MS);

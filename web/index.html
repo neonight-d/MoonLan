@@ -1,9 +1,9 @@
 <!DOCTYPE html>
-<html lang="ru">
+<html lang="en">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>MoonLan — карта сети</title>
+  <title>MoonLan</title>
   <link rel="stylesheet" href="style.css">
   <script src="https://cdnjs.cloudflare.com/ajax/libs/vis-network/9.1.9/standalone/umd/vis-network.min.js"></script>
 </head>
@@ -12,24 +12,27 @@
     <div class="brand">
       <span class="moon" aria-hidden="true"></span>
       <h1>MoonLan</h1>
-      <span class="tagline">карта локальной сети</span>
+      <span class="tagline" data-i18n="tagline"></span>
     </div>
     <div class="toolbar">
       <span id="scan-status" class="status"></span>
-      <button id="journal-btn">Журнал</button>
-      <button id="rescan">Опросить сеть</button>
+      <span class="lang-switch" role="group" aria-label="Language">
+        <button id="lang-ru">RU</button><button id="lang-en">EN</button>
+      </span>
+      <button id="journal-btn" data-i18n="journalBtn"></button>
+      <button id="rescan" data-i18n="rescanBtn"></button>
     </div>
   </header>
 
   <main>
     <aside id="sidebar">
-      <input id="search" type="search" placeholder="Поиск: имя, IP или MAC…" autocomplete="off">
+      <input id="search" type="search" autocomplete="off">
       <section>
-        <h2>Коммутаторы <span id="switch-count" class="count"></span></h2>
+        <h2><span data-i18n="switchesHeader"></span> <span id="switch-count" class="count"></span></h2>
         <ul id="switch-list" class="device-list"></ul>
       </section>
       <section>
-        <h2>Устройства <span id="host-count" class="count"></span></h2>
+        <h2><span data-i18n="devicesHeader"></span> <span id="host-count" class="count"></span></h2>
         <ul id="host-list" class="device-list"></ul>
       </section>
     </aside>
@@ -37,23 +40,22 @@
     <section id="map-panel">
       <div id="network"></div>
       <div id="details" class="hidden">
-        <button id="details-close" title="Закрыть">×</button>
+        <button id="details-close">×</button>
         <div id="details-body"></div>
       </div>
       <div id="journal" class="hidden">
-        <button id="journal-close" title="Закрыть">×</button>
-        <h3>Журнал событий</h3>
+        <button id="journal-close">×</button>
+        <h3 data-i18n="journalTitle"></h3>
         <ul id="journal-list"></ul>
       </div>
       <div id="empty-state" class="hidden">
-        <p>Схема пока пуста.</p>
-        <p>Укажите коммутаторы в <code>config.yaml</code> и нажмите
-           «Опросить сеть», либо запустите сервис с
-           <code>MOONLAN_DEMO=1</code>, чтобы увидеть демо-сеть.</p>
+        <p data-i18n="emptyLine1"></p>
+        <p data-i18n-html="emptyLine2"></p>
       </div>
     </section>
   </main>
 
+  <script src="i18n.js"></script>
   <script src="app.js"></script>
 </body>
 </html>

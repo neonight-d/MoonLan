@@ -1,0 +1,98 @@
+/* MoonLan UI strings (en / ru).
+   This is the only file in web/ that is allowed to contain Russian text.
+   Placeholders like {name} and {n} are substituted by fmt() in app.js. */
+
+const I18N = {
+  en: {
+    title: "MoonLan — network map",
+    tagline: "local network map",
+    journalBtn: "Journal",
+    rescanBtn: "Rescan network",
+    searchPlaceholder: "Search: name, IP or MAC…",
+    switchesHeader: "Switches",
+    devicesHeader: "Devices",
+    journalTitle: "Event journal",
+    noEvents: "No events yet",
+    emptyLine1: "The map is empty.",
+    emptyLine2:
+      "Add switches to <code>config.yaml</code> and press " +
+      "“Rescan network”, or start the service with " +
+      "<code>MOONLAN_DEMO=1</code> to see a demo network.",
+    scanning: "Scanning the network…",
+    scanPrefix: "Last scan: ",
+    noData: "No data yet",
+    close: "Close",
+    ev_new_mac: "New device",
+    ev_host_down: "Host down",
+    ev_host_up: "Host back online",
+    name: "Name",
+    ipAddr: "IP address",
+    macAddr: "MAC address",
+    bridgeMac: "Bridge MAC",
+    switchLabel: "Switch",
+    portLabel: "Port",
+    vlan: "VLAN",
+    lastReply: "Last reply",
+    firstSeen: "First seen",
+    portsUpTotal: "Ports (up/total)",
+    descr: "Description",
+    speed: "Speed",
+    pseudoTitle: "Switch without SNMP",
+    pseudoHint:
+      "An unmanaged switch or access point is visible behind this port " +
+      "({n} devices).",
+    devicesBehindPort: "Devices behind port",
+    portOnSide: "Port on {name} side",
+    lagAggregate: "Aggregate (LACP)",
+    portsOf: "Ports of {name}",
+    lacp: "LACP",
+    gbps: "Gbit/s",
+    mbps: "Mbit/s",
+  },
+  ru: {
+    title: "MoonLan — карта сети",
+    tagline: "карта локальной сети",
+    journalBtn: "Журнал",
+    rescanBtn: "Опросить сеть",
+    searchPlaceholder: "Поиск: имя, IP или MAC…",
+    switchesHeader: "Коммутаторы",
+    devicesHeader: "Устройства",
+    journalTitle: "Журнал событий",
+    noEvents: "Событий пока нет",
+    emptyLine1: "Схема пока пуста.",
+    emptyLine2:
+      "Укажите коммутаторы в <code>config.yaml</code> и нажмите " +
+      "«Опросить сеть», либо запустите сервис с " +
+      "<code>MOONLAN_DEMO=1</code>, чтобы увидеть демо-сеть.",
+    scanning: "Идёт опрос сети…",
+    scanPrefix: "Опрос: ",
+    noData: "Данных пока нет",
+    close: "Закрыть",
+    ev_new_mac: "Новое устройство",
+    ev_host_down: "Хост недоступен",
+    ev_host_up: "Хост снова в сети",
+    name: "Имя",
+    ipAddr: "IP-адрес",
+    macAddr: "MAC-адрес",
+    bridgeMac: "MAC моста",
+    switchLabel: "Коммутатор",
+    portLabel: "Порт",
+    vlan: "VLAN",
+    lastReply: "Отвечал",
+    firstSeen: "Впервые замечен",
+    portsUpTotal: "Порты (активно/всего)",
+    descr: "Описание",
+    speed: "Скорость",
+    pseudoTitle: "Коммутатор без SNMP",
+    pseudoHint:
+      "За этим портом виден неуправляемый коммутатор или точка доступа " +
+      "({n} устройств).",
+    devicesBehindPort: "Устройств за портом",
+    portOnSide: "Порт со стороны {name}",
+    lagAggregate: "Агрегат (LACP)",
+    portsOf: "Порты {name}",
+    lacp: "LACP",
+    gbps: "Гбит/с",
+    mbps: "Мбит/с",
+  },
+};

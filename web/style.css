@@ -51,6 +51,24 @@ h1 { margin: 0; font-size: 1.15rem; letter-spacing: 0.04em; }
 .toolbar { display: flex; align-items: center; gap: 12px; }
 .status { color: var(--text-dim); font-size: 0.85rem; }
 
+/* RU | EN language switcher */
+.lang-switch { display: inline-flex; }
+.lang-switch button {
+  padding: 6px 8px;
+  font-size: 0.8rem;
+  color: var(--text-dim);
+  border-color: var(--line);
+  border-radius: 0;
+}
+.lang-switch button:first-child { border-radius: 6px 0 0 6px; border-right: none; }
+.lang-switch button:last-child { border-radius: 0 6px 6px 0; }
+.lang-switch button.active {
+  color: var(--moon);
+  border-color: var(--moon);
+  background: rgba(232, 228, 213, 0.08);
+}
+.lang-switch button.active + button { border-left-color: var(--moon); }
+
 button {
   background: transparent;
   color: var(--moon);
