@@ -1,55 +1,64 @@
+[Читать по-русски → README_RU.md](README_RU.md)
+
 # MoonLan
 
-**MoonLan** — веб-сервис для Linux, который автоматически строит физическую
-топологию локальной сети на основе данных, полученных с коммутаторов по
-протоколу SNMP, и отображает её в браузере.
+**MoonLan** is a web service for Linux that automatically builds the physical
+topology of a local network from data collected from switches via SNMP and
+displays it in a browser.
 
-Открытый аналог LanTopoLog. Лицензия — MIT.
+An open-source alternative to LanTopoLog. MIT license.
 
-## Возможности (v0.4)
+## Features (v0.4)
 
-- Опрос коммутаторов по SNMP v2c: имя устройства, порты, скорости, статусы.
-- Чтение таблиц MAC-адресов (BRIDGE-MIB и Q-BRIDGE-MIB) с каждого коммутатора.
-- Корректное построение топологии: связь между коммутаторами рисуется,
-  только если она прямая (критерий пересечения FDB) — в звезде нет
-  ложных связей между лучами. В карточке связи — порты обеих сторон.
-- LACP (IEEE8023-LAG-MIB): агрегат отображается одной толстой линией
-  с подписью «LACP N×скорость» и составом агрегата в карточке связи.
-- VLAN (Q-BRIDGE-MIB): PVID порта каждого хоста и имена VLAN —
-  в карточке хоста и в списке устройств.
-- Обнаружение неуправляемых коммутаторов: если за портом видно много
-  хостов, они группируются под узлом «Коммутатор без SNMP»
-  (порог `unmanaged_threshold` в конфигурации).
-- IP-адреса хостов из ARP-таблиц маршрутизаторов (раздел `routers`
-  в конфигурации), имена — через обратный DNS.
-- Непрерывный ping-мониторинг всех хостов и коммутаторов: зелёный/серый
-  индикатор состояния, время последнего ответа.
-- Журнал событий: появление новых MAC-адресов, потеря и восстановление
-  связи с хостами. Данные хранятся в SQLite и переживают перезапуск.
-- Двухпанельный веб-интерфейс: слева список устройств с поиском
-  (имя, IP или MAC), справа интерактивная схема сети с автообновлением.
-- Демо-режим с виртуальной сетью — можно посмотреть интерфейс
-  без реальных коммутаторов.
+- SNMP v2c polling of switches: device name, ports, speeds, statuses.
+- MAC address tables (BRIDGE-MIB and Q-BRIDGE-MIB) from every switch,
+  including entries on trunk bridge-ports missing from
+  `dot1dBasePortIfIndex` (e.g. D-Link LACP trunks).
+- Accurate topology inference: a switch-to-switch link is drawn only when
+  it is direct (FDB set-intersection criterion) — no false links between
+  the rays of a star. A switch is recognized in neighbors' FDB by its full
+  MAC set (bridge MAC, interface MACs, management-IP MAC), with a fallback
+  exclusion rule for one-way visibility. Link cards show ports of both ends.
+- Link stability: FDB entries are merged over the last 3 polls, so links
+  do not flicker when MAC table entries age out.
+- LACP (IEEE8023-LAG-MIB): an aggregate is drawn as a single thick line
+  labeled "LACP N×speed" with the member ports listed in the link card.
+- VLAN (Q-BRIDGE-MIB): each host's port PVID and VLAN names are shown
+  in the host card and the device list.
+- Unmanaged switch detection: when many hosts are visible behind one port,
+  they are grouped under a "Switch without SNMP" node
+  (`unmanaged_threshold` in the configuration).
+- Host IP addresses from routers' ARP tables (`routers` section),
+  host names via reverse DNS.
+- Continuous ping monitoring of all hosts and switches: green/grey status
+  indicator, time of the last reply.
+- Event journal: new MAC addresses, hosts going down and coming back.
+  Data is stored in SQLite and survives restarts.
+- Two-panel web UI: device list with search (name, IP or MAC) on the left,
+  interactive auto-refreshing network map on the right. English and Russian
+  interface languages.
+- Demo mode with a virtual network — explore the UI without real switches.
+- SNMP diagnostic tool: `python -m moonlan.diag <ip>`.
 
-## Дорожная карта
+## Roadmap
 
-| Версия | Функциональность |
-|--------|------------------|
-| v0.1   | SNMP-опрос, таблицы MAC, базовая топология, веб-интерфейс |
-| v0.2   | Ручное редактирование схемы, контекстные меню, экспорт/импорт раскладки *(перенесён)* |
-| v0.3 ✓ | Ping-мониторинг, журнал новых MAC-адресов, время последнего ответа, IP и имена хостов (ARP/DNS) |
-| v0.4 ✓ | Корректный алгоритм связей, LACP, VLAN, неуправляемые коммутаторы |
-| v0.5   | Тревоги и уведомления: email, Telegram, Syslog; пороги трафика; счётчики ошибок портов (ifInErrors и др.) |
-| v0.6   | Контроль Spanning Tree, уведомления об изменениях топологии |
-| v0.7   | Экспорт в PDF и Draw.io, импорт сведений по MAC-адресам |
-| v0.8   | Инвентаризация Windows-компьютеров (WMI/WinRM) |
+| Version | Functionality |
+|---------|---------------|
+| v0.1    | SNMP polling, MAC tables, basic topology, web UI |
+| v0.2    | Manual map editing, context menus, layout export/import *(postponed)* |
+| v0.3 ✓  | Ping monitoring, journal of new MAC addresses, last-reply time, host IPs and names (ARP/DNS) |
+| v0.4 ✓  | Accurate link inference, LACP, VLAN, unmanaged switches |
+| v0.5    | Alerts and notifications: email, Telegram, Syslog; traffic thresholds; port error counters (ifInErrors etc.) |
+| v0.6    | Spanning Tree monitoring, topology change notifications |
+| v0.7    | Export to PDF and Draw.io, MAC address info import |
+| v0.8    | Windows computer inventory (WMI/WinRM) |
 
-## Требования
+## Requirements
 
 - Linux, Python 3.10+
-- Коммутаторы с включённым SNMP v2c (community на чтение)
+- Switches with SNMP v2c enabled (read-only community)
 
-## Установка
+## Installation
 
 ```bash
 git clone https://github.com/neonight-d/MoonLan.git
@@ -58,106 +67,121 @@ python3 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
 cp config.example.yaml config.yaml
-# отредактируйте config.yaml: укажите адреса коммутаторов и community
+# edit config.yaml: set switch addresses and the SNMP community
 ```
 
-## Конфигурация (config.yaml)
+## Configuration (config.yaml)
 
 ```yaml
 listen:
-  host: 0.0.0.0            # адрес и порт веб-интерфейса
+  host: 0.0.0.0            # web UI address and port
   port: 8080
 
 snmp:
-  community: public        # SNMP v2c community (только чтение)
+  community: public        # SNMP v2c community (read-only)
   timeout: 2
   retries: 1
 
-switches:                  # IP-адреса управляемых коммутаторов
+switches:                  # IP addresses of managed switches
   - 192.168.1.2
   - 192.168.1.3
 
-routers:                   # устройства с ARP-таблицей (маршрутизаторы,
-  - 192.168.1.1            # L3-коммутаторы) — источник IP-адресов хостов
+routers:                   # devices with an ARP table (routers,
+  - 192.168.1.1            # L3 switches) — the source of host IPs
 
-scan_interval_minutes: 10  # период опроса SNMP (0 — только вручную)
-ping_interval_seconds: 60  # период ping-мониторинга
-db_path: moonlan.db        # файл SQLite (хосты, журнал событий)
-unmanaged_threshold: 3     # больше стольких хостов на порту — рисуем
-                           # «коммутатор без SNMP» (0 — отключить)
+scan_interval_minutes: 10  # SNMP polling period (0 — manual only)
+ping_interval_seconds: 60  # ping monitoring period
+db_path: moonlan.db        # SQLite file (hosts, event journal)
+unmanaged_threshold: 3     # more hosts than this behind a port — draw
+                           # a "switch without SNMP" node (0 — disable)
 ```
 
-Разделы `routers`, `ping_interval_seconds`, `db_path` и
-`unmanaged_threshold` необязательны — старый конфиг без них продолжит
-работать.
+The `routers`, `ping_interval_seconds`, `db_path` and `unmanaged_threshold`
+sections are optional — an old config without them keeps working.
 
-## Запуск
+## Running
 
 ```bash
 python run.py
 ```
 
-Откройте в браузере `http://адрес_сервера:8080`.
+Open `http://server_address:8080` in a browser.
 
-### Демо-режим (без реальных коммутаторов)
+### Demo mode (no real switches)
 
 ```bash
 MOONLAN_DEMO=1 python run.py
 ```
 
-Сервис сгенерирует виртуальную сеть из трёх коммутаторов и полутора
-десятков хостов — удобно, чтобы познакомиться с интерфейсом.
+The service generates a virtual network — a star of five switches with
+LACP, VLANs, an unmanaged switch and a couple dozen hosts.
 
-## Как это работает
+### Diagnostics
 
-1. MoonLan опрашивает каждый коммутатор из `config.yaml` по SNMP:
-   `sysName`, `sysDescr`, таблицу интерфейсов (IF-MIB) и таблицу
-   пересылки MAC-адресов (BRIDGE-MIB, `dot1dTpFdbTable`).
-2. Физические порты-члены LACP-агрегатов (IEEE8023-LAG-MIB) приводятся
-   к логическому порту агрегата и дальше считаются одним портом.
-3. Связь между коммутаторами A и B рисуется, только если она прямая:
-   на портах, через которые A и B видят друг друга, не должен быть
-   виден один и тот же третий коммутатор (пересечение множеств чужих
-   базовых MAC пусто). Так в звезде не возникают ложные связи между
-   лучами, которые видят друг друга через центр.
-4. MAC-адреса на остальных портах считаются конечными устройствами
-   и отображаются на схеме; хосту проставляется PVID (untagged VLAN)
-   порта подключения. Если за одним портом видно больше
-   `unmanaged_threshold` хостов, они группируются под узлом
-   «Коммутатор без SNMP».
-5. IP-адреса хостов берутся из ARP-таблиц устройств из раздела `routers`
-   (`ipNetToMediaPhysAddress`), имена — обратным DNS-запросом.
-6. Все хосты с IP и коммутаторы регулярно пингуются; состояние и время
-   последнего ответа видны в списке, на схеме и в карточке устройства.
-7. Хосты и журнал событий хранятся в SQLite (`moonlan.db`), поэтому
-   `first_seen` и история не теряются при перезапуске.
-8. Результат доступен через REST API (`/api/topology`) и в веб-интерфейсе.
+```bash
+python -m moonlan.diag <switch_ip> [--community public] [--timeout 2]
+```
 
-## Структура проекта
+Prints everything MoonLan sees on the device via SNMP: interfaces,
+bridge-port mapping, FDB distribution, LAG-MIB support, visibility of
+the other configured switches. Read-only; does not touch the database.
+
+## How it works
+
+1. MoonLan polls every switch from `config.yaml` via SNMP: `sysName`,
+   `sysDescr`, the interface table (IF-MIB) and the MAC forwarding
+   table (BRIDGE-MIB / Q-BRIDGE-MIB). FDB entries on bridge-ports
+   missing from `dot1dBasePortIfIndex` (trunks on some D-Link models)
+   are kept on synthetic ports instead of being dropped.
+2. Physical member ports of LACP aggregates (IEEE8023-LAG-MIB) are
+   mapped to the logical aggregate port and treated as one port.
+3. A link between switches A and B is drawn only when it is direct:
+   the ports through which A and B see each other must not both see
+   any third switch (the intersection of foreign MAC sets is empty).
+   This prevents false ray-to-ray links in a star, where every ray sees
+   all the others through the core. A switch is recognized by any MAC
+   from its full set (bridge MAC, interface MACs, management-IP MAC);
+   one-way visibility is resolved by an exclusion rule.
+4. MAC addresses on the remaining ports are end devices shown on the
+   map; each host gets the PVID (untagged VLAN) of its port. If more
+   than `unmanaged_threshold` hosts are visible behind one port, they
+   are grouped under a "Switch without SNMP" node.
+5. Host IPs are taken from the ARP tables of the `routers` devices
+   (`ipNetToMediaPhysAddress`), names via reverse DNS.
+6. All hosts with an IP and all switches are pinged regularly; status
+   and last-reply time are visible in the list, on the map and in the
+   device card.
+7. Hosts and the event journal are stored in SQLite (`moonlan.db`),
+   so `first_seen` and history survive restarts.
+8. The result is available through the REST API (`/api/topology`)
+   and in the web UI.
+
+## Project structure
 
 ```
 MoonLan/
-├── run.py                  # точка входа
-├── config.example.yaml     # пример конфигурации
+├── run.py                  # entry point
+├── config.example.yaml     # configuration example
 ├── requirements.txt
 ├── moonlan/
-│   ├── config.py           # загрузка конфигурации
-│   ├── snmp_collector.py   # опрос коммутаторов по SNMP (FDB, ARP)
-│   ├── topology.py         # построение топологии
-│   ├── db.py               # SQLite: хосты и журнал событий
-│   ├── pinger.py           # ping-мониторинг (системный ping)
-│   ├── demo.py             # генератор демо-сети
-│   └── server.py           # FastAPI-приложение и REST API
-├── web/                    # веб-интерфейс (HTML/CSS/JS)
+│   ├── config.py           # configuration loading
+│   ├── snmp_collector.py   # SNMP polling of switches (FDB, ARP, LACP, VLAN)
+│   ├── topology.py         # topology inference
+│   ├── db.py               # SQLite: hosts and event journal
+│   ├── pinger.py           # ping monitoring (system ping)
+│   ├── diag.py             # SNMP diagnostic tool
+│   ├── demo.py             # demo network generator
+│   └── server.py           # FastAPI application and REST API
+├── web/                    # web UI (HTML/CSS/JS, ru/en)
 └── docs/
 ```
 
 ## API
 
-| Метод | Путь              | Описание |
-|-------|-------------------|----------|
-| GET   | `/api/topology`   | Текущая топология: узлы, связи (порты, LACP), хосты (IP, имя, ping, VLAN), `pseudo_switches`, `vlan_names` |
-| POST  | `/api/scan`       | Запустить повторный опрос коммутаторов |
-| GET   | `/api/search?q=…` | Поиск по имени, IP или MAC |
-| GET   | `/api/journal?limit=100` | Журнал событий, новые сверху |
-| GET   | `/api/status`     | Состояние сервиса и время последнего опроса |
+| Method | Path              | Description |
+|--------|-------------------|-------------|
+| GET    | `/api/topology`   | Current topology: nodes, links (ports, LACP), hosts (IP, name, ping, VLAN), `pseudo_switches`, `vlan_names` |
+| POST   | `/api/scan`       | Start a new switch poll |
+| GET    | `/api/search?q=…` | Search by name, IP or MAC |
+| GET    | `/api/journal?limit=100` | Event journal, newest first |
+| GET    | `/api/status`     | Service status and last poll time |
