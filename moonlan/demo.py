@@ -1,4 +1,11 @@
-"""Демо-режим: виртуальная сеть, чтобы посмотреть MoonLan без коммутаторов."""
+"""Демо-режим: виртуальная сеть, чтобы посмотреть MoonLan без коммутаторов.
+
+Звезда из четырёх коммутаторов: ядро и три луча. Демонстрирует все
+возможности v0.4: корректные прямые связи (лучи видят друг друга через
+ядро, но ложных связей между ними нет), LACP-агрегат 2×1G между ядром
+и первым лучом, неуправляемый коммутатор с пятью хостами за одним
+портом второго луча, PVID и имена VLAN на портах.
+"""
 
 from __future__ import annotations
 
@@ -10,62 +17,80 @@ from .snmp_collector import PortInfo, SwitchData
 
 random.seed(7)  # чтобы демо-сеть была одинаковой при каждом запуске
 
+VLAN_NAMES = {1: "default", 8: "office", 11: "ipmi"}
+LAG_IFINDEX = 1000  # ifIndex логического порта Po1
+
 
 def _rand_mac(prefix: str = "02:4d:4c") -> str:
     return prefix + ":" + ":".join(f"{random.randint(0, 255):02x}" for _ in range(3))
 
 
+def _switch(ip: str, name: str, mac_octet: int) -> SwitchData:
+    sw = SwitchData(
+        ip=ip, reachable=True, sys_name=name,
+        sys_descr="MoonLan demo switch, 26 ports",
+        bridge_mac=f"02:4d:4c:00:00:{mac_octet:02x}",
+    )
+    for i in range(1, 27):
+        sw.ports[i] = PortInfo(if_index=i, name=f"Gi0/{i}", oper_up=False, speed_mbps=1000)
+    sw.vlan_names = dict(VLAN_NAMES)
+    return sw
+
+
 def demo_network() -> list[SwitchData]:
-    """Три коммутатора звездой от ядра и полтора десятка хостов."""
-    core = SwitchData(
-        ip="10.0.0.1", reachable=True, sys_name="core-sw",
-        sys_descr="MoonLan demo core switch, 24 ports",
-        bridge_mac="02:4d:4c:00:00:01",
-    )
-    access1 = SwitchData(
-        ip="10.0.0.2", reachable=True, sys_name="access-sw-1",
-        sys_descr="MoonLan demo access switch, 24 ports",
-        bridge_mac="02:4d:4c:00:00:02",
-    )
-    access2 = SwitchData(
-        ip="10.0.0.3", reachable=True, sys_name="access-sw-2",
-        sys_descr="MoonLan demo access switch, 24 ports",
-        bridge_mac="02:4d:4c:00:00:03",
-    )
-    switches = [core, access1, access2]
+    """Звезда: ядро + три луча, LACP, pseudo-коммутатор, VLAN."""
+    core = _switch("10.0.0.10", "core-sw", 1)
+    ray1 = _switch("10.0.0.21", "access-sw-1", 2)
+    ray2 = _switch("10.0.0.22", "access-sw-2", 3)
+    ray3 = _switch("10.0.0.23", "access-sw-3", 4)
+    switches = [core, ray1, ray2, ray3]
+    rays = [ray1, ray2, ray3]
 
-    for sw in switches:
-        for i in range(1, 25):
-            sw.ports[i] = PortInfo(
-                if_index=i, name=f"Gi0/{i}",
-                oper_up=False, speed_mbps=1000,
-            )
+    # LACP 2×1G между ядром (порты 1 и 25) и первым лучом (порты 25 и 26)
+    for sw, members in ((core, (1, 25)), (ray1, (25, 26))):
+        sw.ports[LAG_IFINDEX] = PortInfo(
+            if_index=LAG_IFINDEX, name="Po1", oper_up=True, speed_mbps=2000
+        )
+        sw.lag_members = {m: LAG_IFINDEX for m in members}
+        for m in members:
+            sw.ports[m].oper_up = True
 
-    def connect_host(sw: SwitchData, port: int) -> None:
+    # Магистрали ядро—лучи: у ядра порт на каждый луч, у луча — аплинк 24
+    # (у ray1 аплинк — агрегат). FDB заполняем так, как выглядит реальная
+    # звезда: каждый видит базовые MAC всех остальных, лучи — через аплинк.
+    core_port_to_ray = {ray1.ip: 1, ray2.ip: 2, ray3.ip: 3}
+    for ray in (ray2, ray3):
+        core.ports[core_port_to_ray[ray.ip]].oper_up = True
+        ray.ports[24].oper_up = True
+    for ray in rays:
+        uplink = 25 if ray is ray1 else 24
+        core.fdb[ray.bridge_mac] = core_port_to_ray[ray.ip]
+        ray.fdb[core.bridge_mac] = uplink
+        for other in rays:
+            if other is not ray:
+                ray.fdb[other.bridge_mac] = uplink
+
+    def connect_host(sw: SwitchData, port: int, vlan: int) -> str:
         mac = _rand_mac()
         sw.ports[port].oper_up = True
         sw.fdb[mac] = port
-        # ядро «видит» этот MAC через свой uplink к соответствующему коммутатору
-        if sw is access1:
-            core.fdb[mac] = 1
-        elif sw is access2:
-            core.fdb[mac] = 2
+        sw.port_pvid[port] = vlan
+        if sw is not core:  # ядро видит хосты лучей через свои магистрали
+            core.fdb[mac] = core_port_to_ray[sw.ip]
+        return mac
 
-    # Магистрали: core Gi0/1 <-> access1 Gi0/24, core Gi0/2 <-> access2 Gi0/24
-    for port in (1, 2):
-        core.ports[port].oper_up = True
-    for sw in (access1, access2):
-        sw.ports[24].oper_up = True
-        sw.fdb[core.bridge_mac] = 24
-    core.fdb[access1.bridge_mac] = 1
-    core.fdb[access2.bridge_mac] = 2
-
+    # Хосты: первый луч — офис, второй — офис + pseudo-коммутатор,
+    # третий — смешанный, в ядре — серверы в VLAN 11 (ipmi)
     for port in range(1, 9):
-        connect_host(access1, port)
+        connect_host(ray1, port, 1 if port <= 4 else 8)
+    for port in range(1, 5):
+        connect_host(ray2, port, 8)
+    for _ in range(5):  # 5 хостов на одном порту — неуправляемый коммутатор
+        connect_host(ray2, 5, 8)
     for port in range(1, 7):
-        connect_host(access2, port)
-    for port in (10, 11, 12):  # серверы в ядре
-        connect_host(core, port + 2)
+        connect_host(ray3, port, 1 if port % 2 else 8)
+    for port in (12, 13, 14):
+        connect_host(core, port, 11)
 
     return switches
 
