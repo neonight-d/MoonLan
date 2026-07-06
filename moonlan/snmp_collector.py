@@ -49,6 +49,10 @@ OID_PVID = "1.3.6.1.2.1.17.7.1.4.5.1.1"       # dot1qPvid.<bridge-port>
 OID_VLAN_NAME = "1.3.6.1.2.1.17.7.1.4.3.1.1"  # dot1qVlanStaticName.<VLAN ID>
 
 IF_TYPE_ETHERNET = 6  # ethernetCsmacd
+# ifType values that mean a physical Ethernet port. Some switches (e.g.
+# D-Link DES-3526 combo gigabit ports) report types other than 6:
+# 62 = fastEther, 69 = fastEtherFX, 117 = gigabitEthernet.
+PHYSICAL_IF_TYPES = {IF_TYPE_ETHERNET, 62, 69, 117}
 
 
 @dataclass
@@ -168,7 +172,7 @@ class SnmpCollector:
         async for suffix, value in self._walk(host, OID_IF_TYPE):
             port = data.ports.get(suffix[0])
             if port:
-                port.is_physical = int(value) == IF_TYPE_ETHERNET
+                port.is_physical = int(value) in PHYSICAL_IF_TYPES
         async for suffix, value in self._walk(host, OID_IF_OPER_STATUS):
             port = data.ports.get(suffix[0])
             if port:

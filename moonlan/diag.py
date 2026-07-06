@@ -18,7 +18,7 @@ from collections import Counter
 
 from .config import load_config
 from .snmp_collector import (
-    IF_TYPE_ETHERNET,
+    PHYSICAL_IF_TYPES,
     OID_BRIDGE_ADDRESS,
     OID_FDB_PORT,
     OID_IF_DESCR,
@@ -97,10 +97,11 @@ async def run_diag(
     async for suffix, value in collector._walk(ip, OID_IF_OPER_STATUS):
         if_oper[suffix[0]] = int(value)
     indexes = sorted(set(if_names) | set(if_types) | set(if_oper))
-    physical = [i for i in indexes if if_types.get(i) == IF_TYPE_ETHERNET]
+    physical = [i for i in indexes if if_types.get(i) in PHYSICAL_IF_TYPES]
+    types_str = "/".join(str(t) for t in sorted(PHYSICAL_IF_TYPES))
     print(
         f"ifTable entries: {len(indexes)}, "
-        f"physical (ifType={IF_TYPE_ETHERNET}): {len(physical)}"
+        f"physical (ifType {types_str}): {len(physical)}"
     )
     for i in indexes[:MAX_IF_ROWS]:
         oper = {1: "up", 2: "down"}.get(if_oper.get(i, 0), "?")
