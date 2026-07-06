@@ -47,6 +47,23 @@ function hostLabel(h) {
   return h.name || h.ip || h.mac;
 }
 
+function fmtSpeed(mbps) {
+  if (!mbps) return "";
+  return mbps >= 1000 ? mbps / 1000 + " Гбит/с" : mbps + " Мбит/с";
+}
+
+function linkId(link) {
+  return "link:" + link.a + "|" + link.b;
+}
+
+/* Подпись связи: «LACP 2×1 Гбит/с» для агрегата, иначе скорость */
+function linkLabel(link) {
+  if (link.lag && link.lag.count > 1) {
+    return "LACP " + link.lag.count + "×" + fmtSpeed(link.speed_mbps / link.lag.count);
+  }
+  return fmtSpeed(link.speed_mbps);
+}
+
 /* Класс индикатора: живой / не отвечает / нет IP (ping невозможен) */
 function statusClass(h) {
   if (!h.ip) return "noip";
@@ -140,13 +157,14 @@ function buildGraphData() {
   }
 
   for (const link of topology.links) {
+    const isLag = link.lag && link.lag.count > 1;
     edges.push({
-      id: "link:" + link.a + "|" + link.b,
+      id: linkId(link),
       from: "sw:" + link.a,
       to: "sw:" + link.b,
-      label: link.speed_mbps ? link.speed_mbps / 1000 + " Гбит/с" : "",
+      label: linkLabel(link),
       color: { color: colors.moon, opacity: 0.8 },
-      width: 3,
+      width: isLag ? 5 : 3,
       font: { color: colors.dim, size: 11, strokeWidth: 0 },
     });
   }
@@ -194,6 +212,11 @@ function renderGraph() {
     );
     network.on("click", (params) => {
       if (params.nodes.length) showDetails(params.nodes[0]);
+      else if (
+        params.edges.length &&
+        String(params.edges[0]).startsWith("link:")
+      )
+        showLinkDetails(params.edges[0]);
       else hideDetails();
     });
     return;
@@ -254,6 +277,31 @@ function showDetails(nodeId) {
 
 function hideDetails() {
   els.details.classList.add("hidden");
+}
+
+/* Карточка связи: порты обеих сторон, скорость, состав агрегата */
+function showLinkDetails(edgeId) {
+  const link = topology.links.find((l) => linkId(l) === edgeId);
+  if (!link) return;
+  const swName = (ip) => {
+    const sw = topology.switches.find((s) => s.ip === ip);
+    return sw ? sw.name : ip;
+  };
+  let html = `<h3>${swName(link.a)} — ${swName(link.b)}</h3><dl>
+    <dt>Порт со стороны ${swName(link.a)}</dt><dd>${link.a_port}</dd>
+    <dt>Порт со стороны ${swName(link.b)}</dt><dd>${link.b_port}</dd>
+    <dt>Скорость</dt><dd>${fmtSpeed(link.speed_mbps) || "—"}</dd>`;
+  if (link.lag) {
+    html += `<dt>Агрегат (LACP)</dt><dd>${linkLabel(link)}</dd>`;
+    if (link.lag.a_members.length)
+      html += `<dt>Порты ${swName(link.a)}</dt><dd>${link.lag.a_members.join(", ")}</dd>`;
+    if (link.lag.b_members.length)
+      html += `<dt>Порты ${swName(link.b)}</dt><dd>${link.lag.b_members.join(", ")}</dd>`;
+  }
+  html += "</dl>";
+  els.detailsBody.innerHTML = html;
+  els.details.classList.remove("hidden");
+  els.journal.classList.add("hidden");
 }
 
 /* ---------- журнал ---------- */

@@ -2,7 +2,10 @@
 
 Алгоритм v0.4:
 
-1. Прямые связи. Для пары коммутаторов (A, B) берём порт pA, где A видит
+1. LACP: ifIndex физических портов-членов агрегата приводится к ifIndex
+   агрегата, поэтому агрегат участвует во всех расчётах (связи, uplink,
+   привязка хостов) как один логический порт.
+2. Прямые связи. Для пары коммутаторов (A, B) берём порт pA, где A видит
    базовый MAC B, и порт pB, где B видит A. Обозначим S(A, p) — множество
    базовых MAC *других опрошенных коммутаторов*, видимых в FDB A на порту p.
    Связь A(pA)—B(pB) прямая тогда и только тогда, когда
@@ -10,10 +13,10 @@
    не должен быть виден один и тот же третий коммутатор. Это отсекает
    ложные связи «луч — луч» в звезде, где каждый луч видит все остальные
    лучи через центр.
-2. Uplink-порты: порт, где виден любой другой коммутатор, либо порт
+3. Uplink-порты: порт, где виден любой другой коммутатор, либо порт
    с подозрительно большим числом MAC (> UPLINK_MAC_THRESHOLD) — за таким
    почти наверняка другой коммутатор, пусть даже неуправляемый.
-3. Конечные устройства. MAC-адреса на остальных портах — хосты.
+4. Конечные устройства. MAC-адреса на остальных портах — хосты.
    Один и тот же MAC может быть виден с нескольких коммутаторов;
    хост привязывается к тому порту, где кроме него меньше всего
    других MAC (это и есть порт непосредственного подключения).
@@ -87,23 +90,52 @@ def _port_name(sw: SwitchData, if_index: int) -> str:
     return port.name if port and port.name else str(if_index)
 
 
+def _lag_info(sw: SwitchData, agg_index: int) -> tuple[list[str], int]:
+    """Имена физических портов-членов агрегата и суммарная скорость."""
+    members = sorted(m for m, agg in sw.lag_members.items() if agg == agg_index)
+    names = [_port_name(sw, m) for m in members]
+    speed = sum(sw.ports[m].speed_mbps for m in members if m in sw.ports)
+    return names, speed
+
+
 def _make_link(a: SwitchData, pa: int, b: SwitchData, pb: int) -> dict:
-    port = a.ports.get(pa) or b.ports.get(pb)
-    return {
+    link = {
         "a": a.ip,
         "b": b.ip,
         "a_port": _port_name(a, pa),
         "b_port": _port_name(b, pb),
-        "speed_mbps": port.speed_mbps if port else 0,
+        "speed_mbps": 0,
         "lag": None,
     }
+    a_members, a_speed = _lag_info(a, pa)
+    b_members, b_speed = _lag_info(b, pb)
+    if a_members or b_members:
+        members = a_members or b_members
+        link["lag"] = {
+            "members": members,
+            "count": len(members),
+            "a_members": a_members,
+            "b_members": b_members,
+        }
+        link["speed_mbps"] = a_speed or b_speed
+    else:
+        port = a.ports.get(pa) or b.ports.get(pb)
+        link["speed_mbps"] = port.speed_mbps if port else 0
+    return link
 
 
 def build_topology(collected: Iterable[SwitchData]) -> tuple[list[dict], list[dict], list[dict]]:
     """Превращает данные опроса в узлы и связи для схемы."""
     switches = [sw for sw in collected if sw.reachable]
     mac_to_switch = {sw.bridge_mac: sw for sw in switches if sw.bridge_mac}
-    fdb = {sw.ip: dict(sw.fdb) for sw in switches}
+    # FDB с приведением членов LACP к логическому порту-агрегату
+    fdb = {
+        sw.ip: {
+            mac: sw.lag_members.get(if_index, if_index)
+            for mac, if_index in sw.fdb.items()
+        }
+        for sw in switches
+    }
 
     # S(A, p): чужие базовые MAC по портам; sees[A][mac B] — порт, где A видит B
     switch_macs_on_port: dict[str, dict[int, set[str]]] = {}

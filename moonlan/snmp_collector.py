@@ -39,6 +39,8 @@ OID_PORT_IFINDEX = "1.3.6.1.2.1.17.1.4.1.2"   # dot1dBasePortIfIndex.<port>
 OID_FDB_PORT = "1.3.6.1.2.1.17.4.3.1.2"       # dot1dTpFdbPort.<6 байт MAC>
 OID_Q_FDB_PORT = "1.3.6.1.2.1.17.7.1.2.2.1.2" # dot1qTpFdbPort.<fdbId>.<6 байт MAC>
 OID_ARP_PHYS = "1.3.6.1.2.1.4.22.1.2"         # ipNetToMediaPhysAddress.<ifIndex>.<IP>
+# dot3adAggPortAttachedAggID.<ifIndex члена> -> ifIndex агрегата (IEEE8023-LAG-MIB)
+OID_LAG_ATTACHED_ID = "1.2.840.10006.300.43.1.2.1.1.13"
 
 
 @dataclass
@@ -60,6 +62,7 @@ class SwitchData:
     bridge_mac: str = ""
     ports: dict[int, PortInfo] = field(default_factory=dict)   # ifIndex -> порт
     fdb: dict[str, int] = field(default_factory=dict)          # MAC -> ifIndex
+    lag_members: dict[int, int] = field(default_factory=dict)  # ifIndex члена -> ifIndex агрегата
 
 
 def _fmt_mac(raw: bytes) -> str:
@@ -147,6 +150,13 @@ class SnmpCollector:
             port = data.ports.get(suffix[0])
             if port:
                 port.speed_mbps = int(value)
+
+        # LACP: членство физических портов в агрегатах. Если коммутатор
+        # не поддерживает IEEE8023-LAG-MIB, walk просто ничего не отдаст.
+        async for suffix, value in self._walk(host, OID_LAG_ATTACHED_ID):
+            member, aggregate = suffix[0], int(value)
+            if aggregate and aggregate != member:
+                data.lag_members[member] = aggregate
 
         # bridge-port -> ifIndex
         port_to_ifindex: dict[int, int] = {}
