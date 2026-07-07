@@ -19,6 +19,7 @@
       <span class="lang-switch" role="group" aria-label="Language">
         <button id="lang-ru">RU</button><button id="lang-en">EN</button>
       </span>
+      <button id="alarms-btn"><span data-i18n="alarmsBtn"></span><span id="alarms-badge" class="badge hidden"></span></button>
       <button id="journal-btn" data-i18n="journalBtn"></button>
       <button id="rescan" data-i18n="rescanBtn"></button>
     </div>
@@ -47,6 +48,29 @@
         <button id="journal-close">×</button>
         <h3 data-i18n="journalTitle"></h3>
         <ul id="journal-list"></ul>
+      </div>
+      <div id="ports" class="hidden">
+        <button id="ports-close">×</button>
+        <h3 id="ports-title"></h3>
+        <table class="ports-table">
+          <thead>
+            <tr>
+              <th data-i18n="colPort"></th>
+              <th></th>
+              <th data-i18n="colSpeed"></th>
+              <th class="num" data-i18n="colIn"></th>
+              <th class="num" data-i18n="colOut"></th>
+              <th class="num" data-i18n="colErr"></th>
+              <th class="num" data-i18n="colDisc"></th>
+            </tr>
+          </thead>
+          <tbody id="ports-body"></tbody>
+        </table>
+      </div>
+      <div id="alarms" class="hidden">
+        <button id="alarms-close">×</button>
+        <h3 data-i18n="alarmsTitle"></h3>
+        <div id="alarms-body"></div>
       </div>
       <div id="empty-state" class="hidden">
         <p data-i18n="emptyLine1"></p>

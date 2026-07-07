@@ -16,6 +16,15 @@ const els = {
   journalBtn: document.getElementById("journal-btn"),
   journalList: document.getElementById("journal-list"),
   journalClose: document.getElementById("journal-close"),
+  ports: document.getElementById("ports"),
+  portsTitle: document.getElementById("ports-title"),
+  portsBody: document.getElementById("ports-body"),
+  portsClose: document.getElementById("ports-close"),
+  alarms: document.getElementById("alarms"),
+  alarmsBtn: document.getElementById("alarms-btn"),
+  alarmsBadge: document.getElementById("alarms-badge"),
+  alarmsBody: document.getElementById("alarms-body"),
+  alarmsClose: document.getElementById("alarms-close"),
   emptyState: document.getElementById("empty-state"),
   langRu: document.getElementById("lang-ru"),
   langEn: document.getElementById("lang-en"),
@@ -28,6 +37,11 @@ let topology = { switches: [], links: [], hosts: [], pseudo_switches: [] };
 let isScanning = false;
 let shownDetails = null; // {type: "node"|"link", id} — to re-render on language switch
 let lastEvents = null; // cached journal events for re-render
+let activeAlarms = []; // refreshed with the topology — badge and red borders
+let lastAlarms = null; // {active, cleared} cached for the alarms panel
+let portsIp = null; // switch whose ports panel is open
+let portsTimer = null; // its 30 s auto-refresh
+let lastPorts = null; // cached ports payload for re-render
 
 const REFRESH_MS = 30000;
 
@@ -38,6 +52,7 @@ const colors = {
   dim: "#8593a8",
   ok: "#7fc98f",
   panel: "#141c2c",
+  alarm: "#d96b6b",
 };
 
 /* ---------- localization ---------- */
@@ -98,6 +113,12 @@ function setLang(newLang) {
   if (!els.journal.classList.contains("hidden") && lastEvents) {
     renderJournal(lastEvents);
   }
+  if (!els.ports.classList.contains("hidden") && lastPorts) {
+    renderPorts(lastPorts);
+  }
+  if (!els.alarms.classList.contains("hidden") && lastAlarms) {
+    renderAlarms();
+  }
 }
 
 /* ---------- helpers ---------- */
@@ -123,17 +144,33 @@ function linkId(link) {
   return "link:" + link.a + "|" + link.b;
 }
 
+/* "34" for big rates, "3.4" for small ones, "—" when unknown */
+function fmtRate(v) {
+  if (v == null) return "—";
+  return v >= 10 ? String(Math.round(v)) : (+v).toFixed(1);
+}
+
 /* Link caption: "LACP 2×1 Gbit/s" for an aggregate, "LAG trunk" for a
-   trunk detected via synthetic bridge-ports, otherwise the speed */
+   trunk detected via synthetic bridge-ports, otherwise the speed;
+   plus the current load ("↓34 ↑12 Mbit/s") when counters know it */
 function linkLabel(link) {
+  let label;
   if (link.lag && link.lag.count > 1) {
-    return t("lacp") + " " + link.lag.count + "×" + fmtSpeed(link.speed_mbps / link.lag.count);
-  }
-  if (link.lag && link.lag.trunk) {
+    label = t("lacp") + " " + link.lag.count + "×" + fmtSpeed(link.speed_mbps / link.lag.count);
+  } else if (link.lag && link.lag.trunk) {
     const speed = fmtSpeed(link.speed_mbps);
-    return speed ? t("lagTrunk") + " " + speed : t("lagTrunk");
+    label = speed ? t("lagTrunk") + " " + speed : t("lagTrunk");
+  } else {
+    label = fmtSpeed(link.speed_mbps);
   }
-  return fmtSpeed(link.speed_mbps);
+  if (link.load) {
+    // out of the parent side = downstream (↓), into it = upstream (↑)
+    const load =
+      "↓" + fmtRate(link.load.out_mbps) + " ↑" + fmtRate(link.load.in_mbps) +
+      " " + t("mbps");
+    label = label ? label + " · " + load : load;
+  }
+  return label;
 }
 
 /* Port name in the link card; synthetic trunk ports get a "(LAG)" mark */
@@ -176,12 +213,32 @@ function updateScanStatus() {
 /* ---------- data loading and rendering ---------- */
 
 async function loadTopology() {
-  const res = await fetch("/api/topology");
-  topology = await res.json();
+  const [topoRes, alarmsRes] = await Promise.all([
+    fetch("/api/topology"),
+    fetch("/api/alarms?active=1"),
+  ]);
+  topology = await topoRes.json();
+  activeAlarms = (await alarmsRes.json()).alarms || [];
+  renderBadge();
   renderSidebar();
   renderGraph();
   updateScanStatus();
   els.emptyState.classList.toggle("hidden", topology.switches.length > 0);
+}
+
+function renderBadge() {
+  els.alarmsBadge.textContent = activeAlarms.length;
+  els.alarmsBadge.classList.toggle("hidden", activeAlarms.length === 0);
+  els.alarmsBadge.classList.toggle(
+    "critical",
+    activeAlarms.some((a) => a.severity === "critical")
+  );
+}
+
+function switchHasAlarm(ip) {
+  return activeAlarms.some(
+    (a) => a.type === "switch_down" && a.subject === ip
+  );
 }
 
 function li(main, sub, dotClass, onClick, searchText) {
@@ -240,17 +297,19 @@ function buildGraphData() {
   const edges = [];
 
   for (const sw of topology.switches) {
+    // a switch_down alarm paints the node border red
+    const border = switchHasAlarm(sw.ip) ? colors.alarm : colors.moon;
     nodes.push({
       id: "sw:" + sw.ip,
       label: sw.name + "\n" + sw.ip,
       shape: "box",
       color: {
         background: colors.panel,
-        border: colors.moon,
-        highlight: { background: "#1c2739", border: colors.moon },
+        border: border,
+        highlight: { background: "#1c2739", border: border },
       },
       font: { color: colors.text, face: "system-ui" },
-      borderWidth: 2,
+      borderWidth: switchHasAlarm(sw.ip) ? 3 : 2,
       margin: 10,
     });
   }
@@ -376,7 +435,8 @@ function showDetails(nodeId) {
       <dt>${t("bridgeMac")}</dt><dd>${sw.mac || "—"}</dd>
       <dt>${t("portsUpTotal")}</dt><dd>${sw.ports_up} / ${sw.ports_total}</dd>
       <dt>${t("lastReply")}</dt><dd>${fmtTime(sw.last_ping_ok)}</dd>
-      <dt>${t("descr")}</dt><dd>${sw.descr || "—"}</dd></dl>`;
+      <dt>${t("descr")}</dt><dd>${sw.descr || "—"}</dd></dl>
+      <button id="ports-btn" class="panel-btn">${t("portsBtn")}</button>`;
   } else if (nodeId.startsWith("pseudo:")) {
     const ps = (topology.pseudo_switches || []).find((p) => p.id === nodeId);
     if (!ps) return;
@@ -402,11 +462,78 @@ function showDetails(nodeId) {
   els.detailsBody.innerHTML = html;
   els.details.classList.remove("hidden");
   els.journal.classList.add("hidden");
+  els.alarms.classList.add("hidden");
+  closePorts();
+  const portsBtn = document.getElementById("ports-btn");
+  if (portsBtn) {
+    portsBtn.addEventListener("click", () =>
+      openPorts(nodeId.slice("sw:".length))
+    );
+  }
 }
 
 function hideDetails() {
   els.details.classList.add("hidden");
   shownDetails = null;
+}
+
+/* ---------- ports panel ---------- */
+
+async function openPorts(ip) {
+  portsIp = ip;
+  hideDetails();
+  els.journal.classList.add("hidden");
+  els.alarms.classList.add("hidden");
+  await refreshPorts();
+  els.ports.classList.remove("hidden");
+  clearInterval(portsTimer);
+  portsTimer = setInterval(refreshPorts, REFRESH_MS);
+}
+
+function closePorts() {
+  els.ports.classList.add("hidden");
+  clearInterval(portsTimer);
+  portsTimer = null;
+  portsIp = null;
+}
+
+async function refreshPorts() {
+  if (!portsIp) return;
+  const res = await fetch("/api/switch/" + encodeURIComponent(portsIp) + "/ports");
+  lastPorts = await res.json();
+  renderPorts(lastPorts);
+}
+
+function renderPorts(data) {
+  els.portsTitle.textContent = fmt("portsTitle", {
+    name: data.name || data.switch,
+  });
+  // physical ports only; the server puts active ones first
+  const rows = data.ports
+    .filter((p) => p.is_physical)
+    .map((p) => {
+      const tr = document.createElement("tr");
+      if (!p.oper_up) tr.className = "port-down";
+      const td = (content, cls) => {
+        const cell = document.createElement("td");
+        if (cls) cell.className = cls;
+        cell.append(content);
+        tr.append(cell);
+      };
+      let name = p.name;
+      if (p.lag) name += " (" + p.lag + ")";
+      td(name);
+      const dot = document.createElement("span");
+      dot.className = "dot " + (p.oper_up ? "up" : "down");
+      td(dot);
+      td(p.oper_up && p.speed_mbps ? fmtSpeed(p.speed_mbps) : "—");
+      td(fmtRate(p.in_mbps), "num");
+      td(fmtRate(p.out_mbps), "num");
+      td(fmtRate(p.errors_per_min), "num");
+      td(fmtRate(p.discards_per_min), "num");
+      return tr;
+    });
+  els.portsBody.replaceChildren(...rows);
 }
 
 /* Link card: ports of both ends, speed, aggregate members */
@@ -437,6 +564,80 @@ function showLinkDetails(edgeId) {
   els.detailsBody.innerHTML = html;
   els.details.classList.remove("hidden");
   els.journal.classList.add("hidden");
+  els.alarms.classList.add("hidden");
+  closePorts();
+}
+
+/* ---------- alarms ---------- */
+
+function fmtDuration(seconds) {
+  seconds = Math.max(0, Math.floor(seconds));
+  if (seconds < 60) return seconds + t("durS");
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) return minutes + t("durM");
+  const hours = Math.floor(minutes / 60);
+  return hours + t("durH") + " " + (minutes % 60) + t("durM");
+}
+
+async function toggleAlarms() {
+  if (!els.alarms.classList.contains("hidden")) {
+    els.alarms.classList.add("hidden");
+    return;
+  }
+  const [act, cleared] = await Promise.all([
+    fetch("/api/alarms?active=1").then((r) => r.json()),
+    fetch("/api/alarms?active=0&limit=50").then((r) => r.json()),
+  ]);
+  lastAlarms = { active: act.alarms || [], cleared: cleared.alarms || [] };
+  activeAlarms = lastAlarms.active;
+  renderBadge();
+  renderAlarms();
+  hideDetails();
+  els.journal.classList.add("hidden");
+  closePorts();
+  els.alarms.classList.remove("hidden");
+}
+
+function renderAlarms() {
+  const body = els.alarmsBody;
+  body.replaceChildren();
+  const now = Date.now() / 1000;
+  const section = (titleKey, alarms, isActive) => {
+    const h = document.createElement("h4");
+    h.textContent = t(titleKey);
+    body.append(h);
+    if (!alarms.length) {
+      const empty = document.createElement("p");
+      empty.className = "no-alarms";
+      empty.textContent = t(titleKey === "alarmsActive" ? "noAlarms" : "noEvents");
+      body.append(empty);
+      return;
+    }
+    const ul = document.createElement("ul");
+    ul.className = "alarm-list";
+    for (const a of alarms) {
+      const li = document.createElement("li");
+      const head = document.createElement("div");
+      head.className = "alarm-head";
+      const sev = document.createElement("span");
+      sev.className = "sev sev-" + a.severity;
+      sev.textContent = t("al_" + a.type);
+      const subject = document.createElement("span");
+      subject.className = "alarm-subject";
+      subject.textContent = a.display || a.subject;
+      head.append(sev, subject);
+      const sub = document.createElement("div");
+      sub.className = "alarm-sub";
+      sub.textContent = isActive
+        ? fmtTime(a.ts_raised) + " · " + fmtDuration(now - a.ts_raised)
+        : fmtTime(a.ts_raised) + " · " + t("clearedAt") + fmtTime(a.ts_cleared);
+      li.append(head, sub);
+      ul.append(li);
+    }
+    body.append(ul);
+  };
+  section("alarmsActive", lastAlarms.active, true);
+  section("alarmsCleared", lastAlarms.cleared, false);
 }
 
 /* ---------- journal ---------- */
@@ -450,7 +651,13 @@ function renderJournal(events) {
       time.textContent = fmtTime(ev.ts);
       const type = document.createElement("span");
       type.className =
-        { new_mac: "ev-new", host_down: "ev-down", host_up: "ev-up" }[ev.event] || "";
+        {
+          new_mac: "ev-new",
+          host_down: "ev-down",
+          host_up: "ev-up",
+          alarm_raised: "ev-down",
+          alarm_cleared: "ev-up",
+        }[ev.event] || "";
       // events arrive as codes; unknown codes are shown as-is
       const translated = t("ev_" + ev.event);
       type.textContent = translated === "ev_" + ev.event ? ev.event : translated;
@@ -478,6 +685,8 @@ async function toggleJournal() {
   lastEvents = data.events;
   renderJournal(lastEvents);
   hideDetails();
+  closePorts();
+  els.alarms.classList.add("hidden");
   els.journal.classList.remove("hidden");
 }
 
@@ -516,6 +725,11 @@ els.detailsClose.addEventListener("click", hideDetails);
 els.journalBtn.addEventListener("click", toggleJournal);
 els.journalClose.addEventListener("click", () =>
   els.journal.classList.add("hidden")
+);
+els.portsClose.addEventListener("click", closePorts);
+els.alarmsBtn.addEventListener("click", toggleAlarms);
+els.alarmsClose.addEventListener("click", () =>
+  els.alarms.classList.add("hidden")
 );
 els.langRu.addEventListener("click", () => setLang("ru"));
 els.langEn.addEventListener("click", () => setLang("en"));
