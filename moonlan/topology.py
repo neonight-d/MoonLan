@@ -144,9 +144,17 @@ def _port_name(sw: SwitchData, if_index: int) -> str:
     return port.name if port and port.name else str(if_index)
 
 
-def _lag_info(sw: SwitchData, agg_index: int) -> tuple[list[str], int]:
-    """Names of the aggregate's physical member ports and their total speed."""
-    members = sorted(m for m, agg in sw.lag_members.items() if agg == agg_index)
+def _lag_info(sw: SwitchData, port: int) -> tuple[list[str], int]:
+    """Names of the aggregate's physical member ports and their total speed.
+
+    A positive port is an IEEE8023-LAG-MIB aggregate ifIndex; a negative
+    one is a synthetic bridge-port whose members were inferred from the
+    dot1dBasePortIfIndex gaps (SwitchData.lag_groups).
+    """
+    if port < 0:
+        members = sorted(sw.lag_groups.get(-port, []))
+    else:
+        members = sorted(m for m, agg in sw.lag_members.items() if agg == port)
     names = [_port_name(sw, m) for m in members]
     speed = sum(sw.ports[m].speed_mbps for m in members if m in sw.ports)
     return names, speed
@@ -174,7 +182,11 @@ def _make_link(
             "a_members": a_members,
             "b_members": b_members,
         }
-        link["speed_mbps"] = a_speed or b_speed
+        # the slower side limits the aggregate when both are known
+        if a_members and b_members:
+            link["speed_mbps"] = min(a_speed, b_speed)
+        else:
+            link["speed_mbps"] = a_speed or b_speed
     else:
         port = None
         if pa is not None:

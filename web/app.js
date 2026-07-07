@@ -426,10 +426,11 @@ function showLinkDetails(edgeId) {
   }
   if (link.lag && link.lag.count > 1) {
     html += `<dt>${t("lagAggregate")}</dt><dd>${linkLabel(link)}</dd>`;
+    const memberList = (members) => members.join(", ") + " (" + t("lacp") + ")";
     if ((link.lag.a_members || []).length)
-      html += `<dt>${fmt("portsOf", { name: swName(link.a) })}</dt><dd>${link.lag.a_members.join(", ")}</dd>`;
+      html += `<dt>${fmt("portsOf", { name: swName(link.a) })}</dt><dd>${memberList(link.lag.a_members)}</dd>`;
     if ((link.lag.b_members || []).length)
-      html += `<dt>${fmt("portsOf", { name: swName(link.b) })}</dt><dd>${link.lag.b_members.join(", ")}</dd>`;
+      html += `<dt>${fmt("portsOf", { name: swName(link.b) })}</dt><dd>${memberList(link.lag.b_members)}</dd>`;
   }
   html += "</dl>";
   shownDetails = { type: "link", id: edgeId };

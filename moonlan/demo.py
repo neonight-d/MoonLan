@@ -21,7 +21,7 @@ import random
 import time
 
 from .db import Database
-from .snmp_collector import PortInfo, SwitchData
+from .snmp_collector import PortInfo, SwitchData, infer_lag_groups
 
 random.seed(7)  # keep the demo network identical between runs
 
@@ -52,12 +52,21 @@ def _iface_mac(sw: SwitchData) -> str:
     return next(m for m in sw.own_macs if m != sw.bridge_mac)
 
 
-def _synthetic_port(sw: SwitchData, bridge_port: int) -> int:
-    """A trunk bridge-port missing from dot1dBasePortIfIndex."""
+def _synthetic_trunk(sw: SwitchData, bridge_port: int, members: tuple[int, ...]) -> int:
+    """A D-Link-style trunk: the member bridge-ports are missing from
+    dot1dBasePortIfIndex and the FDB lives on a synthetic bridge-port.
+    The members are derived with the same inference the collector uses.
+    """
     if_index = -bridge_port
     sw.ports[if_index] = PortInfo(
         if_index=if_index, name=f"bridge-port {bridge_port}", is_physical=False
     )
+    physical = {p.if_index for p in sw.ports.values() if p.is_physical}
+    sw.lag_groups.update(
+        infer_lag_groups(physical, physical - set(members), {bridge_port})
+    )
+    for m in members:
+        sw.ports[m].oper_up = True
     return if_index
 
 
@@ -83,14 +92,16 @@ def demo_network() -> list[SwitchData]:
 
     # The core sees every ray on its own port. The trunk to ray3 lives
     # on a synthetic bridge-port on BOTH sides — the way D-Link exposes
-    # LAG trunks without IEEE8023-LAG-MIB. The rays do not see the core.
-    core_trunk_to_ray3 = _synthetic_port(core, 3)
-    ray3_trunk = _synthetic_port(ray3, 24)
+    # LAG trunks without IEEE8023-LAG-MIB: member ports 3+4 (core) and
+    # 23+24 (ray3) are missing from dot1dBasePortIfIndex, so their
+    # composition and 2×1G speed are inferred. The rays do not see the core.
+    core_trunk_to_ray3 = _synthetic_trunk(core, 3, (3, 4))
+    ray3_trunk = _synthetic_trunk(ray3, 24, (23, 24))
     core_port_to_ray = {
         ray1.ip: 1,               # LACP member -> normalized to Po1
         ray2.ip: 2,
         ray3.ip: core_trunk_to_ray3,
-        ray4.ip: 4,
+        ray4.ip: 5,
     }
     for ray in (ray2, ray4):
         core.ports[core_port_to_ray[ray.ip]].oper_up = True
