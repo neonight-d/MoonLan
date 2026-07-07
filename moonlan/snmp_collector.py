@@ -80,12 +80,40 @@ class SwitchData:
     ports: dict[int, PortInfo] = field(default_factory=dict)   # ifIndex -> port
     fdb: dict[str, int] = field(default_factory=dict)          # MAC -> ifIndex
     lag_members: dict[int, int] = field(default_factory=dict)  # member ifIndex -> aggregate ifIndex
+    # LAG trunks inferred from bridge-ports missing from
+    # dot1dBasePortIfIndex: synthetic bridge-port -> member ifIndexes
+    lag_groups: dict[int, list[int]] = field(default_factory=dict)
     port_pvid: dict[int, int] = field(default_factory=dict)    # ifIndex -> PVID (untagged VLAN)
     vlan_names: dict[int, str] = field(default_factory=dict)   # VLAN ID -> name
 
 
 def _fmt_mac(raw: bytes) -> str:
     return ":".join(f"{b:02x}" for b in raw)
+
+
+def infer_lag_groups(
+    physical: set[int], mapped: set[int], synthetic: set[int]
+) -> dict[int, list[int]]:
+    """LAG members inferred from bridge-ports missing from dot1dBasePortIfIndex.
+
+    On D-Link models the bridge-port number matches the physical port
+    ifIndex; ports joined into a LACP group vanish from the mapping,
+    while the trunk's FDB lives on a synthetic bridge-port equal to one
+    of the members (the master). So: members = physical ports whose
+    bridge-ports are missing from the mapping, grouped around the
+    synthetic FDB ports (each member goes to the nearest one).
+    """
+    if not mapped:
+        return {}  # the whole mapping is absent — nothing can be inferred
+    missing = sorted(p for p in physical if p not in mapped)
+    trunks = sorted(s for s in synthetic if s in missing)
+    if not trunks:
+        return {}
+    groups: dict[int, list[int]] = {}
+    for member in missing:
+        nearest = min(trunks, key=lambda s: (abs(member - s), s))
+        groups.setdefault(nearest, []).append(member)
+    return groups
 
 
 class SnmpCollector:
@@ -233,6 +261,24 @@ class SnmpCollector:
                 host,
                 "; ".join(
                     f"port {p}: {n} MACs" for p, n in sorted(unmapped.items())
+                ),
+            )
+
+        # LAG composition: physical ports whose bridge-ports vanished
+        # from dot1dBasePortIfIndex, grouped around the synthetic ports
+        data.lag_groups = infer_lag_groups(
+            {p.if_index for p in data.ports.values()
+             if p.is_physical and p.if_index > 0},
+            set(port_to_ifindex),
+            set(unmapped),
+        )
+        if data.lag_groups:
+            log.debug(
+                "%s: inferred LAG groups: %s",
+                host,
+                "; ".join(
+                    f"bridge-port {s}: members {', '.join(map(str, members))}"
+                    for s, members in sorted(data.lag_groups.items())
                 ),
             )
 
