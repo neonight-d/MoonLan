@@ -25,6 +25,7 @@ from .snmp_collector import (
     OID_BRIDGE_ADDRESS,
     OID_FDB_PORT,
     OID_IF_DESCR,
+    OID_IF_HIGH_SPEED,
     OID_IF_NAME,
     OID_IF_OPER_STATUS,
     OID_IF_PHYS_ADDRESS,
@@ -35,7 +36,9 @@ from .snmp_collector import (
     OID_SYS_DESCR,
     OID_SYS_NAME,
     SnmpCollector,
+    SwitchData,
     _fmt_mac,
+    infer_lag_groups,
 )
 
 MAX_IF_ROWS = 40
@@ -43,6 +46,17 @@ MAX_IF_ROWS = 40
 
 def _section(title: str) -> None:
     print(f"\n=== {title} ===")
+
+
+def _lag_group_line(bridge_port: int, members: list[int], speeds: dict[int, int]) -> str:
+    """'LAG on bridge-port 1: members 1, 2 (2×1000 Mbit/s)'."""
+    member_speeds = [speeds.get(m, 0) for m in members]
+    if member_speeds and len(set(member_speeds)) == 1 and member_speeds[0]:
+        speed = f"{len(members)}×{member_speeds[0]} Mbit/s"
+    else:
+        speed = f"total {sum(member_speeds)} Mbit/s"
+    member_list = ", ".join(str(m) for m in members)
+    return f"LAG on bridge-port {bridge_port}: members {member_list} ({speed})"
 
 
 async def _own_macs_light(
@@ -99,6 +113,9 @@ async def run_diag(
         if_types[suffix[0]] = int(value)
     async for suffix, value in collector._walk(ip, OID_IF_OPER_STATUS):
         if_oper[suffix[0]] = int(value)
+    if_speeds: dict[int, int] = {}
+    async for suffix, value in collector._walk(ip, OID_IF_HIGH_SPEED):
+        if_speeds[suffix[0]] = int(value)
     indexes = sorted(set(if_names) | set(if_types) | set(if_oper))
     physical = [i for i in indexes if if_types.get(i) in PHYSICAL_IF_TYPES]
     types_str = "/".join(str(t) for t in sorted(PHYSICAL_IF_TYPES))
@@ -178,6 +195,15 @@ async def run_diag(
                 else ""
             )
             print(f"  ifIndex {member:>4} -> aggregate {lag[member]}{note}")
+    # LAG composition inferred from the dot1dBasePortIfIndex gaps
+    physical = {i for i in indexes if if_types.get(i) in PHYSICAL_IF_TYPES}
+    synthetic = {bp for bp in per_port if bp != 0 and bp not in port_map}
+    groups = infer_lag_groups(physical, set(port_map), synthetic)
+    print("inferred LAG groups (from missing bridge-ports):")
+    if not groups:
+        print("  none")
+    for bridge_port, members in sorted(groups.items()):
+        print(f"  {_lag_group_line(bridge_port, members, if_speeds)}")
 
     # 7. Other switches from config.switches
     _section("7. Other switches from config.yaml in this device's FDB")
@@ -260,6 +286,16 @@ async def run_topology_view(community: str, timeout: int, cfg) -> None:
     print("uplinks:")
     for ip, port in sorted(uplinks.items()):
         print(f"  {label(ip)}: {port_name(ip, port)}")
+    print("LAG groups:")
+    any_groups = False
+    for sw in switches:
+        speeds = {p.if_index: p.speed_mbps for p in sw.ports.values()}
+        for bridge_port, members in sorted(sw.lag_groups.items()):
+            any_groups = True
+            print(f"  {label(sw.ip)}: "
+                  f"{_lag_group_line(bridge_port, members, speeds)}")
+    if not any_groups:
+        print("  none")
     print("links:")
     if not links:
         print("  none")
