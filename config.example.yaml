@@ -36,6 +36,10 @@ scan_interval_minutes: 10
 # Как часто пинговать хосты и коммутаторы, секунд
 ping_interval_seconds: 60
 
+# How often to poll port traffic/error counters, seconds
+# Как часто опрашивать счётчики трафика и ошибок портов, секунд
+counters_interval_seconds: 60
+
 # Database file (hosts, event journal)
 # Файл базы данных (хосты, журнал событий)
 db_path: moonlan.db
@@ -45,3 +49,44 @@ db_path: moonlan.db
 # Если на порту (не магистральном) найдено больше стольких хостов,
 # на схеме рисуется «коммутатор без SNMP» (0 — отключить)
 unmanaged_threshold: 3
+
+# Alarm thresholds / Пороги тревог
+thresholds:
+  errors_per_minute: 10          # port_errors: (errors+discards)/min
+  port_utilization_percent: 90   # port_util: % of the link speed
+                                 # (for a LAG — of the total speed)
+                                 # % от скорости линка (для LAG — от суммарной)
+
+# Notification channels. Keep the real config.yaml (with passwords and
+# tokens) OUT of git — it is listed in .gitignore.
+# Каналы уведомлений. Храните боевой config.yaml (с паролями и токенами)
+# ВНЕ git — он указан в .gitignore.
+notifications:
+  cooldown_seconds: 300      # anti-spam per (type, subject)
+                             # антиспам на (тип, объект)
+  email:
+    enabled: false
+    smtp_host: smtp.example.com
+    smtp_port: 587
+    starttls: true
+    username: ""
+    password: ""
+    mail_from: moonlan@example.com
+    mail_to: [admin@example.com]
+  telegram:
+    enabled: false
+    bot_token: ""              # Bot API token from @BotFather
+    chat_ids: []               # e.g. [123456789]
+  syslog:
+    enabled: false
+    host: 127.0.0.1
+    port: 514
+
+# Which alarm types go to which channels
+# Какие типы тревог в какие каналы отправлять
+alarm_notify:
+  host_down: [email, telegram, syslog]
+  switch_down: [email, telegram, syslog]
+  port_errors: [syslog]
+  port_util: [telegram, syslog]
+  new_mac: [syslog]

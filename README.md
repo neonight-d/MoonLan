@@ -8,7 +8,7 @@ displays it in a browser.
 
 An open-source alternative to LanTopoLog. MIT license.
 
-## Features (v0.4)
+## Features (v0.5)
 
 - SNMP v2c polling of switches: device name, ports, speeds, statuses.
 - MAC address tables (BRIDGE-MIB and Q-BRIDGE-MIB) from every switch,
@@ -32,8 +32,22 @@ An open-source alternative to LanTopoLog. MIT license.
   host names via reverse DNS.
 - Continuous ping monitoring of all hosts and switches: green/grey status
   indicator, time of the last reply.
-- Event journal: new MAC addresses, hosts going down and coming back.
-  Data is stored in SQLite and survives restarts.
+- Port traffic and error monitoring: a light counters poll (ifHC* octets
+  with a 32-bit fallback, errors, discards) turns deltas into Mbit/s and
+  errors/min per port. The "Ports" panel of a switch shows live rates;
+  map edges show the current trunk load ("2×1 Gbit/s · ↓34 ↑12 Mbit/s",
+  summed over LAG members). Counter resets after a switch reboot are
+  detected and do not produce rate spikes.
+- Stateful alarms: host_down (3 missed pings), switch_down (2 failed SNMP
+  polls, critical), port_errors and port_util (threshold with two-cycle
+  hysteresis), new_mac. The "Alarms" panel lists active and recently
+  cleared alarms; the header badge shows the active count. Every
+  raise/clear is also written to the journal.
+- Notifications: email (SMTP), Telegram (Bot API) and Syslog (UDP) with
+  per-alarm-type routing (`alarm_notify`) and an anti-spam cooldown.
+  `python -m moonlan.notify --test` checks every enabled channel.
+- Event journal: new MAC addresses, hosts going down and coming back,
+  alarm raises/clears. Data is stored in SQLite and survives restarts.
 - Two-panel web UI: device list with search (name, IP or MAC) on the left,
   interactive auto-refreshing network map on the right. English and Russian
   interface languages.
@@ -48,7 +62,7 @@ An open-source alternative to LanTopoLog. MIT license.
 | v0.2    | Manual map editing, context menus, layout export/import *(postponed)* |
 | v0.3 ✓  | Ping monitoring, journal of new MAC addresses, last-reply time, host IPs and names (ARP/DNS) |
 | v0.4 ✓  | Accurate link inference, LACP, VLAN, unmanaged switches |
-| v0.5    | Alerts and notifications: email, Telegram, Syslog; traffic thresholds; port error counters (ifInErrors etc.) |
+| v0.5 ✓  | Alerts and notifications: email, Telegram, Syslog; traffic thresholds; port error counters (ifInErrors etc.) |
 | v0.6    | Spanning Tree monitoring, topology change notifications |
 | v0.7    | Export to PDF and Draw.io, MAC address info import |
 | v0.8    | Windows computer inventory (WMI/WinRM) |
@@ -91,13 +105,59 @@ routers:                   # devices with an ARP table (routers,
 
 scan_interval_minutes: 10  # SNMP polling period (0 — manual only)
 ping_interval_seconds: 60  # ping monitoring period
-db_path: moonlan.db        # SQLite file (hosts, event journal)
+counters_interval_seconds: 60  # port counters polling period
+db_path: moonlan.db        # SQLite file (hosts, journal, alarms)
 unmanaged_threshold: 3     # more hosts than this behind a port — draw
                            # a "switch without SNMP" node (0 — disable)
+
+thresholds:
+  errors_per_minute: 10          # port_errors alarm threshold
+  port_utilization_percent: 90   # port_util: % of the link speed
+                                 # (for a LAG — of the total speed)
+
+notifications:
+  cooldown_seconds: 300      # anti-spam per (alarm type, subject)
+  email:
+    enabled: false
+    smtp_host: smtp.example.com
+    smtp_port: 587
+    starttls: true
+    username: ""
+    password: ""
+    mail_from: moonlan@example.com
+    mail_to: [admin@example.com]
+  telegram:
+    enabled: false
+    bot_token: ""            # Bot API token from @BotFather
+    chat_ids: []
+  syslog:
+    enabled: false
+    host: 127.0.0.1
+    port: 514
+
+alarm_notify:                # which alarm types go to which channels
+  host_down: [email, telegram, syslog]
+  switch_down: [email, telegram, syslog]
+  port_errors: [syslog]
+  port_util: [telegram, syslog]
+  new_mac: [syslog]
 ```
 
-The `routers`, `ping_interval_seconds`, `db_path` and `unmanaged_threshold`
-sections are optional — an old config without them keeps working.
+All new sections are optional — an old config without them keeps
+working (monitoring is on, notifications are off).
+
+> **Warning.** The real `config.yaml` contains the SNMP community and
+> notification credentials (SMTP password, bot token). Keep it out of
+> version control — it is listed in `.gitignore`.
+
+Check the notification channels after configuring them:
+
+```bash
+python -m moonlan.notify --test
+```
+
+It sends a test message to every enabled channel and prints a
+per-channel result.
 
 ## Running
 
@@ -114,7 +174,11 @@ MOONLAN_DEMO=1 python run.py
 ```
 
 The service generates a virtual network — a star of five switches with
-LACP, VLANs, an unmanaged switch and a couple dozen hosts.
+LACP, VLANs, an unmanaged switch and a couple dozen hosts. The demo
+also exercises the monitoring: live traffic curves on ports, one port
+with growing errors (a port_errors alarm within a couple of minutes),
+a host_down that raises and clears, new devices on a rescan. Instead
+of sending anything, notifications are logged as `NOTIFY (demo): …`.
 
 ### Diagnostics
 
@@ -151,9 +215,14 @@ the other configured switches. Read-only; does not touch the database.
 6. All hosts with an IP and all switches are pinged regularly; status
    and last-reply time are visible in the list, on the map and in the
    device card.
-7. Hosts and the event journal are stored in SQLite (`moonlan.db`),
-   so `first_seen` and history survive restarts.
-8. The result is available through the REST API (`/api/topology`)
+7. A separate light loop polls port counters (octets, errors,
+   discards) and converts deltas into per-port rates. The alarm engine
+   evaluates the rules after every ping/scan/counters cycle, stores
+   alarms in SQLite, mirrors transitions into the journal and routes
+   notifications to email/Telegram/Syslog with a cooldown.
+8. Hosts, the event journal and alarms are stored in SQLite
+   (`moonlan.db`), so `first_seen` and history survive restarts.
+9. The result is available through the REST API (`/api/topology`)
    and in the web UI.
 
 ## Project structure
@@ -167,7 +236,10 @@ MoonLan/
 │   ├── config.py           # configuration loading
 │   ├── snmp_collector.py   # SNMP polling of switches (FDB, ARP, LACP, VLAN)
 │   ├── topology.py         # topology inference
-│   ├── db.py               # SQLite: hosts and event journal
+│   ├── counters.py         # port traffic/error counters and rates
+│   ├── alarms.py           # stateful alarm engine
+│   ├── notify.py           # email/Telegram/Syslog notifications
+│   ├── db.py               # SQLite: hosts, event journal, alarms
 │   ├── pinger.py           # ping monitoring (system ping)
 │   ├── diag.py             # SNMP diagnostic tool
 │   ├── demo.py             # demo network generator
@@ -180,7 +252,9 @@ MoonLan/
 
 | Method | Path              | Description |
 |--------|-------------------|-------------|
-| GET    | `/api/topology`   | Current topology: nodes, links (ports, LACP), hosts (IP, name, ping, VLAN), `pseudo_switches`, `vlan_names` |
+| GET    | `/api/topology`   | Current topology: nodes, links (ports, LACP, current load), hosts (IP, name, ping, VLAN), `pseudo_switches`, `vlan_names` |
+| GET    | `/api/switch/{ip}/ports` | Port table of a switch: status, speed, PVID, LAG, In/Out Mbit/s, errors and discards per minute, known devices |
+| GET    | `/api/alarms?active=1\|0&limit=50` | Active or recently cleared alarms |
 | POST   | `/api/scan`       | Start a new switch poll |
 | GET    | `/api/search?q=…` | Search by name, IP or MAC |
 | GET    | `/api/journal?limit=100` | Event journal, newest first |

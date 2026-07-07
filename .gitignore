@@ -216,3 +216,9 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# MoonLan local files: the real config holds SNMP communities and
+# notification credentials; the DB and TZ drafts are per-deployment
+config.yaml
+moonlan.db
+.claude/
