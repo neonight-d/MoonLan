@@ -139,7 +139,7 @@ class FdbStability:
         return {mac: entry[0] for mac, entry in cache.items()}
 
 
-def _port_name(sw: SwitchData, if_index: int) -> str:
+def port_name(sw: SwitchData, if_index: int) -> str:
     port = sw.ports.get(if_index)
     return port.name if port and port.name else str(if_index)
 
@@ -155,7 +155,7 @@ def _lag_info(sw: SwitchData, port: int) -> tuple[list[str], int]:
         members = sorted(sw.lag_groups.get(-port, []))
     else:
         members = sorted(m for m, agg in sw.lag_members.items() if agg == port)
-    names = [_port_name(sw, m) for m in members]
+    names = [port_name(sw, m) for m in members]
     speed = sum(sw.ports[m].speed_mbps for m in members if m in sw.ports)
     return names, speed
 
@@ -167,8 +167,8 @@ def _make_link(
     link = {
         "a": a.ip,
         "b": b.ip,
-        "a_port": _port_name(a, pa) if pa is not None else "?",
-        "b_port": _port_name(b, pb) if pb is not None else "?",
+        "a_port": port_name(a, pa) if pa is not None else "?",
+        "b_port": port_name(b, pb) if pb is not None else "?",
         "speed_mbps": 0,
         "lag": None,
     }
@@ -344,7 +344,7 @@ def infer_tree(
             log.warning(
                 "Branch order behind %s port %s is undetermined (%s); "
                 "connecting all members to %s directly",
-                parent.ip, _port_name(parent, port),
+                parent.ip, port_name(parent, port),
                 ", ".join(m.ip for m in members), parent.ip,
             )
             for child in members:
@@ -460,7 +460,7 @@ def build_topology(
         host = {
             "mac": mac,
             "switch": sw_ip,
-            "port": _port_name(sw, if_index),
+            "port": port_name(sw, if_index),
             "vlan": sw.port_pvid.get(if_index, 0),
             "name": "",  # names and IPs are added from the DB (ARP/DNS)
         }
@@ -479,7 +479,7 @@ def build_topology(
             pseudo_switches.append({
                 "id": pseudo_id,
                 "switch": sw_ip,
-                "port": _port_name(switch_by_ip[sw_ip], if_index),
+                "port": port_name(switch_by_ip[sw_ip], if_index),
                 "host_count": len(port_hosts),
             })
 
