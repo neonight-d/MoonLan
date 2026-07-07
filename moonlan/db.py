@@ -34,8 +34,19 @@ CREATE TABLE IF NOT EXISTS journal (
     id      INTEGER PRIMARY KEY AUTOINCREMENT,
     ts      REAL NOT NULL,
     event   TEXT NOT NULL,                -- 'new_mac' | 'host_down' | 'host_up'
-    mac     TEXT NOT NULL,
+                                          -- | 'alarm_raised' | 'alarm_cleared'
+    mac     TEXT NOT NULL,                -- alarm events store the subject here
     details TEXT DEFAULT ''
+);
+CREATE TABLE IF NOT EXISTS alarms (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    type TEXT NOT NULL,        -- host_down|switch_down|port_errors|port_util|new_mac
+    subject TEXT NOT NULL,     -- mac / switch_ip / switch_ip:port
+    severity TEXT NOT NULL,    -- info|warning|critical
+    message TEXT DEFAULT '',
+    ts_raised REAL NOT NULL,
+    ts_cleared REAL DEFAULT 0, -- 0 = active
+    notified INTEGER DEFAULT 0
 );
 """
 
@@ -188,6 +199,68 @@ class Database:
                 "INSERT INTO journal (ts, event, mac, details) VALUES (?, ?, ?, ?)",
                 (ts, event, mac, details),
             )
+
+    # ---------- alarms ----------
+
+    def raise_alarm(
+        self,
+        alarm_type: str,
+        subject: str,
+        severity: str,
+        message: str,
+        ts: float,
+        auto_clear: bool = False,
+    ) -> bool:
+        """Inserts an alarm; False if one is already active for (type, subject).
+
+        auto_clear inserts an instantly cleared alarm (new_mac): a pure
+        notification event that never stays active.
+        """
+        with self._lock, self._conn:
+            if not auto_clear:
+                row = self._conn.execute(
+                    "SELECT id FROM alarms WHERE type = ? AND subject = ? "
+                    "AND ts_cleared = 0",
+                    (alarm_type, subject),
+                ).fetchone()
+                if row is not None:
+                    return False
+            self._conn.execute(
+                "INSERT INTO alarms (type, subject, severity, message, "
+                "ts_raised, ts_cleared, notified) VALUES (?, ?, ?, ?, ?, ?, 1)",
+                (alarm_type, subject, severity, message, ts,
+                 ts if auto_clear else 0),
+            )
+        return True
+
+    def clear_alarm(self, alarm_type: str, subject: str, ts: float) -> bool:
+        """Closes the active alarm for (type, subject); False if none was."""
+        with self._lock, self._conn:
+            cur = self._conn.execute(
+                "UPDATE alarms SET ts_cleared = ? WHERE type = ? AND "
+                "subject = ? AND ts_cleared = 0",
+                (ts, alarm_type, subject),
+            )
+        return cur.rowcount > 0
+
+    def alarms(self, active: bool, limit: int = 50) -> list[dict]:
+        """Active alarms (newest first) or the latest cleared ones."""
+        with self._lock:
+            if active:
+                rows = self._conn.execute(
+                    "SELECT * FROM alarms WHERE ts_cleared = 0 "
+                    "ORDER BY ts_raised DESC LIMIT ?",
+                    (limit,),
+                ).fetchall()
+            else:
+                rows = self._conn.execute(
+                    "SELECT * FROM alarms WHERE ts_cleared > 0 "
+                    "ORDER BY ts_cleared DESC LIMIT ?",
+                    (limit,),
+                ).fetchall()
+        return [dict(row) for row in rows]
+
+    # ---------- journal ----------
 
     def journal(self, limit: int = 100) -> list[dict]:
         """Latest events, newest first; each with the host's name and IP."""
