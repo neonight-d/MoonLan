@@ -1,0 +1,44 @@
+# MoonLan — network topology mapping and monitoring service
+# Install:
+#   sudo cp moonlan.service /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now moonlan
+# Logs:
+#   journalctl -u moonlan -f
+
+[Unit]
+Description=MoonLan network map and monitoring
+Documentation=https://github.com/neonight-d/MoonLan
+# Start after the network is actually up (SNMP polling needs it)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=<user>
+Group=<group>
+WorkingDirectory=/opt/MoonLan
+ExecStart=/opt/MoonLan/.venv/bin/python run.py
+
+# Restart on crashes, but not on clean exit (Ctrl+C / systemctl stop)
+Restart=on-failure
+RestartSec=5
+
+# Insurance against fd exhaustion (main fix is engine reuse in v0.5.1)
+LimitNOFILE=65535
+
+# Graceful shutdown: give uvicorn time to close connections
+TimeoutStopSec=15
+
+# --- Light hardening (safe for MoonLan's needs) ---
+# No privilege escalation for child processes (ping included)
+NoNewPrivileges=true
+# Private /tmp, read-only /usr /boot /etc; home stays writable (moonlan.db)
+PrivateTmp=true
+ProtectSystem=full
+# MoonLan needs no access to kernel tunables or other users' processes
+ProtectKernelTunables=true
+ProtectControlGroups=true
+
+[Install]
+WantedBy=multi-user.target
