@@ -17,8 +17,8 @@ Wants=network-online.target
 Type=simple
 User=<user>
 Group=<group>
-WorkingDirectory=/opt/MoonLan
-ExecStart=/opt/MoonLan/.venv/bin/python run.py
+WorkingDirectory=/opt/moonlan
+ExecStart=/opt/moonlan/.venv/bin/python run.py
 
 # Restart on crashes, but not on clean exit (Ctrl+C / systemctl stop)
 Restart=on-failure
