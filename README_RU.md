@@ -171,6 +171,22 @@ python run.py
 
 Откройте в браузере `http://адрес_сервера:8080`.
 
+### Запуск как сервис (systemd)
+
+Пример юнита — [docs/deploy/moonlan.service](docs/deploy/moonlan.service).
+Поправьте `User=`, `WorkingDirectory=` и путь к venv, затем:
+
+```bash
+sudo cp docs/deploy/moonlan.service /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now moonlan
+journalctl -u moonlan -f        # следить за логом сервиса
+```
+
+В юните заданы `Restart=on-failure` и `LimitNOFILE=65535` (страховка;
+основная защита — переиспользование одного SNMP-движка на процесс,
+поэтому дескрипторы не накапливаются).
+
 ### Демо-режим (без реальных коммутаторов)
 
 ```bash

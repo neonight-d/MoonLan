@@ -167,6 +167,22 @@ python run.py
 
 Open `http://server_address:8080` in a browser.
 
+### Running as a service (systemd)
+
+An example unit lives in [docs/deploy/moonlan.service](docs/deploy/moonlan.service).
+Adjust `User=`, `WorkingDirectory=` and the venv path, then:
+
+```bash
+sudo cp docs/deploy/moonlan.service /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now moonlan
+journalctl -u moonlan -f        # follow the service log
+```
+
+The unit sets `Restart=on-failure` and `LimitNOFILE=65535` (a safety
+net; the service itself reuses one SNMP engine per process, so file
+descriptors do not accumulate).
+
 ### Demo mode (no real switches)
 
 ```bash
