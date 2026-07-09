@@ -140,6 +140,7 @@ main { flex: 1; display: flex; min-height: 0; }
 .dot.up { background: var(--ok); }
 .dot.down { background: var(--text-dim); }
 .dot.noip { background: var(--link); }
+.inline-dot { display: inline-block; margin-right: 4px; vertical-align: baseline; }
 
 #map-panel { flex: 1; position: relative; min-width: 0; }
 #network { position: absolute; inset: 0; }

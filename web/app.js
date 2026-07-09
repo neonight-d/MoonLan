@@ -156,7 +156,15 @@ function fmtRate(v) {
 function linkLabel(link) {
   let label;
   if (link.lag && link.lag.count > 1) {
-    label = t("lacp") + " " + link.lag.count + "×" + fmtSpeed(link.speed_mbps / link.lag.count);
+    // speed_mbps already counts only the active members
+    const total = link.lag.count;
+    const active = link.lag.active == null ? total : link.lag.active;
+    label = active > 0
+      ? t("lacp") + " " + active + "×" + fmtSpeed(link.speed_mbps / active)
+      : t("lacp");
+    if (active < total) {
+      label += " " + fmt("lagMembersShort", { active: active, total: total });
+    }
   } else if (link.lag && link.lag.trunk) {
     const speed = fmtSpeed(link.speed_mbps);
     label = speed ? t("lagTrunk") + " " + speed : t("lagTrunk");
@@ -580,11 +588,18 @@ function showLinkDetails(edgeId) {
   }
   if (link.lag && link.lag.count > 1) {
     html += `<dt>${t("lagAggregate")}</dt><dd>${linkLabel(link)}</dd>`;
-    const memberList = (members) => members.join(", ") + " (" + t("lacp") + ")";
+    // each member with its oper state: green = up, grey = down
+    const memberList = (members, states) =>
+      members
+        .map((m, i) => {
+          const up = !states || states[i] == null || states[i];
+          return `<span class="dot ${up ? "up" : "down"} inline-dot"></span>${m}`;
+        })
+        .join(", ") + " (" + t("lacp") + ")";
     if ((link.lag.a_members || []).length)
-      html += `<dt>${fmt("portsOf", { name: swName(link.a) })}</dt><dd>${memberList(link.lag.a_members)}</dd>`;
+      html += `<dt>${fmt("portsOf", { name: swName(link.a) })}</dt><dd>${memberList(link.lag.a_members, link.lag.a_states)}</dd>`;
     if ((link.lag.b_members || []).length)
-      html += `<dt>${fmt("portsOf", { name: swName(link.b) })}</dt><dd>${memberList(link.lag.b_members)}</dd>`;
+      html += `<dt>${fmt("portsOf", { name: swName(link.b) })}</dt><dd>${memberList(link.lag.b_members, link.lag.b_states)}</dd>`;
   }
   html += "</dl>";
   shownDetails = { type: "link", id: edgeId };

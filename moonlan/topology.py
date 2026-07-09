@@ -144,8 +144,10 @@ def port_name(sw: SwitchData, if_index: int) -> str:
     return port.name if port and port.name else str(if_index)
 
 
-def _lag_info(sw: SwitchData, port: int) -> tuple[list[str], int]:
-    """Names of the aggregate's physical member ports and their total speed.
+def _lag_info(sw: SwitchData, port: int) -> tuple[list[str], list[bool], int]:
+    """The aggregate's physical members: names, oper states and the
+    total speed of the ACTIVE members only — a degraded LAG must not
+    pretend to have its full capacity.
 
     A positive port is an IEEE8023-LAG-MIB aggregate ifIndex; a negative
     one is a synthetic bridge-port whose members were inferred from the
@@ -156,8 +158,13 @@ def _lag_info(sw: SwitchData, port: int) -> tuple[list[str], int]:
     else:
         members = sorted(m for m, agg in sw.lag_members.items() if agg == port)
     names = [port_name(sw, m) for m in members]
-    speed = sum(sw.ports[m].speed_mbps for m in members if m in sw.ports)
-    return names, speed
+    states = [bool(sw.ports[m].oper_up) if m in sw.ports else False
+              for m in members]
+    speed = sum(
+        sw.ports[m].speed_mbps
+        for m, up in zip(members, states) if up and m in sw.ports
+    )
+    return names, states, speed
 
 
 def _make_link(
@@ -172,17 +179,29 @@ def _make_link(
         "speed_mbps": 0,
         "lag": None,
     }
-    a_members, a_speed = _lag_info(a, pa) if pa is not None else ([], 0)
-    b_members, b_speed = _lag_info(b, pb) if pb is not None else ([], 0)
+    a_members, a_states, a_speed = (
+        _lag_info(a, pa) if pa is not None else ([], [], 0)
+    )
+    b_members, b_states, b_speed = (
+        _lag_info(b, pb) if pb is not None else ([], [], 0)
+    )
     if a_members or b_members:
         members = a_members or b_members
+        # traffic flows only through members that are up on both ends;
+        # with one side unknown, trust the side we can see
+        active_counts = [sum(s) for m, s in ((a_members, a_states),
+                                             (b_members, b_states)) if m]
         link["lag"] = {
             "members": members,
             "count": len(members),
+            "active": min(active_counts),
             "a_members": a_members,
             "b_members": b_members,
+            "a_states": a_states,
+            "b_states": b_states,
         }
-        # the slower side limits the aggregate when both are known
+        # the slower side limits the aggregate when both are known;
+        # speeds already count only the active members
         if a_members and b_members:
             link["speed_mbps"] = min(a_speed, b_speed)
         else:

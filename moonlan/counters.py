@@ -18,7 +18,7 @@ import time
 from collections import deque
 from dataclasses import dataclass
 
-from .snmp_collector import SnmpCollector
+from .snmp_collector import OID_IF_OPER_STATUS, SnmpCollector
 
 log = logging.getLogger(__name__)
 
@@ -63,16 +63,21 @@ class PortRates:
     discards_per_min: float  # ifInDiscards + ifOutDiscards
 
 
-async def collect_samples(collector: SnmpCollector, host: str) -> dict[int, Sample]:
-    """One counters poll of a switch: ifIndex -> Sample.
+async def collect_samples(
+    collector: SnmpCollector, host: str
+) -> tuple[dict[int, Sample], dict[int, bool]]:
+    """One counters poll of a switch: (ifIndex -> Sample, ifIndex -> oper up).
 
     Prefers 64-bit ifHC* octet counters; if the switch has none,
     falls back to the 32-bit ones (marked hc=False for wraparound
-    handling). Uses the collector's low-level walk — the counters loop
-    deliberately shares the SNMP transport with the topology scan.
+    handling). Also walks ifOperStatus so LAG degradation is noticed
+    at the counters cadence, not only on full topology scans. Uses the
+    collector's low-level walk — the counters loop deliberately shares
+    the SNMP transport with the topology scan.
     """
     ts = time.time()
     samples: dict[int, Sample] = {}
+    oper: dict[int, bool] = {}
 
     def sample(if_index: int) -> Sample:
         return samples.setdefault(if_index, Sample(ts=ts))
@@ -99,7 +104,10 @@ async def collect_samples(collector: SnmpCollector, host: str) -> dict[int, Samp
         async for suffix, value in collector._walk(host, oid):
             setattr(sample(suffix[0]), attr, int(value))
 
-    return samples
+    async for suffix, value in collector._walk(host, OID_IF_OPER_STATUS):
+        oper[suffix[0]] = int(value) == 1
+
+    return samples, oper
 
 
 def _octet_delta(prev: int, cur: int, hc: bool) -> int | None:

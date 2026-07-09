@@ -185,7 +185,8 @@ class AlarmEngine:
     async def on_counters(self, ip: str, metrics: list[dict]) -> None:
         """One counters cycle. Each metric describes one logical port:
         port (name), speed_mbps (0 = skip the utilization rule), in/out
-        Mbit/s, errors_per_min, discards_per_min.
+        Mbit/s, errors_per_min, discards_per_min; LAG aggregates also
+        carry lag_total / lag_up member counts.
         """
         for m in metrics:
             subject = f"{ip}:{m['port']}"
@@ -203,6 +204,24 @@ class AlarmEngine:
                     util > self._thresholds.port_utilization_percent,
                     f"utilization {util:.0f}% of {speed} Mbit/s",
                 )
+            if m.get("lag_total"):
+                await self._lag_rule(subject, m["lag_up"], m["lag_total"])
+
+    async def _lag_rule(self, subject: str, up: int, total: int) -> None:
+        """lag_degraded: raised after 2 degraded counter cycles,
+        cleared as soon as every member is up again."""
+        if up < total:
+            self._lag_over[subject] = self._lag_over.get(subject, 0) + 1
+            if self._lag_over[subject] >= PORT_CYCLES:
+                await self._raise(
+                    "lag_degraded", subject,
+                    f"{up} of {total} LAG members are up",
+                )
+        else:
+            self._lag_over.pop(subject, None)
+            await self._clear(
+                "lag_degraded", subject, f"all {total} LAG members are up"
+            )
 
     async def on_new_macs(self, new_macs: list[str], details: dict[str, str]) -> None:
         for mac in new_macs:

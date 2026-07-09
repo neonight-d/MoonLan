@@ -269,6 +269,11 @@ class DemoCounters:
 
     ERROR_SWITCH = "10.0.0.22"  # access-sw-2
     ERROR_PORT = 3              # Gi0/3
+    # One member of the core—ray1 LACP (the same physical cable seen
+    # from both ends) flaps on a timer -> lag_degraded raise and clear,
+    # edge label drops to "LACP 1×1 Gbit/s (1/2)"
+    LAG_FLAP = {"10.0.0.10": 25, "10.0.0.21": 26}
+    FLAP_PERIOD = 6  # counter cycles down, then the same up
 
     def __init__(self):
         self._rng = random.Random(11)
@@ -282,8 +287,12 @@ class DemoCounters:
         dt = now - self._last_ts if self._last_ts else 60.0
         self._last_ts = now
         self._cycle += 1
+        member_down = (self._cycle // self.FLAP_PERIOD) % 2 == 1
         out: dict[str, dict[int, Sample]] = {}
         for sw in switches:
+            flap_port = self.LAG_FLAP.get(sw.ip)
+            if flap_port in sw.ports:
+                sw.ports[flap_port].oper_up = not member_down
             samples: dict[int, Sample] = {}
             for p in sw.ports.values():
                 if not p.is_physical or not p.oper_up:
