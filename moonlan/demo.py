@@ -201,12 +201,16 @@ def enrich_db(db: Database, hosts: list[dict]) -> None:
         if row.get("ping_up") or row.get("last_ping_ok"):
             continue  # already seeded
         if not _journal_seeded and i in (1, 6):
-            # a couple powered off: replied 15 minutes ago
+            # a couple powered off: replied 15 minutes ago; marked
+            # monitored so the demo still shows host_down raise/clear
             db.set_ping_state(mac, up=False, last_ok=now - 15 * 60)
+            db.set_monitored(mac, True)
             if i == 6:
                 _recover_mac = mac
         else:
             db.set_ping_state(mac, up=True, last_ok=now)
+            if not _journal_seeded and i in (0, 3):
+                db.set_monitored(mac, True)  # stars in the UI
 
     if not _journal_seeded and len(hosts) > 6:
         _journal_seeded = True

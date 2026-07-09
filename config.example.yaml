@@ -50,12 +50,22 @@ db_path: moonlan.db
 # на схеме рисуется «коммутатор без SNMP» (0 — отключить)
 unmanaged_threshold: 3
 
+# Alarm host_down only for hosts marked "Monitor" in the UI.
+# true = old behavior: every host raises host_down.
+# host_down только для хостов с флагом «Наблюдать» в интерфейсе.
+# true = старое поведение: тревога по каждому хосту.
+monitored_by_default: false
+
 # Alarm thresholds / Пороги тревог
 thresholds:
   errors_per_minute: 10          # port_errors: (errors+discards)/min
   port_utilization_percent: 90   # port_util: % of the link speed
                                  # (for a LAG — of the total speed)
                                  # % от скорости линка (для LAG — от суммарной)
+  mass_down_hosts: 3             # port_hosts_down: hosts of one port gone
+                                 # silent in one ping cycle (0 — disable)
+                                 # хостов одного порта, замолчавших за один
+                                 # ping-цикл (0 — отключить)
 
 # Notification channels. Keep the real config.yaml (with passwords and
 # tokens) OUT of git — it is listed in .gitignore.
@@ -90,3 +100,5 @@ alarm_notify:
   port_errors: [syslog]
   port_util: [telegram, syslog]
   new_mac: [syslog]
+  port_hosts_down: [email, telegram, syslog]
+  lag_degraded: [telegram, syslog]

@@ -38,11 +38,17 @@ An open-source alternative to LanTopoLog. MIT license.
   map edges show the current trunk load ("2×1 Gbit/s · ↓34 ↑12 Mbit/s",
   summed over LAG members). Counter resets after a switch reboot are
   detected and do not produce rate spikes.
-- Stateful alarms: host_down (3 missed pings), switch_down (2 failed SNMP
-  polls, critical), port_errors and port_util (threshold with two-cycle
-  hysteresis), new_mac. The "Alarms" panel lists active and recently
-  cleared alarms; the header badge shows the active count. Every
-  raise/clear is also written to the journal.
+- Stateful alarms: host_down (3 missed pings, only for hosts marked
+  "Monitor" — the journal still records everything), switch_down
+  (2 failed SNMP polls, critical), port_errors and port_util (threshold
+  with two-cycle hysteresis), port_hosts_down (critical: several hosts
+  of one port went silent at once — one alarm instead of a burst),
+  lag_degraded (a LAG member went down), new_mac. The "Alarms" panel
+  lists active and recently cleared alarms; the header badge shows the
+  active count. Every raise/clear is also written to the journal.
+- Honest LAG capacity: the edge label counts only active members —
+  a degraded 2×1 Gbit/s aggregate shows "LACP 1×1 Gbit/s (1/2 members)",
+  and the link card lists each member with its state.
 - Notifications: email (SMTP), Telegram (Bot API) and Syslog (UDP) with
   per-alarm-type routing (`alarm_notify`) and an anti-spam cooldown.
   `python -m moonlan.notify --test` checks every enabled channel.
@@ -109,11 +115,15 @@ counters_interval_seconds: 60  # port counters polling period
 db_path: moonlan.db        # SQLite file (hosts, journal, alarms)
 unmanaged_threshold: 3     # more hosts than this behind a port — draw
                            # a "switch without SNMP" node (0 — disable)
+monitored_by_default: false  # true = host_down alarms for every host,
+                             # not only for those marked "Monitor"
 
 thresholds:
   errors_per_minute: 10          # port_errors alarm threshold
   port_utilization_percent: 90   # port_util: % of the link speed
                                  # (for a LAG — of the total speed)
+  mass_down_hosts: 3             # port_hosts_down: hosts of one port
+                                 # gone silent in one ping cycle
 
 notifications:
   cooldown_seconds: 300      # anti-spam per (alarm type, subject)
@@ -271,6 +281,7 @@ MoonLan/
 | GET    | `/api/topology`   | Current topology: nodes, links (ports, LACP, current load), hosts (IP, name, ping, VLAN), `pseudo_switches`, `vlan_names` |
 | GET    | `/api/switch/{ip}/ports` | Port table of a switch: status, speed, PVID, LAG, In/Out Mbit/s, errors and discards per minute, known devices |
 | GET    | `/api/alarms?active=1\|0&limit=50` | Active or recently cleared alarms |
+| PATCH  | `/api/host/{mac}` | Set the host's monitoring flag: `{"monitored": true\|false}` |
 | POST   | `/api/scan`       | Start a new switch poll |
 | GET    | `/api/search?q=…` | Search by name, IP or MAC |
 | GET    | `/api/journal?limit=100` | Event journal, newest first |
