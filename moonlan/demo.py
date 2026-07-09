@@ -216,7 +216,10 @@ def enrich_db(db: Database, hosts: list[dict]) -> None:
 
 
 _ping_cycle = 0
-RECOVER_AFTER = 8  # ping cycles until the recovering host answers again
+RECOVER_AFTER = 8    # ping cycles until the recovering host answers again
+MASS_DOWN_AT = 12    # all hosts behind the pseudo-switch port go silent
+MASS_RECOVER_AT = 20 # most of them answer again -> port_hosts_down clears
+MASS_PORT = ("10.0.0.22", "Gi0/5")  # the port with the unmanaged switch
 
 
 def ping_results(db: Database) -> dict[str, bool]:
@@ -224,12 +227,28 @@ def ping_results(db: Database) -> dict[str, bool]:
 
     Two hosts are down (host_down raises after 3 cycles); one of them
     recovers at cycle RECOVER_AFTER, demonstrating the CLEARED path.
+    At MASS_DOWN_AT every host behind the pseudo-switch port stops
+    answering at once -> a single port_hosts_down alarm; at
+    MASS_RECOVER_AT most of them come back -> the alarm clears.
     """
     global _ping_cycle
     _ping_cycle += 1
     now = time.time()
     if _recover_mac and _ping_cycle >= RECOVER_AFTER:
         db.set_ping_state(_recover_mac, up=True, last_ok=now)
+
+    rows = db.hosts_by_mac()
+    mass_macs = sorted(
+        mac for mac, row in rows.items()
+        if (row["switch_ip"], row["port"]) == MASS_PORT and row["ip"]
+    )
+    if _ping_cycle == MASS_DOWN_AT:
+        for mac in mass_macs:
+            db.set_ping_state(mac, up=False, last_ok=now)
+    elif _ping_cycle == MASS_RECOVER_AT:
+        for mac in mass_macs[: max(1, len(mass_macs) * 2 // 3)]:
+            db.set_ping_state(mac, up=True, last_ok=now)
+
     db.touch_ping_ok(now)
     return {
         mac: bool(row["ping_up"])

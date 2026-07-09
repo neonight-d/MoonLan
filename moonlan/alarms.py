@@ -20,6 +20,13 @@ Rules:
   cleared after 2 cycles below.
 - new_mac (info): instant auto-cleared alarm for every new MAC after
   the initial inventory scan.
+- port_hosts_down (critical): >= thresholds.mass_down_hosts previously
+  answering hosts on one switch port went silent within a single ping
+  cycle — one alarm per port instead of a burst of host_down; cleared
+  when at least half of the affected hosts answer again. Independent
+  of the monitored flag: a mass outage is an infrastructure problem.
+- lag_degraded (warning): fewer active LAG members than the total for
+  2 consecutive counter cycles; cleared as soon as all members are up.
 """
 
 from __future__ import annotations
@@ -40,6 +47,8 @@ SEVERITIES = {
     "port_errors": "warning",
     "port_util": "warning",
     "new_mac": "info",
+    "port_hosts_down": "critical",
+    "lag_degraded": "warning",
 }
 
 HOST_DOWN_AFTER = 3    # consecutive failed pings
@@ -57,6 +66,10 @@ class AlarmEngine:
         self._snmp_fails: dict[str, int] = {}       # ip -> consecutive misses
         self._over: dict[tuple[str, str], int] = {}   # port rule hysteresis
         self._under: dict[tuple[str, str], int] = {}
+        self._last_ping: dict[str, bool] = {}       # previous cycle results
+        # port_hosts_down: subject -> affected MACs (for the clear rule)
+        self._mass_sets: dict[str, set[str]] = {}
+        self._lag_over: dict[str, int] = {}          # subject -> degraded cycles
 
     async def load(self) -> None:
         """Restores the active set from the DB after a restart."""
@@ -90,6 +103,67 @@ class AlarmEngine:
                         "host_down", mac,
                         f"{label} missed {misses} pings in a row",
                     )
+        await self._mass_down(results, meta)
+        self._last_ping.update(results)
+
+    async def _mass_down(
+        self, results: dict[str, bool], meta: dict[str, dict]
+    ) -> None:
+        """port_hosts_down: many hosts of one port went silent at once."""
+        threshold = self._thresholds.mass_down_hosts
+        if threshold <= 0:
+            return
+
+        def label(mac: str) -> str:
+            row = meta.get(mac, {})
+            return row.get("name") or row.get("ip") or mac
+
+        # Hosts that answered on the previous cycle and are silent now,
+        # grouped by the switch port they live on
+        newly_down: dict[str, list[str]] = {}
+        for mac, up in results.items():
+            if up or not self._last_ping.get(mac):
+                continue
+            row = meta.get(mac, {})
+            if row.get("switch_ip") and row.get("port"):
+                subject = f"{row['switch_ip']}:{row['port']}"
+                newly_down.setdefault(subject, []).append(mac)
+        for subject, macs in newly_down.items():
+            if len(macs) < threshold:
+                continue
+            self._mass_sets.setdefault(subject, set()).update(macs)
+            names = ", ".join(label(m) for m in macs[:5])
+            await self._raise(
+                "port_hosts_down", subject,
+                f"{len(macs)} hosts went silent at once: {names}",
+            )
+
+        # An active alarm that predates a restart has no affected set:
+        # rebuild it from the hosts currently silent on that port
+        for alarm_type, subject in list(self._active):
+            if alarm_type != "port_hosts_down" or subject in self._mass_sets:
+                continue
+            ip, _, port = subject.partition(":")
+            self._mass_sets[subject] = {
+                mac for mac, row in meta.items()
+                if row.get("switch_ip") == ip and row.get("port") == port
+                and not results.get(mac, True)
+            }
+
+        # Clear when at least half of the affected hosts answer again
+        for subject, macs in list(self._mass_sets.items()):
+            if ("port_hosts_down", subject) not in self._active:
+                del self._mass_sets[subject]
+                continue
+            if not macs:
+                continue
+            answering = sum(1 for m in macs if results.get(m))
+            if answering * 2 >= len(macs):
+                del self._mass_sets[subject]
+                await self._clear(
+                    "port_hosts_down", subject,
+                    f"{answering} of {len(macs)} hosts answer again",
+                )
 
     async def on_scan(
         self, reachable: dict[str, bool], names: dict[str, str]
