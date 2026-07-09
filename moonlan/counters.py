@@ -33,9 +33,12 @@ OID_OUT_DISCARDS = "1.3.6.1.2.1.2.2.1.19"      # ifOutDiscards
 
 HISTORY_POINTS = 60  # ring buffer length per port
 WRAP32 = 2 ** 32
-# A wrap-corrected delta after a reboot can look like an absurd rate;
-# nothing in a LAN legitimately exceeds this
-MAX_SANE_MBPS = 100_000
+# Sanity caps: a rate above 1.2x the known link speed is an artifact
+# (usually a Counter32 wraparound misread as traffic); with no known
+# speed the absolute ceiling applies. Same idea for error counters.
+LINK_SPEED_MARGIN = 1.2
+MAX_SANE_MBPS = 100_000        # 100 Gbit/s, when the link speed is unknown
+MAX_SANE_ERRORS_PER_MIN = 1e6
 
 
 @dataclass
@@ -111,6 +114,12 @@ async def collect_samples(
 
 
 def _octet_delta(prev: int, cur: int, hc: bool) -> int | None:
+    """Octet delta between samples; None = invalid (counter reset).
+
+    The +2^32 wraparound correction applies to 32-bit counters only;
+    whether the corrected value is plausible is checked by the caller
+    against the link speed — an implausible one resets the baseline.
+    """
     d = cur - prev
     if d < 0 and not hc:
         d += WRAP32  # Counter32 wraparound
@@ -130,8 +139,19 @@ class CounterStore:
         self._last: dict[tuple[str, int], Sample] = {}
         self._rates: dict[tuple[str, int], deque[PortRates]] = {}
 
-    def update(self, ip: str, samples: dict[int, Sample]) -> dict[int, PortRates]:
-        """Applies a fresh poll; returns the rates computed this cycle."""
+    def update(
+        self,
+        ip: str,
+        samples: dict[int, Sample],
+        speeds: dict[int, int] | None = None,
+    ) -> dict[int, PortRates]:
+        """Applies a fresh poll; returns the rates computed this cycle.
+
+        speeds (ifIndex -> link Mbit/s) drives the sanity check: a rate
+        above 1.2x the link speed is an artifact, not traffic — the
+        point is dropped and the fresh sample becomes the new baseline.
+        """
+        speeds = speeds or {}
         fresh: dict[int, PortRates] = {}
         for if_index, cur in samples.items():
             key = (ip, if_index)
@@ -156,14 +176,39 @@ class CounterStore:
                 continue
             in_mbps = d_in * 8 / dt / 1e6
             out_mbps = d_out * 8 / dt / 1e6
-            if max(in_mbps, out_mbps) > MAX_SANE_MBPS:
-                continue  # a reboot disguised as a 32-bit wraparound
+            link_speed = speeds.get(if_index, 0)
+            cap = link_speed * LINK_SPEED_MARGIN if link_speed > 0 else MAX_SANE_MBPS
+            if max(in_mbps, out_mbps) > cap:
+                # wraparound misfire or a reboot disguised as one
+                log.debug(
+                    "%s ifIndex %d: implausible rate %.0f/%.0f Mbit/s "
+                    "(cap %.0f), raw octets in %d->%d out %d->%d — "
+                    "baseline reset",
+                    ip, if_index, in_mbps, out_mbps, cap,
+                    prev.in_octets, cur.in_octets,
+                    prev.out_octets, cur.out_octets,
+                )
+                continue
+            errors_per_min = (error_deltas[0] + error_deltas[1]) * 60 / dt
+            discards_per_min = (error_deltas[2] + error_deltas[3]) * 60 / dt
+            if max(errors_per_min, discards_per_min) > MAX_SANE_ERRORS_PER_MIN:
+                log.debug(
+                    "%s ifIndex %d: implausible error rate %.0f/%.0f per "
+                    "minute, raw errors %d->%d discards %d->%d — "
+                    "baseline reset",
+                    ip, if_index, errors_per_min, discards_per_min,
+                    prev.in_errors + prev.out_errors,
+                    cur.in_errors + cur.out_errors,
+                    prev.in_discards + prev.out_discards,
+                    cur.in_discards + cur.out_discards,
+                )
+                continue
             rates = PortRates(
                 ts=cur.ts,
                 in_mbps=in_mbps,
                 out_mbps=out_mbps,
-                errors_per_min=(error_deltas[0] + error_deltas[1]) * 60 / dt,
-                discards_per_min=(error_deltas[2] + error_deltas[3]) * 60 / dt,
+                errors_per_min=errors_per_min,
+                discards_per_min=discards_per_min,
             )
             fresh[if_index] = rates
             self._rates.setdefault(key, deque(maxlen=self._history)).append(rates)

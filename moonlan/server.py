@@ -336,7 +336,11 @@ async def run_counters() -> None:
                 port = sw.ports.get(if_index)
                 if port is not None:
                     port.oper_up = up
-        rates = counter_store.update(ip, samples)
+        speeds = (
+            {p.if_index: p.speed_mbps for p in sw.ports.values()}
+            if sw is not None else None
+        )
+        rates = counter_store.update(ip, samples, speeds)
         if sw is not None:
             await alarm_engine.on_counters(ip, _port_metrics(sw, rates))
 
