@@ -276,7 +276,7 @@ function renderSidebar() {
   els.hostList.replaceChildren(
     ...topology.hosts.map((h) =>
       li(
-        hostLabel(h),
+        hostLabel(h) + (h.monitored ? " ★" : ""),
         [h.ip, h.mac, h.vlan ? "VLAN " + h.vlan : ""]
           .filter(Boolean)
           .join(" · "),
@@ -456,7 +456,9 @@ function showDetails(nodeId) {
       <dt>${t("portLabel")}</dt><dd>${host.port}</dd>
       <dt>${t("vlan")}</dt><dd>${vlanLabel(host.vlan)}</dd>
       <dt>${t("lastReply")}</dt><dd>${fmtTime(host.last_ping_ok)}</dd>
-      <dt>${t("firstSeen")}</dt><dd>${fmtDate(host.first_seen)}</dd></dl>`;
+      <dt>${t("firstSeen")}</dt><dd>${fmtDate(host.first_seen)}</dd></dl>
+      <button id="monitor-btn" class="panel-btn${host.monitored ? " active" : ""}">
+        ${host.monitored ? "★" : "☆"} ${t("monitorBtn")}</button>`;
   }
   shownDetails = { type: "node", id: nodeId };
   els.detailsBody.innerHTML = html;
@@ -470,6 +472,27 @@ function showDetails(nodeId) {
       openPorts(nodeId.slice("sw:".length))
     );
   }
+  const monitorBtn = document.getElementById("monitor-btn");
+  if (monitorBtn) {
+    monitorBtn.addEventListener("click", () =>
+      toggleMonitor(nodeId.slice("host:".length))
+    );
+  }
+}
+
+/* Flip the host_down alarm flag of a host and re-render */
+async function toggleMonitor(mac) {
+  const host = topology.hosts.find((h) => h.mac === mac);
+  if (!host) return;
+  const res = await fetch("/api/host/" + encodeURIComponent(mac), {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ monitored: !host.monitored }),
+  });
+  if (!res.ok) return;
+  host.monitored = (await res.json()).monitored;
+  renderSidebar();
+  showDetails("host:" + mac);
 }
 
 function hideDetails() {
@@ -522,6 +545,10 @@ function renderPorts(data) {
       };
       let name = p.name;
       if (p.lag) name += " (" + p.lag + ")";
+      if (p.monitored_hosts) {
+        // monitored devices behind this port
+        name += " ★" + (p.monitored_hosts > 1 ? p.monitored_hosts : "");
+      }
       td(name);
       const dot = document.createElement("span");
       dot.className = "dot " + (p.oper_up ? "up" : "down");

@@ -13,6 +13,7 @@ from pathlib import Path
 from fastapi import FastAPI, Query
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
+from pydantic import BaseModel
 
 from . import __version__, counters, demo, pinger
 from .alarms import AlarmEngine
@@ -122,6 +123,12 @@ async def run_scan() -> None:
         state.scanning = False
 
 
+def _effective_monitored(row: dict) -> bool:
+    """monitored_by_default=true restores the old alert-on-everything
+    behavior regardless of the per-host flag."""
+    return config.monitored_by_default or bool(row.get("monitored", 0))
+
+
 def _merge_db_fields(hosts: list[dict], db_hosts: dict[str, dict]) -> None:
     """Enriches topology hosts with DB fields (IP, name, ping state)."""
     for h in hosts:
@@ -131,6 +138,7 @@ def _merge_db_fields(hosts: list[dict], db_hosts: dict[str, dict]) -> None:
         h["ping_up"] = bool(row.get("ping_up", 0))
         h["last_ping_ok"] = row.get("last_ping_ok", 0)
         h["first_seen"] = row.get("first_seen", 0)
+        h["monitored"] = _effective_monitored(row)
 
 
 async def collect_arp(collector: SnmpCollector) -> dict[str, str]:
@@ -218,6 +226,8 @@ async def run_ping() -> None:
             }
     if results_by_mac:
         meta = await asyncio.to_thread(db.hosts_by_mac)
+        for row in meta.values():
+            row["monitored"] = _effective_monitored(row)
         await alarm_engine.on_ping(results_by_mac, meta)
 
 
@@ -418,10 +428,15 @@ async def api_switch_ports(ip: str) -> dict:
     if sw is None:
         return {"switch": ip, "name": ip, "ports": []}
     rates = counter_store.current(ip, max_age=_rates_max_age())
+    db_hosts = await asyncio.to_thread(db.hosts_by_mac)
     host_counts: Counter = Counter()
+    monitored_counts: Counter = Counter()
     for h in state.as_dict()["hosts"]:
-        if h["switch"] == ip:
-            host_counts[h["port"]] += 1
+        if h["switch"] != ip:
+            continue
+        host_counts[h["port"]] += 1
+        if _effective_monitored(db_hosts.get(h["mac"], {})):
+            monitored_counts[h["port"]] += 1
     member_of: dict[int, str] = {}
     for aggregate, members in _lag_groups(sw).items():
         for m in members:
@@ -443,6 +458,7 @@ async def api_switch_ports(ip: str) -> dict:
             "errors_per_min": round(r.errors_per_min, 1) if r else None,
             "discards_per_min": round(r.discards_per_min, 1) if r else None,
             "hosts": host_counts.get(name, 0),
+            "monitored_hosts": monitored_counts.get(name, 0),
         })
     # active ports first, then by port number
     ports.sort(key=lambda p: (not p["oper_up"], abs(p["if_index"])))
@@ -479,6 +495,19 @@ async def api_alarms(
 @app.get("/api/journal")
 async def api_journal(limit: int = Query(default=100, ge=1, le=1000)) -> dict:
     return {"events": await asyncio.to_thread(db.journal, limit)}
+
+
+class HostPatch(BaseModel):
+    monitored: bool
+
+
+@app.patch("/api/host/{mac}")
+async def api_patch_host(mac: str, body: HostPatch):
+    mac = mac.lower()
+    ok = await asyncio.to_thread(db.set_monitored, mac, body.monitored)
+    if not ok:
+        return JSONResponse({"error": "unknown host"}, status_code=404)
+    return {"mac": mac, "monitored": body.monitored}
 
 
 @app.post("/api/scan")

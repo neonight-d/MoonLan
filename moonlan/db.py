@@ -28,7 +28,8 @@ CREATE TABLE IF NOT EXISTS hosts (
     last_seen  REAL NOT NULL,             -- last seen in FDB
     last_ping_ok REAL DEFAULT 0,          -- last successful ping
     ping_up    INTEGER DEFAULT 0,         -- 1 = replying right now
-    vlan       INTEGER DEFAULT 0          -- PVID of the port the host is on
+    vlan       INTEGER DEFAULT 0,         -- PVID of the port the host is on
+    monitored  INTEGER DEFAULT 0          -- 1 = host_down alarms wanted
 );
 CREATE TABLE IF NOT EXISTS journal (
     id      INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -70,6 +71,11 @@ class Database:
                 "ALTER TABLE hosts ADD COLUMN vlan INTEGER DEFAULT 0"
             )
             log.info("DB migration: added hosts.vlan column")
+        if "monitored" not in columns:
+            self._conn.execute(
+                "ALTER TABLE hosts ADD COLUMN monitored INTEGER DEFAULT 0"
+            )
+            log.info("DB migration: added hosts.monitored column")
 
     def close(self) -> None:
         with self._lock:
@@ -112,6 +118,15 @@ class Database:
                 self._conn.execute(
                     "UPDATE hosts SET ip = ? WHERE mac = ?", (ip, mac)
                 )
+
+    def set_monitored(self, mac: str, monitored: bool) -> bool:
+        """Sets the host_down alarm flag; False if the MAC is unknown."""
+        with self._lock, self._conn:
+            cur = self._conn.execute(
+                "UPDATE hosts SET monitored = ? WHERE mac = ?",
+                (int(monitored), mac),
+            )
+        return cur.rowcount > 0
 
     def set_name(self, mac: str, name: str) -> None:
         with self._lock, self._conn:

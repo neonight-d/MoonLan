@@ -73,6 +73,10 @@ const I18N = {
     durS: "s",
     durM: "m",
     durH: "h",
+    monitorBtn: "Monitor",
+    al_port_hosts_down: "Mass host outage",
+    al_lag_degraded: "LAG degraded",
+    lagMembersShort: "({active}/{total} members)",
   },
   ru: {
     title: "MoonLan — карта сети",
@@ -144,5 +148,9 @@ const I18N = {
     durS: "с",
     durM: "м",
     durH: "ч",
+    monitorBtn: "Наблюдать",
+    al_port_hosts_down: "Массовое отключение хостов",
+    al_lag_degraded: "Деградация LAG",
+    lagMembersShort: "({active}/{total})",
   },
 };

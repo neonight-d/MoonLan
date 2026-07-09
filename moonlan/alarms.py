@@ -70,7 +70,12 @@ class AlarmEngine:
     async def on_ping(
         self, results: dict[str, bool], meta: dict[str, dict]
     ) -> None:
-        """One ping cycle: mac -> replied; meta = DB rows for labels."""
+        """One ping cycle: mac -> replied; meta = DB rows for labels.
+
+        host_down is raised only for hosts with meta["monitored"] set —
+        the journal keeps recording host_up/host_down for everyone
+        (that happens in db.update_ping, not here).
+        """
         for mac, up in results.items():
             row = meta.get(mac, {})
             label = row.get("name") or row.get("ip") or mac
@@ -80,7 +85,7 @@ class AlarmEngine:
             else:
                 misses = self._ping_fails.get(mac, 0) + 1
                 self._ping_fails[mac] = misses
-                if misses >= HOST_DOWN_AFTER:
+                if misses >= HOST_DOWN_AFTER and row.get("monitored"):
                     await self._raise(
                         "host_down", mac,
                         f"{label} missed {misses} pings in a row",

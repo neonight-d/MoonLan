@@ -300,8 +300,13 @@ main { flex: 1; display: flex; min-height: 0; }
 .ports-table .dot { display: inline-block; }
 .ports-table tr.port-down td { color: var(--text-dim); opacity: 0.65; }
 
-/* "Ports" button inside the switch details card */
-.panel-btn { margin-top: 12px; font-size: 0.85rem; padding: 5px 12px; }
+/* "Ports" / "Monitor" buttons inside the details card */
+.panel-btn { margin-top: 12px; margin-right: 8px; font-size: 0.85rem; padding: 5px 12px; }
+.panel-btn.active {
+  color: var(--warn);
+  border-color: var(--warn);
+  background: rgba(217, 168, 107, 0.08);
+}
 
 #empty-state {
   position: absolute; inset: 0;

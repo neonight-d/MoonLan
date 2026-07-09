@@ -22,6 +22,7 @@ class SnmpConfig:
 class Thresholds:
     errors_per_minute: float = 10.0
     port_utilization_percent: float = 90.0
+    mass_down_hosts: int = 3  # port_hosts_down: newly silent hosts per port
 
 
 @dataclass
@@ -66,6 +67,8 @@ DEFAULT_ALARM_NOTIFY: dict[str, list[str]] = {
     "port_errors": ["syslog"],
     "port_util": ["telegram", "syslog"],
     "new_mac": ["syslog"],
+    "port_hosts_down": ["email", "telegram", "syslog"],
+    "lag_degraded": ["telegram", "syslog"],
 }
 
 
@@ -81,6 +84,7 @@ class Config:
     counters_interval_seconds: int = 60
     db_path: str = "moonlan.db"
     unmanaged_threshold: int = 3  # hosts per port; 0 disables pseudo-switches
+    monitored_by_default: bool = False  # True = every host raises host_down
     thresholds: Thresholds = field(default_factory=Thresholds)
     notifications: NotificationsConfig = field(default_factory=NotificationsConfig)
     alarm_notify: dict[str, list[str]] = field(
@@ -133,12 +137,17 @@ def load_config(path: Path | None = None) -> Config:
             raw.get("unmanaged_threshold", cfg.unmanaged_threshold)
         )
 
+        cfg.monitored_by_default = bool(
+            raw.get("monitored_by_default", cfg.monitored_by_default)
+        )
+
         thr = raw.get("thresholds") or {}
         cfg.thresholds = Thresholds(
             errors_per_minute=float(thr.get("errors_per_minute", 10)),
             port_utilization_percent=float(
                 thr.get("port_utilization_percent", 90)
             ),
+            mass_down_hosts=int(thr.get("mass_down_hosts", 3)),
         )
 
         notif = raw.get("notifications") or {}
