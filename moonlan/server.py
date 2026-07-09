@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import socket
 import time
 from collections import Counter
@@ -51,6 +52,22 @@ demo_counters = demo.DemoCounters() if config.demo else None
 # alerting on all of them would be pure noise
 first_scan_done = False
 
+# One SnmpEngine per process: a new engine per cycle leaks sockets and
+# MIB state (OSError 24, MibNotFoundError, growing RSS). Recreate only
+# if the SNMP config ever changes at runtime — it currently cannot.
+_collector: SnmpCollector | None = None
+
+
+def get_collector() -> SnmpCollector:
+    global _collector
+    if _collector is None:
+        _collector = SnmpCollector(
+            community=config.snmp.community,
+            timeout=config.snmp.timeout,
+            retries=config.snmp.retries,
+        )
+    return _collector
+
 
 async def run_scan() -> None:
     """One cycle of polling all switches and rebuilding the topology."""
@@ -63,11 +80,7 @@ async def run_scan() -> None:
         if config.demo:
             collected = demo.demo_network()
         else:
-            collector = SnmpCollector(
-                community=config.snmp.community,
-                timeout=config.snmp.timeout,
-                retries=config.snmp.retries,
-            )
+            collector = get_collector()
             collected = list(
                 await asyncio.gather(*(collector.collect(ip) for ip in config.switches))
             )
@@ -304,11 +317,7 @@ async def run_counters() -> None:
         # the demo flips port states directly in switch_data
         samples_by_ip = demo_counters.sample(list(switch_data.values()))
     else:
-        collector = SnmpCollector(
-            community=config.snmp.community,
-            timeout=config.snmp.timeout,
-            retries=config.snmp.retries,
-        )
+        collector = get_collector()
         ips = list(config.switches)
         collected = await asyncio.gather(
             *(counters.collect_samples(collector, ip) for ip in ips)
@@ -339,6 +348,31 @@ async def periodic_counters() -> None:
         except Exception:
             log.exception("Counter polling failed")
         await asyncio.sleep(max(config.counters_interval_seconds, 5))
+
+
+def resource_usage() -> tuple[int, int]:
+    """(open file descriptors, RSS in kB) — leak watch, Linux only."""
+    fds = len(os.listdir("/proc/self/fd"))
+    rss = 0
+    with open("/proc/self/status", encoding="ascii", errors="replace") as f:
+        for line in f:
+            if line.startswith("VmRSS:"):
+                rss = int(line.split()[1])
+                break
+    return fds, rss
+
+
+RESOURCE_LOG_SECONDS = 600
+
+
+async def periodic_resource_log() -> None:
+    while True:
+        await asyncio.sleep(RESOURCE_LOG_SECONDS)
+        try:
+            fds, rss = resource_usage()
+            log.debug("open fds: %d, rss: %d kB", fds, rss)
+        except OSError:
+            pass  # not a Linux /proc — skip silently
 
 
 def _rates_max_age() -> float:
@@ -428,6 +462,7 @@ async def lifespan(app: FastAPI):
         asyncio.create_task(periodic_scan()),
         asyncio.create_task(periodic_ping()),
         asyncio.create_task(periodic_counters()),
+        asyncio.create_task(periodic_resource_log()),
     ]
     yield
     for task in tasks:

@@ -117,16 +117,30 @@ def infer_lag_groups(
 
 
 class SnmpCollector:
+    """SNMP client for all polling loops.
+
+    Create ONE instance per process and reuse it: every SnmpEngine
+    owns a transport dispatcher (sockets) and loaded MIB state, so a
+    new engine per polling cycle leaks file descriptors and memory
+    (OSError 24 in the pinger, MibNotFoundError from pysnmp, growing
+    RSS). Transport targets are cached per host for the same reason.
+    """
+
     def __init__(self, community: str, timeout: int = 2, retries: int = 1):
         self._community = CommunityData(community, mpModel=1)  # v2c
         self._timeout = timeout
         self._retries = retries
         self._engine = SnmpEngine()
+        self._targets: dict[str, UdpTransportTarget] = {}
 
     async def _target(self, host: str) -> UdpTransportTarget:
-        return await UdpTransportTarget.create(
-            (host, 161), timeout=self._timeout, retries=self._retries
-        )
+        target = self._targets.get(host)
+        if target is None:
+            target = await UdpTransportTarget.create(
+                (host, 161), timeout=self._timeout, retries=self._retries
+            )
+            self._targets[host] = target
+        return target
 
     async def _get(self, host: str, oid: str):
         """GET of a single value; None on error."""
