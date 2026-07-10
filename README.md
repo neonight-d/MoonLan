@@ -52,6 +52,10 @@ An open-source alternative to LanTopoLog. MIT license.
 - Notifications: email (SMTP), Telegram (Bot API) and Syslog (UDP) with
   per-alarm-type routing (`alarm_notify`) and an anti-spam cooldown.
   `python -m moonlan.notify --test` checks every enabled channel.
+- Alarm hygiene: flap damping (an oscillating subject is muted after
+  3 raises in 2 hours with a single FLAPPING notice and a FLAP mark in
+  the panel), manual clear buttons, and a stale-alarm janitor that
+  auto-clears alarms whose subject disappeared from the network data.
 - Event journal: new MAC addresses, hosts going down and coming back,
   alarm raises/clears. Data is stored in SQLite and survives restarts.
 - Two-panel web UI: device list with search (name, IP or MAC) on the left,
@@ -293,6 +297,7 @@ MoonLan/
 | GET    | `/api/switch/{ip}/ports` | Port table of a switch: status, speed, PVID, LAG, In/Out Mbit/s, errors and discards per minute, known devices |
 | GET    | `/api/alarms?active=1\|0&limit=50` | Active or recently cleared alarms |
 | PATCH  | `/api/host/{mac}` | Set the host's monitoring flag: `{"monitored": true\|false}` |
+| POST   | `/api/alarms/{id}/clear` | Manually clear one active alarm |
 | POST   | `/api/scan`       | Start a new switch poll |
 | GET    | `/api/search?q=…` | Search by name, IP or MAC |
 | GET    | `/api/journal?limit=100` | Event journal, newest first |

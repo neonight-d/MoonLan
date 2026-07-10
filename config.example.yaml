@@ -74,6 +74,13 @@ thresholds:
 notifications:
   cooldown_seconds: 300      # anti-spam per (type, subject)
                              # антиспам на (тип, объект)
+  # Flap damping: this many raises of one subject within the window
+  # mute its notifications until it stays quiet for flap_quiet_seconds
+  # Подавление флаппинга: столько подъёмов одного субъекта за окно
+  # глушат его уведомления до flap_quiet_seconds тишины
+  flap_count: 3
+  flap_window_seconds: 7200
+  flap_quiet_seconds: 3600
   email:
     enabled: false
     smtp_host: smtp.example.com
