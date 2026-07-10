@@ -55,6 +55,13 @@ HOST_DOWN_AFTER = 3    # consecutive failed pings
 SWITCH_DOWN_AFTER = 2  # consecutive failed SNMP polls
 PORT_CYCLES = 2        # consecutive counter cycles over/under the threshold
 
+# Stale-alarm janitor: types whose subjects can disappear from the
+# observed state (a port/group/switch is gone) and the cycles a subject
+# must stay missing before its alarm is auto-cleared
+JANITOR_TYPES = {"lag_degraded", "port_errors", "port_util", "port_hosts_down"}
+JANITOR_CYCLES = 5
+JANITOR_NOTE = "auto-cleared: subject no longer present"
+
 
 def display_subject(subject: str) -> str | None:
     """Human-readable form of composite subjects for notifications:
@@ -80,13 +87,52 @@ class AlarmEngine:
         # port_hosts_down: subject -> affected MACs (for the clear rule)
         self._mass_sets: dict[str, set[str]] = {}
         self._lag_over: dict[str, int] = {}          # subject -> degraded cycles
+        # janitor: (type, subject) -> consecutive cycles missing from
+        # the observed state
+        self._missing: dict[tuple[str, str], int] = {}
 
     async def load(self) -> None:
-        """Restores the active set from the DB after a restart."""
+        """Restores the active set from the DB after a restart.
+
+        One-time migration: active lag_degraded alarms with a pre-0.5.2
+        subject (not the stable "ip:lag[...]" form) can never clear —
+        their key was the volatile synthetic bridge-port number — so
+        they are auto-cleared right away.
+        """
         for row in await asyncio.to_thread(self._db.alarms, True, 1000):
-            self._active.add((row["type"], row["subject"]))
+            key = (row["type"], row["subject"])
+            self._active.add(key)
+            if row["type"] == "lag_degraded" and ":lag[" not in row["subject"]:
+                await self._clear(
+                    row["type"], row["subject"],
+                    "legacy subject key", note=JANITOR_NOTE,
+                )
         if self._active:
             log.info("Restored %d active alarms from the DB", len(self._active))
+
+    async def janitor(self, observed: set[tuple[str, str]]) -> None:
+        """Auto-clears active alarms whose subject vanished from the
+        observed state for JANITOR_CYCLES cycles in a row — insurance
+        against any future subject-key changes."""
+        for key in list(self._active):
+            alarm_type, subject = key
+            if alarm_type not in JANITOR_TYPES:
+                continue
+            if key in observed:
+                self._missing.pop(key, None)
+                continue
+            cycles = self._missing.get(key, 0) + 1
+            self._missing[key] = cycles
+            if cycles >= JANITOR_CYCLES:
+                self._missing.pop(key, None)
+                log.warning(
+                    "Janitor: %s %s missing for %d cycles — auto-clearing",
+                    alarm_type, subject, cycles,
+                )
+                await self._clear(
+                    alarm_type, subject, "subject no longer present",
+                    note=JANITOR_NOTE,
+                )
 
     # ---------- inputs ----------
 
@@ -281,13 +327,15 @@ class AlarmEngine:
             display=display_subject(subject),
         )
 
-    async def _clear(self, alarm_type: str, subject: str, message: str) -> None:
+    async def _clear(
+        self, alarm_type: str, subject: str, message: str, note: str = ""
+    ) -> None:
         if (alarm_type, subject) not in self._active:
             return
         ts = time.time()
         self._active.discard((alarm_type, subject))
         cleared = await asyncio.to_thread(
-            self._db.clear_alarm, alarm_type, subject, ts
+            self._db.clear_alarm, alarm_type, subject, ts, note
         )
         if not cleared:
             return

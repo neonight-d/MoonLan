@@ -355,6 +355,26 @@ async def run_counters() -> None:
         rates = counter_store.update(ip, samples, speeds)
         if sw is not None:
             await alarm_engine.on_counters(ip, _port_metrics(sw, rates))
+    await alarm_engine.janitor(_observed_subjects())
+
+
+def _observed_subjects() -> set[tuple[str, str]]:
+    """(type, subject) pairs that exist in the current switch data —
+    the janitor auto-clears active alarms that fell out of this set."""
+    observed: set[tuple[str, str]] = set()
+    for ip, sw in switch_data.items():
+        labels = [
+            p.name or str(p.if_index)
+            for p in sw.ports.values() if p.is_physical
+        ]
+        labels += [_lag_label(sw, members) for members in _lag_groups(sw).values()]
+        for label in labels:
+            subject = f"{ip}:{label}"
+            for alarm_type in ("port_errors", "port_util", "port_hosts_down"):
+                observed.add((alarm_type, subject))
+            if label.startswith("lag["):
+                observed.add(("lag_degraded", subject))
+    return observed
 
 
 async def periodic_counters() -> None:

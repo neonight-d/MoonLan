@@ -248,13 +248,19 @@ class Database:
             )
         return True
 
-    def clear_alarm(self, alarm_type: str, subject: str, ts: float) -> bool:
-        """Closes the active alarm for (type, subject); False if none was."""
+    def clear_alarm(
+        self, alarm_type: str, subject: str, ts: float, note: str = ""
+    ) -> bool:
+        """Closes the active alarm for (type, subject); False if none was.
+
+        A non-empty note is appended to the alarm's message (used by
+        the stale-alarm janitor and manual clears).
+        """
         with self._lock, self._conn:
             cur = self._conn.execute(
-                "UPDATE alarms SET ts_cleared = ? WHERE type = ? AND "
-                "subject = ? AND ts_cleared = 0",
-                (ts, alarm_type, subject),
+                "UPDATE alarms SET ts_cleared = ?, message = message || ? "
+                "WHERE type = ? AND subject = ? AND ts_cleared = 0",
+                (ts, f" — {note}" if note else "", alarm_type, subject),
             )
         return cur.rowcount > 0
 
