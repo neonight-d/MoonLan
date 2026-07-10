@@ -264,6 +264,24 @@ class Database:
             )
         return cur.rowcount > 0
 
+    def clear_alarm_by_id(
+        self, alarm_id: int, ts: float, note: str = ""
+    ) -> dict | None:
+        """Closes one active alarm by id; returns its row or None."""
+        with self._lock, self._conn:
+            row = self._conn.execute(
+                "SELECT * FROM alarms WHERE id = ? AND ts_cleared = 0",
+                (alarm_id,),
+            ).fetchone()
+            if row is None:
+                return None
+            self._conn.execute(
+                "UPDATE alarms SET ts_cleared = ?, message = message || ? "
+                "WHERE id = ?",
+                (ts, f" — {note}" if note else "", alarm_id),
+            )
+        return dict(row)
+
     def alarms(self, active: bool, limit: int = 50) -> list[dict]:
         """Active alarms (newest first) or the latest cleared ones."""
         with self._lock:

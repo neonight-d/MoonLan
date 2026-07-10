@@ -283,6 +283,33 @@ class AlarmEngine:
         for mac in new_macs:
             await self._raise("new_mac", mac, details.get(mac, ""), auto_clear=True)
 
+    async def manual_clear(self, alarm_id: int) -> dict | None:
+        """Operator-initiated clear of one active alarm by its id.
+
+        Returns the cleared row or None if there is no such active
+        alarm. Notifies through the normal routing.
+        """
+        ts = time.time()
+        row = await asyncio.to_thread(
+            self._db.clear_alarm_by_id, alarm_id, ts, "cleared manually"
+        )
+        if row is None:
+            return None
+        alarm_type, subject = row["type"], row["subject"]
+        self._active.discard((alarm_type, subject))
+        self._missing.pop((alarm_type, subject), None)
+        await asyncio.to_thread(
+            self._db.add_event, ts, "alarm_cleared", subject,
+            f"{row['severity']} {alarm_type}: cleared manually",
+        )
+        log.info("Alarm cleared manually: %s %s (id %d)",
+                 alarm_type, subject, alarm_id)
+        await self._notifier.notify(
+            alarm_type, subject, row["severity"], "cleared manually",
+            cleared=True, display=display_subject(subject),
+        )
+        return row
+
     # ---------- transitions ----------
 
     async def _hysteresis(

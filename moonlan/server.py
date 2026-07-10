@@ -611,6 +611,14 @@ async def api_alarms(
     return {"alarms": rows}
 
 
+@app.post("/api/alarms/{alarm_id}/clear")
+async def api_clear_alarm(alarm_id: int):
+    row = await alarm_engine.manual_clear(alarm_id)
+    if row is None:
+        return JSONResponse({"error": "no such active alarm"}, status_code=404)
+    return {"id": alarm_id, "cleared": True}
+
+
 @app.get("/api/journal")
 async def api_journal(limit: int = Query(default=100, ge=1, le=1000)) -> dict:
     return {"events": await asyncio.to_thread(db.journal, limit)}

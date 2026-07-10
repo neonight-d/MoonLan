@@ -640,6 +640,21 @@ async function toggleAlarms() {
   els.alarms.classList.remove("hidden");
 }
 
+/* Manually clear one active alarm (with confirmation), then refresh */
+async function clearAlarm(id) {
+  if (!confirm(t("clearConfirm"))) return;
+  const res = await fetch("/api/alarms/" + id + "/clear", { method: "POST" });
+  if (!res.ok) return;
+  const [act, cleared] = await Promise.all([
+    fetch("/api/alarms?active=1").then((r) => r.json()),
+    fetch("/api/alarms?active=0&limit=50").then((r) => r.json()),
+  ]);
+  lastAlarms = { active: act.alarms || [], cleared: cleared.alarms || [] };
+  activeAlarms = lastAlarms.active;
+  renderBadge();
+  renderAlarms();
+}
+
 function renderAlarms() {
   const body = els.alarmsBody;
   body.replaceChildren();
@@ -668,6 +683,19 @@ function renderAlarms() {
       subject.className = "alarm-subject";
       subject.textContent = a.display || a.subject;
       head.append(sev, subject);
+      if (a.flapping) {
+        const flap = document.createElement("span");
+        flap.className = "flap-chip";
+        flap.textContent = t("flapChip");
+        head.append(flap);
+      }
+      if (isActive) {
+        const clear = document.createElement("button");
+        clear.className = "alarm-clear";
+        clear.textContent = "✕ " + t("clearBtn");
+        clear.addEventListener("click", () => clearAlarm(a.id));
+        head.append(clear);
+      }
       const sub = document.createElement("div");
       sub.className = "alarm-sub";
       sub.textContent = isActive

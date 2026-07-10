@@ -262,6 +262,23 @@ main { flex: 1; display: flex; min-height: 0; }
 .sev-info { color: var(--link); }
 .sev-warning { color: var(--warn); }
 .sev-critical { color: #d96b6b; }
+.flap-chip {
+  flex: none;
+  border: 1px dashed var(--warn);
+  border-radius: 4px;
+  padding: 0 5px;
+  font-size: 0.7rem;
+  color: var(--warn);
+}
+.alarm-clear {
+  flex: none;
+  margin-left: auto;
+  border: none;
+  padding: 0 4px;
+  font-size: 0.75rem;
+  color: var(--text-dim);
+}
+.alarm-clear:hover { color: #d96b6b; background: transparent; }
 
 /* ---------- ports panel ---------- */
 
