@@ -406,7 +406,9 @@ async def periodic_resource_log() -> None:
         await asyncio.sleep(RESOURCE_LOG_SECONDS)
         try:
             fds, rss = resource_usage()
-            log.debug("open fds: %d, rss: %d kB", fds, rss)
+            # INFO on purpose: the leak watch must be visible in
+            # journalctl at the default log level
+            log.info("open fds: %d, rss: %d kB", fds, rss)
         except OSError:
             pass  # not a Linux /proc — skip silently
 
@@ -650,6 +652,10 @@ async def api_search(q: str = Query(default="")) -> dict:
 
 @app.get("/api/status")
 async def api_status() -> dict:
+    try:
+        open_fds, rss_kb = resource_usage()
+    except OSError:
+        open_fds, rss_kb = 0, 0
     return {
         "version": __version__,
         "demo": config.demo,
@@ -658,6 +664,8 @@ async def api_status() -> dict:
         "last_scan": state.last_scan,
         "scanning": state.scanning,
         "uptime_hint": time.time(),
+        "open_fds": open_fds,
+        "rss_kb": rss_kb,
     }
 
 

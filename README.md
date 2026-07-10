@@ -193,6 +193,17 @@ The unit sets `Restart=on-failure` and `LimitNOFILE=65535` (a safety
 net; the service itself reuses one SNMP engine per process, so file
 descriptors do not accumulate).
 
+Resource usage is logged at INFO every 10 minutes — check for leaks
+with:
+
+```bash
+journalctl -u moonlan | grep "open fds"
+```
+
+(your user must be in the `systemd-journal` group to read the journal
+of a system service). The same numbers are exposed as `open_fds` and
+`rss_kb` in `/api/status`.
+
 ### Demo mode (no real switches)
 
 ```bash
