@@ -265,6 +265,18 @@ def _lag_groups(sw: SwitchData) -> dict[int, list[int]]:
     return groups
 
 
+def _lag_label(sw: SwitchData, members: list[int]) -> str:
+    """Stable alarm label of a LAG, e.g. "lag[Slot0/1+Slot0/2]".
+
+    Built from the member port names: a member going down changes only
+    its oper status, never the composition, while the synthetic
+    bridge-port number D-Link exposes DOES change on member flaps —
+    keying alarms by it left them hanging active forever (v0.5.1 bug).
+    """
+    names = [port_name(sw, m) for m in sorted(members)]
+    return "lag[" + "+".join(names) + "]"
+
+
 def _port_metrics(
     sw: SwitchData, rates: dict[int, counters.PortRates]
 ) -> list[dict]:
@@ -295,7 +307,7 @@ def _port_metrics(
         # utilization is judged against the ACTIVE capacity: a degraded
         # LAG saturates earlier
         metrics.append({
-            "port": port_name(sw, aggregate),
+            "port": _lag_label(sw, members),
             "speed_mbps": sum(p.speed_mbps for p in member_ports if p.oper_up),
             "in_mbps": sum(r.in_mbps for r in member_rates),
             "out_mbps": sum(r.out_mbps for r in member_rates),
@@ -559,8 +571,10 @@ def _alarm_display(row: dict, hosts: dict[str, dict], sw_names: dict[str, str]) 
     if row["type"] == "switch_down":
         return sw_names.get(subject, subject)
     ip, sep, port = subject.partition(":")
-    if sep and ip in sw_names:
-        return f"{sw_names[ip]} · {port}"
+    if sep:
+        if port.startswith("lag[") and port.endswith("]"):
+            port = "LAG " + port[4:-1]
+        return f"{sw_names.get(ip, ip)} · {port}"
     return subject
 
 

@@ -56,6 +56,16 @@ SWITCH_DOWN_AFTER = 2  # consecutive failed SNMP polls
 PORT_CYCLES = 2        # consecutive counter cycles over/under the threshold
 
 
+def display_subject(subject: str) -> str | None:
+    """Human-readable form of composite subjects for notifications:
+    "10.0.0.10:lag[Slot0/1+Slot0/2]" -> "10.0.0.10 LAG Slot0/1+Slot0/2".
+    None means the raw subject is already readable."""
+    ip, sep, rest = subject.partition(":")
+    if sep and rest.startswith("lag[") and rest.endswith("]"):
+        return f"{ip} LAG {rest[4:-1]}"
+    return None
+
+
 class AlarmEngine:
     def __init__(self, db: Database, notifier: Notifier, thresholds: Thresholds):
         self._db = db
@@ -266,7 +276,10 @@ class AlarmEngine:
             f"{severity} {alarm_type}: {message}",
         )
         log.warning("Alarm raised: %s %s — %s", alarm_type, subject, message)
-        await self._notifier.notify(alarm_type, subject, severity, message)
+        await self._notifier.notify(
+            alarm_type, subject, severity, message,
+            display=display_subject(subject),
+        )
 
     async def _clear(self, alarm_type: str, subject: str, message: str) -> None:
         if (alarm_type, subject) not in self._active:
@@ -285,5 +298,6 @@ class AlarmEngine:
         )
         log.info("Alarm cleared: %s %s — %s", alarm_type, subject, message)
         await self._notifier.notify(
-            alarm_type, subject, severity, message, cleared=True
+            alarm_type, subject, severity, message, cleared=True,
+            display=display_subject(subject),
         )

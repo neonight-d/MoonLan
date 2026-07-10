@@ -34,9 +34,15 @@ SYSLOG_SEVERITY = {"critical": 2, "warning": 4, "info": 6}
 
 
 def format_text(
-    alarm_type: str, subject: str, severity: str, message: str, cleared: bool
+    alarm_type: str,
+    subject: str,
+    severity: str,
+    message: str,
+    cleared: bool,
+    head: str | None = None,
 ) -> str:
-    head = "CLEARED" if cleared else severity.upper()
+    if head is None:
+        head = "CLEARED" if cleared else severity.upper()
     text = f"[MoonLan] {head} {alarm_type}: {subject}"
     return f"{text} — {message}" if message else text
 
@@ -76,8 +82,15 @@ class Notifier:
         severity: str,
         message: str = "",
         cleared: bool = False,
+        head: str | None = None,
+        display: str | None = None,
     ) -> None:
-        text = format_text(alarm_type, subject, severity, message, cleared)
+        """head overrides the [MoonLan] <HEAD> prefix (e.g. FLAPPING);
+        display replaces the raw subject in the text with a
+        human-readable one (e.g. "LAG Slot0/1+Slot0/2")."""
+        text = format_text(
+            alarm_type, display or subject, severity, message, cleared, head
+        )
         if self._demo:
             if self._routing.get(alarm_type):
                 log.info("NOTIFY (demo): %s", text)
@@ -85,7 +98,7 @@ class Notifier:
         channels = self._enabled_channels(alarm_type)
         if not channels:
             return
-        key = (alarm_type, subject, cleared)
+        key = (alarm_type, subject, head or cleared)
         now = time.time()
         if now - self._last_sent.get(key, 0) < self._cfg.cooldown_seconds:
             return
