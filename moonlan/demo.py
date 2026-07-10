@@ -176,6 +176,7 @@ def demo_network() -> list[SwitchData]:
 
 _journal_seeded = False
 _recover_mac: str | None = None  # host that comes back -> host_down clear
+_flap_mac: str | None = None     # host bouncing every few cycles -> FLAPPING
 
 
 def enrich_db(db: Database, hosts: list[dict]) -> None:
@@ -186,7 +187,7 @@ def enrich_db(db: Database, hosts: list[dict]) -> None:
     state is only seeded once per host — after that ping_results()
     owns it, so the down/recover scenario is not reset by rescans.
     """
-    global _journal_seeded, _recover_mac
+    global _journal_seeded, _recover_mac, _flap_mac
     now = time.time()
 
     rows = db.hosts_by_mac()
@@ -211,6 +212,10 @@ def enrich_db(db: Database, hosts: list[dict]) -> None:
             db.set_ping_state(mac, up=True, last_ok=now)
             if not _journal_seeded and i in (0, 3):
                 db.set_monitored(mac, True)  # stars in the UI
+            if not _journal_seeded and i == 8:
+                # bounces every few ping cycles -> flap damping demo
+                db.set_monitored(mac, True)
+                _flap_mac = mac
 
     if not _journal_seeded and len(hosts) > 6:
         _journal_seeded = True
@@ -240,6 +245,15 @@ def ping_results(db: Database) -> dict[str, bool]:
     now = time.time()
     if _recover_mac and _ping_cycle >= RECOVER_AFTER:
         db.set_ping_state(_recover_mac, up=True, last_ok=now)
+    if _flap_mac:
+        # 3 cycles silent, 1 cycle up: host_down raises and clears over
+        # and over -> flap damping mutes it after the 3rd raise
+        flap_up = _ping_cycle % 4 == 0
+        row = db.hosts_by_mac().get(_flap_mac, {})
+        db.set_ping_state(
+            _flap_mac, up=flap_up,
+            last_ok=now if flap_up else row.get("last_ping_ok", 0),
+        )
 
     rows = db.hosts_by_mac()
     mass_macs = sorted(

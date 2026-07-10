@@ -35,7 +35,9 @@ import asyncio
 import logging
 import time
 
-from .config import Thresholds
+from collections import deque
+
+from .config import NotificationsConfig, Thresholds
 from .db import Database
 from .notify import Notifier
 
@@ -62,6 +64,18 @@ JANITOR_TYPES = {"lag_degraded", "port_errors", "port_util", "port_hosts_down"}
 JANITOR_CYCLES = 5
 JANITOR_NOTE = "auto-cleared: subject no longer present"
 
+# Flap damping applies to alarms that can oscillate on their own
+FLAP_TYPES = {
+    "host_down", "port_hosts_down", "port_errors", "port_util", "lag_degraded",
+}
+
+
+def _fmt_window(seconds: float) -> str:
+    seconds = int(seconds)
+    if seconds % 3600 == 0:
+        return f"{seconds // 3600}h"
+    return f"{seconds // 60}m"
+
 
 def display_subject(subject: str) -> str | None:
     """Human-readable form of composite subjects for notifications:
@@ -74,10 +88,17 @@ def display_subject(subject: str) -> str | None:
 
 
 class AlarmEngine:
-    def __init__(self, db: Database, notifier: Notifier, thresholds: Thresholds):
+    def __init__(
+        self,
+        db: Database,
+        notifier: Notifier,
+        thresholds: Thresholds,
+        notif_cfg: NotificationsConfig | None = None,
+    ):
         self._db = db
         self._notifier = notifier
         self._thresholds = thresholds
+        self._notif_cfg = notif_cfg or NotificationsConfig()
         self._active: set[tuple[str, str]] = set()  # (type, subject)
         self._ping_fails: dict[str, int] = {}       # mac -> consecutive misses
         self._snmp_fails: dict[str, int] = {}       # ip -> consecutive misses
@@ -90,6 +111,10 @@ class AlarmEngine:
         # janitor: (type, subject) -> consecutive cycles missing from
         # the observed state
         self._missing: dict[tuple[str, str], int] = {}
+        # flap damping: raise timestamps per key and the muted set
+        # ((type, subject) -> ts of the last raise while flapping)
+        self._raise_times: dict[tuple[str, str], deque[float]] = {}
+        self._flapping: dict[tuple[str, str], float] = {}
 
     async def load(self) -> None:
         """Restores the active set from the DB after a restart.
@@ -161,6 +186,7 @@ class AlarmEngine:
                     )
         await self._mass_down(results, meta)
         self._last_ping.update(results)
+        await self.flap_maintenance()
 
     async def _mass_down(
         self, results: dict[str, bool], meta: dict[str, dict]
@@ -349,6 +375,8 @@ class AlarmEngine:
             f"{severity} {alarm_type}: {message}",
         )
         log.warning("Alarm raised: %s %s — %s", alarm_type, subject, message)
+        if await self._flap_on_raise(alarm_type, subject, severity):
+            return  # muted: the alarm is in the DB/journal, no notification
         await self._notifier.notify(
             alarm_type, subject, severity, message,
             display=display_subject(subject),
@@ -372,7 +400,66 @@ class AlarmEngine:
             f"{severity} {alarm_type}: {message}",
         )
         log.info("Alarm cleared: %s %s — %s", alarm_type, subject, message)
+        if (alarm_type, subject) in self._flapping:
+            return  # muted while the subject is flapping
         await self._notifier.notify(
             alarm_type, subject, severity, message, cleared=True,
             display=display_subject(subject),
         )
+
+    # ---------- flap damping ----------
+
+    def flapping_keys(self) -> set[tuple[str, str]]:
+        return set(self._flapping)
+
+    async def _flap_on_raise(
+        self, alarm_type: str, subject: str, severity: str
+    ) -> bool:
+        """Registers a raise for flap damping; True = mute this raise."""
+        if alarm_type not in FLAP_TYPES:
+            return False
+        cfg = self._notif_cfg
+        if cfg.flap_count <= 0:
+            return False
+        key = (alarm_type, subject)
+        now = time.time()
+        history = self._raise_times.setdefault(key, deque())
+        history.append(now)
+        while history and now - history[0] > cfg.flap_window_seconds:
+            history.popleft()
+        if key in self._flapping:
+            self._flapping[key] = now  # the quiet timer restarts
+            return True
+        if len(history) >= cfg.flap_count:
+            self._flapping[key] = now
+            log.warning(
+                "Flapping detected: %s %s — %d raises in %s, muting",
+                alarm_type, subject, len(history),
+                _fmt_window(cfg.flap_window_seconds),
+            )
+            await self._notifier.notify(
+                alarm_type, subject, severity,
+                f"{len(history)} raises in "
+                f"{_fmt_window(cfg.flap_window_seconds)}, notifications muted",
+                head="FLAPPING", display=display_subject(subject),
+            )
+            return True
+        return False
+
+    async def flap_maintenance(self) -> None:
+        """Ends the flapping state after flap_quiet_seconds without a
+        single raise, with a "flapping ended" notification."""
+        cfg = self._notif_cfg
+        now = time.time()
+        for key, last_raise in list(self._flapping.items()):
+            if now - last_raise < cfg.flap_quiet_seconds:
+                continue
+            del self._flapping[key]
+            self._raise_times.pop(key, None)
+            alarm_type, subject = key
+            log.info("Flapping ended: %s %s", alarm_type, subject)
+            await self._notifier.notify(
+                alarm_type, subject, SEVERITIES[alarm_type],
+                "flapping ended", head="FLAPPING",
+                display=display_subject(subject),
+            )

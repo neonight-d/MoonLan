@@ -45,7 +45,9 @@ switch_data: dict[str, SwitchData] = {}
 
 counter_store = counters.CounterStore()
 notifier = Notifier(config, demo=config.demo)
-alarm_engine = AlarmEngine(db, notifier, config.thresholds)
+alarm_engine = AlarmEngine(
+    db, notifier, config.thresholds, config.notifications
+)
 demo_counters = demo.DemoCounters() if config.demo else None
 
 # The first scan is the initial inventory: every MAC is "new" there,
@@ -608,8 +610,10 @@ async def api_alarms(
     rows = await asyncio.to_thread(db.alarms, bool(active), limit)
     db_hosts = await asyncio.to_thread(db.hosts_by_mac)
     sw_names = {sw["ip"]: sw["name"] for sw in state.as_dict()["switches"]}
+    flapping = alarm_engine.flapping_keys()
     for row in rows:
         row["display"] = _alarm_display(row, db_hosts, sw_names)
+        row["flapping"] = (row["type"], row["subject"]) in flapping
     return {"alarms": rows}
 
 

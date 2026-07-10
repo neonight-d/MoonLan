@@ -54,6 +54,12 @@ class SyslogConfig:
 @dataclass
 class NotificationsConfig:
     cooldown_seconds: int = 300  # anti-spam per (type, subject)
+    # Flap damping: >= flap_count raises of one (type, subject) within
+    # flap_window_seconds mute its notifications until it stays quiet
+    # for flap_quiet_seconds (alarms keep flowing to the DB/journal)
+    flap_count: int = 3
+    flap_window_seconds: int = 7200
+    flap_quiet_seconds: int = 3600
     email: EmailConfig = field(default_factory=EmailConfig)
     telegram: TelegramConfig = field(default_factory=TelegramConfig)
     syslog: SyslogConfig = field(default_factory=SyslogConfig)
@@ -156,6 +162,9 @@ def load_config(path: Path | None = None) -> Config:
         syslog = notif.get("syslog") or {}
         cfg.notifications = NotificationsConfig(
             cooldown_seconds=int(notif.get("cooldown_seconds", 300)),
+            flap_count=int(notif.get("flap_count", 3)),
+            flap_window_seconds=int(notif.get("flap_window_seconds", 7200)),
+            flap_quiet_seconds=int(notif.get("flap_quiet_seconds", 3600)),
             email=EmailConfig(
                 enabled=bool(email.get("enabled", False)),
                 smtp_host=str(email.get("smtp_host", "")),
