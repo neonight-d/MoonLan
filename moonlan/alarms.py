@@ -7,10 +7,12 @@ alarm_cleared) so the journal stays the full chronicle, and handed to
 the notifier.
 
 Rules:
-- host_down (warning): a host with an IP misses 3 consecutive pings;
-  cleared by the first successful ping. The journal's own host_down /
-  host_up events (immediate, in db.update_ping) are left as is — the
-  alarm is the debounced version of the same signal.
+- host_down (warning): a monitored host with an IP misses 3
+  consecutive pings; cleared by the first successful ping. The
+  journal's own host_down / host_up events (immediate, in
+  db.update_ping) are left as is — the alarm is the debounced version
+  of the same signal. Stale hosts (drawn from the grace window rather
+  than from a fresh FDB) are never alarmed on.
 - switch_down (critical): a configured switch fails 2 consecutive SNMP
   polls; cleared by a successful poll.
 - port_errors (warning): (errors+discards)/min above the threshold for
@@ -187,7 +189,11 @@ class AlarmEngine:
                 self._up_streak[mac] = 0
                 misses = self._ping_fails.get(mac, 0) + 1
                 self._ping_fails[mac] = misses
-                if misses >= HOST_DOWN_AFTER and row.get("monitored"):
+                if (
+                    misses >= HOST_DOWN_AFTER
+                    and row.get("monitored")
+                    and not row.get("stale")
+                ):
                     await self._raise(
                         "host_down", mac,
                         f"{label} missed {misses} pings in a row",
@@ -225,6 +231,8 @@ class AlarmEngine:
             if up or streak_before.get(mac, 0) < MASS_DOWN_MIN_UP_STREAK:
                 continue
             row = meta.get(mac, {})
+            if row.get("stale"):
+                continue  # its presence on that port is not confirmed
             if row.get("switch_ip") and row.get("port"):
                 subject = f"{row['switch_ip']}:{row['port']}"
                 newly_down.setdefault(subject, []).append(mac)

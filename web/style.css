@@ -129,6 +129,8 @@ main { flex: 1; display: flex; min-height: 0; }
 .device-list .li-text > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .device-list .sub { color: var(--text-dim); font-family: ui-monospace, monospace; font-size: 0.8rem; }
 .device-list li.hidden-by-search { display: none; }
+/* seen in an older MAC table, not in the current one */
+.device-list li.stale { opacity: 0.5; }
 
 /* Status indicator (ping) */
 .dot {

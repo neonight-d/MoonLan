@@ -249,7 +249,7 @@ function switchHasAlarm(ip) {
   );
 }
 
-function li(main, sub, dotClass, onClick, searchText) {
+function li(main, sub, dotClass, onClick, searchText, cssClass) {
   const item = document.createElement("li");
   if (dotClass) {
     const dot = document.createElement("span");
@@ -270,6 +270,7 @@ function li(main, sub, dotClass, onClick, searchText) {
   item.append(text);
   item.dataset.search = (searchText || main + " " + sub).toLowerCase();
   item.addEventListener("click", onClick);
+  if (cssClass) item.classList.add(cssClass);
   return item;
 }
 
@@ -291,7 +292,8 @@ function renderSidebar() {
         statusClass(h),
         () => focusNode("host:" + h.mac),
         // VLAN is intentionally excluded from search
-        [hostLabel(h), h.ip, h.mac].filter(Boolean).join(" ")
+        [hostLabel(h), h.ip, h.mac].filter(Boolean).join(" "),
+        h.stale ? "stale" : ""
       )
     )
   );
@@ -363,20 +365,28 @@ function buildGraphData() {
 
   for (const host of topology.hosts) {
     const c = statusColor(host);
+    // stale = drawn from the grace window, not from a fresh MAC table
     nodes.push({
       id: "host:" + host.mac,
       label: hostLabel(host),
       shape: "dot",
       size: 9,
+      opacity: host.stale ? 0.4 : 1,
       color: { background: c, border: c },
-      font: { color: colors.dim, size: 11, face: "ui-monospace" },
+      font: {
+        color: colors.dim,
+        size: 11,
+        face: "ui-monospace",
+        strokeWidth: 0,
+      },
     });
     edges.push({
       id: "hostedge:" + host.mac,
       from: host.via || "sw:" + host.switch,
       to: "host:" + host.mac,
-      color: { color: colors.link, opacity: 0.35 },
+      color: { color: colors.link, opacity: host.stale ? 0.15 : 0.35 },
       width: 1,
+      dashes: host.stale ? [3, 3] : false,
     });
   }
 
@@ -456,7 +466,8 @@ function showDetails(nodeId) {
   } else {
     const host = topology.hosts.find((h) => "host:" + h.mac === nodeId);
     if (!host) return;
-    html = `<h3>${hostLabel(host)}</h3><dl>
+    html = `<h3>${hostLabel(host)}</h3>
+      ${host.stale ? `<p class="hint">${t("staleHint")}</p>` : ""}<dl>
       <dt>${t("name")}</dt><dd>${host.name || "—"}</dd>
       <dt>${t("ipAddr")}</dt><dd>${host.ip || "—"}</dd>
       <dt>${t("macAddr")}</dt><dd>${host.mac}</dd>
@@ -464,6 +475,7 @@ function showDetails(nodeId) {
       <dt>${t("portLabel")}</dt><dd>${host.port}</dd>
       <dt>${t("vlan")}</dt><dd>${vlanLabel(host.vlan)}</dd>
       <dt>${t("lastReply")}</dt><dd>${fmtTime(host.last_ping_ok)}</dd>
+      <dt>${t("lastSeenLabel")}</dt><dd>${fmtTime(host.last_seen)}</dd>
       <dt>${t("firstSeen")}</dt><dd>${fmtDate(host.first_seen)}</dd></dl>
       <button id="monitor-btn" class="panel-btn${host.monitored ? " active" : ""}">
         ${host.monitored ? "★" : "☆"} ${t("monitorBtn")}</button>`;

@@ -219,9 +219,32 @@ def enrich_db(db: Database, hosts: list[dict]) -> None:
 
     if not _journal_seeded and len(hosts) > 6:
         _journal_seeded = True
+        _seed_stale_hosts(db, now)
         db.add_event(now - 40 * 60, "host_down", hosts[6]["mac"], "10.0.99.16")
         db.add_event(now - 15 * 60, "host_down", hosts[1]["mac"], "pc-02.demo.lan")
         db.add_event(now - 5 * 60, "host_up", hosts[3]["mac"], "pc-04.demo.lan")
+
+
+# Devices whose MAC is no longer in any FDB: still drawn at the port
+# where they were seen last, greyed out, until the grace window ends
+STALE_HOSTS = [
+    ("fe:ee:00:00:0a:01", "10.0.99.71", "nb-sales.demo.lan", "Gi0/5", 3.0),
+    ("fe:ee:00:00:0a:02", "10.0.99.72", "printer-2f.demo.lan", "Gi0/6", 9.5),
+]
+STALE_SWITCH = "10.0.0.24"  # access-sw-4
+
+
+def _seed_stale_hosts(db: Database, now: float) -> None:
+    """Hosts last seen hours ago — the grace-window scenario."""
+    db.upsert_hosts([
+        {"mac": mac, "switch": STALE_SWITCH, "port": port, "vlan": 8}
+        for mac, _ip, _name, port, _hours in STALE_HOSTS
+    ])
+    for mac, ip, name, _port, hours in STALE_HOSTS:
+        db.set_ips({mac: ip})
+        db.set_name(mac, name)
+        db.set_last_seen(mac, now - hours * 3600)
+        db.set_ping_state(mac, up=False, last_ok=now - hours * 3600)
 
 
 _ping_cycle = 0

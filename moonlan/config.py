@@ -91,6 +91,10 @@ class Config:
     db_path: str = "moonlan.db"
     unmanaged_threshold: int = 3  # hosts per port; 0 disables pseudo-switches
     monitored_by_default: bool = False  # True = every host raises host_down
+    # A host stays on the map this long after its MAC left the FDB
+    # (FDB entries age out in minutes; quiet devices must not blink)
+    host_grace_hours: float = 24.0
+    host_retention_days: float = 30.0  # then it is deleted from the DB
     thresholds: Thresholds = field(default_factory=Thresholds)
     notifications: NotificationsConfig = field(default_factory=NotificationsConfig)
     alarm_notify: dict[str, list[str]] = field(
@@ -145,6 +149,12 @@ def load_config(path: Path | None = None) -> Config:
 
         cfg.monitored_by_default = bool(
             raw.get("monitored_by_default", cfg.monitored_by_default)
+        )
+        cfg.host_grace_hours = float(
+            raw.get("host_grace_hours", cfg.host_grace_hours)
+        )
+        cfg.host_retention_days = float(
+            raw.get("host_retention_days", cfg.host_retention_days)
         )
 
         thr = raw.get("thresholds") or {}

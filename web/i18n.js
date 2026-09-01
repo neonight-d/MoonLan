@@ -80,6 +80,11 @@ const I18N = {
     clearBtn: "Clear",
     clearConfirm: "Clear this alarm?",
     flapChip: "FLAP",
+    lastSeenLabel: "Last seen",
+    staleHint:
+      "The MAC address is missing from the current switch tables — " +
+      "the device is shown at the port where it was seen last.",
+    ev_hosts_purged: "Old hosts removed",
   },
   ru: {
     title: "MoonLan — карта сети",
@@ -158,5 +163,10 @@ const I18N = {
     clearBtn: "Снять",
     clearConfirm: "Снять эту тревогу?",
     flapChip: "FLAP",
+    lastSeenLabel: "Последний раз виден",
+    staleHint:
+      "MAC-адреса нет в текущих таблицах коммутаторов — устройство " +
+      "показано на порту, где оно было замечено в последний раз.",
+    ev_hosts_purged: "Удалены старые хосты",
   },
 };

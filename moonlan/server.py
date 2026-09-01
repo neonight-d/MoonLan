@@ -54,6 +54,11 @@ demo_counters = demo.DemoCounters() if config.demo else None
 # alerting on all of them would be pure noise
 first_scan_done = False
 
+# MACs present in the FDB of the latest scan. A host missing from it is
+# "stale": still drawn at its last known port during the grace window,
+# but never alarmed on — its presence is no longer confirmed.
+fdb_macs: set[str] = set()
+
 # One SnmpEngine per process: a new engine per cycle leaks sockets and
 # MIB state (OSError 24, MibNotFoundError, growing RSS). Recreate only
 # if the SNMP config ever changes at runtime — it currently cannot.
@@ -73,7 +78,7 @@ def get_collector() -> SnmpCollector:
 
 async def run_scan() -> None:
     """One cycle of polling all switches and rebuilding the topology."""
-    global first_scan_done
+    global first_scan_done, fdb_macs
     if state.scanning:
         return
     state.scanning = True
@@ -102,6 +107,7 @@ async def run_scan() -> None:
             config.unmanaged_threshold,
             fdb_stability=None if config.demo else fdb_stability,
         )
+        fdb_macs = {h["mac"] for h in hosts}
         new_macs = await asyncio.to_thread(db.upsert_hosts, hosts)
         if new_macs:
             log.info("New MACs: %d", len(new_macs))
@@ -111,7 +117,11 @@ async def run_scan() -> None:
             if arp:
                 await asyncio.to_thread(db.set_ips, arp)
             await resolve_names()
-        _merge_db_fields(hosts, await asyncio.to_thread(db.hosts_by_mac))
+        db_rows = await asyncio.to_thread(db.hosts_by_mac)
+        hosts = _add_stale_hosts(
+            hosts, db_rows, pseudo_switches, {sw["ip"] for sw in switches}
+        )
+        _merge_db_fields(hosts, db_rows)
         state.update(switches, links, hosts, pseudo_switches, vlan_names)
         if config.demo:
             await run_ping()  # set the switches' ping state right away
@@ -138,6 +148,58 @@ async def run_scan() -> None:
         state.scanning = False
 
 
+def _switch_macs() -> set[str]:
+    """Every MAC belonging to a polled switch — those are nodes of the
+    map, never hosts, even when a router's ARP table lists them."""
+    macs: set[str] = set()
+    for sw in switch_data.values():
+        macs |= sw.own_macs
+        if sw.bridge_mac:
+            macs.add(sw.bridge_mac)
+    return macs
+
+
+def _add_stale_hosts(
+    fresh: list[dict],
+    db_rows: dict[str, dict],
+    pseudo_switches: list[dict],
+    switch_ips: set[str],
+) -> list[dict]:
+    """Adds hosts that fell out of the FDB but are still within the
+    grace window, drawn at their last known port and marked stale.
+
+    FDB entries age out in minutes, so without this a quiet device
+    blinks in and out of the map on every scan.
+    """
+    for h in fresh:
+        h["stale"] = False
+    grace = config.host_grace_hours * 3600
+    if grace <= 0:
+        return fresh
+    now = time.time()
+    known = {h["mac"] for h in fresh} | _switch_macs()
+    pseudo_by_port = {(p["switch"], p["port"]): p["id"] for p in pseudo_switches}
+    on_map = list(fresh)
+    for mac, row in sorted(db_rows.items()):
+        if mac in known or row["switch_ip"] not in switch_ips:
+            continue
+        if now - row["last_seen"] >= grace:
+            continue
+        host = {
+            "mac": mac,
+            "switch": row["switch_ip"],
+            "port": row["port"],
+            "vlan": row["vlan"],
+            "name": "",
+            "stale": True,
+        }
+        via = pseudo_by_port.get((row["switch_ip"], row["port"]))
+        if via:
+            host["via"] = via
+        on_map.append(host)
+    return on_map
+
+
 def _effective_monitored(row: dict) -> bool:
     """monitored_by_default=true restores the old alert-on-everything
     behavior regardless of the per-host flag."""
@@ -153,6 +215,8 @@ def _merge_db_fields(hosts: list[dict], db_hosts: dict[str, dict]) -> None:
         h["ping_up"] = bool(row.get("ping_up", 0))
         h["last_ping_ok"] = row.get("last_ping_ok", 0)
         h["first_seen"] = row.get("first_seen", 0)
+        h["last_seen"] = row.get("last_seen", 0)
+        h["last_arp"] = row.get("last_arp", 0)
         h["monitored"] = _effective_monitored(row)
 
 
@@ -245,8 +309,12 @@ async def run_ping() -> None:
             }
     if results_by_mac:
         meta = await asyncio.to_thread(db.hosts_by_mac)
-        for row in meta.values():
+        for mac, row in meta.items():
             row["monitored"] = _effective_monitored(row)
+            # A located host missing from the latest FDB is not
+            # confirmed present, so it raises no alarms. Hosts that
+            # were never located (ARP-only) keep alerting normally.
+            row["stale"] = bool(row["switch_ip"]) and mac not in fdb_macs
         await alarm_engine.on_ping(results_by_mac, meta)
 
 
@@ -488,6 +556,23 @@ def _link_load(link: dict) -> dict | None:
     return None
 
 
+async def purge_old_hosts() -> None:
+    """Startup cleanup: drop hosts nothing has seen for retention days."""
+    days = config.host_retention_days
+    if days <= 0:
+        return
+    now = time.time()
+    removed = await asyncio.to_thread(db.purge_old_hosts, now - days * 86400)
+    if removed:
+        log.info(
+            "Removed %d hosts not seen for %g days", removed, days
+        )
+        await asyncio.to_thread(
+            db.add_event, now, "hosts_purged", "",
+            f"{removed} hosts not seen for {days:g} days",
+        )
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     logging.basicConfig(
@@ -501,6 +586,7 @@ async def lifespan(app: FastAPI):
             "No switches are configured in config.yaml. Add addresses to "
             "the switches section or start with MOONLAN_DEMO=1."
         )
+    await purge_old_hosts()
     await alarm_engine.load()
     tasks = [
         asyncio.create_task(periodic_scan()),
