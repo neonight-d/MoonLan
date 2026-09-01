@@ -56,6 +56,10 @@ SEVERITIES = {
 HOST_DOWN_AFTER = 3    # consecutive failed pings
 SWITCH_DOWN_AFTER = 2  # consecutive failed SNMP polls
 PORT_CYCLES = 2        # consecutive counter cycles over/under the threshold
+# A host must have answered this many consecutive pings before its
+# silence counts toward a mass outage — freshly discovered and already
+# flickering records are not evidence that a port went down
+MASS_DOWN_MIN_UP_STREAK = 2
 
 # Stale-alarm janitor: types whose subjects can disappear from the
 # observed state (a port/group/switch is gone) and the cycles a subject
@@ -104,7 +108,8 @@ class AlarmEngine:
         self._snmp_fails: dict[str, int] = {}       # ip -> consecutive misses
         self._over: dict[tuple[str, str], int] = {}   # port rule hysteresis
         self._under: dict[tuple[str, str], int] = {}
-        self._last_ping: dict[str, bool] = {}       # previous cycle results
+        # consecutive successful pings per MAC (0 = silent right now)
+        self._up_streak: dict[str, int] = {}
         # port_hosts_down: subject -> affected MACs (for the clear rule)
         self._mass_sets: dict[str, set[str]] = {}
         self._lag_over: dict[str, int] = {}          # subject -> degraded cycles
@@ -170,13 +175,16 @@ class AlarmEngine:
         the journal keeps recording host_up/host_down for everyone
         (that happens in db.update_ping, not here).
         """
+        streak_before = {mac: self._up_streak.get(mac, 0) for mac in results}
         for mac, up in results.items():
             row = meta.get(mac, {})
             label = row.get("name") or row.get("ip") or mac
             if up:
                 self._ping_fails.pop(mac, None)
+                self._up_streak[mac] = streak_before[mac] + 1
                 await self._clear("host_down", mac, f"{label} answers ping again")
             else:
+                self._up_streak[mac] = 0
                 misses = self._ping_fails.get(mac, 0) + 1
                 self._ping_fails[mac] = misses
                 if misses >= HOST_DOWN_AFTER and row.get("monitored"):
@@ -184,40 +192,54 @@ class AlarmEngine:
                         "host_down", mac,
                         f"{label} missed {misses} pings in a row",
                     )
-        await self._mass_down(results, meta)
-        self._last_ping.update(results)
+        await self._mass_down(results, meta, streak_before)
         await self.flap_maintenance()
 
     async def _mass_down(
-        self, results: dict[str, bool], meta: dict[str, dict]
+        self,
+        results: dict[str, bool],
+        meta: dict[str, dict],
+        streak_before: dict[str, int],
     ) -> None:
-        """port_hosts_down: many hosts of one port went silent at once."""
+        """port_hosts_down: many devices of one port went silent at once.
+
+        Counted per DEVICE, not per host record: the identity is the IP
+        when there is one (one address = one device) and the MAC
+        otherwise. Only hosts that had been answering steadily count.
+        """
         threshold = self._thresholds.mass_down_hosts
         if threshold <= 0:
             return
+
+        def identity(mac: str) -> str:
+            return meta.get(mac, {}).get("ip") or mac
 
         def label(mac: str) -> str:
             row = meta.get(mac, {})
             return row.get("name") or row.get("ip") or mac
 
-        # Hosts that answered on the previous cycle and are silent now,
-        # grouped by the switch port they live on
+        # Hosts that had been answering and are silent now, grouped by
+        # the switch port they live on
         newly_down: dict[str, list[str]] = {}
         for mac, up in results.items():
-            if up or not self._last_ping.get(mac):
+            if up or streak_before.get(mac, 0) < MASS_DOWN_MIN_UP_STREAK:
                 continue
             row = meta.get(mac, {})
             if row.get("switch_ip") and row.get("port"):
                 subject = f"{row['switch_ip']}:{row['port']}"
                 newly_down.setdefault(subject, []).append(mac)
         for subject, macs in newly_down.items():
-            if len(macs) < threshold:
+            # one label per device, first occurrence wins
+            by_device: dict[str, str] = {}
+            for mac in macs:
+                by_device.setdefault(identity(mac), label(mac))
+            if len(by_device) < threshold:
                 continue
             self._mass_sets.setdefault(subject, set()).update(macs)
-            names = ", ".join(label(m) for m in macs[:5])
+            names = ", ".join(list(by_device.values())[:5])
             await self._raise(
                 "port_hosts_down", subject,
-                f"{len(macs)} hosts went silent at once: {names}",
+                f"{len(by_device)} devices went silent at once: {names}",
             )
 
         # An active alarm that predates a restart has no affected set:
@@ -232,19 +254,20 @@ class AlarmEngine:
                 and not results.get(mac, True)
             }
 
-        # Clear when at least half of the affected hosts answer again
+        # Clear when at least half of the affected devices answer again
         for subject, macs in list(self._mass_sets.items()):
             if ("port_hosts_down", subject) not in self._active:
                 del self._mass_sets[subject]
                 continue
             if not macs:
                 continue
-            answering = sum(1 for m in macs if results.get(m))
-            if answering * 2 >= len(macs):
+            devices = {identity(m) for m in macs}
+            answering = {identity(m) for m in macs if results.get(m)}
+            if len(answering) * 2 >= len(devices):
                 del self._mass_sets[subject]
                 await self._clear(
                     "port_hosts_down", subject,
-                    f"{answering} of {len(macs)} hosts answer again",
+                    f"{len(answering)} of {len(devices)} devices answer again",
                 )
 
     async def on_scan(
