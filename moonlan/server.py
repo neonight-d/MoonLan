@@ -226,11 +226,15 @@ async def run_ping() -> None:
             switch_ping[sw["ip"]] = {"ping_up": True, "last_ping_ok": now}
     else:
         targets = await asyncio.to_thread(db.hosts_with_ip)
-        ips = [ip for _, ip in targets] + list(config.switches)
+        # One ping per unique address, the result applied to every host
+        # holding it: IPs are unique in the DB since v0.5.3, but a
+        # single probe per address is the right shape regardless
+        unique_ips = list(dict.fromkeys(ip for _, ip in targets))
+        ips = unique_ips + list(config.switches)
         if not ips:
             return
         results = await pinger.ping_many(ips)
-        results_by_mac = {mac: results[ip] for mac, ip in targets}
+        results_by_mac = {mac: results.get(ip, False) for mac, ip in targets}
         await asyncio.to_thread(db.update_ping, results_by_mac, now)
         for ip in config.switches:
             prev = switch_ping.get(ip, {})

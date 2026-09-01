@@ -29,7 +29,8 @@ CREATE TABLE IF NOT EXISTS hosts (
     last_ping_ok REAL DEFAULT 0,          -- last successful ping
     ping_up    INTEGER DEFAULT 0,         -- 1 = replying right now
     vlan       INTEGER DEFAULT 0,         -- PVID of the port the host is on
-    monitored  INTEGER DEFAULT 0          -- 1 = host_down alarms wanted
+    monitored  INTEGER DEFAULT 0,         -- 1 = host_down alarms wanted
+    last_arp   REAL DEFAULT 0             -- last seen in a router's ARP table
 );
 CREATE TABLE IF NOT EXISTS journal (
     id      INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -76,6 +77,34 @@ class Database:
                 "ALTER TABLE hosts ADD COLUMN monitored INTEGER DEFAULT 0"
             )
             log.info("DB migration: added hosts.monitored column")
+        if "last_arp" not in columns:
+            self._conn.execute(
+                "ALTER TABLE hosts ADD COLUMN last_arp REAL DEFAULT 0"
+            )
+            log.info("DB migration: added hosts.last_arp column")
+        # An IP belongs to exactly one MAC. Stale ARP pairs (a device
+        # changed its MAC, DHCP reassigned the address) used to leave
+        # the same IP on several host rows, and then one unreachable
+        # address tripped the mass-outage threshold all by itself.
+        freed = self._dedupe_ips()
+        if freed:
+            log.info(
+                "DB migration: cleared duplicate IPs on %d host records", freed
+            )
+        self._conn.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_hosts_ip "
+            "ON hosts(ip) WHERE ip <> ''"
+        )
+
+    def _dedupe_ips(self) -> int:
+        """Leaves each non-empty IP on its most recently seen host only."""
+        cur = self._conn.execute(
+            "UPDATE hosts SET ip = '' WHERE ip <> '' AND mac <> ("
+            "  SELECT h2.mac FROM hosts h2 WHERE h2.ip = hosts.ip"
+            "  ORDER BY MAX(h2.last_seen, COALESCE(h2.last_arp, 0)) DESC,"
+            "           h2.mac LIMIT 1)"
+        )
+        return cur.rowcount
 
     def close(self) -> None:
         with self._lock:
@@ -112,12 +141,59 @@ class Database:
             log.info("New MAC address: %s", mac)
         return new_macs
 
-    def set_ips(self, mac_to_ip: dict[str, str]) -> None:
+    def set_ips(
+        self, mac_to_ip: dict[str, str], create_missing: bool = False
+    ) -> int:
+        """Applies ARP data (MAC -> IP); returns the number of hosts created.
+
+        An IP ends up on exactly one MAC: the address is taken away
+        from its previous owner first, so the later ARP entry wins
+        (the merged ARP table is iterated in source order). With
+        create_missing, MACs that are in ARP but on no switch port are
+        stored with an empty switch_ip — the "not on map" inventory;
+        their last_seen stays 0 (never seen in an FDB) and last_arp
+        carries their liveness instead.
+        """
+        now = time.time()
+        created = 0
         with self._lock, self._conn:
             for mac, ip in mac_to_ip.items():
+                if not ip:
+                    continue
                 self._conn.execute(
-                    "UPDATE hosts SET ip = ? WHERE mac = ?", (ip, mac)
+                    "UPDATE hosts SET ip = '' WHERE ip = ? AND mac <> ?",
+                    (ip, mac),
                 )
+                cur = self._conn.execute(
+                    "UPDATE hosts SET ip = ?, last_arp = ? WHERE mac = ?",
+                    (ip, now, mac),
+                )
+                if cur.rowcount == 0 and create_missing:
+                    self._conn.execute(
+                        "INSERT INTO hosts (mac, ip, switch_ip, port, "
+                        "first_seen, last_seen, last_arp) "
+                        "VALUES (?, ?, '', '', ?, 0, ?)",
+                        (mac, ip, now, now),
+                    )
+                    created += 1
+        return created
+
+    def set_last_seen(self, mac: str, ts: float) -> None:
+        """Overrides when the host was last seen in an FDB (demo seeding)."""
+        with self._lock, self._conn:
+            self._conn.execute(
+                "UPDATE hosts SET last_seen = ? WHERE mac = ?", (ts, mac)
+            )
+
+    def purge_old_hosts(self, cutoff: float) -> int:
+        """Deletes hosts not seen — in any FDB or ARP table — since cutoff."""
+        with self._lock, self._conn:
+            cur = self._conn.execute(
+                "DELETE FROM hosts WHERE "
+                "MAX(last_seen, COALESCE(last_arp, 0)) < ?",
+                (cutoff,),
+            )
+        return cur.rowcount
 
     def set_monitored(self, mac: str, monitored: bool) -> bool:
         """Sets the host_down alarm flag; False if the MAC is unknown."""
