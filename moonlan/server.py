@@ -621,6 +621,9 @@ async def lifespan(app: FastAPI):
         )
     await purge_old_hosts()
     await alarm_engine.load()
+    await alarm_engine.clear_missing_hosts(
+        set(await asyncio.to_thread(db.hosts_by_mac))
+    )
     tasks = [
         asyncio.create_task(periodic_scan()),
         asyncio.create_task(periodic_ping()),
