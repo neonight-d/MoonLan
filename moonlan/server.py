@@ -115,14 +115,34 @@ async def run_scan() -> None:
             await asyncio.to_thread(demo.enrich_db, db, hosts)
         else:
             if arp:
-                await asyncio.to_thread(db.set_ips, arp)
+                # ARP knows devices no switch port ever showed (behind a
+                # router or an unpolled switch): keep them as inventory
+                # with an empty switch_ip. Switches and routers
+                # themselves are map nodes, not hosts.
+                infra_ips = set(config.switches) | set(config.routers)
+                own_macs = _switch_macs()
+                arp_hosts = {
+                    mac: ip for mac, ip in arp.items()
+                    if mac not in own_macs and ip not in infra_ips
+                }
+                created = await asyncio.to_thread(
+                    db.set_ips, arp_hosts, True
+                )
+                if created:
+                    log.info(
+                        "ARP: %d devices known but not seen on any switch "
+                        "port", created,
+                    )
             await resolve_names()
         db_rows = await asyncio.to_thread(db.hosts_by_mac)
-        hosts = _add_stale_hosts(
+        hosts, unlocated = _assemble_hosts(
             hosts, db_rows, pseudo_switches, {sw["ip"] for sw in switches}
         )
         _merge_db_fields(hosts, db_rows)
-        state.update(switches, links, hosts, pseudo_switches, vlan_names)
+        _merge_db_fields(unlocated, db_rows)
+        state.update(
+            switches, links, hosts, pseudo_switches, vlan_names, unlocated
+        )
         if config.demo:
             await run_ping()  # set the switches' ping state right away
 
@@ -159,31 +179,32 @@ def _switch_macs() -> set[str]:
     return macs
 
 
-def _add_stale_hosts(
+def _assemble_hosts(
     fresh: list[dict],
     db_rows: dict[str, dict],
     pseudo_switches: list[dict],
     switch_ips: set[str],
-) -> list[dict]:
-    """Adds hosts that fell out of the FDB but are still within the
-    grace window, drawn at their last known port and marked stale.
+) -> tuple[list[dict], list[dict]]:
+    """Splits the known inventory into map hosts and off-map devices.
 
-    FDB entries age out in minutes, so without this a quiet device
-    blinks in and out of the map on every scan.
+    On the map: this scan's FDB hosts, plus hosts whose MAC left the
+    FDB less than host_grace_hours ago, drawn at their last known port
+    (FDB entries age out in minutes — without the grace window a quiet
+    device blinks in and out on every scan) and marked stale.
+
+    Off the map: everything else the DB knows — devices ARP sees but
+    no switch port ever showed, and hosts whose grace window ran out.
     """
     for h in fresh:
         h["stale"] = False
-    grace = config.host_grace_hours * 3600
-    if grace <= 0:
-        return fresh
     now = time.time()
+    grace = config.host_grace_hours * 3600
     known = {h["mac"] for h in fresh} | _switch_macs()
     pseudo_by_port = {(p["switch"], p["port"]): p["id"] for p in pseudo_switches}
     on_map = list(fresh)
-    for mac, row in sorted(db_rows.items()):
-        if mac in known or row["switch_ip"] not in switch_ips:
-            continue
-        if now - row["last_seen"] >= grace:
+    unlocated: list[dict] = []
+    for mac, row in db_rows.items():
+        if mac in known:
             continue
         host = {
             "mac": mac,
@@ -193,11 +214,23 @@ def _add_stale_hosts(
             "name": "",
             "stale": True,
         }
-        via = pseudo_by_port.get((row["switch_ip"], row["port"]))
-        if via:
-            host["via"] = via
-        on_map.append(host)
-    return on_map
+        located = row["switch_ip"] in switch_ips
+        if located and grace > 0 and now - row["last_seen"] < grace:
+            via = pseudo_by_port.get((row["switch_ip"], row["port"]))
+            if via:
+                host["via"] = via
+            on_map.append(host)
+        else:
+            host["unlocated"] = True
+            unlocated.append(host)
+    # devices ARP still knows first, then by how recently anything saw them
+    unlocated.sort(
+        key=lambda h: (
+            not db_rows[h["mac"]]["ip"],
+            -max(db_rows[h["mac"]]["last_arp"], db_rows[h["mac"]]["last_seen"]),
+        )
+    )
+    return on_map, unlocated
 
 
 def _effective_monitored(row: dict) -> bool:
@@ -610,6 +643,9 @@ async def api_topology() -> JSONResponse:
     hosts = [dict(h) for h in topo["hosts"]]
     _merge_db_fields(hosts, db_hosts)
     topo["hosts"] = hosts
+    unlocated = [dict(h) for h in topo.get("unlocated", [])]
+    _merge_db_fields(unlocated, db_hosts)
+    topo["unlocated"] = unlocated
     topo["switches"] = [
         {
             **sw,
@@ -755,6 +791,7 @@ async def api_status() -> dict:
         "demo": config.demo,
         "switch_count": len(state.switches),
         "host_count": len(state.hosts),
+        "unlocated_count": len(state.unlocated),
         "last_scan": state.last_scan,
         "scanning": state.scanning,
         "uptime_hint": time.time(),

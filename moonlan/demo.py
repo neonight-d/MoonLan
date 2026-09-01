@@ -22,6 +22,13 @@ v0.5 scenarios (the demo doubles as the regression suite):
   cycles -> host_down raise and clear;
 - two latecomer hosts that appear from the second scan on -> new_mac
   alarms (the first scan is the initial inventory and stays silent).
+
+v0.5.3 scenarios:
+- two hosts last seen hours ago: on the map, greyed out, no alarms;
+- two devices known only from ARP, in a subnet no switch port shows —
+  the "not on map" inventory;
+- the mass-outage port carries five distinct IPs, so the alarm counts
+  five devices rather than five host records.
 """
 
 from __future__ import annotations
@@ -219,7 +226,7 @@ def enrich_db(db: Database, hosts: list[dict]) -> None:
 
     if not _journal_seeded and len(hosts) > 6:
         _journal_seeded = True
-        _seed_stale_hosts(db, now)
+        _seed_offmap_hosts(db, now)
         db.add_event(now - 40 * 60, "host_down", hosts[6]["mac"], "10.0.99.16")
         db.add_event(now - 15 * 60, "host_down", hosts[1]["mac"], "pc-02.demo.lan")
         db.add_event(now - 5 * 60, "host_up", hosts[3]["mac"], "pc-04.demo.lan")
@@ -233,9 +240,16 @@ STALE_HOSTS = [
 ]
 STALE_SWITCH = "10.0.0.24"  # access-sw-4
 
+# Devices ARP knows but no switch port ever showed — a subnet behind a
+# router, exactly what hides real segments from an L2 map
+UNLOCATED_HOSTS = [
+    ("fe:ee:00:00:0b:01", "10.4.23.14", "audit-220.demo.lan"),
+    ("fe:ee:00:00:0b:02", "10.4.23.51", "cam-hall.demo.lan"),
+]
 
-def _seed_stale_hosts(db: Database, now: float) -> None:
-    """Hosts last seen hours ago — the grace-window scenario."""
+
+def _seed_offmap_hosts(db: Database, now: float) -> None:
+    """Hosts last seen hours ago (grace window) and ARP-only devices."""
     db.upsert_hosts([
         {"mac": mac, "switch": STALE_SWITCH, "port": port, "vlan": 8}
         for mac, _ip, _name, port, _hours in STALE_HOSTS
@@ -245,6 +259,10 @@ def _seed_stale_hosts(db: Database, now: float) -> None:
         db.set_name(mac, name)
         db.set_last_seen(mac, now - hours * 3600)
         db.set_ping_state(mac, up=False, last_ok=now - hours * 3600)
+    for mac, ip, name in UNLOCATED_HOSTS:
+        db.set_ips({mac: ip}, create_missing=True)
+        db.set_name(mac, name)
+        db.set_ping_state(mac, up=True, last_ok=now)
 
 
 _ping_cycle = 0

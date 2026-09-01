@@ -4,6 +4,9 @@ const els = {
   network: document.getElementById("network"),
   switchList: document.getElementById("switch-list"),
   hostList: document.getElementById("host-list"),
+  unlocatedSection: document.getElementById("unlocated-section"),
+  unlocatedList: document.getElementById("unlocated-list"),
+  unlocatedCount: document.getElementById("unlocated-count"),
   switchCount: document.getElementById("switch-count"),
   hostCount: document.getElementById("host-count"),
   search: document.getElementById("search"),
@@ -297,6 +300,23 @@ function renderSidebar() {
       )
     )
   );
+  // devices nothing draws on the map: known from ARP or seen on a port
+  // too long ago — searchable inventory, not graph nodes
+  const unlocated = topology.unlocated || [];
+  els.unlocatedList.replaceChildren(
+    ...unlocated.map((h) =>
+      li(
+        hostLabel(h) + (h.monitored ? " ★" : ""),
+        [h.ip, h.mac].filter(Boolean).join(" · "),
+        statusClass(h),
+        () => showDetails("unloc:" + h.mac),
+        [hostLabel(h), h.ip, h.mac].filter(Boolean).join(" "),
+        "stale"
+      )
+    )
+  );
+  els.unlocatedSection.classList.toggle("hidden", unlocated.length === 0);
+  els.unlocatedCount.textContent = unlocated.length;
   els.switchCount.textContent = topology.switches.length;
   els.hostCount.textContent = topology.hosts.length;
   applySearchFilter();
@@ -443,6 +463,15 @@ function focusNode(id) {
 
 /* ---------- detail cards ---------- */
 
+/* Host behind a details id: "host:<mac>" on the map, "unloc:<mac>" off it */
+function findHost(nodeId) {
+  const mac = nodeId.slice(nodeId.indexOf(":") + 1);
+  const list = nodeId.startsWith("unloc:")
+    ? topology.unlocated || []
+    : topology.hosts;
+  return list.find((h) => h.mac === mac);
+}
+
 function showDetails(nodeId) {
   let html = "";
   if (nodeId.startsWith("sw:")) {
@@ -464,18 +493,27 @@ function showDetails(nodeId) {
       <dt>${t("portLabel")}</dt><dd>${ps.port}</dd>
       <dt>${t("devicesBehindPort")}</dt><dd>${ps.host_count}</dd></dl>`;
   } else {
-    const host = topology.hosts.find((h) => "host:" + h.mac === nodeId);
+    const host = findHost(nodeId);
     if (!host) return;
+    const offMap = host.unlocated;
+    const hint = offMap
+      ? host.ip
+        ? t("unlocatedHint")
+        : t("offMapHint")
+      : host.stale
+      ? t("staleHint")
+      : "";
     html = `<h3>${hostLabel(host)}</h3>
-      ${host.stale ? `<p class="hint">${t("staleHint")}</p>` : ""}<dl>
+      ${hint ? `<p class="hint">${hint}</p>` : ""}<dl>
       <dt>${t("name")}</dt><dd>${host.name || "—"}</dd>
       <dt>${t("ipAddr")}</dt><dd>${host.ip || "—"}</dd>
       <dt>${t("macAddr")}</dt><dd>${host.mac}</dd>
-      <dt>${t("switchLabel")}</dt><dd>${host.switch}</dd>
-      <dt>${t("portLabel")}</dt><dd>${host.port}</dd>
+      <dt>${t("switchLabel")}</dt><dd>${host.switch || "—"}</dd>
+      <dt>${t("portLabel")}</dt><dd>${host.port || "—"}</dd>
       <dt>${t("vlan")}</dt><dd>${vlanLabel(host.vlan)}</dd>
       <dt>${t("lastReply")}</dt><dd>${fmtTime(host.last_ping_ok)}</dd>
       <dt>${t("lastSeenLabel")}</dt><dd>${fmtTime(host.last_seen)}</dd>
+      ${offMap ? `<dt>${t("lastArpLabel")}</dt><dd>${fmtTime(host.last_arp)}</dd>` : ""}
       <dt>${t("firstSeen")}</dt><dd>${fmtDate(host.first_seen)}</dd></dl>
       <button id="monitor-btn" class="panel-btn${host.monitored ? " active" : ""}">
         ${host.monitored ? "★" : "☆"} ${t("monitorBtn")}</button>`;
@@ -494,17 +532,15 @@ function showDetails(nodeId) {
   }
   const monitorBtn = document.getElementById("monitor-btn");
   if (monitorBtn) {
-    monitorBtn.addEventListener("click", () =>
-      toggleMonitor(nodeId.slice("host:".length))
-    );
+    monitorBtn.addEventListener("click", () => toggleMonitor(nodeId));
   }
 }
 
 /* Flip the host_down alarm flag of a host and re-render */
-async function toggleMonitor(mac) {
-  const host = topology.hosts.find((h) => h.mac === mac);
+async function toggleMonitor(nodeId) {
+  const host = findHost(nodeId);
   if (!host) return;
-  const res = await fetch("/api/host/" + encodeURIComponent(mac), {
+  const res = await fetch("/api/host/" + encodeURIComponent(host.mac), {
     method: "PATCH",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ monitored: !host.monitored }),
@@ -512,7 +548,7 @@ async function toggleMonitor(mac) {
   if (!res.ok) return;
   host.monitored = (await res.json()).monitored;
   renderSidebar();
-  showDetails("host:" + mac);
+  showDetails(nodeId);
 }
 
 function hideDetails() {

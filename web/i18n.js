@@ -81,9 +81,19 @@ const I18N = {
     clearConfirm: "Clear this alarm?",
     flapChip: "FLAP",
     lastSeenLabel: "Last seen",
+    lastArpLabel: "Last ARP entry",
     staleHint:
       "The MAC address is missing from the current switch tables — " +
       "the device is shown at the port where it was seen last.",
+    unlocatedHeader: "Not on map",
+    unlocatedHint:
+      "The device is known from ARP but was not found on any port of " +
+      "the polled switches — it is most likely behind a router or an " +
+      "unpolled switch.",
+    offMapHint:
+      "The MAC address has not shown up in any switch table for a " +
+      "while; the device stays in the inventory until the retention " +
+      "window ends.",
     ev_hosts_purged: "Old hosts removed",
   },
   ru: {
@@ -164,9 +174,18 @@ const I18N = {
     clearConfirm: "Снять эту тревогу?",
     flapChip: "FLAP",
     lastSeenLabel: "Последний раз виден",
+    lastArpLabel: "Последняя ARP-запись",
     staleHint:
       "MAC-адреса нет в текущих таблицах коммутаторов — устройство " +
       "показано на порту, где оно было замечено в последний раз.",
+    unlocatedHeader: "Вне карты",
+    unlocatedHint:
+      "Устройство известно по ARP, но не найдено на портах опрашиваемых " +
+      "коммутаторов — вероятно, находится за маршрутизатором или " +
+      "неопрашиваемым коммутатором.",
+    offMapHint:
+      "MAC-адрес давно не появлялся в таблицах коммутаторов; устройство " +
+      "остаётся в инвентаре до истечения срока хранения.",
     ev_hosts_purged: "Удалены старые хосты",
   },
 };

@@ -62,6 +62,9 @@ class TopologyState:
     hosts: list[dict] = field(default_factory=list)
     pseudo_switches: list[dict] = field(default_factory=list)
     vlan_names: dict[int, str] = field(default_factory=dict)
+    # known devices that sit on no port of a polled switch: they are
+    # inventory and search results, but nothing is drawn for them
+    unlocated: list[dict] = field(default_factory=list)
     last_scan: float = 0.0
     scanning: bool = False
     _lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
@@ -73,6 +76,7 @@ class TopologyState:
         hosts: list[dict],
         pseudo_switches: list[dict],
         vlan_names: dict[int, str],
+        unlocated: list[dict] | None = None,
     ) -> None:
         with self._lock:
             self.switches = switches
@@ -80,6 +84,7 @@ class TopologyState:
             self.hosts = hosts
             self.pseudo_switches = pseudo_switches
             self.vlan_names = vlan_names
+            self.unlocated = unlocated or []
             self.last_scan = time.time()
 
     def as_dict(self) -> dict:
@@ -90,6 +95,7 @@ class TopologyState:
                 "hosts": self.hosts,
                 "pseudo_switches": self.pseudo_switches,
                 "vlan_names": self.vlan_names,
+                "unlocated": self.unlocated,
                 "last_scan": self.last_scan,
                 "scanning": self.scanning,
             }
@@ -104,7 +110,7 @@ class TopologyState:
                 haystack = f"{sw['name']} {sw['ip']} {sw.get('mac', '')}".lower()
                 if q in haystack:
                     found.append({"type": "switch", **sw})
-            for host in self.hosts:
+            for host in self.hosts + self.unlocated:
                 haystack = (
                     f"{host['mac']} {host.get('name', '')} {host.get('ip', '')}"
                 ).lower()
