@@ -80,6 +80,8 @@ const I18N = {
     clearBtn: "Clear",
     clearConfirm: "Clear this alarm?",
     flapChip: "FLAP",
+    flapTooltip: "Notifications muted: {n} raises in {h} h",
+    lastRaiseLabel: "last raise",
     lastSeenLabel: "Last seen",
     lastArpLabel: "Last ARP entry",
     staleHint:
@@ -173,6 +175,8 @@ const I18N = {
     clearBtn: "Снять",
     clearConfirm: "Снять эту тревогу?",
     flapChip: "FLAP",
+    flapTooltip: "Уведомления приглушены: {n} подъёмов за {h} ч",
+    lastRaiseLabel: "последний подъём",
     lastSeenLabel: "Последний раз виден",
     lastArpLabel: "Последняя ARP-запись",
     staleHint:
