@@ -712,20 +712,34 @@ async def api_switch_ports(ip: str) -> dict:
     return {"switch": ip, "name": sw.sys_name or ip, "ports": ports}
 
 
-def _alarm_display(row: dict, hosts: dict[str, dict], sw_names: dict[str, str]) -> str:
-    """Human label of the alarm subject (device name when known)."""
+def _alarm_meta(
+    row: dict, hosts: dict[str, dict], sw_names: dict[str, str]
+) -> dict:
+    """Subject broken into display parts so the UI parses no strings:
+    the device label, and the switch and port it belongs to."""
     subject = row["subject"]
+    meta = {"display": subject, "switch_ip": "", "switch_name": "", "port": ""}
     if row["type"] in ("host_down", "new_mac"):
-        h = hosts.get(subject, {})
-        return h.get("name") or h.get("ip") or subject
-    if row["type"] == "switch_down":
-        return sw_names.get(subject, subject)
-    ip, sep, port = subject.partition(":")
-    if sep:
-        if port.startswith("lag[") and port.endswith("]"):
-            port = "LAG " + port[4:-1]
-        return f"{sw_names.get(ip, ip)} · {port}"
-    return subject
+        host = hosts.get(subject, {})
+        meta["display"] = host.get("name") or host.get("ip") or subject
+        meta["switch_ip"] = host.get("switch_ip", "")
+        meta["port"] = host.get("port", "")
+    elif row["type"] == "switch_down":
+        meta["switch_ip"] = subject
+    else:
+        ip, sep, port = subject.partition(":")
+        if sep:
+            meta["switch_ip"] = ip
+            meta["port"] = (
+                "LAG " + port[4:-1]
+                if port.startswith("lag[") and port.endswith("]")
+                else port
+            )
+    if meta["switch_ip"]:
+        meta["switch_name"] = sw_names.get(meta["switch_ip"], meta["switch_ip"])
+        if row["type"] not in ("host_down", "new_mac"):
+            meta["display"] = meta["switch_name"]
+    return meta
 
 
 @app.get("/api/alarms")
@@ -737,10 +751,16 @@ async def api_alarms(
     db_hosts = await asyncio.to_thread(db.hosts_by_mac)
     sw_names = {sw["ip"]: sw["name"] for sw in state.as_dict()["switches"]}
     flapping = alarm_engine.flapping_keys()
+    stats = alarm_engine.raise_stats()
     for row in rows:
-        row["display"] = _alarm_display(row, db_hosts, sw_names)
-        row["flapping"] = (row["type"], row["subject"]) in flapping
-    return {"alarms": rows}
+        key = (row["type"], row["subject"])
+        row.update(_alarm_meta(row, db_hosts, sw_names))
+        row["flapping"] = key in flapping
+        row["raise_count"], row["last_raise"] = stats.get(key, (1, row["ts_raised"]))
+    return {
+        "alarms": rows,
+        "flap_window_hours": config.notifications.flap_window_seconds / 3600,
+    }
 
 
 @app.post("/api/alarms/{alarm_id}/clear")

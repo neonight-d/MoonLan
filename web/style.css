@@ -219,7 +219,8 @@ main { flex: 1; display: flex; min-height: 0; }
 #alarms {
   position: absolute;
   top: 14px; right: 14px;
-  width: 400px;
+  width: 380px;
+  max-width: calc(100% - 28px);
   max-height: calc(100% - 28px);
   overflow-y: auto;
   background: var(--bg-panel);
@@ -249,11 +250,16 @@ main { flex: 1; display: flex; min-height: 0; }
 }
 .alarm-list li:first-child { border-top: none; }
 .alarm-head { display: flex; align-items: baseline; gap: 8px; }
-.alarm-subject {
+/* the device name wraps in full: a truncated switch name told the
+   operator nothing about which device the alarm is on */
+.alarm-subject { word-break: break-word; }
+.alarm-port {
   font-family: ui-monospace, monospace;
-  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  font-size: 0.8rem;
+  color: var(--text);
 }
 .alarm-sub { color: var(--text-dim); font-size: 0.78rem; }
+.flap-since { color: var(--text-dim); font-size: 0.72rem; }
 .sev {
   flex: none;
   border: 1px solid;

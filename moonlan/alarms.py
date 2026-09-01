@@ -443,6 +443,17 @@ class AlarmEngine:
     def flapping_keys(self) -> set[tuple[str, str]]:
         return set(self._flapping)
 
+    def raise_stats(self) -> dict[tuple[str, str], tuple[int, float]]:
+        """Per subject: raises inside the flap window and the last one."""
+        now = time.time()
+        window = self._notif_cfg.flap_window_seconds
+        stats: dict[tuple[str, str], tuple[int, float]] = {}
+        for key, times in self._raise_times.items():
+            recent = [t for t in times if now - t <= window]
+            if recent:
+                stats[key] = (len(recent), recent[-1])
+        return stats
+
     async def _flap_on_raise(
         self, alarm_type: str, subject: str, severity: str
     ) -> bool:

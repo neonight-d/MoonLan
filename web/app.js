@@ -42,6 +42,7 @@ let shownDetails = null; // {type: "node"|"link", id} — to re-render on langua
 let lastEvents = null; // cached journal events for re-render
 let activeAlarms = []; // refreshed with the topology — badge and red borders
 let lastAlarms = null; // {active, cleared} cached for the alarms panel
+let flapWindowHours = 2; // from the API, for the FLAP tooltip
 let portsIp = null; // switch whose ports panel is open
 let portsTimer = null; // its 30 s auto-refresh
 let lastPorts = null; // cached ports payload for re-render
@@ -224,12 +225,12 @@ function updateScanStatus() {
 /* ---------- data loading and rendering ---------- */
 
 async function loadTopology() {
-  const [topoRes, alarmsRes] = await Promise.all([
-    fetch("/api/topology"),
-    fetch("/api/alarms?active=1"),
+  const [topo, alarms] = await Promise.all([
+    fetch("/api/topology").then((r) => r.json()),
+    fetchAlarms("active=1"),
   ]);
-  topology = await topoRes.json();
-  activeAlarms = (await alarmsRes.json()).alarms || [];
+  topology = topo;
+  activeAlarms = alarms;
   renderBadge();
   renderSidebar();
   renderGraph();
@@ -669,19 +670,31 @@ function fmtDuration(seconds) {
   return hours + t("durH") + " " + (minutes % 60) + t("durM");
 }
 
+/* One alarms request; also picks up the flap window for the tooltip */
+async function fetchAlarms(query) {
+  const data = await (await fetch("/api/alarms?" + query)).json();
+  if (data.flap_window_hours) flapWindowHours = data.flap_window_hours;
+  return data.alarms || [];
+}
+
+/* Reloads both lists and repaints the panel and the badge */
+async function refreshAlarms() {
+  const [active, cleared] = await Promise.all([
+    fetchAlarms("active=1"),
+    fetchAlarms("active=0&limit=50"),
+  ]);
+  lastAlarms = { active, cleared };
+  activeAlarms = active;
+  renderBadge();
+  renderAlarms();
+}
+
 async function toggleAlarms() {
   if (!els.alarms.classList.contains("hidden")) {
     els.alarms.classList.add("hidden");
     return;
   }
-  const [act, cleared] = await Promise.all([
-    fetch("/api/alarms?active=1").then((r) => r.json()),
-    fetch("/api/alarms?active=0&limit=50").then((r) => r.json()),
-  ]);
-  lastAlarms = { active: act.alarms || [], cleared: cleared.alarms || [] };
-  activeAlarms = lastAlarms.active;
-  renderBadge();
-  renderAlarms();
+  await refreshAlarms();
   hideDetails();
   els.journal.classList.add("hidden");
   closePorts();
@@ -693,14 +706,7 @@ async function clearAlarm(id) {
   if (!confirm(t("clearConfirm"))) return;
   const res = await fetch("/api/alarms/" + id + "/clear", { method: "POST" });
   if (!res.ok) return;
-  const [act, cleared] = await Promise.all([
-    fetch("/api/alarms?active=1").then((r) => r.json()),
-    fetch("/api/alarms?active=0&limit=50").then((r) => r.json()),
-  ]);
-  lastAlarms = { active: act.alarms || [], cleared: cleared.alarms || [] };
-  activeAlarms = lastAlarms.active;
-  renderBadge();
-  renderAlarms();
+  await refreshAlarms();
 }
 
 function renderAlarms() {
@@ -722,20 +728,25 @@ function renderAlarms() {
     ul.className = "alarm-list";
     for (const a of alarms) {
       const li = document.createElement("li");
+      // head: kind of alarm, the FLAP mark and the clear button
       const head = document.createElement("div");
       head.className = "alarm-head";
       const sev = document.createElement("span");
       sev.className = "sev sev-" + a.severity;
       sev.textContent = t("al_" + a.type);
-      const subject = document.createElement("span");
-      subject.className = "alarm-subject";
-      subject.textContent = a.display || a.subject;
-      head.append(sev, subject);
+      head.append(sev);
       if (a.flapping) {
         const flap = document.createElement("span");
         flap.className = "flap-chip";
         flap.textContent = t("flapChip");
-        head.append(flap);
+        flap.title = fmt("flapTooltip", {
+          n: a.raise_count,
+          h: flapWindowHours,
+        });
+        const since = document.createElement("span");
+        since.className = "flap-since";
+        since.textContent = t("lastRaiseLabel") + " " + fmtTime(a.last_raise);
+        head.append(flap, since);
       }
       if (isActive) {
         const clear = document.createElement("button");
@@ -744,12 +755,23 @@ function renderAlarms() {
         clear.addEventListener("click", () => clearAlarm(a.id));
         head.append(clear);
       }
+      // device on its own line, wrapped in full — never truncated
+      const subject = document.createElement("div");
+      subject.className = "alarm-subject";
+      subject.textContent = a.display || a.subject;
+      li.append(head, subject);
+      if (a.port) {
+        const port = document.createElement("div");
+        port.className = "alarm-port";
+        port.textContent = t("portLabel") + ": " + a.port;
+        li.append(port);
+      }
       const sub = document.createElement("div");
       sub.className = "alarm-sub";
       sub.textContent = isActive
         ? fmtTime(a.ts_raised) + " · " + fmtDuration(now - a.ts_raised)
         : fmtTime(a.ts_raised) + " · " + t("clearedAt") + fmtTime(a.ts_cleared);
-      li.append(head, sub);
+      li.append(sub);
       ul.append(li);
     }
     body.append(ul);
