@@ -142,6 +142,19 @@ class AlarmEngine:
         if self._active:
             log.info("Restored %d active alarms from the DB", len(self._active))
 
+    async def clear_missing_hosts(self, known_macs: set[str]) -> None:
+        """Closes host_down alarms whose host is gone from the DB.
+
+        The retention cleanup can delete a host that still has an
+        active alarm; nothing would ever clear it afterwards.
+        """
+        for alarm_type, subject in list(self._active):
+            if alarm_type == "host_down" and subject not in known_macs:
+                await self._clear(
+                    alarm_type, subject, "host removed from the inventory",
+                    note=JANITOR_NOTE,
+                )
+
     async def janitor(self, observed: set[tuple[str, str]]) -> None:
         """Auto-clears active alarms whose subject vanished from the
         observed state for JANITOR_CYCLES cycles in a row — insurance
