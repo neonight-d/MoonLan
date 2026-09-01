@@ -29,7 +29,16 @@ An open-source alternative to LanTopoLog. MIT license.
   they are grouped under a "Switch without SNMP" node
   (`unmanaged_threshold` in the configuration).
 - Host IP addresses from routers' ARP tables (`routers` section),
-  host names via reverse DNS.
+  host names via reverse DNS. An IP belongs to exactly one MAC, so a
+  device replaced or re-addressed by DHCP does not linger as a second
+  host record.
+- Stable inventory: a host whose MAC left the switch tables stays on
+  the map at its last known port for `host_grace_hours` (default 24),
+  greyed out and marked "last seen …", instead of blinking with every
+  MAC-table timeout. Devices ARP knows but no switch port shows — a
+  subnet behind a router, for instance — are listed under "Not on map",
+  searchable and pingable. `python -m moonlan.diag --hosts` reports how
+  complete the inventory is and which subnets are missing from it.
 - Continuous ping monitoring of all hosts and switches: green/grey status
   indicator, time of the last reply.
 - Port traffic and error monitoring: a light counters poll (ifHC* octets
@@ -121,16 +130,22 @@ unmanaged_threshold: 3     # more hosts than this behind a port — draw
                            # a "switch without SNMP" node (0 — disable)
 monitored_by_default: false  # true = host_down alarms for every host,
                              # not only for those marked "Monitor"
+host_grace_hours: 24       # how long a host stays on the map after its
+                           # MAC left the switch tables
+host_retention_days: 30    # then it is deleted from the database
 
 thresholds:
   errors_per_minute: 10          # port_errors alarm threshold
   port_utilization_percent: 90   # port_util: % of the link speed
                                  # (for a LAG — of the total speed)
-  mass_down_hosts: 3             # port_hosts_down: hosts of one port
+  mass_down_hosts: 3             # port_hosts_down: devices of one port
                                  # gone silent in one ping cycle
 
 notifications:
   cooldown_seconds: 300      # anti-spam per (alarm type, subject)
+  flap_count: 3              # this many raises of one subject within
+  flap_window_seconds: 7200  # this window mute its notifications
+  flap_quiet_seconds: 3600   # until it stays quiet for this long
   email:
     enabled: false
     smtp_host: smtp.example.com
@@ -320,7 +335,7 @@ MoonLan/
 
 | Method | Path              | Description |
 |--------|-------------------|-------------|
-| GET    | `/api/topology`   | Current topology: nodes, links (ports, LACP, current load), hosts (IP, name, ping, VLAN), `pseudo_switches`, `vlan_names` |
+| GET    | `/api/topology`   | Current topology: nodes, links (ports, LACP, current load), hosts (IP, name, ping, VLAN, `stale`), `unlocated` (known devices on no port), `pseudo_switches`, `vlan_names` |
 | GET    | `/api/switch/{ip}/ports` | Port table of a switch: status, speed, PVID, LAG, In/Out Mbit/s, errors and discards per minute, known devices |
 | GET    | `/api/alarms?active=1\|0&limit=50` | Active or recently cleared alarms |
 | PATCH  | `/api/host/{mac}` | Set the host's monitoring flag: `{"monitored": true\|false}` |
