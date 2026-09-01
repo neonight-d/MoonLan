@@ -2,6 +2,7 @@
 
 Usage:  python -m moonlan.diag <ip> [--community public] [--timeout 2]
         python -m moonlan.diag --topology
+        python -m moonlan.diag --hosts
 
 Community and timeout default to the values from config.yaml. The tool
 writes nothing to the database and does not need the running service.
@@ -9,13 +10,17 @@ The output is meant for debugging topology inference: unmapped
 bridge-ports, LAG-MIB support, visibility of neighboring switches in
 the FDB. --topology polls every switch from config.yaml and prints the
 inferred tree: the root, the branch split, the uplinks and the links.
+--hosts compares the FDB, the routers' ARP tables and the database to
+show how complete the host inventory is.
 """
 
 from __future__ import annotations
 
 import argparse
 import asyncio
+import sqlite3
 import sys
+import time
 from collections import Counter
 
 from .config import load_config
@@ -316,6 +321,116 @@ async def run_topology_view(community: str, timeout: int, cfg) -> None:
             print(f"  {label(ip)}")
 
 
+def _subnet(ip: str) -> str:
+    parts = ip.split(".")
+    return ".".join(parts[:3]) + ".0/24" if len(parts) == 4 else ip
+
+
+def _db_snapshot(path: str) -> list[dict] | None:
+    """Reads the hosts table without touching it (read-only URI)."""
+    try:
+        conn = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
+    except sqlite3.OperationalError:
+        return None
+    conn.row_factory = sqlite3.Row
+    try:
+        rows = conn.execute("SELECT * FROM hosts").fetchall()
+    except sqlite3.DatabaseError:
+        return None
+    finally:
+        conn.close()
+    return [dict(row) for row in rows]
+
+
+async def run_host_inventory(community: str, timeout: int, cfg) -> None:
+    """Section 9: how complete the host inventory is and what is missing.
+
+    Polls the FDB of every configured switch and the ARP tables of
+    every configured router, then compares the two: devices behind a
+    router (or behind an unpolled switch) show up in ARP only and can
+    never appear on an L2 map.
+    """
+    _section("9. Host inventory")
+    if not cfg.switches:
+        sys.exit("no switches in config.yaml")
+    collector = SnmpCollector(community=community, timeout=timeout)
+    collected = list(
+        await asyncio.gather(*(collector.collect(ip) for ip in cfg.switches))
+    )
+    switch_macs = {mac for sw in collected for mac in sw.own_macs}
+
+    print("MAC addresses in the FDB (switch MACs excluded):")
+    fdb_macs: set[str] = set()
+    for sw in collected:
+        if not sw.reachable:
+            print(f"  {sw.ip}: does not respond to SNMP")
+            continue
+        macs = set(sw.fdb) - switch_macs
+        fdb_macs |= macs
+        print(f"  {sw.sys_name or sw.ip} ({sw.ip}): {len(macs)}")
+    print(f"  unique across all switches: {len(fdb_macs)}")
+
+    print("\nARP sources:")
+    arp: dict[str, str] = {}
+    if not cfg.routers:
+        print("  none configured — host IP addresses are unknown")
+    for ip in cfg.routers:
+        table = await collector.collect_arp(ip)
+        print(f"  {ip}: {len(table)} entries")
+        arp.update(table)
+    arp_macs = set(arp) - switch_macs
+    if cfg.routers:
+        print(f"  unique MACs from all sources: {len(arp_macs)}")
+
+    print("\nFDB vs ARP:")
+    both = fdb_macs & arp_macs
+    print(f"  on a switch port and in ARP (located, IP known): {len(both)}")
+    print(f"  on a switch port only (no IP known): {len(fdb_macs - arp_macs)}")
+    print(
+        f"  in ARP only (not on any polled port): {len(arp_macs - fdb_macs)}"
+    )
+
+    print("\nKnown IP addresses by subnet:")
+    per_subnet: dict[str, list[int]] = {}
+    for mac, ip in arp.items():
+        if mac in switch_macs:
+            continue
+        counts = per_subnet.setdefault(_subnet(ip), [0, 0])
+        counts[0] += 1
+        if mac in fdb_macs:
+            counts[1] += 1
+    if not per_subnet:
+        print("  no ARP data")
+    for subnet, (total, located) in sorted(
+        per_subnet.items(), key=lambda kv: (-kv[1][0], kv[0])
+    ):
+        note = "" if located else "   <- no device of this subnet is on any port"
+        print(f"  {subnet}: {total} devices, {located} on switch ports{note}")
+
+    print(f"\nDatabase ({cfg.db_path}):")
+    rows = _db_snapshot(cfg.db_path)
+    if rows is None:
+        print("  not readable (the service has not created it yet)")
+        return
+    grace = cfg.host_grace_hours * 3600
+    now = time.time()
+    missing = [r for r in rows if r["mac"] not in fdb_macs]
+    in_grace = [
+        r for r in missing
+        if r["switch_ip"] and now - r["last_seen"] < grace
+    ]
+    print(f"  hosts: {len(rows)}")
+    print(
+        f"  not in any current FDB: {len(missing)} "
+        f"(still within the {cfg.host_grace_hours:g} h grace window: "
+        f"{len(in_grace)})"
+    )
+    print(f"  never located (no switch port): "
+          f"{sum(1 for r in rows if not r['switch_ip'])}")
+    print(f"  without an IP: {sum(1 for r in rows if not r['ip'])}")
+    print(f"  without a name: {sum(1 for r in rows if not r['name'])}")
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(
         prog="python -m moonlan.diag",
@@ -332,13 +447,20 @@ def main() -> None:
         "--topology", action="store_true",
         help="poll all switches from config.yaml and print the inferred topology",
     )
+    parser.add_argument(
+        "--hosts", action="store_true",
+        help="compare FDB, ARP and the database: how complete the "
+             "host inventory is and which subnets are missing from it",
+    )
     args = parser.parse_args()
-    if not args.topology and not args.ip:
-        parser.error("an ip is required unless --topology is given")
+    if not (args.topology or args.hosts) and not args.ip:
+        parser.error("an ip is required unless --topology or --hosts is given")
     cfg = load_config()
     community = args.community or cfg.snmp.community
     timeout = args.timeout or cfg.snmp.timeout
-    if args.topology:
+    if args.hosts:
+        asyncio.run(run_host_inventory(community, timeout, cfg))
+    elif args.topology:
         asyncio.run(run_topology_view(community, timeout, cfg))
     else:
         asyncio.run(run_diag(args.ip, community, timeout, cfg.switches))

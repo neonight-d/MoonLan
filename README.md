@@ -231,6 +231,33 @@ Prints everything MoonLan sees on the device via SNMP: interfaces,
 bridge-port mapping, FDB distribution, LAG-MIB support, visibility of
 the other configured switches. Read-only; does not touch the database.
 
+#### How complete is the inventory
+
+```bash
+python -m moonlan.diag --hosts
+```
+
+Polls the MAC tables of every switch and the ARP tables of every
+router, then compares them with the database:
+
+- how many MAC addresses each switch sees and how many are unique;
+- how many entries each ARP source returns;
+- the split into devices that are both on a port and in ARP, on a port
+  only (no IP known), and **in ARP only** — those sit on no port of any
+  polled switch;
+- known IP addresses grouped by /24, each with the number of devices
+  and how many of them are on a switch port;
+- database totals: hosts, how many are missing from the current MAC
+  tables (and how many of those are still inside the grace window),
+  never located, without an IP, without a name.
+
+A subnet whose devices are all "in ARP only" is behind a router (or
+behind a switch MoonLan does not poll): its traffic never crosses a
+polled switch port, so an L2 map cannot place those devices — MoonLan
+lists them under "Not on map". Since `routers:` accepts a list, adding
+every L3 device that holds an ARP table (each VLAN gateway, each
+router) is what makes the inventory more complete.
+
 ## How it works
 
 1. MoonLan polls every switch from `config.yaml` via SNMP: `sysName`,
