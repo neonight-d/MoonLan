@@ -237,6 +237,12 @@ def enrich_db(db: Database, hosts: list[dict]) -> None:
 STALE_HOSTS = [
     ("fe:ee:00:00:0a:01", "10.0.99.71", "nb-sales.demo.lan", "Gi0/5", 3.0),
     ("fe:ee:00:00:0a:02", "10.0.99.72", "printer-2f.demo.lan", "Gi0/6", 9.5),
+    # Four quiet devices on one port: nothing of them is in the FDB
+    # right now, yet the port still deserves its pseudo-switch
+    ("fe:ee:00:00:0a:11", "10.0.99.81", "desk-a.demo.lan", "Gi0/7", 5.0),
+    ("fe:ee:00:00:0a:12", "10.0.99.82", "desk-b.demo.lan", "Gi0/7", 5.5),
+    ("fe:ee:00:00:0a:13", "10.0.99.83", "desk-c.demo.lan", "Gi0/7", 6.0),
+    ("fe:ee:00:00:0a:14", "10.0.99.84", "desk-d.demo.lan", "Gi0/7", 6.5),
 ]
 STALE_SWITCH = "10.0.0.24"  # access-sw-4
 

@@ -492,7 +492,10 @@ function showDetails(nodeId) {
       <p class="hint">${fmt("pseudoHint", { n: ps.host_count })}</p><dl>
       <dt>${t("switchLabel")}</dt><dd>${ps.switch}</dd>
       <dt>${t("portLabel")}</dt><dd>${ps.port}</dd>
-      <dt>${t("devicesBehindPort")}</dt><dd>${ps.host_count}</dd></dl>`;
+      <dt>${t("devicesBehindPort")}</dt><dd>${fmt("devicesCount", {
+        n: ps.host_count,
+        live: ps.host_count_live == null ? ps.host_count : ps.host_count_live,
+      })}</dd></dl>`;
   } else {
     const host = findHost(nodeId);
     if (!host) return;

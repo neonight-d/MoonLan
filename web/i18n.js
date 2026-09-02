@@ -44,6 +44,7 @@ const I18N = {
       "An unmanaged switch or access point is visible behind this port " +
       "({n} devices).",
     devicesBehindPort: "Devices behind port",
+    devicesCount: "{n} ({live} seen right now)",
     portOnSide: "Port on {name} side",
     lagAggregate: "Aggregate (LACP)",
     portsOf: "Ports of {name}",
@@ -67,6 +68,7 @@ const I18N = {
     al_host_down: "Host down",
     al_switch_down: "Switch down",
     al_port_errors: "Port errors",
+    al_port_discards: "Port discards",
     al_port_util: "High port load",
     al_new_mac: "New device",
     clearedAt: "cleared ",
@@ -139,6 +141,7 @@ const I18N = {
       "За этим портом виден неуправляемый коммутатор или точка доступа " +
       "({n} устройств).",
     devicesBehindPort: "Устройств за портом",
+    devicesCount: "{n} (сейчас активно {live})",
     portOnSide: "Порт со стороны {name}",
     lagAggregate: "Агрегат (LACP)",
     portsOf: "Порты {name}",
@@ -162,6 +165,7 @@ const I18N = {
     al_host_down: "Хост недоступен",
     al_switch_down: "Коммутатор недоступен",
     al_port_errors: "Ошибки на порту",
+    al_port_discards: "Отбрасывания на порту",
     al_port_util: "Высокая загрузка порта",
     al_new_mac: "Новое устройство",
     clearedAt: "снята ",
