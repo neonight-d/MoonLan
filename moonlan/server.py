@@ -752,7 +752,16 @@ async def api_switch_ports(ip: str) -> dict:
         })
     # active ports first, then by port number
     ports.sort(key=lambda p: (not p["oper_up"], abs(p["if_index"])))
-    return {"switch": ip, "name": sw.sys_name or ip, "ports": ports}
+    return {
+        "switch": ip,
+        "name": sw.sys_name or ip,
+        "ports": ports,
+        # so the panel can colour the values it shows
+        "thresholds": {
+            "errors_per_minute": config.thresholds.errors_per_minute,
+            "discards_per_minute": config.thresholds.discards_per_minute,
+        },
+    }
 
 
 def _alarm_meta(

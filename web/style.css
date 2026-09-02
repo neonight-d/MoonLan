@@ -287,6 +287,15 @@ main { flex: 1; display: flex; min-height: 0; }
   color: var(--text-dim);
 }
 .alarm-clear:hover { color: #d96b6b; background: transparent; }
+.alarm-link {
+  align-self: flex-start;
+  border: none;
+  padding: 0;
+  font-size: 0.78rem;
+  color: var(--link);
+  text-decoration: underline;
+}
+.alarm-link:hover { background: transparent; color: var(--moon); }
 
 /* ---------- ports panel ---------- */
 
@@ -324,6 +333,14 @@ main { flex: 1; display: flex; min-height: 0; }
 }
 .ports-table th.num, .ports-table td.num { text-align: right; }
 .ports-table .dot { display: inline-block; }
+.ports-table th[data-sort] { cursor: pointer; user-select: none; }
+.ports-table th[data-sort]:hover { color: var(--text); }
+.ports-table th.sorted-asc::after { content: " ▲"; font-size: 0.7rem; }
+.ports-table th.sorted-desc::after { content: " ▼"; font-size: 0.7rem; }
+/* damaged frames are a fault; discards are usually just filtering */
+.ports-table td.over-error { color: #d96b6b; font-weight: 600; }
+.ports-table td.over-discard { color: var(--warn); }
+.ports-table tr.highlight td { background: rgba(232, 228, 213, 0.1); }
 .ports-table tr.port-down td { color: var(--text-dim); opacity: 0.65; }
 
 /* "Ports" / "Monitor" buttons inside the details card */

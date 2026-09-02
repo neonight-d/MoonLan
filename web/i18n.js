@@ -60,6 +60,13 @@ const I18N = {
     colOut: "Out, Mbit/s",
     colErr: "Err/min",
     colDisc: "Disc/min",
+    errTooltip:
+      "Damaged frames: bad cable or patch cord, duplex mismatch, a dying "
+      + "transceiver. Rare on healthy hardware — worth looking into.",
+    discTooltip:
+      "Frames dropped on purpose or for lack of buffer: VLAN filtering, "
+      + "storm control, traffic bursts. Usually normal.",
+    openPortsLink: "Open switch ports",
     alarmsBtn: "Alarms",
     alarmsTitle: "Alarms",
     alarmsActive: "Active",
@@ -157,6 +164,14 @@ const I18N = {
     colOut: "Исх., Мбит/с",
     colErr: "Ошиб/мин",
     colDisc: "Отбр/мин",
+    errTooltip:
+      "Испорченные кадры: плохой кабель или патч-корд, рассогласование "
+      + "дуплекса, умирающий трансивер. На исправном оборудовании редки — "
+      + "стоит разобраться.",
+    discTooltip:
+      "Кадры, отброшенные намеренно или из-за нехватки буфера: фильтрация "
+      + "VLAN, storm control, всплески трафика. Обычно норма.",
+    openPortsLink: "Открыть порты коммутатора",
     alarmsBtn: "Тревоги",
     alarmsTitle: "Тревоги",
     alarmsActive: "Активные",

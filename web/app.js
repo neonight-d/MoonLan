@@ -46,6 +46,8 @@ let flapWindowHours = 2; // from the API, for the FLAP tooltip
 let portsIp = null; // switch whose ports panel is open
 let portsTimer = null; // its 30 s auto-refresh
 let lastPorts = null; // cached ports payload for re-render
+let portsSort = null; // {key, dir} chosen by clicking a column header
+let portsHighlight = null; // port name to mark, e.g. the one an alarm is on
 
 const REFRESH_MS = 30000;
 
@@ -97,6 +99,11 @@ function applyStatic() {
   els.search.placeholder = t("searchPlaceholder");
   els.detailsClose.title = t("close");
   els.journalClose.title = t("close");
+  // what the two counters actually mean — the whole point of v0.5.4
+  const errHead = document.querySelector('#ports th[data-sort="err"]');
+  const discHead = document.querySelector('#ports th[data-sort="disc"]');
+  if (errHead) errHead.title = t("errTooltip");
+  if (discHead) discHead.title = t("discTooltip");
   els.langRu.classList.toggle("active", lang === "ru");
   els.langEn.classList.toggle("active", lang === "en");
 }
@@ -562,8 +569,9 @@ function hideDetails() {
 
 /* ---------- ports panel ---------- */
 
-async function openPorts(ip) {
+async function openPorts(ip, highlightPort) {
   portsIp = ip;
+  portsHighlight = highlightPort || null;
   hideDetails();
   els.journal.classList.add("hidden");
   els.alarms.classList.add("hidden");
@@ -587,16 +595,73 @@ async function refreshPorts() {
   renderPorts(lastPorts);
 }
 
+/* "Gi0/2" before "Gi0/10": compare digit runs as numbers */
+function naturalCompare(a, b) {
+  const chunks = (s) => String(s).match(/\d+|\D+/g) || [];
+  const left = chunks(a);
+  const right = chunks(b);
+  for (let i = 0; i < Math.max(left.length, right.length); i++) {
+    const x = left[i];
+    const y = right[i];
+    if (x === undefined) return -1;
+    if (y === undefined) return 1;
+    const nx = parseInt(x, 10);
+    const ny = parseInt(y, 10);
+    if (!isNaN(nx) && !isNaN(ny)) {
+      if (nx !== ny) return nx - ny;
+    } else if (x !== y) {
+      return x < y ? -1 : 1;
+    }
+  }
+  return 0;
+}
+
+/* Column the user picked; without one the server order stands
+   (active ports first, then by port number) */
+function sortPorts(ports) {
+  if (!portsSort) return ports;
+  const value = {
+    speed: (p) => p.speed_mbps,
+    in: (p) => p.in_mbps,
+    out: (p) => p.out_mbps,
+    err: (p) => p.errors_per_min,
+    disc: (p) => p.discards_per_min,
+  }[portsSort.key];
+  const compare = value
+    ? (a, b) => (value(a) ?? -1) - (value(b) ?? -1)
+    : (a, b) => naturalCompare(a.name, b.name);
+  // the direction goes into the comparator, not a reverse() afterwards,
+  // so ports with equal values keep their natural order
+  return [...ports].sort((a, b) => portsSort.dir * compare(a, b));
+}
+
+function setPortsSort(key) {
+  // a second click on the same column flips the direction; numbers
+  // start with the largest, names with the first port
+  const dir = portsSort && portsSort.key === key ? -portsSort.dir
+    : key === "name" ? 1 : -1;
+  portsSort = { key, dir };
+  for (const th of document.querySelectorAll("#ports th[data-sort]")) {
+    th.classList.toggle("sorted-asc", th.dataset.sort === key && dir > 0);
+    th.classList.toggle("sorted-desc", th.dataset.sort === key && dir < 0);
+  }
+  if (lastPorts) renderPorts(lastPorts);
+}
+
 function renderPorts(data) {
   els.portsTitle.textContent = fmt("portsTitle", {
     name: data.name || data.switch,
   });
+  const limits = data.thresholds || {};
+  let highlighted = null;
   // physical ports only; the server puts active ones first
-  const rows = data.ports
-    .filter((p) => p.is_physical)
-    .map((p) => {
+  const rows = sortPorts(data.ports.filter((p) => p.is_physical)).map((p) => {
       const tr = document.createElement("tr");
       if (!p.oper_up) tr.className = "port-down";
+      if (portsHighlight && p.name === portsHighlight) {
+        tr.classList.add("highlight");
+        highlighted = tr;
+      }
       const td = (content, cls) => {
         const cell = document.createElement("td");
         if (cls) cell.className = cls;
@@ -616,11 +681,16 @@ function renderPorts(data) {
       td(p.oper_up && p.speed_mbps ? fmtSpeed(p.speed_mbps) : "—");
       td(fmtRate(p.in_mbps), "num");
       td(fmtRate(p.out_mbps), "num");
-      td(fmtRate(p.errors_per_min), "num");
-      td(fmtRate(p.discards_per_min), "num");
+      // damaged frames are a fault, discards are usually filtering
+      const overErr = p.errors_per_min > (limits.errors_per_minute ?? Infinity);
+      const overDisc =
+        p.discards_per_min > (limits.discards_per_minute ?? Infinity);
+      td(fmtRate(p.errors_per_min), "num" + (overErr ? " over-error" : ""));
+      td(fmtRate(p.discards_per_min), "num" + (overDisc ? " over-discard" : ""));
       return tr;
     });
   els.portsBody.replaceChildren(...rows);
+  if (highlighted) highlighted.scrollIntoView({ block: "center" });
 }
 
 /* Link card: ports of both ends, speed, aggregate members */
@@ -769,6 +839,17 @@ function renderAlarms() {
         port.textContent = t("portLabel") + ": " + a.port;
         li.append(port);
       }
+      // counter alarms: jump straight to the port they are about
+      if (
+        a.switch_ip &&
+        (a.type === "port_errors" || a.type === "port_discards")
+      ) {
+        const link = document.createElement("button");
+        link.className = "alarm-link";
+        link.textContent = t("openPortsLink");
+        link.addEventListener("click", () => openPorts(a.switch_ip, a.port));
+        li.append(link);
+      }
       const sub = document.createElement("div");
       sub.className = "alarm-sub";
       sub.textContent = isActive
@@ -870,6 +951,9 @@ els.journalClose.addEventListener("click", () =>
   els.journal.classList.add("hidden")
 );
 els.portsClose.addEventListener("click", closePorts);
+for (const th of document.querySelectorAll("#ports th[data-sort]")) {
+  th.addEventListener("click", () => setPortsSort(th.dataset.sort));
+}
 els.alarmsBtn.addEventListener("click", toggleAlarms);
 els.alarmsClose.addEventListener("click", () =>
   els.alarms.classList.add("hidden")
