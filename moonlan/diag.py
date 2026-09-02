@@ -3,6 +3,7 @@
 Usage:  python -m moonlan.diag <ip> [--community public] [--timeout 2]
         python -m moonlan.diag --topology
         python -m moonlan.diag --hosts
+        python -m moonlan.diag --port <ip> [--iface Gi0/1] [--watch 3]
 
 Community and timeout default to the values from config.yaml. The tool
 writes nothing to the database and does not need the running service.
@@ -11,7 +12,9 @@ bridge-ports, LAG-MIB support, visibility of neighboring switches in
 the FDB. --topology polls every switch from config.yaml and prints the
 inferred tree: the root, the branch split, the uplinks and the links.
 --hosts compares the FDB, the routers' ARP tables and the database to
-show how complete the host inventory is.
+show how complete the host inventory is. --port prints the raw error,
+discard, octet and packet counters of a switch's ports and, with
+--watch, the very rates the alarm engine works with.
 """
 
 from __future__ import annotations
@@ -23,7 +26,9 @@ import sys
 import time
 from collections import Counter
 
+from . import counters
 from .config import load_config
+from .counters import CounterStore, Sample
 from .topology import infer_tree, normalized_fdb, switch_sightings
 from .snmp_collector import (
     PHYSICAL_IF_TYPES,
@@ -431,6 +436,124 @@ async def run_host_inventory(community: str, timeout: int, cfg) -> None:
     print(f"  without a name: {sum(1 for r in rows if not r['name'])}")
 
 
+WATCH_INTERVAL = 60  # seconds between --watch measurements
+
+
+async def _port_labels(
+    collector: SnmpCollector, host: str
+) -> tuple[dict[int, str], dict[int, int]]:
+    """ifIndex -> port name and link speed, without a full poll."""
+    names: dict[int, str] = {}
+    speeds: dict[int, int] = {}
+    async for suffix, value in collector._walk(host, OID_IF_DESCR):
+        names[suffix[0]] = str(value)
+    async for suffix, value in collector._walk(host, OID_IF_NAME):
+        name = str(value).strip()
+        if name:
+            names[suffix[0]] = name
+    async for suffix, value in collector._walk(host, OID_IF_HIGH_SPEED):
+        speeds[suffix[0]] = int(value)
+    return names, speeds
+
+
+def _select_ports(
+    samples: dict[int, Sample], names: dict[int, str], iface: str | None
+) -> list[int]:
+    """One port when --iface is given, otherwise every port with a
+    non-zero error or discard counter, worst first."""
+    if iface:
+        if iface.isdigit() and int(iface) in samples:
+            return [int(iface)]
+        wanted = iface.lower()
+        return [
+            i for i in samples
+            if names.get(i, str(i)).lower() == wanted
+        ]
+    noisy = [
+        i for i, s in samples.items()
+        if s.in_errors or s.out_errors or s.in_discards or s.out_discards
+    ]
+    noisy.sort(
+        key=lambda i: (
+            samples[i].in_errors + samples[i].out_errors
+            + samples[i].in_discards + samples[i].out_discards
+        ),
+        reverse=True,
+    )
+    return noisy
+
+
+def _print_raw(
+    if_index: int,
+    s: Sample,
+    names: dict[int, str],
+    speeds: dict[int, int],
+    oper: dict[int, bool],
+) -> None:
+    name = names.get(if_index, str(if_index))
+    status = "up" if oper.get(if_index) else "down"
+    print(
+        f"  {name:<16} {status:<5} {speeds.get(if_index, 0):>6} Mbit/s  "
+        f"errors in/out {s.in_errors}/{s.out_errors}  "
+        f"discards in/out {s.in_discards}/{s.out_discards}"
+    )
+    print(
+        f"  {'':<16} octets in/out {s.in_octets}/{s.out_octets}  "
+        f"unicast packets in/out {s.in_pkts}/{s.out_pkts}"
+    )
+
+
+async def run_port_counters(
+    host: str, iface: str | None, watch: int, community: str, timeout: int
+) -> None:
+    """Section 10: raw port counters and, with --watch, the deltas and
+    rates the alarm engine computes from them."""
+    _section(f"10. Port counters: {host}")
+    collector = SnmpCollector(community=community, timeout=timeout)
+    names, speeds = await _port_labels(collector, host)
+    if not names:
+        sys.exit(f"{host} does not respond to SNMP")
+    store = CounterStore()
+
+    for measurement in range(max(1, watch)):
+        if measurement:
+            print(f"\n… waiting {WATCH_INTERVAL} s")
+            await asyncio.sleep(WATCH_INTERVAL)
+        samples, oper = await counters.collect_samples(collector, host)
+        rates = store.update(host, samples, speeds)
+        ports = _select_ports(samples, names, iface)
+        if not ports:
+            print(
+                f"  {iface}: no such port"
+                if iface
+                else "  no port has a non-zero error or discard counter"
+            )
+            return
+        print(f"\nraw counters ({time.strftime('%H:%M:%S')}):")
+        for if_index in ports:
+            _print_raw(if_index, samples[if_index], names, speeds, oper)
+        if not rates:
+            continue  # first measurement is the baseline
+        print("rates since the previous measurement:")
+        for if_index in ports:
+            r = rates.get(if_index)
+            if r is None:
+                continue
+            share = (
+                f", {r.error_ratio * 100:.4f}% of frames"
+                if r.error_ratio is not None else ""
+            )
+            print(
+                f"  {names.get(if_index, str(if_index)):<16} "
+                f"in {r.in_mbps:.2f} Mbit/s, out {r.out_mbps:.2f} Mbit/s, "
+                f"errors {r.errors_per_min:.1f}/min "
+                f"(in {r.in_errors_per_min:.1f}, out {r.out_errors_per_min:.1f}"
+                f"{share}), discards {r.discards_per_min:.0f}/min "
+                f"(in {r.in_discards_per_min:.0f}, "
+                f"out {r.out_discards_per_min:.0f})"
+            )
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(
         prog="python -m moonlan.diag",
@@ -452,13 +575,34 @@ def main() -> None:
         help="compare FDB, ARP and the database: how complete the "
              "host inventory is and which subnets are missing from it",
     )
+    parser.add_argument(
+        "--port", metavar="SWITCH_IP",
+        help="print raw error, discard, octet and packet counters of "
+             "the switch's ports",
+    )
+    parser.add_argument(
+        "--iface", help="one port for --port (name or ifIndex)"
+    )
+    parser.add_argument(
+        "--watch", type=int, default=1, metavar="N",
+        help=f"repeat the --port measurement N times every "
+             f"{WATCH_INTERVAL} s and print the rates the alarm engine sees",
+    )
     args = parser.parse_args()
-    if not (args.topology or args.hosts) and not args.ip:
-        parser.error("an ip is required unless --topology or --hosts is given")
+    if not (args.topology or args.hosts or args.port) and not args.ip:
+        parser.error(
+            "an ip is required unless --topology, --hosts or --port is given"
+        )
     cfg = load_config()
     community = args.community or cfg.snmp.community
     timeout = args.timeout or cfg.snmp.timeout
-    if args.hosts:
+    if args.port:
+        asyncio.run(
+            run_port_counters(
+                args.port, args.iface, args.watch, community, timeout
+            )
+        )
+    elif args.hosts:
         asyncio.run(run_host_inventory(community, timeout, cfg))
     elif args.topology:
         asyncio.run(run_topology_view(community, timeout, cfg))
