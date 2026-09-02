@@ -30,6 +30,10 @@ OID_IN_ERRORS = "1.3.6.1.2.1.2.2.1.14"         # ifInErrors
 OID_OUT_ERRORS = "1.3.6.1.2.1.2.2.1.20"        # ifOutErrors
 OID_IN_DISCARDS = "1.3.6.1.2.1.2.2.1.13"       # ifInDiscards
 OID_OUT_DISCARDS = "1.3.6.1.2.1.2.2.1.19"      # ifOutDiscards
+OID_HC_IN_PKTS = "1.3.6.1.2.1.31.1.1.1.7"      # ifHCInUcastPkts (64-bit)
+OID_HC_OUT_PKTS = "1.3.6.1.2.1.31.1.1.1.11"    # ifHCOutUcastPkts (64-bit)
+OID_IN_PKTS = "1.3.6.1.2.1.2.2.1.11"           # ifInUcastPkts (32-bit)
+OID_OUT_PKTS = "1.3.6.1.2.1.2.2.1.17"          # ifOutUcastPkts (32-bit)
 
 HISTORY_POINTS = 60  # ring buffer length per port
 WRAP32 = 2 ** 32
@@ -52,18 +56,38 @@ class Sample:
     out_errors: int = 0
     in_discards: int = 0
     out_discards: int = 0
+    in_pkts: int = 0
+    out_pkts: int = 0
     hc: bool = True  # octet counters are 64-bit (no wraparound possible)
 
 
 @dataclass
 class PortRates:
-    """Rates computed from the delta between two samples."""
+    """Rates computed from the delta between two samples.
+
+    Errors and discards are kept apart on purpose: errors mean damaged
+    frames (a physical problem), discards are usually normal filtering
+    — VLAN rules, storm control, a full buffer during a burst.
+    """
 
     ts: float
     in_mbps: float
     out_mbps: float
-    errors_per_min: float    # ifInErrors + ifOutErrors
-    discards_per_min: float  # ifInDiscards + ifOutDiscards
+    in_errors_per_min: float
+    out_errors_per_min: float
+    in_discards_per_min: float
+    out_discards_per_min: float
+    # errors as a share of all frames on the port (0.01 = 1%); None
+    # when the switch exposes no packet counters
+    error_ratio: float | None = None
+
+    @property
+    def errors_per_min(self) -> float:
+        return self.in_errors_per_min + self.out_errors_per_min
+
+    @property
+    def discards_per_min(self) -> float:
+        return self.in_discards_per_min + self.out_discards_per_min
 
 
 async def collect_samples(
@@ -106,6 +130,22 @@ async def collect_samples(
     ):
         async for suffix, value in collector._walk(host, oid):
             setattr(sample(suffix[0]), attr, int(value))
+
+    # Unicast packet counters turn the error count into a share of the
+    # traffic — a port doing millions of frames a minute and a quiet
+    # one need very different error counts to be worth an alarm
+    got_pkts = False
+    async for suffix, value in collector._walk(host, OID_HC_IN_PKTS):
+        sample(suffix[0]).in_pkts = int(value)
+        got_pkts = True
+    if got_pkts:
+        async for suffix, value in collector._walk(host, OID_HC_OUT_PKTS):
+            sample(suffix[0]).out_pkts = int(value)
+    else:
+        async for suffix, value in collector._walk(host, OID_IN_PKTS):
+            sample(suffix[0]).in_pkts = int(value)
+        async for suffix, value in collector._walk(host, OID_OUT_PKTS):
+            sample(suffix[0]).out_pkts = int(value)
 
     async for suffix, value in collector._walk(host, OID_IF_OPER_STATUS):
         oper[suffix[0]] = int(value) == 1
@@ -189,8 +229,9 @@ class CounterStore:
                     prev.out_octets, cur.out_octets,
                 )
                 continue
-            errors_per_min = (error_deltas[0] + error_deltas[1]) * 60 / dt
-            discards_per_min = (error_deltas[2] + error_deltas[3]) * 60 / dt
+            per_min = [d * 60 / dt for d in error_deltas]
+            errors_per_min = per_min[0] + per_min[1]
+            discards_per_min = per_min[2] + per_min[3]
             if max(errors_per_min, discards_per_min) > MAX_SANE_ERRORS_PER_MIN:
                 log.debug(
                     "%s ifIndex %d: implausible error rate %.0f/%.0f per "
@@ -203,12 +244,22 @@ class CounterStore:
                     cur.in_discards + cur.out_discards,
                 )
                 continue
+            # Packet counters may be 32-bit even where octets are not,
+            # so a negative delta only costs this cycle's ratio — no
+            # wraparound correction is guessed at
+            d_pkts = (cur.in_pkts - prev.in_pkts) + (cur.out_pkts - prev.out_pkts)
+            errors = error_deltas[0] + error_deltas[1]
+            frames = d_pkts + errors
+            ratio = errors / frames if d_pkts > 0 and frames > 0 else None
             rates = PortRates(
                 ts=cur.ts,
                 in_mbps=in_mbps,
                 out_mbps=out_mbps,
-                errors_per_min=errors_per_min,
-                discards_per_min=discards_per_min,
+                in_errors_per_min=per_min[0],
+                out_errors_per_min=per_min[1],
+                in_discards_per_min=per_min[2],
+                out_discards_per_min=per_min[3],
+                error_ratio=ratio,
             )
             fresh[if_index] = rates
             self._rates.setdefault(key, deque(maxlen=self._history)).append(rates)

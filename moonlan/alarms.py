@@ -15,11 +15,16 @@ Rules:
   than from a fresh FDB) are never alarmed on.
 - switch_down (critical): a configured switch fails 2 consecutive SNMP
   polls; cleared by a successful poll.
-- port_errors (warning): (errors+discards)/min above the threshold for
-  2 consecutive counter cycles; cleared after 2 cycles below.
+- port_errors (warning): damaged frames (ifInErrors+ifOutErrors) above
+  errors_per_minute AND, where packet counters exist, above
+  error_ratio_percent of all frames, for port_alarm_cycles consecutive
+  counter cycles; cleared after the same number of cycles below.
+- port_discards (info): ifInDiscards+ifOutDiscards above
+  discards_per_minute. Discards are usually normal filtering (VLAN
+  rules, storm control, a burst filling a buffer), so they are a
+  separate, quieter alarm and go to syslog only.
 - port_util (warning): port load above the threshold percent of the
-  link speed (of the total speed for a LAG) for 2 consecutive cycles;
-  cleared after 2 cycles below.
+  link speed (of the total speed for a LAG); same hysteresis.
 - new_mac (info): instant auto-cleared alarm for every new MAC after
   the initial inventory scan.
 - port_hosts_down (critical): >= thresholds.mass_down_hosts previously
@@ -49,6 +54,7 @@ SEVERITIES = {
     "host_down": "warning",
     "switch_down": "critical",
     "port_errors": "warning",
+    "port_discards": "info",
     "port_util": "warning",
     "new_mac": "info",
     "port_hosts_down": "critical",
@@ -57,7 +63,6 @@ SEVERITIES = {
 
 HOST_DOWN_AFTER = 3    # consecutive failed pings
 SWITCH_DOWN_AFTER = 2  # consecutive failed SNMP polls
-PORT_CYCLES = 2        # consecutive counter cycles over/under the threshold
 # A host must have answered this many consecutive pings before its
 # silence counts toward a mass outage — freshly discovered and already
 # flickering records are not evidence that a port went down
@@ -66,13 +71,17 @@ MASS_DOWN_MIN_UP_STREAK = 2
 # Stale-alarm janitor: types whose subjects can disappear from the
 # observed state (a port/group/switch is gone) and the cycles a subject
 # must stay missing before its alarm is auto-cleared
-JANITOR_TYPES = {"lag_degraded", "port_errors", "port_util", "port_hosts_down"}
+JANITOR_TYPES = {
+    "lag_degraded", "port_errors", "port_discards", "port_util",
+    "port_hosts_down",
+}
 JANITOR_CYCLES = 5
 JANITOR_NOTE = "auto-cleared: subject no longer present"
 
 # Flap damping applies to alarms that can oscillate on their own
 FLAP_TYPES = {
-    "host_down", "port_hosts_down", "port_errors", "port_util", "lag_degraded",
+    "host_down", "port_hosts_down", "port_errors", "port_discards",
+    "port_util", "lag_degraded",
 }
 
 
@@ -138,6 +147,19 @@ class AlarmEngine:
                 await self._clear(
                     row["type"], row["subject"],
                     "legacy subject key", note=JANITOR_NOTE,
+                )
+            elif (
+                row["type"] == "port_errors"
+                and "errors+discards" in row["message"]
+            ):
+                # Raised before v0.5.4, when discards counted as errors:
+                # most such alarms are healthy ports doing normal
+                # filtering. Cleared once; the split rule re-raises
+                # within a few counter cycles if the errors are real.
+                await self._clear(
+                    row["type"], row["subject"],
+                    "raised on errors+discards combined",
+                    note="recalculated: discards are alarmed separately now",
                 )
         if self._active:
             log.info("Restored %d active alarms from the DB", len(self._active))
@@ -311,16 +333,21 @@ class AlarmEngine:
     async def on_counters(self, ip: str, metrics: list[dict]) -> None:
         """One counters cycle. Each metric describes one logical port:
         port (name), speed_mbps (0 = skip the utilization rule), in/out
-        Mbit/s, errors_per_min, discards_per_min; LAG aggregates also
-        carry lag_total / lag_up member counts.
+        Mbit/s, in/out errors and discards per minute, error_ratio
+        (None when the switch has no packet counters); LAG aggregates
+        also carry lag_total / lag_up member counts.
         """
+        thresholds = self._thresholds
         for m in metrics:
             subject = f"{ip}:{m['port']}"
-            total = m["errors_per_min"] + m["discards_per_min"]
+            await self._error_rule(subject, m)
+            discards = m["in_discards_per_min"] + m["out_discards_per_min"]
             await self._hysteresis(
-                "port_errors", subject,
-                total > self._thresholds.errors_per_minute,
-                f"{total:.1f} errors+discards per minute",
+                "port_discards", subject,
+                discards > thresholds.discards_per_minute,
+                f"{discards:.0f} discards per minute "
+                f"(in: {m['in_discards_per_min']:.0f}, "
+                f"out: {m['out_discards_per_min']:.0f})",
             )
             speed = m["speed_mbps"]
             if speed:
@@ -333,12 +360,35 @@ class AlarmEngine:
             if m.get("lag_total"):
                 await self._lag_rule(subject, m["lag_up"], m["lag_total"])
 
+    async def _error_rule(self, subject: str, m: dict) -> None:
+        """port_errors: damaged frames only, never discards.
+
+        The absolute rate must be over the threshold AND — when the
+        switch exposes packet counters — the errors must be a large
+        enough share of the traffic. A busy port doing millions of
+        frames a minute is not in trouble over a handful of errors.
+        """
+        thresholds = self._thresholds
+        errors = m["in_errors_per_min"] + m["out_errors_per_min"]
+        over = errors > thresholds.errors_per_minute
+        ratio = m.get("error_ratio")
+        share = ""
+        if ratio is not None:
+            over = over and ratio * 100 > thresholds.error_ratio_percent
+            share = f", {ratio * 100:.3f}% of frames"
+        await self._hysteresis(
+            "port_errors", subject, over,
+            f"{errors:.1f} errors per minute "
+            f"(in: {m['in_errors_per_min']:.1f}, "
+            f"out: {m['out_errors_per_min']:.1f}{share})",
+        )
+
     async def _lag_rule(self, subject: str, up: int, total: int) -> None:
-        """lag_degraded: raised after 2 degraded counter cycles,
-        cleared as soon as every member is up again."""
+        """lag_degraded: raised after port_alarm_cycles degraded counter
+        cycles, cleared as soon as every member is up again."""
         if up < total:
             self._lag_over[subject] = self._lag_over.get(subject, 0) + 1
-            if self._lag_over[subject] >= PORT_CYCLES:
+            if self._lag_over[subject] >= self._thresholds.port_alarm_cycles:
                 await self._raise(
                     "lag_degraded", subject,
                     f"{up} of {total} LAG members are up",
@@ -392,9 +442,10 @@ class AlarmEngine:
         else:
             self._under[key] = self._under.get(key, 0) + 1
             self._over[key] = 0
-        if self._over.get(key, 0) >= PORT_CYCLES:
+        cycles = self._thresholds.port_alarm_cycles
+        if self._over.get(key, 0) >= cycles:
             await self._raise(alarm_type, subject, message)
-        elif key in self._active and self._under.get(key, 0) >= PORT_CYCLES:
+        elif key in self._active and self._under.get(key, 0) >= cycles:
             await self._clear(alarm_type, subject, "back below the threshold")
 
     async def _raise(

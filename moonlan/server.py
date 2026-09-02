@@ -405,8 +405,11 @@ def _port_metrics(
             "speed_mbps": 0 if if_index in in_lag else port.speed_mbps,
             "in_mbps": r.in_mbps,
             "out_mbps": r.out_mbps,
-            "errors_per_min": r.errors_per_min,
-            "discards_per_min": r.discards_per_min,
+            "in_errors_per_min": r.in_errors_per_min,
+            "out_errors_per_min": r.out_errors_per_min,
+            "in_discards_per_min": r.in_discards_per_min,
+            "out_discards_per_min": r.out_discards_per_min,
+            "error_ratio": r.error_ratio,
         })
     for aggregate, members in groups.items():
         member_rates = [rates[m] for m in members if m in rates]
@@ -419,8 +422,11 @@ def _port_metrics(
             "in_mbps": sum(r.in_mbps for r in member_rates),
             "out_mbps": sum(r.out_mbps for r in member_rates),
             # member errors are already alarmed individually
-            "errors_per_min": 0.0,
-            "discards_per_min": 0.0,
+            "in_errors_per_min": 0.0,
+            "out_errors_per_min": 0.0,
+            "in_discards_per_min": 0.0,
+            "out_discards_per_min": 0.0,
+            "error_ratio": None,
             "lag_total": len(member_ports),
             "lag_up": sum(1 for p in member_ports if p.oper_up),
         })
@@ -477,7 +483,9 @@ def _observed_subjects() -> set[tuple[str, str]]:
         labels += [_lag_label(sw, members) for members in _lag_groups(sw).values()]
         for label in labels:
             subject = f"{ip}:{label}"
-            for alarm_type in ("port_errors", "port_util", "port_hosts_down"):
+            for alarm_type in (
+                "port_errors", "port_discards", "port_util", "port_hosts_down"
+            ):
                 observed.add((alarm_type, subject))
             if label.startswith("lag["):
                 observed.add(("lag_degraded", subject))
