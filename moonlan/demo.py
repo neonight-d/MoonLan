@@ -320,14 +320,20 @@ class DemoCounters:
     """Synthetic raw counter samples for the demo network.
 
     Every active physical port carries a smooth random traffic curve
-    (a bounded random walk); one port accumulates errors fast enough
-    to cross the default threshold -> port_errors alarm after ~2
-    cycles. Real Sample objects are produced so the whole delta
-    pipeline in CounterStore is exercised, not bypassed.
+    (a bounded random walk); one port accumulates damaged frames
+    (-> port_errors) and another one accumulates discards without a
+    single error (-> port_discards, info, syslog only), so the split
+    between the two alarms is visible side by side. Packet counters
+    are derived from the traffic, which gives the error-ratio rule
+    something real to work with. Real Sample objects are produced so
+    the whole delta pipeline in CounterStore is exercised, not
+    bypassed.
     """
 
     ERROR_SWITCH = "10.0.0.22"  # access-sw-2
-    ERROR_PORT = 3              # Gi0/3
+    ERROR_PORT = 3              # Gi0/3: damaged frames
+    DISCARD_PORT = 4            # Gi0/4: filtering, no errors at all
+    AVG_FRAME_BYTES = 800       # to turn octets into packet counters
     # One member of the core—ray1 LACP (the same physical cable seen
     # from both ends) flaps on a timer -> lag_degraded raise and clear,
     # edge label drops to "LACP 1×1 Gbit/s (1/2)"
@@ -363,22 +369,31 @@ class DemoCounters:
                 for i in (0, 1):
                     step = self._rng.gauss(0, rate[i] * 0.15 + 0.5)
                     rate[i] = min(max(rate[i] + step, 0.2), 900.0)
-                tot = self._totals.setdefault(key, [0, 0, 0, 0, 0, 0])
-                tot[0] += int(rate[0] * 1e6 / 8 * dt)  # in octets
-                tot[1] += int(rate[1] * 1e6 / 8 * dt)  # out octets
-                if (
-                    sw.ip == self.ERROR_SWITCH
-                    and p.if_index == self.ERROR_PORT
-                    and self._cycle >= 2
-                ):
-                    # ~12 err/min + ~4 disc/min > default threshold of 10
-                    tot[2] += max(1, int(12 * dt / 60))
-                    tot[4] += max(1, int(4 * dt / 60))
+                # kept as floats and truncated only when a sample is
+                # emitted, so the rates come out right at any interval
+                tot = self._totals.setdefault(key, [0.0] * 8)
+                d_in = rate[0] * 1e6 / 8 * dt   # octets
+                d_out = rate[1] * 1e6 / 8 * dt
+                tot[0] += d_in
+                tot[1] += d_out
+                tot[6] += d_in / self.AVG_FRAME_BYTES   # in packets
+                tot[7] += d_out / self.AVG_FRAME_BYTES  # out packets
+                if sw.ip == self.ERROR_SWITCH and self._cycle >= 2:
+                    if p.if_index == self.ERROR_PORT:
+                        # 120 damaged frames a minute, split in/out:
+                        # over the 5/min threshold and ~0.05% of this
+                        # port's frames, so both error rules agree
+                        tot[2] += 90 * dt / 60
+                        tot[3] += 30 * dt / 60
+                    elif p.if_index == self.DISCARD_PORT:
+                        # a port that filters a lot and breaks nothing
+                        tot[4] += 600 * dt / 60
                 samples[p.if_index] = Sample(
                     ts=now,
-                    in_octets=tot[0], out_octets=tot[1],
-                    in_errors=tot[2], out_errors=tot[3],
-                    in_discards=tot[4], out_discards=tot[5],
+                    in_octets=int(tot[0]), out_octets=int(tot[1]),
+                    in_errors=int(tot[2]), out_errors=int(tot[3]),
+                    in_discards=int(tot[4]), out_discards=int(tot[5]),
+                    in_pkts=int(tot[6]), out_pkts=int(tot[7]),
                 )
             out[sw.ip] = samples
         return out

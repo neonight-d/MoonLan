@@ -20,8 +20,14 @@ class SnmpConfig:
 
 @dataclass
 class Thresholds:
-    errors_per_minute: float = 10.0
+    # Errors are damaged frames — rare and worth a warning. Discards
+    # are usually normal filtering (VLAN rules, storm control, a full
+    # buffer during a burst), so they have their own, much higher bar.
+    errors_per_minute: float = 5.0
+    error_ratio_percent: float = 0.01  # of all frames on the port
+    discards_per_minute: float = 500.0
     port_utilization_percent: float = 90.0
+    port_alarm_cycles: int = 3  # counter cycles over/under a threshold
     mass_down_hosts: int = 3  # port_hosts_down: newly silent hosts per port
 
 
@@ -71,6 +77,9 @@ DEFAULT_ALARM_NOTIFY: dict[str, list[str]] = {
     "host_down": ["email", "telegram", "syslog"],
     "switch_down": ["email", "telegram", "syslog"],
     "port_errors": ["syslog"],
+    # discards are noisy and usually harmless: syslog only, never
+    # Telegram or email
+    "port_discards": ["syslog"],
     "port_util": ["telegram", "syslog"],
     "new_mac": ["syslog"],
     "port_hosts_down": ["email", "telegram", "syslog"],
@@ -158,12 +167,27 @@ def load_config(path: Path | None = None) -> Config:
         )
 
         thr = raw.get("thresholds") or {}
+        defaults = Thresholds()
         cfg.thresholds = Thresholds(
-            errors_per_minute=float(thr.get("errors_per_minute", 10)),
-            port_utilization_percent=float(
-                thr.get("port_utilization_percent", 90)
+            errors_per_minute=float(
+                thr.get("errors_per_minute", defaults.errors_per_minute)
             ),
-            mass_down_hosts=int(thr.get("mass_down_hosts", 3)),
+            error_ratio_percent=float(
+                thr.get("error_ratio_percent", defaults.error_ratio_percent)
+            ),
+            discards_per_minute=float(
+                thr.get("discards_per_minute", defaults.discards_per_minute)
+            ),
+            port_utilization_percent=float(
+                thr.get("port_utilization_percent",
+                        defaults.port_utilization_percent)
+            ),
+            port_alarm_cycles=int(
+                thr.get("port_alarm_cycles", defaults.port_alarm_cycles)
+            ),
+            mass_down_hosts=int(
+                thr.get("mass_down_hosts", defaults.mass_down_hosts)
+            ),
         )
 
         notif = raw.get("notifications") or {}
