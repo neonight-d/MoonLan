@@ -67,7 +67,19 @@ host_retention_days: 30
 
 # Alarm thresholds / Пороги тревог
 thresholds:
-  errors_per_minute: 10          # port_errors: (errors+discards)/min
+  # Errors are damaged frames (cable, duplex, transceiver) — rare and
+  # worth a warning; discards are usually normal filtering (VLAN rules,
+  # storm control, bursts) and get their own, much quieter alarm.
+  # Ошибки — испорченные кадры (кабель, дуплекс, трансивер), редки и
+  # заслуживают предупреждения; отбрасывания — обычно штатная
+  # фильтрация (VLAN, storm control, всплески), у них своя тихая тревога.
+  errors_per_minute: 5           # port_errors: ifInErrors+ifOutErrors
+  error_ratio_percent: 0.01      # and at least this share of all frames
+                                 # и не меньше такой доли всех кадров
+  discards_per_minute: 500       # port_discards (info, syslog only)
+  port_alarm_cycles: 3           # cycles over/under a threshold before
+                                 # an alarm is raised or cleared
+                                 # циклов подряд до поднятия/снятия
   port_utilization_percent: 90   # port_util: % of the link speed
                                  # (for a LAG — of the total speed)
                                  # % от скорости линка (для LAG — от суммарной)
@@ -115,6 +127,7 @@ alarm_notify:
   host_down: [email, telegram, syslog]
   switch_down: [email, telegram, syslog]
   port_errors: [syslog]
+  port_discards: [syslog]
   port_util: [telegram, syslog]
   new_mac: [syslog]
   port_hosts_down: [email, telegram, syslog]

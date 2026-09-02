@@ -49,12 +49,21 @@ An open-source alternative to LanTopoLog. MIT license.
   detected and do not produce rate spikes.
 - Stateful alarms: host_down (3 missed pings, only for hosts marked
   "Monitor" — the journal still records everything), switch_down
-  (2 failed SNMP polls, critical), port_errors and port_util (threshold
-  with two-cycle hysteresis), port_hosts_down (critical: several hosts
-  of one port went silent at once — one alarm instead of a burst),
-  lag_degraded (a LAG member went down), new_mac. The "Alarms" panel
-  lists active and recently cleared alarms; the header badge shows the
-  active count. Every raise/clear is also written to the journal.
+  (2 failed SNMP polls, critical), port_errors, port_discards and
+  port_util (threshold plus hysteresis), port_hosts_down (critical:
+  several devices of one port went silent at once — one alarm instead
+  of a burst), lag_degraded (a LAG member went down), new_mac. The
+  "Alarms" panel lists active and recently cleared alarms; the header
+  badge shows the active count. Every raise/clear is also written to
+  the journal.
+- Errors and discards are told apart: damaged frames (a cable, duplex
+  or transceiver fault) raise port_errors — a warning, and only when
+  they are also a meaningful share of the port's frames — while
+  discards, which are usually normal filtering, raise the quiet
+  port_discards (info, syslog only). The "Ports" panel colours both
+  columns against their thresholds and explains them in tooltips;
+  `python -m moonlan.diag --port <switch> --watch N` shows the raw
+  counters and the very rates the alarm engine works with.
 - Honest LAG capacity: the edge label counts only active members —
   a degraded 2×1 Gbit/s aggregate shows "LACP 1×1 Gbit/s (1/2 members)",
   and the link card lists each member with its state.
@@ -135,7 +144,10 @@ host_grace_hours: 24       # how long a host stays on the map after its
 host_retention_days: 30    # then it is deleted from the database
 
 thresholds:
-  errors_per_minute: 10          # port_errors alarm threshold
+  errors_per_minute: 5           # port_errors: damaged frames only
+  error_ratio_percent: 0.01      # and at least this share of all frames
+  discards_per_minute: 500       # port_discards (info, syslog only)
+  port_alarm_cycles: 3           # cycles before an alarm is raised/cleared
   port_utilization_percent: 90   # port_util: % of the link speed
                                  # (for a LAG — of the total speed)
   mass_down_hosts: 3             # port_hosts_down: devices of one port
@@ -168,6 +180,7 @@ alarm_notify:                # which alarm types go to which channels
   host_down: [email, telegram, syslog]
   switch_down: [email, telegram, syslog]
   port_errors: [syslog]
+  port_discards: [syslog]
   port_util: [telegram, syslog]
   new_mac: [syslog]
 ```
