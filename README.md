@@ -273,6 +273,42 @@ lists them under "Not on map". Since `routers:` accepts a list, adding
 every L3 device that holds an ARP table (each VLAN gateway, each
 router) is what makes the inventory more complete.
 
+#### Errors vs discards
+
+```bash
+python -m moonlan.diag --port 10.0.0.21               # noisy ports
+python -m moonlan.diag --port 10.0.0.21 --iface Gi0/1 # one port
+python -m moonlan.diag --port 10.0.0.21 --watch 3     # 3 measurements, 60 s apart
+```
+
+The first measurement prints the raw counters (`ifInErrors`,
+`ifOutErrors`, `ifInDiscards`, `ifOutDiscards`, `ifHCInOctets`,
+`ifHCOutOctets`, `ifHCInUcastPkts`, `ifHCOutUcastPkts`, `ifOperStatus`,
+`ifHighSpeed`); with `--watch` every later one adds the deltas and the
+rates — exactly the numbers the alarm engine and the "Ports" panel work
+with. Without `--iface` only ports with a non-zero error or discard
+counter are listed, worst first.
+
+**Errors** are damaged frames: a bad cable or patch cord, a duplex
+mismatch, a dying SFP or transceiver, interference on a long run. They
+are genuinely rare on healthy hardware, which is why `port_errors` is a
+warning at 5 per minute — and, where the switch reports packet
+counters, only when the errors are more than `error_ratio_percent` of
+all frames the port carries.
+
+**Discards** are frames the switch dropped on purpose or for lack of
+room: VLAN filtering (a frame arrives for a VLAN the port is not in),
+storm control, ACLs, a buffer filled by a burst. Hundreds a minute on a
+busy access port are normal and mean nothing is broken, so they raise
+`port_discards` (info, syslog only, 500 per minute by default) and
+never reach Telegram or email.
+
+So: errors → look at the physical layer (`--watch` to see whether they
+keep growing, then the cable, the port, the transceiver, the duplex
+setting). Discards → look at the configuration and the traffic profile
+(VLANs on the port, storm control, whether the load has outgrown the
+link speed).
+
 ## How it works
 
 1. MoonLan polls every switch from `config.yaml` via SNMP: `sysName`,
