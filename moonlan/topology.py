@@ -435,8 +435,21 @@ def build_topology(
     collected: Iterable[SwitchData],
     unmanaged_threshold: int = UNMANAGED_THRESHOLD,
     fdb_stability: FdbStability | None = None,
+    known_hosts_per_port: dict[tuple[str, str], int] | None = None,
+    sticky_pseudo_ports: set[tuple[str, str]] | None = None,
 ) -> tuple[list[dict], list[dict], list[dict], list[dict], dict[int, str]]:
-    """Turns poll data into nodes and links for the map."""
+    """Turns poll data into nodes and links for the map.
+
+    known_hosts_per_port ((switch ip, port name) -> count) is how many
+    devices the database knows behind a port, stale ones inside the
+    grace window included; the caller computes it. Without it the
+    unmanaged-switch threshold would only see this poll's FDB, which
+    ages out in minutes, and pseudo-switch groups would form and
+    dissolve from scan to scan. sticky_pseudo_ports are ports that had
+    a pseudo node last time: they keep it while any host remains.
+    """
+    known_hosts_per_port = known_hosts_per_port or {}
+    sticky_pseudo_ports = sticky_pseudo_ports or set()
     switches = [sw for sw in collected if sw.reachable]
     fdb = normalized_fdb(switches)
 
@@ -479,7 +492,8 @@ def build_topology(
 
     switch_by_ip = {sw.ip: sw for sw in switches}
     hosts = []
-    hosts_per_port: dict[tuple[str, int], list[dict]] = {}
+    # keyed by port NAME, the same key the database and the caller use
+    hosts_per_port: dict[tuple[str, str], list[dict]] = {}
     for mac, (_, sw_ip, if_index) in sorted(best_location.items()):
         sw = switch_by_ip[sw_ip]
         host = {
@@ -490,22 +504,40 @@ def build_topology(
             "name": "",  # names and IPs are added from the DB (ARP/DNS)
         }
         hosts.append(host)
-        hosts_per_port.setdefault((sw_ip, if_index), []).append(host)
+        hosts_per_port.setdefault((sw_ip, host["port"]), []).append(host)
 
-    # 4. Many hosts on a non-trunk port — an unmanaged switch behind it
+    # 4. Many devices on a non-trunk port — an unmanaged switch behind
+    # it. The count is the larger of what this poll sees and what the
+    # database knows about the port, so a group does not dissolve when
+    # half its devices go quiet and their MACs age out of the FDB.
     pseudo_switches: list[dict] = []
     if unmanaged_threshold > 0:
-        for (sw_ip, if_index), port_hosts in sorted(hosts_per_port.items()):
-            if len(port_hosts) <= unmanaged_threshold:
+        uplink_names = {
+            sw.ip: {port_name(sw, i) for i in uplink_ports[sw.ip]}
+            for sw in switches
+        }
+        candidates = set(hosts_per_port) | {
+            key for key in known_hosts_per_port if key[0] in switch_by_ip
+        }
+        for sw_ip, port in sorted(candidates):
+            if port in uplink_names.get(sw_ip, set()):
+                continue  # a trunk, whatever the database remembers
+            port_hosts = hosts_per_port.get((sw_ip, port), [])
+            known = known_hosts_per_port.get((sw_ip, port), 0)
+            total = max(len(port_hosts), known)
+            sticky = (sw_ip, port) in sticky_pseudo_ports and total > 0
+            if total <= unmanaged_threshold and not sticky:
                 continue
-            pseudo_id = f"pseudo:{sw_ip}:{if_index}"
+            pseudo_id = f"pseudo:{sw_ip}:{port}"
             for host in port_hosts:
                 host["via"] = pseudo_id
             pseudo_switches.append({
                 "id": pseudo_id,
                 "switch": sw_ip,
-                "port": port_name(switch_by_ip[sw_ip], if_index),
-                "host_count": len(port_hosts),
+                "port": port,
+                "host_count": total,
+                "host_count_live": len(port_hosts),
+                "host_count_known": known,
             })
 
     switch_dicts = [{

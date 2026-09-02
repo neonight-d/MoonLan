@@ -59,6 +59,11 @@ first_scan_done = False
 # but never alarmed on — its presence is no longer confirmed.
 fdb_macs: set[str] = set()
 
+# (switch ip, port) of the pseudo-switches drawn last time: a group
+# that already exists must not vanish while any device is left on the
+# port, or the nodes would jump around between scans
+prev_pseudo_ports: set[tuple[str, str]] = set()
+
 # One SnmpEngine per process: a new engine per cycle leaks sockets and
 # MIB state (OSError 24, MibNotFoundError, growing RSS). Recreate only
 # if the SNMP config ever changes at runtime — it currently cannot.
@@ -78,7 +83,7 @@ def get_collector() -> SnmpCollector:
 
 async def run_scan() -> None:
     """One cycle of polling all switches and rebuilding the topology."""
-    global first_scan_done, fdb_macs
+    global first_scan_done, fdb_macs, prev_pseudo_ports
     if state.scanning:
         return
     state.scanning = True
@@ -102,11 +107,21 @@ async def run_scan() -> None:
                     sw.own_macs.add(mac)
         for sw in collected:
             switch_data[sw.ip] = sw
+        # What the database already knows about each port feeds the
+        # unmanaged-switch threshold, so groups survive FDB aging
         switches, links, hosts, pseudo_switches, vlan_names = build_topology(
             collected,
             config.unmanaged_threshold,
             fdb_stability=None if config.demo else fdb_stability,
+            known_hosts_per_port=_known_hosts_per_port(
+                await asyncio.to_thread(db.hosts_by_mac),
+                {sw.ip for sw in collected if sw.reachable},
+            ),
+            sticky_pseudo_ports=prev_pseudo_ports,
         )
+        prev_pseudo_ports = {
+            (p["switch"], p["port"]) for p in pseudo_switches
+        }
         fdb_macs = {h["mac"] for h in hosts}
         new_macs = await asyncio.to_thread(db.upsert_hosts, hosts)
         if new_macs:
@@ -177,6 +192,23 @@ def _switch_macs() -> set[str]:
         if sw.bridge_mac:
             macs.add(sw.bridge_mac)
     return macs
+
+
+def _known_hosts_per_port(
+    db_rows: dict[str, dict], switch_ips: set[str]
+) -> dict[tuple[str, str], int]:
+    """How many devices the database knows behind each port, counting
+    the ones inside the grace window — the same set that stays on the
+    map — so the unmanaged-switch threshold sees the whole group and
+    not only the MACs this particular poll happened to catch."""
+    grace = config.host_grace_hours * 3600
+    now = time.time()
+    counts: Counter = Counter()
+    for row in db_rows.values():
+        if row["switch_ip"] in switch_ips and row["port"]:
+            if grace > 0 and now - row["last_seen"] < grace:
+                counts[(row["switch_ip"], row["port"])] += 1
+    return dict(counts)
 
 
 def _assemble_hosts(
