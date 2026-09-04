@@ -299,8 +299,6 @@ def _group_offline(on_map: list[dict], db_rows: dict[str, dict]) -> list[dict]:
             "last_seen_max": max(
                 db_rows[m["mac"]]["last_seen"] for m in members
             ),
-            # a big group starts collapsed: only the group node is drawn
-            "collapse_default": len(members) > config.offline_group_collapse_at,
         })
     return groups
 
