@@ -499,6 +499,24 @@ function buildGraphData() {
   return { nodes, edges };
 }
 
+/* ---------- physics ---------- */
+
+const IMPROVED_LAYOUT_LIMIT = 200; // above this the fancy layout is too slow
+const PHYSICS_SETTLE_MS = 2000;
+let physicsTimer = null;
+
+function setPhysics(on) {
+  if (network) network.setOptions({ physics: on });
+}
+
+/* New nodes need somewhere to go: let the simulation run briefly, then
+   put it back to sleep. */
+function nudgePhysics() {
+  setPhysics(true);
+  clearTimeout(physicsTimer);
+  physicsTimer = setTimeout(() => setPhysics(false), PHYSICS_SETTLE_MS);
+}
+
 /* ---------- label backdrop for the selected node ---------- */
 
 /* Where the node's caption is drawn, in canvas coordinates. vis knows
@@ -587,6 +605,8 @@ function renderGraph() {
         forceAtlas2Based: { gravitationalConstant: -60, springLength: 90 },
         stabilization: { iterations: 200 },
       },
+      // the fancy initial layout costs seconds on a large map
+      layout: { improvedLayout: nodes.length <= IMPROVED_LAYOUT_LIMIT },
       interaction: { hover: true },
     };
     network = new vis.Network(
@@ -623,6 +643,10 @@ function renderGraph() {
       hoveredNodeId = null;
       network.redraw();
     });
+    // Once the layout has settled there is nothing left to simulate:
+    // running physics on hundreds of nodes burns CPU and makes the map
+    // breathe under the cursor. Dragging still works without it.
+    network.once("stabilizationIterationsDone", () => setPhysics(false));
     return;
   }
 
@@ -630,10 +654,13 @@ function renderGraph() {
   // the Network, so node positions and the camera are preserved
   const nodeIds = new Set(nodes.map((n) => n.id));
   const edgeIds = new Set(edges.map((e) => e.id));
+  const added = nodes.some((n) => !nodesDs.get(n.id));
   nodesDs.remove(nodesDs.getIds().filter((id) => !nodeIds.has(id)));
   edgesDs.remove(edgesDs.getIds().filter((id) => !edgeIds.has(id)));
   nodesDs.update(nodes);
   edgesDs.update(edges);
+  // only new nodes need a place: a plain refresh leaves physics off
+  if (added) nudgePhysics();
 }
 
 function focusNode(id) {
