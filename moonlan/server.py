@@ -150,13 +150,14 @@ async def run_scan() -> None:
                     )
             await resolve_names()
         db_rows = await asyncio.to_thread(db.hosts_by_mac)
-        hosts, unlocated = _assemble_hosts(
+        hosts, offline_groups, unlocated = _assemble_hosts(
             hosts, db_rows, pseudo_switches, {sw["ip"] for sw in switches}
         )
         _merge_db_fields(hosts, db_rows)
         _merge_db_fields(unlocated, db_rows)
         state.update(
-            switches, links, hosts, pseudo_switches, vlan_names, unlocated
+            switches, links, hosts, pseudo_switches, vlan_names, unlocated,
+            offline_groups,
         )
         if config.demo:
             await run_ping()  # set the switches' ping state right away
@@ -216,13 +217,16 @@ def _assemble_hosts(
     db_rows: dict[str, dict],
     pseudo_switches: list[dict],
     switch_ips: set[str],
-) -> tuple[list[dict], list[dict]]:
-    """Splits the known inventory into map hosts and off-map devices.
+) -> tuple[list[dict], list[dict], list[dict]]:
+    """Splits the known inventory into map hosts, offline groups and
+    off-map devices.
 
     On the map: this scan's FDB hosts, plus hosts whose MAC left the
     FDB less than host_grace_hours ago, drawn at their last known port
     (FDB entries age out in minutes — without the grace window a quiet
-    device blinks in and out on every scan) and marked stale.
+    device blinks in and out on every scan) and marked stale. Stale
+    hosts sharing a port are collected under one offline group instead
+    of surrounding the switch with a cloud of grey dots.
 
     Off the map: everything else the DB knows — devices ARP sees but
     no switch port ever showed, and hosts whose grace window ran out.
@@ -262,7 +266,43 @@ def _assemble_hosts(
             -max(db_rows[h["mac"]]["last_arp"], db_rows[h["mac"]]["last_seen"]),
         )
     )
-    return on_map, unlocated
+    return on_map, _group_offline(on_map, db_rows), unlocated
+
+
+def _group_offline(on_map: list[dict], db_rows: dict[str, dict]) -> list[dict]:
+    """Collects the stale hosts of one port under a single group node.
+
+    A port whose devices are all offline gets a "temporary location"
+    node — the devices are shown where they were last seen, and one
+    node says so instead of a dozen grey dots. Ports that already have
+    a pseudo-switch keep it: their hosts hang off that node.
+    """
+    threshold = config.offline_group_threshold
+    if threshold <= 0:
+        return []
+    by_port: dict[tuple[str, str], list[dict]] = {}
+    for host in on_map:
+        if host["stale"] and not host.get("via"):
+            by_port.setdefault((host["switch"], host["port"]), []).append(host)
+    groups: list[dict] = []
+    for (sw_ip, port), members in sorted(by_port.items()):
+        if len(members) < threshold:
+            continue  # one or two lone dots read fine on their own
+        group_id = f"offline:{sw_ip}:{port}"
+        for host in members:
+            host["via"] = group_id
+        groups.append({
+            "id": group_id,
+            "switch": sw_ip,
+            "port": port,
+            "count": len(members),
+            "last_seen_max": max(
+                db_rows[m["mac"]]["last_seen"] for m in members
+            ),
+            # a big group starts collapsed: only the group node is drawn
+            "collapse_default": len(members) > config.offline_group_collapse_at,
+        })
+    return groups
 
 
 def _effective_monitored(row: dict) -> bool:

@@ -139,6 +139,39 @@ function hostLabel(h) {
   return h.name || h.ip || h.mac;
 }
 
+/* ---------- offline groups ---------- */
+
+const COLLAPSE_KEY = "moonlan-offline-collapsed";
+
+function collapseState() {
+  try {
+    return JSON.parse(localStorage.getItem(COLLAPSE_KEY) || "{}");
+  } catch (e) {
+    return {};
+  }
+}
+
+/* Collapsed groups draw only their own node. The choice is per group
+   and remembered; big groups start collapsed. */
+function isCollapsed(groupId) {
+  const group = (topology.offline_groups || []).find((g) => g.id === groupId);
+  if (!group) return false;
+  const stored = collapseState()[groupId];
+  return stored === undefined ? !!group.collapse_default : stored;
+}
+
+function toggleCollapsed(groupId) {
+  const state = collapseState();
+  state[groupId] = !isCollapsed(groupId);
+  try {
+    localStorage.setItem(COLLAPSE_KEY, JSON.stringify(state));
+  } catch (e) {
+    /* private mode: the choice just does not survive a reload */
+  }
+  renderGraph();
+  showDetails(groupId);
+}
+
 /* "11 (ipmi)" — VLAN ID plus name when known */
 function vlanLabel(v) {
   if (!v) return "—";
@@ -391,7 +424,37 @@ function buildGraphData() {
     });
   }
 
+  // one node per port whose devices are all offline, so the switches
+  // are not surrounded by a cloud of grey dots
+  for (const group of topology.offline_groups || []) {
+    nodes.push({
+      id: group.id,
+      label: t("offlineGroup") + " · " + group.count,
+      shape: "square",
+      size: 13,
+      color: {
+        background: "#2a2f3d",
+        border: colors.dim,
+        highlight: { background: "#3a4152", border: colors.moon },
+      },
+      shapeProperties: { borderDashes: [2, 3] },
+      borderWidth: 2,
+      font: { color: colors.dim, size: 11 },
+    });
+    edges.push({
+      id: "offedge:" + group.id,
+      from: "sw:" + group.switch,
+      to: group.id,
+      dashes: [3, 3],
+      color: { color: colors.dim, opacity: 0.4 },
+      width: 1,
+    });
+  }
+
   for (const host of topology.hosts) {
+    // members of a collapsed group live in the list and in search,
+    // but the map shows only the group node
+    if (host.via && isCollapsed(host.via)) continue;
     const c = statusColor(host);
     // stale = drawn from the grace window, not from a fresh MAC table
     nodes.push({
@@ -492,6 +555,26 @@ function showDetails(nodeId) {
       <dt>${t("lastReply")}</dt><dd>${fmtTime(sw.last_ping_ok)}</dd>
       <dt>${t("descr")}</dt><dd>${sw.descr || "—"}</dd></dl>
       <button id="ports-btn" class="panel-btn">${t("portsBtn")}</button>`;
+  } else if (nodeId.startsWith("offline:")) {
+    const group = (topology.offline_groups || []).find((g) => g.id === nodeId);
+    if (!group) return;
+    const members = topology.hosts.filter((h) => h.via === nodeId);
+    const collapsed = isCollapsed(nodeId);
+    const rows = members
+      .map(
+        (h) => `<li data-mac="${h.mac}"><span>${hostLabel(h)}</span>
+          <span class="sub">${fmtTime(h.last_seen)}</span></li>`
+      )
+      .join("");
+    html = `<h3>${fmt("offlineGroupTitle", { n: group.count })}</h3>
+      <p class="hint">${t("offlineGroupHint")}</p><dl>
+      <dt>${t("switchLabel")}</dt><dd>${group.switch}</dd>
+      <dt>${t("portLabel")}</dt><dd>${group.port}</dd>
+      <dt>${t("lastSeenLabel")}</dt><dd>${fmtTime(group.last_seen_max)}</dd>
+      </dl><ul class="offline-list">${rows}</ul>
+      <button id="offline-toggle" class="panel-btn">${
+        collapsed ? t("showDevices") : t("hideDevices")
+      }</button>`;
   } else if (nodeId.startsWith("pseudo:")) {
     const ps = (topology.pseudo_switches || []).find((p) => p.id === nodeId);
     if (!ps) return;
@@ -544,6 +627,19 @@ function showDetails(nodeId) {
   const monitorBtn = document.getElementById("monitor-btn");
   if (monitorBtn) {
     monitorBtn.addEventListener("click", () => toggleMonitor(nodeId));
+  }
+  const offlineToggle = document.getElementById("offline-toggle");
+  if (offlineToggle) {
+    offlineToggle.addEventListener("click", () => toggleCollapsed(nodeId));
+  }
+  // a device of the group: focus its node when one is drawn, and open
+  // its card either way
+  for (const row of els.detailsBody.querySelectorAll(".offline-list li")) {
+    row.addEventListener("click", () => {
+      const id = "host:" + row.dataset.mac;
+      if (nodesDs && nodesDs.get(id)) focusNode(id);
+      else showDetails(id);
+    });
   }
 }
 

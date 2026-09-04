@@ -65,6 +65,8 @@ class TopologyState:
     # known devices that sit on no port of a polled switch: they are
     # inventory and search results, but nothing is drawn for them
     unlocated: list[dict] = field(default_factory=list)
+    # one node per port whose devices are all offline right now
+    offline_groups: list[dict] = field(default_factory=list)
     last_scan: float = 0.0
     scanning: bool = False
     _lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
@@ -77,6 +79,7 @@ class TopologyState:
         pseudo_switches: list[dict],
         vlan_names: dict[int, str],
         unlocated: list[dict] | None = None,
+        offline_groups: list[dict] | None = None,
     ) -> None:
         with self._lock:
             self.switches = switches
@@ -85,6 +88,7 @@ class TopologyState:
             self.pseudo_switches = pseudo_switches
             self.vlan_names = vlan_names
             self.unlocated = unlocated or []
+            self.offline_groups = offline_groups or []
             self.last_scan = time.time()
 
     def as_dict(self) -> dict:
@@ -96,6 +100,7 @@ class TopologyState:
                 "pseudo_switches": self.pseudo_switches,
                 "vlan_names": self.vlan_names,
                 "unlocated": self.unlocated,
+                "offline_groups": self.offline_groups,
                 "last_scan": self.last_scan,
                 "scanning": self.scanning,
             }
@@ -446,7 +451,8 @@ def build_topology(
     unmanaged-switch threshold would only see this poll's FDB, which
     ages out in minutes, and pseudo-switch groups would form and
     dissolve from scan to scan. sticky_pseudo_ports are ports that had
-    a pseudo node last time: they keep it while any host remains.
+    a pseudo node last time: they keep it while at least one device is
+    still answering there.
     """
     known_hosts_per_port = known_hosts_per_port or {}
     sticky_pseudo_ports = sticky_pseudo_ports or set()
@@ -509,7 +515,10 @@ def build_topology(
     # 4. Many devices on a non-trunk port — an unmanaged switch behind
     # it. The count is the larger of what this poll sees and what the
     # database knows about the port, so a group does not dissolve when
-    # half its devices go quiet and their MACs age out of the FDB.
+    # half its devices go quiet and their MACs age out of the FDB. A
+    # port where nothing answers at all is a different story: those
+    # devices are only remembered, not seen, and the caller groups them
+    # as an offline "temporary location" instead.
     pseudo_switches: list[dict] = []
     if unmanaged_threshold > 0:
         uplink_names = {
@@ -523,9 +532,14 @@ def build_topology(
             if port in uplink_names.get(sw_ip, set()):
                 continue  # a trunk, whatever the database remembers
             port_hosts = hosts_per_port.get((sw_ip, port), [])
+            if not port_hosts:
+                # Nothing is confirmed behind this port right now, so
+                # there is no evidence of a switch: the caller draws
+                # the devices as an offline group instead
+                continue
             known = known_hosts_per_port.get((sw_ip, port), 0)
             total = max(len(port_hosts), known)
-            sticky = (sw_ip, port) in sticky_pseudo_ports and total > 0
+            sticky = (sw_ip, port) in sticky_pseudo_ports
             if total <= unmanaged_threshold and not sticky:
                 continue
             pseudo_id = f"pseudo:{sw_ip}:{port}"
