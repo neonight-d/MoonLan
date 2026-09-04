@@ -4,6 +4,7 @@ Usage:  python -m moonlan.diag <ip> [--community public] [--timeout 2]
         python -m moonlan.diag --topology
         python -m moonlan.diag --hosts
         python -m moonlan.diag --port <ip> [--iface Gi0/1] [--watch 3]
+        python -m moonlan.diag --config
 
 Community and timeout default to the values from config.yaml. The tool
 writes nothing to the database and does not need the running service.
@@ -27,7 +28,7 @@ import time
 from collections import Counter
 
 from . import counters
-from .config import load_config
+from .config import SECRET_KEYS, load_config
 from .counters import CounterStore, Sample
 from .topology import infer_tree, normalized_fdb, switch_sightings
 from .snmp_collector import (
@@ -436,6 +437,57 @@ async def run_host_inventory(community: str, timeout: int, cfg) -> None:
     print(f"  without a name: {sum(1 for r in rows if not r['name'])}")
 
 
+def _mask(key: str, value) -> str:
+    """Credentials are not printed, only whether they are set."""
+    if key.rsplit(".", 1)[-1] in SECRET_KEYS and value:
+        return "***"
+    if isinstance(value, list):
+        return "[" + ", ".join(str(v) for v in value) + "]"
+    return str(value)
+
+
+def run_config_audit(cfg) -> None:
+    """Section 11: the effective configuration and where it came from.
+
+    A config.yaml written for an older version keeps overriding
+    settings whose meaning has changed (errors_per_minute: 10 used to
+    count discards too) and misses the ones added since, which then
+    apply their defaults silently. Both are visible here.
+    """
+    _section("11. Effective configuration")
+    report = cfg.report
+    if report is None:
+        sys.exit("configuration report is not available")
+    print(
+        f"config.yaml: {report.path}"
+        + ("" if report.exists else "  (not found — every setting is a default)")
+    )
+    print(f"\n{'setting':<42} {'value':<28} source")
+    for key, value, source in report.values:
+        print(f"{key:<42} {_mask(key, value):<28} {source}")
+
+    print(
+        f"\nfrom config.yaml: {len(report.overrides)}, "
+        f"defaults: {len(report.defaults)}"
+    )
+
+    print("\nkeys in config.yaml MoonLan does not know (ignored):")
+    if report.unknown:
+        for key in report.unknown:
+            print(f"  {key}")
+        print("  ^ a typo, or a setting removed in a later version")
+    else:
+        print("  none")
+
+    print("\nkeys missing from config.yaml (defaults apply):")
+    missing = report.defaults if report.exists else []
+    if missing:
+        for key, value, _ in missing:
+            print(f"  {key} = {_mask(key, value)}")
+    else:
+        print("  none")
+
+
 WATCH_INTERVAL = 60  # seconds between --watch measurements
 
 
@@ -576,6 +628,11 @@ def main() -> None:
              "host inventory is and which subnets are missing from it",
     )
     parser.add_argument(
+        "--config", action="store_true",
+        help="print the effective configuration: every setting, its "
+             "value and whether it comes from config.yaml or a default",
+    )
+    parser.add_argument(
         "--port", metavar="SWITCH_IP",
         help="print raw error, discard, octet and packet counters of "
              "the switch's ports",
@@ -589,14 +646,20 @@ def main() -> None:
              f"{WATCH_INTERVAL} s and print the rates the alarm engine sees",
     )
     args = parser.parse_args()
-    if not (args.topology or args.hosts or args.port) and not args.ip:
+    if (
+        not (args.topology or args.hosts or args.port or args.config)
+        and not args.ip
+    ):
         parser.error(
-            "an ip is required unless --topology, --hosts or --port is given"
+            "an ip is required unless --topology, --hosts, --port or "
+            "--config is given"
         )
     cfg = load_config()
     community = args.community or cfg.snmp.community
     timeout = args.timeout or cfg.snmp.timeout
-    if args.port:
+    if args.config:
+        run_config_audit(cfg)
+    elif args.port:
         asyncio.run(
             run_port_counters(
                 args.port, args.iface, args.watch, community, timeout

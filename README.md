@@ -269,6 +269,25 @@ Prints everything MoonLan sees on the device via SNMP: interfaces,
 bridge-port mapping, FDB distribution, LAG-MIB support, visibility of
 the other configured switches. Read-only; does not touch the database.
 
+#### Updating the configuration
+
+```bash
+python -m moonlan.diag --config
+```
+
+Prints every setting with its effective value and whether it came from
+your `config.yaml` or from a default, followed by two lists: keys the
+file has that MoonLan does not know (a typo, or a setting removed in a
+later version) and keys the file lacks, whose defaults now apply.
+Passwords, tokens and the SNMP community are shown as `***`.
+
+Worth running after every upgrade: a `config.yaml` written for an older
+version keeps overriding settings whose meaning has changed — for
+instance `errors_per_minute: 10` used to count discards as errors and
+now applies to damaged frames alone, where the default is 5. The
+service logs the same summary on startup, at WARNING level when the
+file contains keys it does not recognise.
+
 #### How complete is the inventory
 
 ```bash
