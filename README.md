@@ -39,14 +39,14 @@ An open-source alternative to LanTopoLog. MIT license.
   subnet behind a router, for instance — are listed under "Not on map",
   searchable and pingable. `python -m moonlan.diag --hosts` reports how
   complete the inventory is and which subnets are missing from it.
-- A readable map at any size: offline devices sharing a port are drawn
-  as one "Offline · N" node instead of a cloud of grey dots around
-  every switch (`offline_group_threshold`); large groups start
-  collapsed (`offline_group_collapse_at`) and their card lists the
-  devices with when each was last seen. The caption of the selected
-  node gets a rounded backdrop so it stays readable over edges and
-  neighbours, and the force layout stops once the map has settled —
-  hundreds of nodes cost no CPU while you read them.
+- A readable map at any size: offline devices sharing a port hang off
+  one "Offline · N" node instead of surrounding every switch with a
+  cloud of grey dots (`offline_group_threshold`); the devices stay
+  visible behind the group node, and its card lists them with when
+  each was last seen. The caption of the selected node gets a rounded
+  backdrop so it stays readable over edges and neighbours, and the
+  force layout can be stopped with the "Freeze layout" button when the
+  map is where you want it.
 - Continuous ping monitoring of all hosts and switches: green/grey status
   indicator, time of the last reply.
 - Port traffic and error monitoring: a light counters poll (ifHC* octets
@@ -150,9 +150,8 @@ monitored_by_default: false  # true = host_down alarms for every host,
 host_grace_hours: 24       # how long a host stays on the map after its
                            # MAC left the switch tables
 host_retention_days: 30    # then it is deleted from the database
-offline_group_threshold: 2   # offline devices on one port are drawn
-                             # as a single "Offline · N" node
-offline_group_collapse_at: 5 # bigger groups start collapsed
+offline_group_threshold: 2   # offline devices on one port hang off
+                             # a single "Offline · N" node
 
 thresholds:
   errors_per_minute: 5           # port_errors: damaged frames only

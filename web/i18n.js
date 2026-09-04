@@ -113,8 +113,6 @@ const I18N = {
     offlineGroupHint:
       "These devices are missing from the current switch tables; they "
       + "are shown on the port where they were seen last.",
-    showDevices: "Show devices",
-    hideDevices: "Collapse",
   },
   ru: {
     title: "MoonLan — карта сети",
@@ -226,7 +224,5 @@ const I18N = {
     offlineGroupHint:
       "Устройства не найдены в текущих таблицах коммутаторов; показаны "
       + "на порту, где были замечены в последний раз.",
-    showDevices: "Показать устройства",
-    hideDevices: "Свернуть",
   },
 };

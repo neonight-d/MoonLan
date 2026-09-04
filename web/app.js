@@ -163,39 +163,6 @@ function hostLabel(h) {
   return h.name || h.ip || h.mac;
 }
 
-/* ---------- offline groups ---------- */
-
-const COLLAPSE_KEY = "moonlan-offline-collapsed";
-
-function collapseState() {
-  try {
-    return JSON.parse(localStorage.getItem(COLLAPSE_KEY) || "{}");
-  } catch (e) {
-    return {};
-  }
-}
-
-/* Collapsed groups draw only their own node. The choice is per group
-   and remembered; big groups start collapsed. */
-function isCollapsed(groupId) {
-  const group = (topology.offline_groups || []).find((g) => g.id === groupId);
-  if (!group) return false;
-  const stored = collapseState()[groupId];
-  return stored === undefined ? !!group.collapse_default : stored;
-}
-
-function toggleCollapsed(groupId) {
-  const state = collapseState();
-  state[groupId] = !isCollapsed(groupId);
-  try {
-    localStorage.setItem(COLLAPSE_KEY, JSON.stringify(state));
-  } catch (e) {
-    /* private mode: the choice just does not survive a reload */
-  }
-  renderGraph();
-  showDetails(groupId);
-}
-
 /* "11 (ipmi)" — VLAN ID plus name when known */
 function vlanLabel(v) {
   if (!v) return "—";
@@ -493,9 +460,6 @@ function buildGraphData() {
   }
 
   for (const host of topology.hosts) {
-    // members of a collapsed group live in the list and in search,
-    // but the map shows only the group node
-    if (host.via && isCollapsed(host.via)) continue;
     const c = statusColor(host);
     // stale = drawn from the grace window, not from a fresh MAC table
     nodes.push({
@@ -693,7 +657,6 @@ function showDetails(nodeId) {
     const group = (topology.offline_groups || []).find((g) => g.id === nodeId);
     if (!group) return;
     const members = topology.hosts.filter((h) => h.via === nodeId);
-    const collapsed = isCollapsed(nodeId);
     const rows = members
       .map(
         (h) => `<li data-mac="${h.mac}"><span>${hostLabel(h)}</span>
@@ -705,10 +668,7 @@ function showDetails(nodeId) {
       <dt>${t("switchLabel")}</dt><dd>${group.switch}</dd>
       <dt>${t("portLabel")}</dt><dd>${group.port}</dd>
       <dt>${t("lastSeenLabel")}</dt><dd>${fmtTime(group.last_seen_max)}</dd>
-      </dl><ul class="offline-list">${rows}</ul>
-      <button id="offline-toggle" class="panel-btn">${
-        collapsed ? t("showDevices") : t("hideDevices")
-      }</button>`;
+      </dl><ul class="offline-list">${rows}</ul>`;
   } else if (nodeId.startsWith("pseudo:")) {
     const ps = (topology.pseudo_switches || []).find((p) => p.id === nodeId);
     if (!ps) return;
@@ -762,18 +722,9 @@ function showDetails(nodeId) {
   if (monitorBtn) {
     monitorBtn.addEventListener("click", () => toggleMonitor(nodeId));
   }
-  const offlineToggle = document.getElementById("offline-toggle");
-  if (offlineToggle) {
-    offlineToggle.addEventListener("click", () => toggleCollapsed(nodeId));
-  }
-  // a device of the group: focus its node when one is drawn, and open
-  // its card either way
+  // a device of the group: its node is always on the map
   for (const row of els.detailsBody.querySelectorAll(".offline-list li")) {
-    row.addEventListener("click", () => {
-      const id = "host:" + row.dataset.mac;
-      if (nodesDs && nodesDs.get(id)) focusNode(id);
-      else showDetails(id);
-    });
+    row.addEventListener("click", () => focusNode("host:" + row.dataset.mac));
   }
 }
 

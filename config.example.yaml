@@ -65,14 +65,13 @@ monitored_by_default: false
 host_grace_hours: 24
 host_retention_days: 30
 
-# Devices that are offline on the same port are drawn as one node
-# "Offline · N" instead of a cloud of grey dots; groups larger than
-# offline_group_collapse_at start collapsed (0 — no grouping).
-# Офлайн-устройства на одном порту рисуются одним узлом «Офлайн · N»
-# вместо облака серых точек; группы больше offline_group_collapse_at
-# по умолчанию свёрнуты (0 — не группировать).
+# Devices that are offline on the same port hang off one node
+# "Offline · N" instead of a cloud of grey dots around the switch
+# (0 — no grouping). The devices themselves stay on the map.
+# Офлайн-устройства на одном порту собираются под узлом «Офлайн · N»
+# вместо облака серых точек вокруг коммутатора (0 — не группировать).
+# Сами устройства остаются на карте.
 offline_group_threshold: 2
-offline_group_collapse_at: 5
 
 # Alarm thresholds / Пороги тревог
 thresholds:
