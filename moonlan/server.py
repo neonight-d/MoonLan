@@ -667,6 +667,27 @@ def _link_load(link: dict) -> dict | None:
     return None
 
 
+def _log_config() -> None:
+    """One line on how much of the configuration is actually yours —
+    a config.yaml left over from an older version silently overrides
+    settings whose defaults have changed since."""
+    report = config.report
+    if report is None:
+        return
+    summary = (
+        f"Config: {len(report.overrides)} from {report.path}, "
+        f"{len(report.defaults)} defaults"
+    )
+    if report.unknown:
+        log.warning(
+            "%s; unknown keys ignored: %s — check them with "
+            "python -m moonlan.diag --config",
+            summary, ", ".join(report.unknown),
+        )
+    else:
+        log.info("%s", summary)
+
+
 async def purge_old_hosts() -> None:
     """Startup cleanup: drop hosts nothing has seen for retention days."""
     days = config.host_retention_days
@@ -690,6 +711,7 @@ async def lifespan(app: FastAPI):
         level=logging.INFO,
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
     )
+    _log_config()
     if config.demo:
         log.info("MoonLan started in DEMO mode (virtual network)")
     elif not config.switches:
