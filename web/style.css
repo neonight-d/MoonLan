@@ -343,6 +343,27 @@ main { flex: 1; display: flex; min-height: 0; }
 .ports-table tr.highlight td { background: rgba(232, 228, 213, 0.1); }
 .ports-table tr.port-down td { color: var(--text-dim); opacity: 0.65; }
 
+/* devices of an offline group, listed in its card */
+.offline-list {
+  list-style: none;
+  margin: 10px 0 0;
+  padding: 0;
+  max-height: 220px;
+  overflow-y: auto;
+  font-size: 0.85rem;
+}
+.offline-list li {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 5px 6px;
+  border-top: 1px solid var(--line);
+  cursor: pointer;
+}
+.offline-list li:first-child { border-top: none; }
+.offline-list li:hover { background: var(--bg-hover); }
+.offline-list .sub { color: var(--text-dim); font-size: 0.78rem; white-space: nowrap; }
+
 /* "Ports" / "Monitor" buttons inside the details card */
 .panel-btn { margin-top: 12px; margin-right: 8px; font-size: 0.85rem; padding: 5px 12px; }
 .panel-btn.active {

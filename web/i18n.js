@@ -106,6 +106,13 @@ const I18N = {
       "while; the device stays in the inventory until the retention " +
       "window ends.",
     ev_hosts_purged: "Old hosts removed",
+    offlineGroup: "Offline",
+    offlineGroupTitle: "Offline devices · {n}",
+    offlineGroupHint:
+      "These devices are missing from the current switch tables; they "
+      + "are shown on the port where they were seen last.",
+    showDevices: "Show devices",
+    hideDevices: "Collapse",
   },
   ru: {
     title: "MoonLan — карта сети",
@@ -210,5 +217,12 @@ const I18N = {
       "MAC-адрес давно не появлялся в таблицах коммутаторов; устройство " +
       "остаётся в инвентаре до истечения срока хранения.",
     ev_hosts_purged: "Удалены старые хосты",
+    offlineGroup: "Офлайн",
+    offlineGroupTitle: "Офлайн-устройства · {n}",
+    offlineGroupHint:
+      "Устройства не найдены в текущих таблицах коммутаторов; показаны "
+      + "на порту, где были замечены в последний раз.",
+    showDevices: "Показать устройства",
+    hideDevices: "Свернуть",
   },
 };

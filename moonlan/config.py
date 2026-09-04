@@ -104,6 +104,10 @@ class Config:
     # (FDB entries age out in minutes; quiet devices must not blink)
     host_grace_hours: float = 24.0
     host_retention_days: float = 30.0  # then it is deleted from the DB
+    # Offline devices on one port are drawn as a single group node
+    # instead of a cloud of grey dots around the switch
+    offline_group_threshold: int = 2   # 0 disables the grouping
+    offline_group_collapse_at: int = 5  # bigger groups start collapsed
     thresholds: Thresholds = field(default_factory=Thresholds)
     notifications: NotificationsConfig = field(default_factory=NotificationsConfig)
     alarm_notify: dict[str, list[str]] = field(
@@ -164,6 +168,14 @@ def load_config(path: Path | None = None) -> Config:
         )
         cfg.host_retention_days = float(
             raw.get("host_retention_days", cfg.host_retention_days)
+        )
+        cfg.offline_group_threshold = int(
+            raw.get("offline_group_threshold", cfg.offline_group_threshold)
+        )
+        cfg.offline_group_collapse_at = int(
+            raw.get(
+                "offline_group_collapse_at", cfg.offline_group_collapse_at
+            )
         )
 
         thr = raw.get("thresholds") or {}
