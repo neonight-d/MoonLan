@@ -29,6 +29,7 @@ const els = {
   alarmsBody: document.getElementById("alarms-body"),
   alarmsClose: document.getElementById("alarms-close"),
   emptyState: document.getElementById("empty-state"),
+  freezeBtn: document.getElementById("freeze-btn"),
   langRu: document.getElementById("lang-ru"),
   langEn: document.getElementById("lang-en"),
 };
@@ -109,6 +110,7 @@ function applyStatic() {
   if (discHead) discHead.title = t("discTooltip");
   els.langRu.classList.toggle("active", lang === "ru");
   els.langEn.classList.toggle("active", lang === "en");
+  applyFreeze();
 }
 
 function setLang(newLang) {
@@ -133,6 +135,25 @@ function setLang(newLang) {
   if (!els.alarms.classList.contains("hidden") && lastAlarms) {
     renderAlarms();
   }
+}
+
+/* ---------- layout freeze ---------- */
+
+/* The force layout keeps running and slowly tidies the map up; anyone
+   who prefers it still can stop it by hand. Dragging works either way. */
+const FREEZE_KEY = "moonlan-freeze-layout";
+let layoutFrozen = localStorage.getItem(FREEZE_KEY) === "1";
+
+function applyFreeze() {
+  if (network) network.setOptions({ physics: !layoutFrozen });
+  els.freezeBtn.textContent = layoutFrozen ? t("unfreezeBtn") : t("freezeBtn");
+  els.freezeBtn.classList.toggle("active", layoutFrozen);
+}
+
+function toggleFreeze() {
+  layoutFrozen = !layoutFrozen;
+  localStorage.setItem(FREEZE_KEY, layoutFrozen ? "1" : "0");
+  applyFreeze();
 }
 
 /* ---------- helpers ---------- */
@@ -499,24 +520,6 @@ function buildGraphData() {
   return { nodes, edges };
 }
 
-/* ---------- physics ---------- */
-
-const IMPROVED_LAYOUT_LIMIT = 200; // above this the fancy layout is too slow
-const PHYSICS_SETTLE_MS = 2000;
-let physicsTimer = null;
-
-function setPhysics(on) {
-  if (network) network.setOptions({ physics: on });
-}
-
-/* New nodes need somewhere to go: let the simulation run briefly, then
-   put it back to sleep. */
-function nudgePhysics() {
-  setPhysics(true);
-  clearTimeout(physicsTimer);
-  physicsTimer = setTimeout(() => setPhysics(false), PHYSICS_SETTLE_MS);
-}
-
 /* ---------- label backdrop for the selected node ---------- */
 
 /* Where the node's caption is drawn, in canvas coordinates. vis knows
@@ -605,8 +608,6 @@ function renderGraph() {
         forceAtlas2Based: { gravitationalConstant: -60, springLength: 90 },
         stabilization: { iterations: 200 },
       },
-      // the fancy initial layout costs seconds on a large map
-      layout: { improvedLayout: nodes.length <= IMPROVED_LAYOUT_LIMIT },
       interaction: { hover: true },
     };
     network = new vis.Network(
@@ -643,10 +644,7 @@ function renderGraph() {
       hoveredNodeId = null;
       network.redraw();
     });
-    // Once the layout has settled there is nothing left to simulate:
-    // running physics on hundreds of nodes burns CPU and makes the map
-    // breathe under the cursor. Dragging still works without it.
-    network.once("stabilizationIterationsDone", () => setPhysics(false));
+    applyFreeze();  // a freeze chosen earlier survives a reload
     return;
   }
 
@@ -654,13 +652,10 @@ function renderGraph() {
   // the Network, so node positions and the camera are preserved
   const nodeIds = new Set(nodes.map((n) => n.id));
   const edgeIds = new Set(edges.map((e) => e.id));
-  const added = nodes.some((n) => !nodesDs.get(n.id));
   nodesDs.remove(nodesDs.getIds().filter((id) => !nodeIds.has(id)));
   edgesDs.remove(edgesDs.getIds().filter((id) => !edgeIds.has(id)));
   nodesDs.update(nodes);
   edgesDs.update(edges);
-  // only new nodes need a place: a plain refresh leaves physics off
-  if (added) nudgePhysics();
 }
 
 function focusNode(id) {
@@ -1189,6 +1184,7 @@ els.portsClose.addEventListener("click", closePorts);
 for (const th of document.querySelectorAll("#ports th[data-sort]")) {
   th.addEventListener("click", () => setPortsSort(th.dataset.sort));
 }
+els.freezeBtn.addEventListener("click", toggleFreeze);
 els.alarmsBtn.addEventListener("click", toggleAlarms);
 els.alarmsClose.addEventListener("click", () =>
   els.alarms.classList.add("hidden")
