@@ -48,6 +48,8 @@ let portsTimer = null; // its 30 s auto-refresh
 let lastPorts = null; // cached ports payload for re-render
 let portsSort = null; // {key, dir} chosen by clicking a column header
 let portsHighlight = null; // port name to mark, e.g. the one an alarm is on
+let selectedNodeId = null; // its caption gets a backdrop and brighter text
+let hoveredNodeId = null; // the same, weaker, while the mouse is over it
 
 const REFRESH_MS = 30000;
 
@@ -59,6 +61,7 @@ const colors = {
   ok: "#7fc98f",
   panel: "#141c2c",
   alarm: "#d96b6b",
+  line: "#26324a",
 };
 
 /* ---------- localization ---------- */
@@ -363,6 +366,23 @@ function renderSidebar() {
   applySearchFilter();
 }
 
+/* Caption style of a node; the selected one is brighter than the rest */
+function nodeFont(id) {
+  const selected = id === selectedNodeId;
+  if (id.startsWith("sw:")) {
+    return { color: colors.text, face: "system-ui" };
+  }
+  if (id.startsWith("host:")) {
+    return {
+      color: selected ? colors.text : colors.dim,
+      size: 11,
+      face: "ui-monospace",
+      strokeWidth: 0,
+    };
+  }
+  return { color: selected ? colors.text : colors.dim, size: 11 };
+}
+
 function buildGraphData() {
   const nodes = [];
   const edges = [];
@@ -379,7 +399,7 @@ function buildGraphData() {
         border: border,
         highlight: { background: "#1c2739", border: border },
       },
-      font: { color: colors.text, face: "system-ui" },
+      font: nodeFont("sw:" + sw.ip),
       borderWidth: switchHasAlarm(sw.ip) ? 3 : 2,
       margin: 10,
     });
@@ -412,7 +432,7 @@ function buildGraphData() {
       },
       shapeProperties: { borderDashes: [4, 4] },
       borderWidth: 2,
-      font: { color: colors.dim, size: 11 },
+      font: nodeFont(ps.id),
     });
     edges.push({
       id: "psedge:" + ps.id,
@@ -439,7 +459,7 @@ function buildGraphData() {
       },
       shapeProperties: { borderDashes: [2, 3] },
       borderWidth: 2,
-      font: { color: colors.dim, size: 11 },
+      font: nodeFont(group.id),
     });
     edges.push({
       id: "offedge:" + group.id,
@@ -464,12 +484,7 @@ function buildGraphData() {
       size: 9,
       opacity: host.stale ? 0.4 : 1,
       color: { background: c, border: c },
-      font: {
-        color: colors.dim,
-        size: 11,
-        face: "ui-monospace",
-        strokeWidth: 0,
-      },
+      font: nodeFont("host:" + host.mac),
     });
     edges.push({
       id: "hostedge:" + host.mac,
@@ -482,6 +497,82 @@ function buildGraphData() {
   }
 
   return { nodes, edges };
+}
+
+/* ---------- label backdrop for the selected node ---------- */
+
+/* Where the node's caption is drawn, in canvas coordinates. vis knows
+   it exactly (the label was measured on the previous frame); the
+   fallback measures the text under the node's bounding box. */
+function labelBox(ctx, nodeId) {
+  const node = network.body && network.body.nodes[nodeId];
+  const measured = node && node.labelModule && node.labelModule.size;
+  if (measured && measured.width) {
+    return {
+      x: measured.left,
+      y: measured.top,
+      w: measured.width,
+      h: measured.height,
+    };
+  }
+  const item = nodesDs.get(nodeId);
+  const pos = network.getPositions([nodeId])[nodeId];
+  if (!item || !pos) return null;
+  const box = network.getBoundingBox(nodeId);
+  const font = (item.font || {}).size || 14;
+  ctx.font = font + "px " + ((item.font || {}).face || "system-ui");
+  const lines = String(item.label || "").split("\n");
+  const w = Math.max(...lines.map((line) => ctx.measureText(line).width));
+  const h = lines.length * font * 1.25;
+  return { x: pos.x - w / 2, y: box.bottom - h, w, h };
+}
+
+function roundedRect(ctx, x, y, w, h, r) {
+  ctx.beginPath();
+  if (ctx.roundRect) {
+    ctx.roundRect(x, y, w, h, r);
+    return;
+  }
+  ctx.moveTo(x + r, y);
+  ctx.arcTo(x + w, y, x + w, y + h, r);
+  ctx.arcTo(x + w, y + h, x, y + h, r);
+  ctx.arcTo(x, y + h, x, y, r);
+  ctx.arcTo(x, y, x + w, y, r);
+  ctx.closePath();
+}
+
+/* Drawn from beforeDrawing, i.e. under the nodes and their captions */
+function drawLabelBackdrop(ctx, nodeId, strong) {
+  const box = labelBox(ctx, nodeId);
+  if (!box || !box.w) return;
+  const padX = 6;
+  const padY = 4;
+  ctx.save();
+  ctx.globalAlpha = strong ? 0.85 : 0.5;
+  ctx.fillStyle = colors.panel;
+  roundedRect(ctx, box.x - padX, box.y - padY, box.w + padX * 2, box.h + padY * 2, 4);
+  ctx.fill();
+  if (strong) {
+    ctx.globalAlpha = 1;
+    ctx.strokeStyle = colors.line;
+    ctx.lineWidth = 1;
+    ctx.stroke();
+  }
+  ctx.restore();
+}
+
+/* The selected caption is also brighter than the others */
+function setSelectedNode(id) {
+  const previous = selectedNodeId;
+  selectedNodeId = id;
+  const updates = [];
+  for (const nodeId of [previous, id]) {
+    if (nodeId && nodesDs && nodesDs.get(nodeId)) {
+      updates.push({ id: nodeId, font: nodeFont(nodeId) });
+    }
+  }
+  if (updates.length) nodesDs.update(updates);
+  if (network) network.redraw();
 }
 
 function renderGraph() {
@@ -504,13 +595,33 @@ function renderGraph() {
       options
     );
     network.on("click", (params) => {
-      if (params.nodes.length) showDetails(params.nodes[0]);
-      else if (
+      if (params.nodes.length) {
+        setSelectedNode(params.nodes[0]);
+        showDetails(params.nodes[0]);
+      } else if (
         params.edges.length &&
         String(params.edges[0]).startsWith("link:")
-      )
+      ) {
+        setSelectedNode(null);
         showLinkDetails(params.edges[0]);
-      else hideDetails();
+      } else {
+        setSelectedNode(null);
+        hideDetails();
+      }
+    });
+    network.on("beforeDrawing", (ctx) => {
+      if (hoveredNodeId && hoveredNodeId !== selectedNodeId) {
+        drawLabelBackdrop(ctx, hoveredNodeId, false);
+      }
+      if (selectedNodeId) drawLabelBackdrop(ctx, selectedNodeId, true);
+    });
+    network.on("hoverNode", (params) => {
+      hoveredNodeId = params.node;
+      network.redraw();
+    });
+    network.on("blurNode", () => {
+      hoveredNodeId = null;
+      network.redraw();
     });
     return;
   }
@@ -529,6 +640,7 @@ function focusNode(id) {
   if (!network) return;
   network.focus(id, { scale: 1.2, animation: true });
   network.selectNodes([id]);
+  setSelectedNode(id);
   showDetails(id);
 }
 
