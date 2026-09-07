@@ -34,7 +34,12 @@ from collections import Counter
 from . import counters, pinger
 from .config import SECRET_KEYS, load_config
 from .counters import CounterStore, Sample
-from .topology import infer_tree, normalized_fdb, switch_sightings
+from .topology import (
+    infer_tree,
+    normalized_fdb,
+    switch_sightings,
+    trunk_ports,
+)
 from .snmp_collector import (
     PHYSICAL_IF_TYPES,
     OID_BRIDGE_ADDRESS,
@@ -304,6 +309,14 @@ async def run_topology_view(community: str, timeout: int, cfg) -> None:
     print("uplinks:")
     for ip, port in sorted(uplinks.items()):
         print(f"  {label(ip)}: {port_name(ip, port)}")
+    # Everything else carries hosts. A port wrongly listed here takes
+    # every device behind it off the map, so the reason is spelled out.
+    print("trunk ports (excluded from host binding):")
+    for ip, ports in sorted(trunk_ports(switches, switches_on_port, uplinks).items()):
+        listed = ", ".join(
+            f"{port_name(ip, i)} ({why})" for i, why in sorted(ports.items())
+        )
+        print(f"  {label(ip)}: {listed or 'none'}")
     print("LAG groups:")
     any_groups = False
     for sw in switches:

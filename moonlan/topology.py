@@ -49,7 +49,6 @@ from .snmp_collector import SwitchData
 
 log = logging.getLogger(__name__)
 
-UPLINK_MAC_THRESHOLD = 8
 UNMANAGED_THRESHOLD = 3  # hosts per port; more — draw a pseudo-switch
 
 
@@ -436,6 +435,35 @@ def infer_tree(
     return links, uplinks, info
 
 
+def trunk_ports(
+    switches: list[SwitchData],
+    switches_on_port: dict[str, dict[int, set[str]]],
+    uplinks: dict[str, int | None],
+) -> dict[str, dict[int, str]]:
+    """Ports leading to other switches: ip -> {ifIndex: why it is a trunk}.
+
+    A port is a trunk only when it structurally is one — another polled
+    switch is visible on it, or the tree inference chose it as the
+    uplink toward the root. Until v0.5.7 a port with more than eight
+    MACs behind it also counted, a leftover from the naive v0.1 link
+    algorithm. Trunks are excluded from host binding and from
+    pseudo-switch detection, so on a real network that heuristic swept
+    every device behind an unmanaged switch off the map and into the
+    "not on map" list. Many devices on one port is exactly what
+    unmanaged_threshold is for.
+    """
+    trunks: dict[str, dict[int, str]] = {}
+    for sw in switches:
+        ports: dict[int, str] = {}
+        for if_index, neighbors in switches_on_port.get(sw.ip, {}).items():
+            ports[if_index] = "sees " + ", ".join(sorted(neighbors))
+        uplink = uplinks.get(sw.ip)
+        if uplink is not None:
+            ports.setdefault(uplink, "uplink toward the root")
+        trunks[sw.ip] = ports
+    return trunks
+
+
 def build_topology(
     collected: Iterable[SwitchData],
     unmanaged_threshold: int = UNMANAGED_THRESHOLD,
@@ -469,16 +497,24 @@ def build_topology(
     switches_on_port, sees = switch_sightings(switches, link_fdb)
 
     # 1. Switch-to-switch links: a tree grown from the root
-    links, _uplinks, _info = infer_tree(switches, switches_on_port, sees)
+    links, uplinks, _info = infer_tree(switches, switches_on_port, sees)
 
-    # 2. Trunk ports: any port with another switch behind it, or with
-    # too many MACs; they are excluded from host binding
-    uplink_ports: dict[str, set[int]] = {}
-    for sw in switches:
-        uplink_ports[sw.ip] = set(switches_on_port[sw.ip])
-        for if_index, count in Counter(link_fdb[sw.ip].values()).items():
-            if count > UPLINK_MAC_THRESHOLD:
-                uplink_ports[sw.ip].add(if_index)
+    # 2. Trunk ports: they lead to other switches and carry no hosts
+    trunks = trunk_ports(switches, switches_on_port, uplinks)
+    uplink_ports: dict[str, set[int]] = {
+        ip: set(ports) for ip, ports in trunks.items()
+    }
+    switch_by_ip = {sw.ip: sw for sw in switches}
+    for ip, ports in sorted(trunks.items()):
+        # one line per poll: a device silently vanishing from the map
+        # is almost always a port that became a trunk by mistake
+        log.debug(
+            "%s trunk ports: %s", ip,
+            ", ".join(
+                f"{port_name(switch_by_ip[ip], i)} ({why})"
+                for i, why in sorted(ports.items())
+            ) or "none",
+        )
 
     # 3. End devices: pick the port with the fewest MAC "neighbors"
     mac_to_switch: dict[str, SwitchData] = {}
@@ -496,7 +532,6 @@ def build_topology(
             if mac not in best_location or candidate < best_location[mac]:
                 best_location[mac] = candidate
 
-    switch_by_ip = {sw.ip: sw for sw in switches}
     hosts = []
     # keyed by port NAME, the same key the database and the caller use
     hosts_per_port: dict[tuple[str, str], list[dict]] = {}
