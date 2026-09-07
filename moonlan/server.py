@@ -21,7 +21,12 @@ from .alarms import AlarmEngine
 from .config import Config, load_config
 from .db import Database
 from .notify import Notifier
-from .snmp_collector import SnmpCollector, SwitchData, is_random_mac
+from .snmp_collector import (
+    SnmpCollector,
+    SwitchData,
+    is_random_mac,
+    is_valid_mac,
+)
 from .topology import FdbStability, TopologyState, build_topology, port_name
 
 log = logging.getLogger("moonlan")
@@ -729,6 +734,28 @@ def _log_config() -> None:
         log.info("%s", summary)
 
 
+async def purge_invalid_macs() -> None:
+    """Startup cleanup: drop records whose MAC cannot be real.
+
+    Before the FDB rows were validated, malformed table entries were
+    stored as devices; those records are still in the database and on
+    the map.
+    """
+    rows = await asyncio.to_thread(db.hosts_by_mac)
+    bad = [mac for mac in rows if not is_valid_mac(mac)]
+    if not bad:
+        return
+    removed = await asyncio.to_thread(db.delete_hosts, bad)
+    log.info(
+        "Removed %d host records with impossible MAC addresses "
+        "(multicast, reserved or malformed)", removed,
+    )
+    await asyncio.to_thread(
+        db.add_event, time.time(), "hosts_purged", "",
+        f"{removed} records with impossible MAC addresses",
+    )
+
+
 async def purge_old_hosts() -> None:
     """Startup cleanup: drop hosts nothing has seen for retention days."""
     days = config.host_retention_days
@@ -760,6 +787,7 @@ async def lifespan(app: FastAPI):
             "No switches are configured in config.yaml. Add addresses to "
             "the switches section or start with MOONLAN_DEMO=1."
         )
+    await purge_invalid_macs()
     await purge_old_hosts()
     await alarm_engine.load()
     await alarm_engine.clear_missing_hosts(
