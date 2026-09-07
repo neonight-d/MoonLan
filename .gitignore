@@ -222,3 +222,8 @@ __marimo__/
 config.yaml
 moonlan.db
 .claude/
+*.db
+*.db.bak
+*.pid
+*.log
+docs/tz/
