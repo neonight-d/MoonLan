@@ -87,6 +87,12 @@ const I18N = {
     monitorBtn: "Monitor",
     al_port_hosts_down: "Mass host outage",
     al_lag_degraded: "LAG degraded",
+    al_port_frame_corruption: "Frame corruption",
+    suspectMacs: "Suspected frame corruption: {n} addresses",
+    suspectMacsHint:
+      "The MAC table of this port holds addresses a few bits away from "
+      + "a real one: the switch learned them from damaged frames. Check "
+      + "the cable, the patch cord and the port itself.",
     lagMembersShort: "({active}/{total} members)",
     clearBtn: "Clear",
     clearConfirm: "Clear this alarm?",
@@ -210,6 +216,12 @@ const I18N = {
     monitorBtn: "Наблюдать",
     al_port_hosts_down: "Массовое отключение хостов",
     al_lag_degraded: "Деградация LAG",
+    al_port_frame_corruption: "Повреждение кадров",
+    suspectMacs: "Подозрение на повреждение кадров: {n} адресов",
+    suspectMacsHint:
+      "В таблице MAC этого порта есть адреса, отличающиеся от реального "
+      + "на несколько бит: коммутатор выучил их из повреждённых кадров. "
+      + "Проверьте кабель, патч-корд и сам порт.",
     lagMembersShort: "({active}/{total})",
     clearBtn: "Снять",
     clearConfirm: "Снять эту тревогу?",

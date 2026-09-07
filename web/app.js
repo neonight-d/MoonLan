@@ -867,7 +867,24 @@ function renderPorts(data) {
         // monitored devices behind this port
         name += " ★" + (p.monitored_hosts > 1 ? p.monitored_hosts : "");
       }
-      td(name);
+      const nameCell = document.createElement("td");
+      nameCell.textContent = name;
+      // addresses this port's damaged frames invented, with the real
+      // one each of them is a distortion of
+      const suspect = p.suspect_macs || [];
+      if (suspect.length) {
+        const chip = document.createElement("span");
+        chip.className = "chip warn";
+        chip.textContent = "⚠ " + suspect.length;
+        chip.title =
+          fmt("suspectMacs", { n: suspect.length }) + "\n" +
+          t("suspectMacsHint") + "\n" +
+          suspect
+            .map((s) => s.mac + " ← " + s.sample + " (" + s.distance + ")")
+            .join("\n");
+        nameCell.append(" ", chip);
+      }
+      tr.append(nameCell);
       const dot = document.createElement("span");
       dot.className = "dot " + (p.oper_up ? "up" : "down");
       td(dot);
@@ -1035,7 +1052,9 @@ function renderAlarms() {
       // counter alarms: jump straight to the port they are about
       if (
         a.switch_ip &&
-        (a.type === "port_errors" || a.type === "port_discards")
+        (a.type === "port_errors" ||
+          a.type === "port_discards" ||
+          a.type === "port_frame_corruption")
       ) {
         const link = document.createElement("button");
         link.className = "alarm-link";

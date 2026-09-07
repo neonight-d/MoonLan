@@ -23,6 +23,12 @@ v0.5 scenarios (the demo doubles as the regression suite):
 - two latecomer hosts that appear from the second scan on -> new_mac
   alarms (the first scan is the initial inventory and stays silent).
 
+v0.5.8 scenarios:
+- a port whose cable starts failing on the second scan: the switch
+  learns five distorted copies of the address of the device behind it
+  -> port_frame_corruption, and the copies never reach the map;
+- a device visible only through the trunks, placed approximately.
+
 v0.5.3 scenarios:
 - hosts last seen hours ago: on the map, greyed out, no alarms — one
   alone on its port, two on another and six on a third (both gathered
@@ -65,6 +71,31 @@ LAG_IFINDEX = 1000  # ifIndex of the logical port Po1
 # The second one is a phone with a randomized (locally administered)
 # MAC — the kind that leaves a new "device" behind on every visit
 LATECOMERS = {"00:ee:00:00:00:01": 9, "b2:1a:7c:44:55:66": 10}  # mac -> ray1 port
+
+# A port with a failing cable. Two real cameras live behind it; from
+# the second scan on, the switch also learns distorted copies of the
+# first one's address out of the damaged frames — different ones every
+# poll, which is exactly how it looks on real hardware. The second
+# camera is 12 bits away from the first: far enough that the 8-bit rule
+# leaves it alone, which is the point of having a threshold.
+CORRUPT_PORT = 6            # Gi0/6 of access-sw-2
+CORRUPT_REAL = "20:7b:d5:1a:31:8d"
+CORRUPT_IP = "10.0.99.57"
+CORRUPT_NEIGHBOR = "20:77:b5:7c:37:87"
+CORRUPT_NEIGHBOR_IP = "10.0.99.58"
+CORRUPT_PER_SCAN = 3        # invented addresses per poll
+
+
+def _corrupt_copies(scan: int) -> list[str]:
+    """The distorted copies this poll's damaged frames produced."""
+    octets = [int(part, 16) for part in CORRUPT_REAL.split(":")]
+    copies = []
+    for n in range(CORRUPT_PER_SCAN):
+        bit = (scan * CORRUPT_PER_SCAN + n) % 32  # never the first octet
+        flipped = list(octets)
+        flipped[2 + bit // 8] ^= 1 << (bit % 8)
+        copies.append(":".join(f"{o:02x}" for o in flipped))
+    return copies
 
 
 def _rand_mac(prefix: str = "00:4d:4c") -> str:
@@ -185,6 +216,19 @@ def demo_network() -> list[SwitchData]:
     for port in (12, 13, 14):
         connect_host(core, port, 11)
 
+    # A real device on access-sw-2 Gi0/6 whose cable starts failing from
+    # the second scan on: the switch then learns copies of its address
+    # out of the damaged frames. On a real port the copies differ every
+    # time; fixed ones make the demo a repeatable regression case.
+    ray2.ports[CORRUPT_PORT].oper_up = True
+    ray2.port_pvid[CORRUPT_PORT] = 8
+    macs = [CORRUPT_REAL, CORRUPT_NEIGHBOR]
+    if _scan_count >= 2:
+        macs += _corrupt_copies(_scan_count)
+    for mac in macs:
+        ray2.fdb[mac] = CORRUPT_PORT
+        core.fdb[mac] = core_port_to_ray[ray2.ip]
+
     if _scan_count == 1:
         _report_rejected_fdb(ray4)
 
@@ -247,6 +291,19 @@ def enrich_db(db: Database, hosts: list[dict]) -> None:
     # An address ARP knows is confirmed on the spot, so the demo must
     # not hand one to a MAC whose whole point is to stay unconfirmed
     hosts = [h for h in hosts if not h.get("unconfirmed")]
+    # The device whose frames arrive damaged is an ordinary one: it has
+    # an IP, answers ping and stays on the map — only the copies of its
+    # address do not. Its address is set aside from the positional
+    # assignment below so it never drifts.
+    hosts = [h for h in hosts if h["mac"] not in (CORRUPT_REAL, CORRUPT_NEIGHBOR)]
+    for mac, ip, name in (
+        (CORRUPT_REAL, CORRUPT_IP, "cam-4floor.demo.lan"),
+        (CORRUPT_NEIGHBOR, CORRUPT_NEIGHBOR_IP, "cam-4floor-2.demo.lan"),
+    ):
+        db.set_ips({mac: ip})
+        db.set_name(mac, name)
+        if not rows.get(mac, {}).get("last_ping_ok"):
+            db.set_ping_state(mac, up=True, last_ok=now)
     for i, host in enumerate(hosts):
         mac = host["mac"]
         if i % 5 == 4:
@@ -403,6 +460,9 @@ class DemoCounters:
     ERROR_SWITCH = "10.0.0.22"  # access-sw-2
     ERROR_PORT = 3              # Gi0/3: damaged frames
     DISCARD_PORT = 4            # Gi0/4: filtering, no errors at all
+    # Gi0/6 is the failing cable: the same fault the invented MAC
+    # addresses come from, so the corruption alarm goes critical
+    CORRUPT_ERROR_PORT = CORRUPT_PORT
     AVG_FRAME_BYTES = 800       # to turn octets into packet counters
     # One member of the core—ray1 LACP (the same physical cable seen
     # from both ends) flaps on a timer -> lag_degraded raise and clear,
@@ -455,6 +515,9 @@ class DemoCounters:
                         # port's frames, so both error rules agree
                         tot[2] += 90 * dt / 60
                         tot[3] += 30 * dt / 60
+                    elif p.if_index == self.CORRUPT_ERROR_PORT:
+                        tot[2] += 40 * dt / 60
+                        tot[3] += 20 * dt / 60
                     elif p.if_index == self.DISCARD_PORT:
                         # a port that filters a lot and breaks nothing
                         tot[4] += 600 * dt / 60

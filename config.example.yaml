@@ -92,6 +92,14 @@ ip_confirm_hours: 6
 # (1 — прежнее поведение).
 new_host_confirm_scans: 2
 
+# Keep addresses that look like damaged copies of a real one (see
+# thresholds.corruption_*) off the map. false draws them instead —
+# a way to see the damage rather than only be told about it.
+# Не показывать на карте адреса, похожие на искажённые копии реального
+# (см. thresholds.corruption_*). false — рисовать их: способ увидеть
+# повреждение своими глазами, а не только прочитать о нём в тревоге.
+filter_suspect_macs: true
+
 # Alarm thresholds / Пороги тревог
 thresholds:
   # Errors are damaged frames (cable, duplex, transceiver) — rare and
@@ -110,6 +118,18 @@ thresholds:
   port_utilization_percent: 90   # port_util: % of the link speed
                                  # (for a LAG — of the total speed)
                                  # % от скорости линка (для LAG — от суммарной)
+  # Frame corruption: a failing cable makes the switch learn addresses
+  # a few bits away from the real one. How far a MAC may sit from a
+  # confirmed one on the same port and still be read as its damaged
+  # copy, and how many copies raise port_frame_corruption within
+  # notifications.flap_window_seconds.
+  # Повреждение кадров: из-за плохого кабеля коммутатор учит адреса,
+  # отличающиеся от настоящего на несколько бит. На сколько бит MAC
+  # может отличаться от подтверждённого на том же порту, чтобы считаться
+  # его искажённой копией, и сколько таких копий за окно
+  # notifications.flap_window_seconds поднимают port_frame_corruption.
+  corruption_hamming_bits: 8
+  corruption_macs_threshold: 5
   mass_down_hosts: 3             # port_hosts_down: devices (unique IPs)
                                  # of one port gone silent in one ping
                                  # cycle (0 — disable)
@@ -159,3 +179,4 @@ alarm_notify:
   new_mac: [syslog]
   port_hosts_down: [email, telegram, syslog]
   lag_degraded: [telegram, syslog]
+  port_frame_corruption: [telegram, syslog]
