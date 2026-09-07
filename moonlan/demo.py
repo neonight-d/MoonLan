@@ -244,6 +244,9 @@ def enrich_db(db: Database, hosts: list[dict]) -> None:
     now = time.time()
 
     rows = db.hosts_by_mac()
+    # An address ARP knows is confirmed on the spot, so the demo must
+    # not hand one to a MAC whose whole point is to stay unconfirmed
+    hosts = [h for h in hosts if not h.get("unconfirmed")]
     for i, host in enumerate(hosts):
         mac = host["mac"]
         if i % 5 == 4:

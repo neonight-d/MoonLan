@@ -81,6 +81,17 @@ offline_group_threshold: 2
 # устройство, и его ответы выдавали бы старую запись за живую.
 ip_confirm_hours: 6
 
+# How many polls a brand-new MAC must appear in before it becomes a
+# device on the map. A MAC ARP already knows by IP is taken at once, so
+# real newcomers are not delayed; damaged frames invent addresses that
+# live for a poll or two and now never reach the map (1 — old behavior).
+# Сколько опросов новый MAC должен подтвердиться, прежде чем станет
+# устройством на карте. MAC, известный ARP по IP, принимается сразу,
+# поэтому реальные устройства не задерживаются; повреждённые кадры
+# порождают адреса-однодневки, и они больше не попадают на карту
+# (1 — прежнее поведение).
+new_host_confirm_scans: 2
+
 # Alarm thresholds / Пороги тревог
 thresholds:
   # Errors are damaged frames (cable, duplex, transceiver) — rare and
