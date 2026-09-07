@@ -33,6 +33,7 @@ from collections import Counter
 
 from . import counters, pinger
 from .config import SECRET_KEYS, load_config
+from .corruption import find_suspects, sample_mac
 from .counters import CounterStore, Sample
 from .topology import (
     infer_tree,
@@ -553,8 +554,56 @@ async def _port_maps(
     return port_to_ifindex, names, pvid
 
 
+def _corruption_section(
+    host: str, rows: list[dict], names: dict[int, str],
+    port_to_ifindex: dict[int, int], cfg,
+) -> None:
+    """The distorted copies in this MAC table, grouped by port.
+
+    The database says which addresses are real (confirmed, or holding
+    an IP); everything else on the same port is measured against them.
+    """
+    print("\nsuspected corrupted MACs:")
+    db_rows = {r["mac"]: r for r in _db_snapshot(cfg.db_path) or []}
+    hosts: list[dict] = []
+    pending: set[str] = set()
+    for row in rows:
+        if row["reason"]:
+            continue
+        if_index = port_to_ifindex.get(row["bridge_port"])
+        port = names.get(if_index, str(row["bridge_port"]))
+        hosts.append({"mac": row["mac"], "switch": host, "port": port})
+        record = db_rows.get(row["mac"])
+        if record is None or (
+            not record.get("confirmed") and not record["ip"]
+        ):
+            pending.add(row["mac"])
+    suspects = find_suspects(
+        hosts, pending, cfg.thresholds.corruption_hamming_bits
+    )
+    if not suspects:
+        print("  none — every address here is either confirmed or far "
+              "from any confirmed one")
+        return
+    for (_ip, port), found in sorted(suspects.items()):
+        sample = sample_mac(found)
+        print(f"  {port}: {len(found)} copies of {sample}")
+        for s in found:
+            record = db_rows.get(s["mac"], {})
+            has_ip = record.get("ip") or "no IP"
+            print(
+                f"    {s['mac']}  {s['distance']} bit(s) from "
+                f"{s['sample']}  {has_ip}"
+            )
+    print(
+        f"  ^ addresses within {cfg.thresholds.corruption_hamming_bits} bits "
+        f"of a real one on the same port: the switch learned them from "
+        f"damaged frames"
+    )
+
+
 async def run_fdb_dump(
-    host: str, port_filter: str | None, community: str, timeout: int
+    host: str, port_filter: str | None, community: str, timeout: int, cfg
 ) -> None:
     """Section 12: the raw MAC table with the verdict on every row.
 
@@ -621,6 +670,7 @@ async def run_fdb_dump(
         f"bad MAC: {rejected - bad_suffix})"
     )
     print(f"locally administered (randomized) MACs among accepted: {local_admin}")
+    _corruption_section(host, rows, names, port_to_ifindex, cfg)
 
 
 def _is_mac(text: str) -> bool:
@@ -665,8 +715,16 @@ async def run_host_diag(
 
     collector = SnmpCollector(community=community, timeout=timeout)
 
+    # Which MACs identify a switch: a port carrying one is a trunk, and
+    # a device seen only on trunks is behind equipment nobody polls
+    switch_macs: set[str] = set()
+    for switch in cfg.switches:
+        _name, macs = await _own_macs_light(collector, switch)
+        switch_macs |= macs
+
     print("\nMAC tables of the switches:")
     seen_on: list[str] = []
+    trunk_only = True
     for switch in cfg.switches:
         if not mac:
             print(f"  {switch}: no MAC known, nothing to look for")
@@ -675,7 +733,12 @@ async def run_host_diag(
         if not names:
             print(f"  {switch}: does not respond to SNMP")
             continue
-        found = [r for r in await _fdb_rows(collector, switch) if r["mac"] == mac]
+        rows_here = await _fdb_rows(collector, switch)
+        trunks = {
+            r["bridge_port"] for r in rows_here
+            if not r["reason"] and r["mac"] in switch_macs
+        }
+        found = [r for r in rows_here if r["mac"] == mac]
         if not found:
             print(f"  {switch}: not in the MAC table")
             continue
@@ -683,11 +746,16 @@ async def run_host_diag(
             if_index = port_to_ifindex.get(row["bridge_port"])
             name = names.get(if_index, str(if_index))
             state = f"REJECTED ({row['reason']})" if row["reason"] else "accepted"
+            trunk = row["bridge_port"] in trunks
             if not row["reason"]:
-                seen_on.append(f"{switch} port {name}")
+                seen_on.append(
+                    f"{switch} port {name}" + (" (a trunk)" if trunk else "")
+                )
+                trunk_only = trunk_only and trunk
             print(
                 f"  {switch}: port {name}, VLAN "
                 f"{pvid.get(if_index, '—')}, {state}"
+                + (", trunk port — another switch is behind it" if trunk else "")
             )
             print(f"      OID {row['oid']}")
 
@@ -718,16 +786,30 @@ async def run_host_diag(
         print("  replies" if replied else "  no reply")
 
     print("\nsummary:")
-    print("  " + _host_summary(record, mac, ip, seen_on, arp_says_mac, replied))
+    print("  " + _host_summary(
+        record, mac, ip, seen_on, arp_says_mac, replied,
+        trunk_only and bool(seen_on),
+    ))
 
 
 def _host_summary(
     record, mac: str, ip: str, seen_on: list[str],
-    arp_holder: str, replied: bool | None,
+    arp_holder: str, replied: bool | None, trunk_only: bool = False,
 ) -> str:
     """One sentence on why the device looks the way it looks."""
     if seen_on:
-        return f"the MAC is in the table of {', '.join(seen_on)} — the device is present"
+        where = ", ".join(seen_on)
+        if not trunk_only:
+            return f"the MAC is in the table of {where} — the device is present"
+        placed = (
+            f"MoonLan draws it on {record['switch_ip']} {record['port']}"
+            if record and record["switch_ip"] else "MoonLan has not placed it yet"
+        )
+        return (
+            f"the MAC is visible ONLY on trunk ports ({where}), so the device "
+            f"hangs off a switch MoonLan does not poll; its location is "
+            f"approximate — {placed}"
+        )
     if record is None:
         return "nothing is known about this device"
     parts = ["no switch reports this MAC, so the device counts as offline"]
@@ -936,7 +1018,7 @@ def main() -> None:
     elif args.host:
         asyncio.run(run_host_diag(args.host, community, timeout, cfg))
     elif args.fdb:
-        asyncio.run(run_fdb_dump(args.fdb, args.iface, community, timeout))
+        asyncio.run(run_fdb_dump(args.fdb, args.iface, community, timeout, cfg))
     elif args.port:
         asyncio.run(
             run_port_counters(
