@@ -8,7 +8,7 @@ displays it in a browser.
 
 An open-source alternative to LanTopoLog. MIT license.
 
-## Features (v0.5)
+## Features (v0.5.8)
 
 - SNMP v2c polling of switches: device name, ports, speeds, statuses.
 - MAC address tables (BRIDGE-MIB and Q-BRIDGE-MIB) from every switch,
@@ -59,6 +59,21 @@ An open-source alternative to LanTopoLog. MIT license.
   marked as such — that is what leaves a trail of one-off devices.
   `python -m moonlan.diag --fdb <switch>` shows the verdict on every
   row, `--host <ip|mac>` explains one device in a sentence.
+- A new MAC waits before it becomes a device: it has to appear in
+  `new_host_confirm_scans` polls (default 2), or be vouched for by ARP
+  with an IP, which is what happens to every real newcomer. Addresses
+  a failing cable invents live for a poll or two and now never reach
+  the map, the device counter or the journal.
+- Frame corruption is named: an unconfirmed, IP-less address a few bits
+  away from a real one on the same port is a damaged copy of it, not a
+  device. Such addresses are held off the map, listed on the port with
+  a ⚠ mark, and once enough of them pile up the port raises
+  `port_frame_corruption` — critical when the port's error counters
+  agree. See "Frame corruption: how to read the alarm" below.
+- Devices behind switches MoonLan does not poll stay on the map: a MAC
+  visible only on trunk ports is drawn on the trunk with the best claim
+  to it, marked "approximate" with a dashed edge, instead of
+  disappearing into "Not on map" (`place_trunk_only_hosts`).
 - Port traffic and error monitoring: a light counters poll (ifHC* octets
   with a 32-bit fallback, errors, discards) turns deltas into Mbit/s and
   errors/min per port. The "Ports" panel of a switch shows live rates;
@@ -164,6 +179,12 @@ offline_group_threshold: 2   # offline devices on one port hang off
                              # a single "Offline · N" node
 ip_confirm_hours: 6          # a stale host whose IP ARP has not confirmed
                              # for this long releases the address
+new_host_confirm_scans: 2    # polls a new MAC must appear in before it
+                             # becomes a device (an IP from ARP is enough)
+filter_suspect_macs: true    # keep damaged copies of a real address off
+                             # the map (false — draw them)
+place_trunk_only_hosts: true # a MAC seen only on trunks is drawn there,
+                             # marked "approximate"
 
 thresholds:
   errors_per_minute: 5           # port_errors: damaged frames only
@@ -174,6 +195,10 @@ thresholds:
                                  # (for a LAG — of the total speed)
   mass_down_hosts: 3             # port_hosts_down: devices of one port
                                  # gone silent in one ping cycle
+  corruption_hamming_bits: 8     # how far a MAC may sit from a real one
+                                 # on the same port and still be its copy
+  corruption_macs_threshold: 5   # copies on one port within the flap
+                                 # window -> port_frame_corruption
 
 notifications:
   cooldown_seconds: 300      # anti-spam per (alarm type, subject)
@@ -387,6 +412,53 @@ setting). Discards → look at the configuration and the traffic profile
 (VLANs on the port, storm control, whether the load has outgrown the
 link speed).
 
+#### Frame corruption: how to read the alarm
+
+```
+WARNING port_frame_corruption: 10.0.0.44:1/3 — 7 distorted copies of
+20:7b:d5:1a:31:8d in the MAC table (20:7b:d5:1a:31:9d, 20:7b:d5:7a:34:07,
+…) — check the cable, the patch cord and the port
+```
+
+A switch learns the source address of every frame it forwards. When the
+frames themselves arrive damaged — a failing cable or patch cord, a
+dying transceiver, interference on a long run — the switch faithfully
+learns the damaged addresses too. Next to the real `20:7b:d5:1a:31:8d`
+the MAC table grows `20:7b:d5:1a:31:9d` (one bit away),
+`20:7b:d5:7a:34:07`, `20:77:b5:7c:37:87`. Each of them lives for a poll
+or two, never answers ARP, and used to settle on the map as a device.
+
+MoonLan reads the pattern for what it is: an unconfirmed, IP-less
+address within `corruption_hamming_bits` (8) of a confirmed one **on
+the same port**. Those addresses are kept off the map, the port carries
+a ⚠ mark in the "Ports" panel listing them, and once
+`corruption_macs_threshold` (5) of them accumulate inside
+`notifications.flap_window_seconds`, the port raises the alarm. If the
+port's error counters are alarming too — or were recently — the
+standing alarm is upgraded to **critical** and says so: two independent
+symptoms of one physical fault.
+
+To see the evidence:
+
+```bash
+python -m moonlan.diag --fdb 10.0.0.44            # whole MAC table
+python -m moonlan.diag --fdb 10.0.0.44 --iface 1/3  # one port
+```
+
+The last section groups the corrupted addresses by port: the real MAC
+each group is a distortion of, every copy with its Hamming distance and
+whether anything ever gave it an IP.
+
+What to do: replace the patch cord first, then the cable run, then move
+the device to another port. If the copies stop appearing, the alarm
+clears itself once the flap window passes without a new one.
+
+Two devices with neighbouring factory MACs on one port are not a false
+positive: they answer ARP, which confirms them and takes them out of
+the candidate set. A device that never gets an IP and sits near another
+one can be flagged — `filter_suspect_macs: false` draws such addresses
+anyway, and `--fdb` always shows what was matched against what.
+
 ## How it works
 
 1. MoonLan polls every switch from `config.yaml` via SNMP: `sysName`,
@@ -434,6 +506,7 @@ MoonLan/
 │   ├── snmp_collector.py   # SNMP polling of switches (FDB, ARP, LACP, VLAN)
 │   ├── topology.py         # topology inference
 │   ├── counters.py         # port traffic/error counters and rates
+│   ├── corruption.py       # damaged copies of a real MAC on one port
 │   ├── alarms.py           # stateful alarm engine
 │   ├── notify.py           # email/Telegram/Syslog notifications
 │   ├── db.py               # SQLite: hosts, event journal, alarms
