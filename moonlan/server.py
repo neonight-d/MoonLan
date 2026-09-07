@@ -16,7 +16,7 @@ from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from . import __version__, counters, demo, pinger
+from . import __version__, corruption, counters, demo, pinger
 from .alarms import AlarmEngine
 from .config import Config, load_config
 from .db import Database
@@ -68,6 +68,10 @@ fdb_macs: set[str] = set()
 # that already exists must not vanish while any device is left on the
 # port, or the nodes would jump around between scans
 prev_pseudo_ports: set[tuple[str, str]] = set()
+
+# (switch ip, port) -> the distorted MACs of the latest scan, for the
+# ports panel and the diagnostics
+suspect_by_port: dict[tuple[str, str], list[dict]] = {}
 
 # One SnmpEngine per process: a new engine per cycle leaks sockets and
 # MIB state (OSError 24, MibNotFoundError, growing RSS). Recreate only
@@ -133,9 +137,7 @@ async def run_scan() -> None:
             config.unmanaged_threshold,
             fdb_stability=None if config.demo else fdb_stability,
             known_hosts_per_port=_known_hosts_per_port(
-                db_rows,
-                {sw.ip for sw in collected if sw.reachable},
-                unconfirmed,
+                db_rows, {sw.ip for sw in collected if sw.reachable}
             ),
             sticky_pseudo_ports=prev_pseudo_ports,
             unconfirmed_macs=unconfirmed,
@@ -143,7 +145,21 @@ async def run_scan() -> None:
         prev_pseudo_ports = {
             (p["switch"], p["port"]) for p in pseudo_switches
         }
-        new_macs = await asyncio.to_thread(db.upsert_hosts, hosts, confirm_scans)
+        # Addresses a bit or two away from a real one on the same port:
+        # a failing cable, not new devices. They are held back from
+        # confirmation for as long as they look like copies — otherwise
+        # a permanently damaged port would simply confirm its phantoms.
+        suspects = corruption.find_suspects(
+            hosts, unconfirmed, config.thresholds.corruption_hamming_bits
+        )
+        _apply_suspects(hosts, suspects)
+        suspect_macs = {
+            s["mac"] for found in suspects.values() for s in found
+        }
+        new_macs = await asyncio.to_thread(
+            db.upsert_hosts, hosts, confirm_scans,
+            suspect_macs if config.filter_suspect_macs else set(),
+        )
         if config.demo:
             await asyncio.to_thread(demo.enrich_db, db, hosts)
         else:
@@ -178,6 +194,8 @@ async def run_scan() -> None:
                 "MACs awaiting confirmation (%d poll(s) each): %d",
                 confirm_scans, len(unconfirmed),
             )
+        if not config.filter_suspect_macs:
+            unconfirmed -= suspect_macs  # draw the damage instead
         hosts = [h for h in hosts if h["mac"] not in unconfirmed]
         fdb_macs = {h["mac"] for h in hosts}
         db_rows = await asyncio.to_thread(db.hosts_by_mac)
@@ -199,6 +217,10 @@ async def run_scan() -> None:
             {sw.ip: sw.reachable for sw in collected},
             {sw.ip: sw.sys_name or sw.ip for sw in collected},
         )
+        await alarm_engine.on_corruption(
+            {f"{sw_ip}:{port}": found
+             for (sw_ip, port), found in suspects.items()}
+        )
         if new_macs and first_scan_done:
             rows = await asyncio.to_thread(db.hosts_by_mac)
             await alarm_engine.on_new_macs(
@@ -215,6 +237,28 @@ async def run_scan() -> None:
         )
     finally:
         state.scanning = False
+
+
+def _apply_suspects(
+    hosts: list[dict], suspects: dict[tuple[str, str], list[dict]]
+) -> None:
+    """Marks the distorted MACs and remembers them for the ports panel."""
+    suspect_by_port.clear()
+    suspect_by_port.update(suspects)
+    flat = {
+        s["mac"]: s for found in suspects.values() for s in found
+    }
+    for host in hosts:
+        found = flat.get(host["mac"])
+        if found:
+            host["suspect_corrupt"] = True
+            host["suspect_of"] = found["sample"]
+    if flat:
+        log.info(
+            "Suspected frame corruption: %d distorted MACs on %d port(s): %s",
+            len(flat), len(suspects),
+            ", ".join(f"{ip} {port}" for ip, port in sorted(suspects)),
+        )
 
 
 def _switch_macs() -> set[str]:
@@ -265,9 +309,7 @@ async def _release_unconfirmed_ips(db_rows: dict[str, dict]) -> None:
 
 
 def _known_hosts_per_port(
-    db_rows: dict[str, dict],
-    switch_ips: set[str],
-    unconfirmed: set[str] | None = None,
+    db_rows: dict[str, dict], switch_ips: set[str]
 ) -> dict[tuple[str, str], int]:
     """How many devices the database knows behind each port, counting
     the ones inside the grace window — the same set that stays on the
@@ -275,10 +317,9 @@ def _known_hosts_per_port(
     not only the MACs this particular poll happened to catch."""
     grace = config.host_grace_hours * 3600
     now = time.time()
-    unconfirmed = unconfirmed or set()
     counts: Counter = Counter()
     for row in db_rows.values():
-        if row["mac"] in unconfirmed:
+        if not row["confirmed"]:
             continue  # not a device yet: it must not push a port over
                       # the unmanaged-switch threshold
         if row["switch_ip"] in switch_ips and row["port"]:
@@ -637,7 +678,8 @@ def _observed_subjects() -> set[tuple[str, str]]:
         for label in labels:
             subject = f"{ip}:{label}"
             for alarm_type in (
-                "port_errors", "port_discards", "port_util", "port_hosts_down"
+                "port_errors", "port_discards", "port_util", "port_hosts_down",
+                "port_frame_corruption",
             ):
                 observed.add((alarm_type, subject))
             if label.startswith("lag["):
@@ -915,6 +957,8 @@ async def api_switch_ports(ip: str) -> dict:
             "discards_per_min": round(r.discards_per_min, 1) if r else None,
             "hosts": host_counts.get(name, 0),
             "monitored_hosts": monitored_counts.get(name, 0),
+            # MACs that look like damaged copies of a real one here
+            "suspect_macs": suspect_by_port.get((ip, name), []),
         })
     # active ports first, then by port number
     ports.sort(key=lambda p: (not p["oper_up"], abs(p["if_index"])))

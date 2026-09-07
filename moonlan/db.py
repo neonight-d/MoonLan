@@ -140,7 +140,10 @@ class Database:
 
     # ---------- hosts ----------
 
-    def upsert_hosts(self, hosts: list[dict], confirm_scans: int = 1) -> list[str]:
+    def upsert_hosts(
+        self, hosts: list[dict], confirm_scans: int = 1,
+        hold: set[str] | None = None,
+    ) -> list[str]:
         """Updates hosts after an FDB poll; returns the MACs CONFIRMED now.
 
         seen_count counts the polls a MAC was present in some MAC table
@@ -150,8 +153,14 @@ class Database:
         IP. A damaged frame invents an address that is gone by the next
         poll; making it wait costs nothing and keeps those out of the
         map, the journal and the alarms.
+
+        hold are MACs that must not be confirmed by sightings however
+        many they accumulate — the ones that look like damaged copies
+        of a real address. An IP still confirms them: ARP answers come
+        back only from a device that exists.
         """
         now = time.time()
+        hold = hold or set()
         confirmed: list[str] = []
         with self._lock, self._conn:
             for h in hosts:
@@ -173,7 +182,9 @@ class Database:
                 ).fetchone()
                 if row["confirmed"]:
                     continue
-                if row["seen_count"] < confirm_scans and not row["ip"]:
+                if row["ip"]:
+                    pass  # ARP vouches for it whatever else is true
+                elif h["mac"] in hold or row["seen_count"] < confirm_scans:
                     continue
                 self._confirm(h["mac"], now, f"{h['switch']} / {h['port']}")
                 confirmed.append(h["mac"])
@@ -478,6 +489,25 @@ class Database:
                  ts if auto_clear else 0),
             )
         return True
+
+    def escalate_alarm(
+        self, alarm_type: str, subject: str, severity: str, message: str
+    ) -> bool:
+        """Raises the severity of an alarm that is already active.
+
+        Evidence can arrive after the alarm: frame corruption is
+        suspected from the MAC table, then the port's error counters
+        confirm it. Clearing and re-raising would send a misleading
+        CLEARED, so the standing alarm is upgraded in place.
+        """
+        with self._lock, self._conn:
+            cur = self._conn.execute(
+                "UPDATE alarms SET severity = ?, message = ? "
+                "WHERE type = ? AND subject = ? AND ts_cleared = 0 "
+                "AND severity <> ?",
+                (severity, message, alarm_type, subject, severity),
+            )
+        return cur.rowcount > 0
 
     def clear_alarm(
         self, alarm_type: str, subject: str, ts: float, note: str = ""

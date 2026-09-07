@@ -34,6 +34,10 @@ Rules:
   of the monitored flag: a mass outage is an infrastructure problem.
 - lag_degraded (warning): fewer active LAG members than the total for
   2 consecutive counter cycles; cleared as soon as all members are up.
+- port_frame_corruption (warning, critical with port_errors): the MAC
+  table of one port grew corruption_macs_threshold distorted copies of
+  confirmed addresses inside the flap window; cleared when the window
+  passes without a new one.
 """
 
 from __future__ import annotations
@@ -59,6 +63,7 @@ SEVERITIES = {
     "new_mac": "info",
     "port_hosts_down": "critical",
     "lag_degraded": "warning",
+    "port_frame_corruption": "warning",
 }
 
 HOST_DOWN_AFTER = 3    # consecutive failed pings
@@ -73,7 +78,7 @@ MASS_DOWN_MIN_UP_STREAK = 2
 # must stay missing before its alarm is auto-cleared
 JANITOR_TYPES = {
     "lag_degraded", "port_errors", "port_discards", "port_util",
-    "port_hosts_down",
+    "port_hosts_down", "port_frame_corruption",
 }
 JANITOR_CYCLES = 5
 JANITOR_NOTE = "auto-cleared: subject no longer present"
@@ -131,6 +136,11 @@ class AlarmEngine:
         # ((type, subject) -> ts of the last raise while flapping)
         self._raise_times: dict[tuple[str, str], deque[float]] = {}
         self._flapping: dict[tuple[str, str], float] = {}
+        # frame corruption: subject -> {distorted mac: (ts, sample)}
+        self._corrupt: dict[str, dict[str, tuple[float, str]]] = {}
+        # when port_errors was last active on a subject, so a corruption
+        # alarm can say the error counters agree with it
+        self._errors_seen: dict[str, float] = {}
 
     async def load(self) -> None:
         """Restores the active set from the DB after a restart.
@@ -399,6 +409,88 @@ class AlarmEngine:
                 "lag_degraded", subject, f"all {total} LAG members are up"
             )
 
+    async def on_corruption(self, suspects: dict[str, list[dict]]) -> None:
+        """One scan's distorted MACs, keyed by "switch ip:port".
+
+        Counted over the flap window rather than per scan: a bad cable
+        produces a few invented addresses per poll, and it is their
+        accumulation that is the symptom. Every address is counted once
+        — an artifact that lingers must not keep pushing the total up.
+        """
+        threshold = self._thresholds.corruption_macs_threshold
+        if threshold <= 0:
+            return
+        now = time.time()
+        window = self._notif_cfg.flap_window_seconds
+        for subject, found in suspects.items():
+            seen = self._corrupt.setdefault(subject, {})
+            for s in found:
+                seen.setdefault(s["mac"], (now, s["sample"]))
+        for subject in list(self._corrupt):
+            seen = self._corrupt[subject]
+            for mac, (ts, _sample) in list(seen.items()):
+                if now - ts > window:
+                    del seen[mac]
+            if not seen:
+                del self._corrupt[subject]
+                await self._clear(
+                    "port_frame_corruption", subject,
+                    f"no distorted MAC in {_fmt_window(window)}",
+                )
+                continue
+            if len(seen) < threshold:
+                continue
+            samples: dict[str, int] = {}
+            for _ts, sample in seen.values():
+                samples[sample] = samples.get(sample, 0) + 1
+            sample = max(samples, key=lambda mac: (samples[mac], mac))
+            copies = ", ".join(sorted(seen)[:5])
+            confirmed = self._errors_recent(subject, now, window)
+            message = (
+                f"{len(seen)} distorted copies of {sample} in the MAC table "
+                f"({copies}) — check the cable, the patch cord and the port"
+            )
+            if confirmed:
+                message += "; confirmed by the port's error counters"
+            severity = "critical" if confirmed else None
+            if ("port_frame_corruption", subject) in self._active:
+                await self._escalate(
+                    "port_frame_corruption", subject, severity, message
+                )
+                continue
+            await self._raise(
+                "port_frame_corruption", subject, message, severity=severity
+            )
+
+    async def _escalate(
+        self, alarm_type: str, subject: str, severity: str | None, message: str
+    ) -> None:
+        """Upgrades a standing alarm when later evidence confirms it."""
+        if severity is None or severity == SEVERITIES[alarm_type]:
+            return
+        upgraded = await asyncio.to_thread(
+            self._db.escalate_alarm, alarm_type, subject, severity, message
+        )
+        if not upgraded:
+            return
+        ts = time.time()
+        await asyncio.to_thread(
+            self._db.add_event, ts, "alarm_raised", subject,
+            f"{severity} {alarm_type}: {message}",
+        )
+        log.warning("Alarm escalated: %s %s — %s", alarm_type, subject, message)
+        await self._notifier.notify(
+            alarm_type, subject, severity, message,
+            display=display_subject(subject),
+        )
+
+    def _errors_recent(self, subject: str, now: float, window: float) -> bool:
+        """Is port_errors active on this port, or was it just cleared?"""
+        if ("port_errors", subject) in self._active:
+            return True
+        last = self._errors_seen.get(subject, 0)
+        return bool(last) and now - last <= window
+
     async def on_new_macs(self, new_macs: list[str], details: dict[str, str]) -> None:
         for mac in new_macs:
             await self._raise("new_mac", mac, details.get(mac, ""), auto_clear=True)
@@ -449,12 +541,15 @@ class AlarmEngine:
             await self._clear(alarm_type, subject, "back below the threshold")
 
     async def _raise(
-        self, alarm_type: str, subject: str, message: str, auto_clear: bool = False
+        self, alarm_type: str, subject: str, message: str,
+        auto_clear: bool = False, severity: str | None = None,
     ) -> None:
         if not auto_clear and (alarm_type, subject) in self._active:
             return
         ts = time.time()
-        severity = SEVERITIES[alarm_type]
+        severity = severity or SEVERITIES[alarm_type]
+        if alarm_type == "port_errors":
+            self._errors_seen[subject] = ts
         inserted = await asyncio.to_thread(
             self._db.raise_alarm, alarm_type, subject, severity, message, ts,
             auto_clear,
@@ -489,6 +584,10 @@ class AlarmEngine:
         )
         if not cleared:
             return
+        if alarm_type == "port_errors":
+            # a corruption alarm raised soon after still counts as
+            # confirmed by the counters
+            self._errors_seen[subject] = ts
         severity = SEVERITIES[alarm_type]
         await asyncio.to_thread(
             self._db.add_event, ts, "alarm_cleared", subject,

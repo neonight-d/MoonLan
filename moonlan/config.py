@@ -29,6 +29,11 @@ class Thresholds:
     port_utilization_percent: float = 90.0
     port_alarm_cycles: int = 3  # counter cycles over/under a threshold
     mass_down_hosts: int = 3  # port_hosts_down: newly silent hosts per port
+    # Frame corruption: how far a MAC may sit from a confirmed one on
+    # the same port and still be read as a damaged copy of it, and how
+    # many such copies raise port_frame_corruption within the flap window
+    corruption_hamming_bits: int = 8
+    corruption_macs_threshold: int = 5
 
 
 @dataclass
@@ -84,6 +89,8 @@ DEFAULT_ALARM_NOTIFY: dict[str, list[str]] = {
     "new_mac": ["syslog"],
     "port_hosts_down": ["email", "telegram", "syslog"],
     "lag_degraded": ["telegram", "syslog"],
+    # a physical fault: worth waking someone, but not by email
+    "port_frame_corruption": ["telegram", "syslog"],
 }
 
 
@@ -115,6 +122,9 @@ class Config:
     # invent addresses that live for one poll — this is what keeps them
     # off the map, out of the journal and out of the alarms.
     new_host_confirm_scans: int = 2
+    # Keep MACs that look like damaged copies of a real address off the
+    # map; false draws them, which is a way to see the damage itself
+    filter_suspect_macs: bool = True
     thresholds: Thresholds = field(default_factory=Thresholds)
     notifications: NotificationsConfig = field(default_factory=NotificationsConfig)
     alarm_notify: dict[str, list[str]] = field(
@@ -268,6 +278,9 @@ def load_config(path: Path | None = None) -> Config:
     cfg.new_host_confirm_scans = r.get(
         "new_host_confirm_scans", d.new_host_confirm_scans, int
     )
+    cfg.filter_suspect_macs = r.get(
+        "filter_suspect_macs", d.filter_suspect_macs, bool
+    )
 
     t = d.thresholds
     cfg.thresholds = Thresholds(
@@ -289,6 +302,13 @@ def load_config(path: Path | None = None) -> Config:
         ),
         mass_down_hosts=r.get(
             "thresholds.mass_down_hosts", t.mass_down_hosts, int
+        ),
+        corruption_hamming_bits=r.get(
+            "thresholds.corruption_hamming_bits", t.corruption_hamming_bits, int
+        ),
+        corruption_macs_threshold=r.get(
+            "thresholds.corruption_macs_threshold",
+            t.corruption_macs_threshold, int,
         ),
     )
 

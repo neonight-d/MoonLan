@@ -153,6 +153,8 @@ main { flex: 1; display: flex; min-height: 0; }
   color: var(--text-dim);
   white-space: nowrap;
 }
+/* the same mark when it reports a fault, e.g. distorted MACs on a port */
+.chip.warn { border-color: var(--warn); color: var(--warn); cursor: help; }
 
 #map-panel { flex: 1; position: relative; min-width: 0; }
 #network { position: absolute; inset: 0; }
