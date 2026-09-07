@@ -21,7 +21,7 @@ from .alarms import AlarmEngine
 from .config import Config, load_config
 from .db import Database
 from .notify import Notifier
-from .snmp_collector import SnmpCollector, SwitchData
+from .snmp_collector import SnmpCollector, SwitchData, is_random_mac
 from .topology import FdbStability, TopologyState, build_topology, port_name
 
 log = logging.getLogger("moonlan")
@@ -321,6 +321,9 @@ def _merge_db_fields(hosts: list[dict], db_hosts: dict[str, dict]) -> None:
         h["last_seen"] = row.get("last_seen", 0)
         h["last_arp"] = row.get("last_arp", 0)
         h["monitored"] = _effective_monitored(row)
+        # phones and laptops randomize their MAC per network, which is
+        # why one device can leave a trail of one-off entries
+        h["random_mac"] = is_random_mac(h["mac"])
 
 
 async def collect_arp(collector: SnmpCollector) -> dict[str, str]:

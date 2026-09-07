@@ -36,26 +36,36 @@ v0.5.3 scenarios:
 
 from __future__ import annotations
 
+import logging
 import random
 import time
 
 from .counters import Sample
 from .db import Database
-from .snmp_collector import PortInfo, SwitchData, infer_lag_groups
+from .snmp_collector import (
+    PortInfo,
+    SwitchData,
+    infer_lag_groups,
+    parse_fdb_entry,
+)
 
 # The RNG is re-seeded inside demo_network so every scan rebuilds the
 # same base network (stable MACs -> no phantom new_mac events)
+log = logging.getLogger(__name__)
+
 _rng = random.Random(7)
 
 VLAN_NAMES = {1: "default", 8: "office", 11: "ipmi"}
 LAG_IFINDEX = 1000  # ifIndex of the logical port Po1
 
-# Latecomer MACs sort after the base 02:4d:4c hosts so the positional
+# Latecomer MACs sort after the base 00:4d:4c hosts so the positional
 # IP/name assignment in enrich_db is not reshuffled by their arrival
-LATECOMERS = {"fe:ee:00:00:00:01": 9, "fe:ee:00:00:00:02": 10}  # mac -> ray1 port
+# The second one is a phone with a randomized (locally administered)
+# MAC — the kind that leaves a new "device" behind on every visit
+LATECOMERS = {"00:ee:00:00:00:01": 9, "b2:1a:7c:44:55:66": 10}  # mac -> ray1 port
 
 
-def _rand_mac(prefix: str = "02:4d:4c") -> str:
+def _rand_mac(prefix: str = "00:4d:4c") -> str:
     return prefix + ":" + ":".join(f"{_rng.randint(0, 255):02x}" for _ in range(3))
 
 
@@ -173,6 +183,9 @@ def demo_network() -> list[SwitchData]:
     for port in (12, 13, 14):
         connect_host(core, port, 11)
 
+    if _scan_count == 1:
+        _report_rejected_fdb(ray4)
+
     # Latecomers appear from the second scan on -> new_mac alarms
     if _scan_count >= 2:
         for mac, port in LATECOMERS.items():
@@ -182,6 +195,34 @@ def demo_network() -> list[SwitchData]:
             core.fdb[mac] = core_port_to_ray[ray1.ip]
 
     return switches
+
+
+# Rows shaped like the ones that invented 32 phantom devices on a real
+# switch: an over-long suffix (the walk left the table) and a multicast
+# address. The demo network is built in memory, so they are fed to the
+# real validator to show what it now rejects.
+BOGUS_FDB_ROWS = [
+    ((0x00, 0x0e, 0x04, 0xb7, 0x79, 0xab, 0x20, 0x7b), 3, 7),
+    ((0x04, 0xb7, 0x79, 0xab, 0x20, 0x7b, 0x31), 3, 6),
+    ((0x01, 0x00, 0x5e, 0x00, 0x00, 0xfb), 3, 6),
+]
+
+
+def _report_rejected_fdb(sw: SwitchData) -> None:
+    """Runs the demo's bogus rows through the collector's validator."""
+    bad_suffix = bad_mac = 0
+    for suffix, value, expected_len in BOGUS_FDB_ROWS:
+        _mac, _port, reason = parse_fdb_entry(suffix, value, expected_len)
+        if not reason:
+            continue
+        if "suffix" in reason:
+            bad_suffix += 1
+        else:
+            bad_mac += 1
+    log.info(
+        "%s FDB: %d entries rejected (bad suffix: %d, bad MAC: %d)",
+        sw.ip, bad_suffix + bad_mac, bad_suffix, bad_mac,
+    )
 
 
 _journal_seeded = False
@@ -242,28 +283,28 @@ ACCESS_4 = "10.0.0.24"  # access-sw-4
 ACCESS_2 = "10.0.0.22"  # access-sw-2, the one with the pseudo-switch
 STALE_HOSTS = [
     # Alone on its port: still drawn as a single grey dot
-    ("fe:ee:00:00:0a:01", "10.0.99.71", "nb-sales.demo.lan", ACCESS_4, "Gi0/5", 3.0),
+    ("00:ee:00:00:0a:01", "10.0.99.71", "nb-sales.demo.lan", ACCESS_4, "Gi0/5", 3.0),
     # Two on one port: a small offline group
-    ("fe:ee:00:00:0a:02", "10.0.99.72", "printer-2f.demo.lan", ACCESS_4, "Gi0/6", 9.5),
-    ("fe:ee:00:00:0a:03", "10.0.99.73", "scanner-2f.demo.lan", ACCESS_4, "Gi0/6", 9.0),
+    ("00:ee:00:00:0a:02", "10.0.99.72", "printer-2f.demo.lan", ACCESS_4, "Gi0/6", 9.5),
+    ("00:ee:00:00:0a:03", "10.0.99.73", "scanner-2f.demo.lan", ACCESS_4, "Gi0/6", 9.0),
     # Six on one port: a big offline group
-    ("fe:ee:00:00:0a:11", "10.0.99.81", "desk-a.demo.lan", ACCESS_4, "Gi0/7", 5.0),
-    ("fe:ee:00:00:0a:12", "10.0.99.82", "desk-b.demo.lan", ACCESS_4, "Gi0/7", 5.5),
-    ("fe:ee:00:00:0a:13", "10.0.99.83", "desk-c.demo.lan", ACCESS_4, "Gi0/7", 6.0),
-    ("fe:ee:00:00:0a:14", "10.0.99.84", "desk-d.demo.lan", ACCESS_4, "Gi0/7", 6.5),
-    ("fe:ee:00:00:0a:15", "10.0.99.85", "desk-e.demo.lan", ACCESS_4, "Gi0/7", 7.0),
-    ("fe:ee:00:00:0a:16", "10.0.99.86", "desk-f.demo.lan", ACCESS_4, "Gi0/7", 7.5),
+    ("00:ee:00:00:0a:11", "10.0.99.81", "desk-a.demo.lan", ACCESS_4, "Gi0/7", 5.0),
+    ("00:ee:00:00:0a:12", "10.0.99.82", "desk-b.demo.lan", ACCESS_4, "Gi0/7", 5.5),
+    ("00:ee:00:00:0a:13", "10.0.99.83", "desk-c.demo.lan", ACCESS_4, "Gi0/7", 6.0),
+    ("00:ee:00:00:0a:14", "10.0.99.84", "desk-d.demo.lan", ACCESS_4, "Gi0/7", 6.5),
+    ("00:ee:00:00:0a:15", "10.0.99.85", "desk-e.demo.lan", ACCESS_4, "Gi0/7", 7.0),
+    ("00:ee:00:00:0a:16", "10.0.99.86", "desk-f.demo.lan", ACCESS_4, "Gi0/7", 7.5),
     # The mixed case: two offline devices on the port that also carries
     # five live ones, so they hang off the pseudo-switch there
-    ("fe:ee:00:00:0a:21", "10.0.99.91", "tv-lobby.demo.lan", ACCESS_2, "Gi0/5", 4.0),
-    ("fe:ee:00:00:0a:22", "10.0.99.92", "ap-lobby.demo.lan", ACCESS_2, "Gi0/5", 8.0),
+    ("00:ee:00:00:0a:21", "10.0.99.91", "tv-lobby.demo.lan", ACCESS_2, "Gi0/5", 4.0),
+    ("00:ee:00:00:0a:22", "10.0.99.92", "ap-lobby.demo.lan", ACCESS_2, "Gi0/5", 8.0),
 ]
 
 # Devices ARP knows but no switch port ever showed — a subnet behind a
 # router, exactly what hides real segments from an L2 map
 UNLOCATED_HOSTS = [
-    ("fe:ee:00:00:0b:01", "10.4.23.14", "audit-220.demo.lan"),
-    ("fe:ee:00:00:0b:02", "10.4.23.51", "cam-hall.demo.lan"),
+    ("00:ee:00:00:0b:01", "10.4.23.14", "audit-220.demo.lan"),
+    ("00:ee:00:00:0b:02", "10.4.23.51", "cam-hall.demo.lan"),
 ]
 
 
