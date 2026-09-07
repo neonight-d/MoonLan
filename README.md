@@ -48,7 +48,17 @@ An open-source alternative to LanTopoLog. MIT license.
   force layout can be stopped with the "Freeze layout" button when the
   map is where you want it.
 - Continuous ping monitoring of all hosts and switches: green/grey status
-  indicator, time of the last reply.
+  indicator, time of the last reply. Pings follow IP ownership: a host
+  whose MAC left every switch table and whose address ARP no longer
+  confirms releases that address (`ip_confirm_hours`) instead of
+  borrowing the liveness of whatever device holds it now.
+- Only real addresses reach the map: MAC-table rows whose OID suffix
+  does not match the table, along with multicast, broadcast and
+  all-zero addresses, are rejected and counted per switch instead of
+  becoming phantom devices. Randomized (locally administered) MACs are
+  marked as such — that is what leaves a trail of one-off devices.
+  `python -m moonlan.diag --fdb <switch>` shows the verdict on every
+  row, `--host <ip|mac>` explains one device in a sentence.
 - Port traffic and error monitoring: a light counters poll (ifHC* octets
   with a 32-bit fallback, errors, discards) turns deltas into Mbit/s and
   errors/min per port. The "Ports" panel of a switch shows live rates;
@@ -152,6 +162,8 @@ host_grace_hours: 24       # how long a host stays on the map after its
 host_retention_days: 30    # then it is deleted from the database
 offline_group_threshold: 2   # offline devices on one port hang off
                              # a single "Offline · N" node
+ip_confirm_hours: 6          # a stale host whose IP ARP has not confirmed
+                             # for this long releases the address
 
 thresholds:
   errors_per_minute: 5           # port_errors: damaged frames only
@@ -268,6 +280,30 @@ python -m moonlan.diag <switch_ip> [--community public] [--timeout 2]
 Prints everything MoonLan sees on the device via SNMP: interfaces,
 bridge-port mapping, FDB distribution, LAG-MIB support, visibility of
 the other configured switches. Read-only; does not touch the database.
+
+#### Diagnosing one device
+
+```bash
+python -m moonlan.diag --host 10.0.0.51        # or a MAC address
+python -m moonlan.diag --fdb 10.0.0.44 --iface 1/3
+```
+
+`--host` gathers everything MoonLan knows about one device: its stored
+record with every timestamp, whether each switch has the MAC in its
+table right now (port, VLAN, the raw OID of the entry) or plainly does
+not, what every router's ARP says in both directions, a ping issued on
+the spot, and a one-line verdict — for example, that no switch reports
+the MAC, it was last seen on a port eight hours ago, and the address
+still answers because ARP now maps it to a different device.
+
+`--fdb` dumps the switch's MAC table row by row: raw OID, the length of
+its suffix, the address it yields, the bridge-port and ifIndex, and
+whether the row was accepted or rejected and why. It is the way to
+settle whether devices on some port are real: rows whose OID suffix
+does not match the table (a walk that left it, or an agent with its own
+indexing) used to become phantom addresses, and they are now listed as
+rejected. `--iface` narrows the listing to one port, while rejected
+rows are always shown — they carry no usable port.
 
 #### Updating the configuration
 

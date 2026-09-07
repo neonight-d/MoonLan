@@ -73,6 +73,14 @@ host_retention_days: 30
 # Сами устройства остаются на карте.
 offline_group_threshold: 2
 
+# A host whose MAC is gone from every switch table and whose IP no ARP
+# table has confirmed for this long gives the address up: another
+# device may hold it, and its replies would fake the old host alive.
+# Хост, чей MAC исчез из таблиц коммутаторов, а IP столько времени не
+# подтверждался ARP, освобождает адрес: им может владеть другое
+# устройство, и его ответы выдавали бы старую запись за живую.
+ip_confirm_hours: 6
+
 # Alarm thresholds / Пороги тревог
 thresholds:
   # Errors are damaged frames (cable, duplex, transceiver) — rare and
