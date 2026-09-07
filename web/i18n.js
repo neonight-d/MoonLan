@@ -95,6 +95,17 @@ const I18N = {
     lastRaiseLabel: "last raise",
     lastSeenLabel: "Last seen",
     lastArpLabel: "Last ARP entry",
+    ipConfirmedLabel: "IP confirmed (ARP)",
+    ipNotConfirmed: "not confirmed",
+    randomMac: "random MAC",
+    randomMacHint:
+      "A locally administered address. Phones and laptops randomize it "
+      + "per network, so such devices keep reappearing under new MACs.",
+    staleButAliveHint:
+      "The MAC is missing from the switch tables, but the address is "
+      + "answering: the device may have changed its MAC or it sits "
+      + "behind equipment MoonLan does not poll.",
+    ev_ip_released: "IP address released",
     staleHint:
       "The MAC address is missing from the current switch tables — " +
       "the device is shown at the port where it was seen last.",
@@ -207,6 +218,18 @@ const I18N = {
     lastRaiseLabel: "последний подъём",
     lastSeenLabel: "Последний раз виден",
     lastArpLabel: "Последняя ARP-запись",
+    ipConfirmedLabel: "IP подтверждён (ARP)",
+    ipNotConfirmed: "не подтверждён",
+    randomMac: "случайный MAC",
+    randomMacHint:
+      "Локально администрируемый адрес. Телефоны и ноутбуки меняют его "
+      + "для каждой сети, поэтому такие устройства появляются снова и "
+      + "снова под новыми MAC.",
+    staleButAliveHint:
+      "MAC отсутствует в таблицах коммутаторов, но адрес активен: "
+      + "устройство могло сменить MAC или подключено за необслуживаемым "
+      + "устройством.",
+    ev_ip_released: "IP-адрес освобождён",
     staleHint:
       "MAC-адреса нет в текущих таблицах коммутаторов — устройство " +
       "показано на порту, где оно было замечено в последний раз.",

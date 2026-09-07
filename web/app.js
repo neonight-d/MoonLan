@@ -321,7 +321,8 @@ function renderSidebar() {
     ...topology.hosts.map((h) =>
       li(
         hostLabel(h) + (h.monitored ? " ★" : ""),
-        [h.ip, h.mac, h.vlan ? "VLAN " + h.vlan : ""]
+        [h.ip, h.mac, h.random_mac ? t("randomMac") : "",
+         h.vlan ? "VLAN " + h.vlan : ""]
           .filter(Boolean)
           .join(" · "),
         statusClass(h),
@@ -339,7 +340,9 @@ function renderSidebar() {
     ...unlocated.map((h) =>
       li(
         hostLabel(h) + (h.monitored ? " ★" : ""),
-        [h.ip, h.mac].filter(Boolean).join(" · "),
+        [h.ip, h.mac, h.random_mac ? t("randomMac") : ""]
+          .filter(Boolean)
+          .join(" · "),
         statusClass(h),
         () => showDetails("unloc:" + h.mac),
         [hostLabel(h), h.ip, h.mac].filter(Boolean).join(" "),
@@ -691,11 +694,20 @@ function showDetails(nodeId) {
       : host.stale
       ? t("staleHint")
       : "";
+    // a stale record whose address ARP still confirms is not a dead
+    // host: the device most likely changed its MAC
+    const aliveByIp = host.stale && !offMap && host.ping_up && host.ip_confirmed;
     html = `<h3>${hostLabel(host)}</h3>
+      ${aliveByIp ? `<p class="hint">${t("staleButAliveHint")}</p>` : ""}
       ${hint ? `<p class="hint">${hint}</p>` : ""}<dl>
       <dt>${t("name")}</dt><dd>${host.name || "—"}</dd>
       <dt>${t("ipAddr")}</dt><dd>${host.ip || "—"}</dd>
-      <dt>${t("macAddr")}</dt><dd>${host.mac}</dd>
+      <dt>${t("ipConfirmedLabel")}</dt><dd>${
+        host.ip_confirmed ? fmtTime(host.ip_confirmed) : t("ipNotConfirmed")
+      }</dd>
+      <dt>${t("macAddr")}</dt><dd>${host.mac}${
+        host.random_mac ? ` <span class="chip" title="${t("randomMacHint")}">${t("randomMac")}</span>` : ""
+      }</dd>
       <dt>${t("switchLabel")}</dt><dd>${host.switch || "—"}</dd>
       <dt>${t("portLabel")}</dt><dd>${host.port || "—"}</dd>
       <dt>${t("vlan")}</dt><dd>${vlanLabel(host.vlan)}</dd>

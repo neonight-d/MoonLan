@@ -30,7 +30,8 @@ CREATE TABLE IF NOT EXISTS hosts (
     ping_up    INTEGER DEFAULT 0,         -- 1 = replying right now
     vlan       INTEGER DEFAULT 0,         -- PVID of the port the host is on
     monitored  INTEGER DEFAULT 0,         -- 1 = host_down alarms wanted
-    last_arp   REAL DEFAULT 0             -- last seen in a router's ARP table
+    last_arp   REAL DEFAULT 0,            -- last seen in a router's ARP table
+    ip_confirmed REAL DEFAULT 0           -- when ARP last tied this IP to this MAC
 );
 CREATE TABLE IF NOT EXISTS journal (
     id      INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -82,6 +83,11 @@ class Database:
                 "ALTER TABLE hosts ADD COLUMN last_arp REAL DEFAULT 0"
             )
             log.info("DB migration: added hosts.last_arp column")
+        if "ip_confirmed" not in columns:
+            self._conn.execute(
+                "ALTER TABLE hosts ADD COLUMN ip_confirmed REAL DEFAULT 0"
+            )
+            log.info("DB migration: added hosts.ip_confirmed column")
         # An IP belongs to exactly one MAC. Stale ARP pairs (a device
         # changed its MAC, DHCP reassigned the address) used to leave
         # the same IP on several host rows, and then one unreachable
@@ -148,7 +154,8 @@ class Database:
 
         An IP ends up on exactly one MAC: the address is taken away
         from its previous owner first, so the later ARP entry wins
-        (the merged ARP table is iterated in source order). With
+        (the merged ARP table is iterated in source order), and
+        ip_confirmed records that ARP still ties the two together. With
         create_missing, MACs that are in ARP but on no switch port are
         stored with an empty switch_ip — the "not on map" inventory;
         their last_seen stays 0 (never seen in an FDB) and last_arp
@@ -165,18 +172,26 @@ class Database:
                     (ip, mac),
                 )
                 cur = self._conn.execute(
-                    "UPDATE hosts SET ip = ?, last_arp = ? WHERE mac = ?",
-                    (ip, now, mac),
+                    "UPDATE hosts SET ip = ?, last_arp = ?, ip_confirmed = ? "
+                    "WHERE mac = ?",
+                    (ip, now, now, mac),
                 )
                 if cur.rowcount == 0 and create_missing:
                     self._conn.execute(
                         "INSERT INTO hosts (mac, ip, switch_ip, port, "
-                        "first_seen, last_seen, last_arp) "
-                        "VALUES (?, ?, '', '', ?, 0, ?)",
-                        (mac, ip, now, now),
+                        "first_seen, last_seen, last_arp, ip_confirmed) "
+                        "VALUES (?, ?, '', '', ?, 0, ?, ?)",
+                        (mac, ip, now, now, now),
                     )
                     created += 1
         return created
+
+    def set_ip_confirmed(self, mac: str, ts: float) -> None:
+        """Overrides when ARP last confirmed the host's IP (demo seeding)."""
+        with self._lock, self._conn:
+            self._conn.execute(
+                "UPDATE hosts SET ip_confirmed = ? WHERE mac = ?", (ts, mac)
+            )
 
     def set_last_seen(self, mac: str, ts: float) -> None:
         """Overrides when the host was last seen in an FDB (demo seeding)."""
@@ -184,6 +199,41 @@ class Database:
             self._conn.execute(
                 "UPDATE hosts SET last_seen = ? WHERE mac = ?", (ts, mac)
             )
+
+    def release_ip(self, mac: str, ts: float, note: str = "") -> bool:
+        """Takes the IP away from a host and logs it.
+
+        A host whose MAC no longer appears in any MAC table and whose
+        address ARP stopped confirming must not keep pinging that
+        address: another device may hold it now, and its replies would
+        make the dead record look alive.
+        """
+        with self._lock, self._conn:
+            row = self._conn.execute(
+                "SELECT ip FROM hosts WHERE mac = ? AND ip != ''", (mac,)
+            ).fetchone()
+            if row is None:
+                return False
+            self._conn.execute(
+                "UPDATE hosts SET ip = '', ip_confirmed = 0, ping_up = 0 "
+                "WHERE mac = ?",
+                (mac,),
+            )
+            self._conn.execute(
+                "INSERT INTO journal (ts, event, mac, details) VALUES (?, ?, ?, ?)",
+                (ts, "ip_released", mac, f"{row['ip']} {note}".strip()),
+            )
+        return True
+
+    def delete_hosts(self, macs: list[str]) -> int:
+        """Removes host records outright (invalid MACs left by old scans)."""
+        if not macs:
+            return 0
+        with self._lock, self._conn:
+            cur = self._conn.executemany(
+                "DELETE FROM hosts WHERE mac = ?", [(m,) for m in macs]
+            )
+        return cur.rowcount
 
     def purge_old_hosts(self, cutoff: float) -> int:
         """Deletes hosts not seen — in any FDB or ARP table — since cutoff."""
