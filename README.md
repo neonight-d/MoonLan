@@ -8,6 +8,14 @@ displays it in a browser.
 
 An open-source alternative to LanTopoLog. MIT license.
 
+![Network map with port statistics](docs/img/map.png)
+
+*Automatically discovered topology: LACP trunks, unmanaged switches, offline device groups and live port counters.*
+
+![Alarms panel](docs/img/alarms.png)
+
+*Alarm panel: port errors, discards and host outages with one-click access to the switch port table.*
+
 ## Features (v0.5.8)
 
 - SNMP v2c polling of switches: device name, ports, speeds, statuses.
