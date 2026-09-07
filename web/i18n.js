@@ -111,6 +111,11 @@ const I18N = {
       "The MAC is missing from the switch tables, but the address is "
       + "answering: the device may have changed its MAC or it sits "
       + "behind equipment MoonLan does not poll.",
+    approximate: "approximate",
+    approximateHint:
+      "Approximate location: the MAC address is visible only on trunk "
+      + "ports, so the device sits behind a switch MoonLan does not poll. "
+      + "It is drawn on the trunk it was seen through.",
     ev_ip_released: "IP address released",
     staleHint:
       "The MAC address is missing from the current switch tables — " +
@@ -241,6 +246,11 @@ const I18N = {
       "MAC отсутствует в таблицах коммутаторов, но адрес активен: "
       + "устройство могло сменить MAC или подключено за необслуживаемым "
       + "устройством.",
+    approximate: "приблизительно",
+    approximateHint:
+      "Расположение приблизительное: MAC виден только на магистральных "
+      + "портах — устройство подключено за неопрашиваемым коммутатором. "
+      + "Показано на магистрали, через которую его видно.",
     ev_ip_released: "IP-адрес освобождён",
     staleHint:
       "MAC-адреса нет в текущих таблицах коммутаторов — устройство " +

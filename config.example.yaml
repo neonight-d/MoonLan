@@ -100,6 +100,15 @@ new_host_confirm_scans: 2
 # повреждение своими глазами, а не только прочитать о нём в тревоге.
 filter_suspect_macs: true
 
+# A device no switch sees on a host port — only on trunks — sits behind
+# equipment MoonLan does not poll. true draws it on the trunk it was
+# seen through, marked "approximate"; false leaves it off the map.
+# Устройство, которое ни один коммутатор не видит на пользовательском
+# порту (только на магистралях), подключено за неопрашиваемым
+# оборудованием. true — рисовать его на магистрали с пометкой
+# «приблизительно»; false — не показывать на карте.
+place_trunk_only_hosts: true
+
 # Alarm thresholds / Пороги тревог
 thresholds:
   # Errors are damaged frames (cable, duplex, transceiver) — rare and

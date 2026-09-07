@@ -125,6 +125,10 @@ class Config:
     # Keep MACs that look like damaged copies of a real address off the
     # map; false draws them, which is a way to see the damage itself
     filter_suspect_macs: bool = True
+    # A device no switch sees on a host port is placed on the trunk
+    # with the best claim to it, marked approximate, rather than
+    # dropped off the map
+    place_trunk_only_hosts: bool = True
     thresholds: Thresholds = field(default_factory=Thresholds)
     notifications: NotificationsConfig = field(default_factory=NotificationsConfig)
     alarm_notify: dict[str, list[str]] = field(
@@ -280,6 +284,9 @@ def load_config(path: Path | None = None) -> Config:
     )
     cfg.filter_suspect_macs = r.get(
         "filter_suspect_macs", d.filter_suspect_macs, bool
+    )
+    cfg.place_trunk_only_hosts = r.get(
+        "place_trunk_only_hosts", d.place_trunk_only_hosts, bool
     )
 
     t = d.thresholds

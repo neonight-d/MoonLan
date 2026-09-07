@@ -480,7 +480,9 @@ function buildGraphData() {
       to: "host:" + host.mac,
       color: { color: colors.link, opacity: host.stale ? 0.15 : 0.35 },
       width: 1,
-      dashes: host.stale ? [3, 3] : false,
+      // approximate = seen only through a trunk: the device is real,
+      // the port it hangs on is a guess
+      dashes: host.stale ? [3, 3] : host.approximate ? [2, 4] : false,
     });
   }
 
@@ -698,6 +700,7 @@ function showDetails(nodeId) {
     // host: the device most likely changed its MAC
     const aliveByIp = host.stale && !offMap && host.ping_up && host.ip_confirmed;
     html = `<h3>${hostLabel(host)}</h3>
+      ${host.approximate ? `<p class="hint">${t("approximateHint")}</p>` : ""}
       ${aliveByIp ? `<p class="hint">${t("staleButAliveHint")}</p>` : ""}
       ${hint ? `<p class="hint">${hint}</p>` : ""}<dl>
       <dt>${t("name")}</dt><dd>${host.name || "—"}</dd>
@@ -709,7 +712,9 @@ function showDetails(nodeId) {
         host.random_mac ? ` <span class="chip" title="${t("randomMacHint")}">${t("randomMac")}</span>` : ""
       }</dd>
       <dt>${t("switchLabel")}</dt><dd>${host.switch || "—"}</dd>
-      <dt>${t("portLabel")}</dt><dd>${host.port || "—"}</dd>
+      <dt>${t("portLabel")}</dt><dd>${host.port || "—"}${
+        host.approximate ? ` <span class="chip">${t("approximate")}</span>` : ""
+      }</dd>
       <dt>${t("vlan")}</dt><dd>${vlanLabel(host.vlan)}</dd>
       <dt>${t("lastReply")}</dt><dd>${fmtTime(host.last_ping_ok)}</dd>
       <dt>${t("lastSeenLabel")}</dt><dd>${fmtTime(host.last_seen)}</dd>

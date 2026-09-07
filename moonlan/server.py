@@ -141,6 +141,7 @@ async def run_scan() -> None:
             ),
             sticky_pseudo_ports=prev_pseudo_ports,
             unconfirmed_macs=unconfirmed,
+            place_trunk_only=config.place_trunk_only_hosts,
         )
         prev_pseudo_ports = {
             (p["switch"], p["port"]) for p in pseudo_switches

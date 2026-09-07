@@ -34,6 +34,10 @@ Algorithm (v0.4.4) — a tree grown from the root:
 8. End devices. MACs on non-trunk ports are hosts; a host is bound to
    the port with the fewest other MACs. More than unmanaged_threshold
    hosts on one port become a "switch without SNMP" pseudo node.
+9. A MAC seen ONLY on trunk ports sits behind equipment nobody polls.
+   It is placed on the trunk of the switch that has the best claim to
+   it — a downlink before an uplink, the deeper switch before the
+   shallower one — and marked approximate, instead of disappearing.
 """
 
 from __future__ import annotations
@@ -464,6 +468,25 @@ def trunk_ports(
     return trunks
 
 
+def tree_depth(root: str | None, links: list[dict]) -> dict[str, int]:
+    """Hops from the root to every switch of the inferred tree."""
+    if root is None:
+        return {}
+    neighbors: dict[str, list[str]] = {}
+    for link in links:
+        neighbors.setdefault(link["a"], []).append(link["b"])
+        neighbors.setdefault(link["b"], []).append(link["a"])
+    depth = {root: 0}
+    queue = [root]
+    while queue:
+        current = queue.pop(0)
+        for other in neighbors.get(current, []):
+            if other not in depth:
+                depth[other] = depth[current] + 1
+                queue.append(other)
+    return depth
+
+
 def build_topology(
     collected: Iterable[SwitchData],
     unmanaged_threshold: int = UNMANAGED_THRESHOLD,
@@ -471,6 +494,7 @@ def build_topology(
     known_hosts_per_port: dict[tuple[str, str], int] | None = None,
     sticky_pseudo_ports: set[tuple[str, str]] | None = None,
     unconfirmed_macs: set[str] | None = None,
+    place_trunk_only: bool = True,
 ) -> tuple[list[dict], list[dict], list[dict], list[dict], dict[int, str]]:
     """Turns poll data into nodes and links for the map.
 
@@ -503,7 +527,7 @@ def build_topology(
     switches_on_port, sees = switch_sightings(switches, link_fdb)
 
     # 1. Switch-to-switch links: a tree grown from the root
-    links, uplinks, _info = infer_tree(switches, switches_on_port, sees)
+    links, uplinks, info = infer_tree(switches, switches_on_port, sees)
 
     # 2. Trunk ports: they lead to other switches and carry no hosts
     trunks = trunk_ports(switches, switches_on_port, uplinks)
@@ -538,6 +562,35 @@ def build_topology(
             if mac not in best_location or candidate < best_location[mac]:
                 best_location[mac] = candidate
 
+    # 3a. Devices every switch sees only through a trunk: they hang off
+    # equipment nobody polls, and there is no port of ours to bind them
+    # to. Dropping them left real, pinging devices in the "not on map"
+    # list; instead they are placed on the trunk with the best claim —
+    # a downlink before an uplink, the deeper switch before the
+    # shallower one — and flagged as approximate.
+    approximate: set[str] = set()
+    if place_trunk_only:
+        depth = tree_depth(info["root"], links)
+        claims: dict[str, tuple] = {}
+        for sw in switches:
+            for mac, if_index in fdb[sw.ip].items():
+                if mac in switch_macs or mac in best_location:
+                    continue
+                if if_index not in uplink_ports[sw.ip]:
+                    continue
+                downlink = if_index != uplinks.get(sw.ip)
+                claim = (downlink, depth.get(sw.ip, 0), sw.ip, if_index)
+                if mac not in claims or claim > claims[mac]:
+                    claims[mac] = claim
+        for mac, (_downlink, _depth, sw_ip, if_index) in claims.items():
+            best_location[mac] = (0, sw_ip, if_index)
+            approximate.add(mac)
+        if approximate:
+            log.debug(
+                "%d devices are visible only through trunks and were placed "
+                "approximately", len(approximate),
+            )
+
     hosts = []
     # keyed by port NAME, the same key the database and the caller use
     hosts_per_port: dict[tuple[str, str], list[dict]] = {}
@@ -550,10 +603,15 @@ def build_topology(
             "vlan": sw.port_pvid.get(if_index, 0),
             "name": "",  # names and IPs are added from the DB (ARP/DNS)
         }
+        if mac in approximate:
+            host["approximate"] = True
         hosts.append(host)
         if mac in unconfirmed_macs:
             host["unconfirmed"] = True
-            continue  # no vote on whether a switch hides behind the port
+        if mac in approximate or mac in unconfirmed_macs:
+            # neither votes on whether a switch hides behind the port:
+            # one is not a device yet, the other is not really there
+            continue
         hosts_per_port.setdefault((sw_ip, host["port"]), []).append(host)
 
     # 4. Many devices on a non-trunk port — an unmanaged switch behind
