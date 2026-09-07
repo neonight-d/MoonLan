@@ -107,6 +107,9 @@ class Config:
     # Offline devices on one port are drawn as a single group node
     # instead of a cloud of grey dots around the switch
     offline_group_threshold: int = 2   # 0 disables the grouping
+    # A stale host whose IP ARP has not confirmed for this long
+    # gives the address up: it may belong to another device now
+    ip_confirm_hours: float = 6.0
     thresholds: Thresholds = field(default_factory=Thresholds)
     notifications: NotificationsConfig = field(default_factory=NotificationsConfig)
     alarm_notify: dict[str, list[str]] = field(
@@ -253,6 +256,9 @@ def load_config(path: Path | None = None) -> Config:
     )
     cfg.offline_group_threshold = r.get(
         "offline_group_threshold", d.offline_group_threshold, int
+    )
+    cfg.ip_confirm_hours = r.get(
+        "ip_confirm_hours", d.ip_confirm_hours, float
     )
 
     t = d.thresholds

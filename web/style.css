@@ -143,6 +143,16 @@ main { flex: 1; display: flex; min-height: 0; }
 .dot.down { background: var(--text-dim); }
 .dot.noip { background: var(--link); }
 .inline-dot { display: inline-block; margin-right: 4px; vertical-align: baseline; }
+/* small inline mark, e.g. "random MAC" next to an address */
+.chip {
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  padding: 0 5px;
+  margin-left: 6px;
+  font-size: 0.72rem;
+  color: var(--text-dim);
+  white-space: nowrap;
+}
 
 #map-panel { flex: 1; position: relative; min-width: 0; }
 #network { position: absolute; inset: 0; }

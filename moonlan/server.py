@@ -150,6 +150,7 @@ async def run_scan() -> None:
                     )
             await resolve_names()
         db_rows = await asyncio.to_thread(db.hosts_by_mac)
+        await _release_unconfirmed_ips(db_rows)
         hosts, offline_groups, unlocated = _assemble_hosts(
             hosts, db_rows, pseudo_switches, {sw["ip"] for sw in switches}
         )
@@ -193,6 +194,42 @@ def _switch_macs() -> set[str]:
         if sw.bridge_mac:
             macs.add(sw.bridge_mac)
     return macs
+
+
+async def _release_unconfirmed_ips(db_rows: dict[str, dict]) -> None:
+    """Takes the IP off hosts that no longer own it.
+
+    Pings go by IP while staleness is judged by MAC, so a record whose
+    MAC left every switch table keeps "answering" with whatever device
+    holds that address now — the host looks alive hours after it left.
+    Once ARP has not confirmed the pair for ip_confirm_hours, the
+    address is released and the record stops being pinged. db_rows is
+    updated in place so the rest of this scan sees the change.
+    """
+    hours = config.ip_confirm_hours
+    if hours <= 0:
+        return
+    now = time.time()
+    cutoff = now - hours * 3600
+    released = []
+    for mac, row in db_rows.items():
+        if not row["ip"] or mac in fdb_macs:
+            continue
+        if row["ip_confirmed"] >= cutoff:
+            continue
+        if await asyncio.to_thread(
+            db.release_ip, mac, now,
+            f"not confirmed by ARP for {hours:g} h",
+        ):
+            released.append(mac)
+            row["ip"] = ""
+            row["ip_confirmed"] = 0
+            row["ping_up"] = 0
+    if released:
+        log.info(
+            "Released %d IP addresses of hosts missing from every MAC "
+            "table and unconfirmed by ARP", len(released),
+        )
 
 
 def _known_hosts_per_port(
@@ -320,6 +357,7 @@ def _merge_db_fields(hosts: list[dict], db_hosts: dict[str, dict]) -> None:
         h["first_seen"] = row.get("first_seen", 0)
         h["last_seen"] = row.get("last_seen", 0)
         h["last_arp"] = row.get("last_arp", 0)
+        h["ip_confirmed"] = row.get("ip_confirmed", 0)
         h["monitored"] = _effective_monitored(row)
         # phones and laptops randomize their MAC per network, which is
         # why one device can leave a trail of one-off entries

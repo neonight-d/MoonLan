@@ -30,6 +30,8 @@ v0.5.3 scenarios:
   port with live hosts;
 - two devices known only from ARP, in a subnet no switch port shows —
   the "not on map" inventory;
+- one host whose IP no ARP table confirms, and one device with a
+  randomized (locally administered) MAC;
 - the mass-outage port carries five distinct IPs, so the alarm counts
   five devices rather than five host records.
 """
@@ -247,6 +249,11 @@ def enrich_db(db: Database, hosts: list[dict]) -> None:
         if i % 5 == 4:
             continue  # some hosts never got an IP
         db.set_ips({mac: f"10.0.99.{10 + i}"})
+        if i == 3:
+            # one host whose address no ARP table confirms: its card
+            # says so, and if its MAC ever leaves the switch tables the
+            # address is released instead of faking the host alive
+            db.set_ip_confirmed(mac, 0)
         if i % 3 != 2:  # some hosts have no name — only an IP
             db.set_name(mac, f"pc-{i + 1:02d}.demo.lan")
         row = rows.get(mac, {})
