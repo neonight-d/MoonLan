@@ -110,6 +110,11 @@ class Config:
     # A stale host whose IP ARP has not confirmed for this long
     # gives the address up: it may belong to another device now
     ip_confirm_hours: float = 6.0
+    # Polls a brand-new MAC must appear in before it becomes a device
+    # (a MAC ARP already knows by IP is taken at once). Damaged frames
+    # invent addresses that live for one poll — this is what keeps them
+    # off the map, out of the journal and out of the alarms.
+    new_host_confirm_scans: int = 2
     thresholds: Thresholds = field(default_factory=Thresholds)
     notifications: NotificationsConfig = field(default_factory=NotificationsConfig)
     alarm_notify: dict[str, list[str]] = field(
@@ -259,6 +264,9 @@ def load_config(path: Path | None = None) -> Config:
     )
     cfg.ip_confirm_hours = r.get(
         "ip_confirm_hours", d.ip_confirm_hours, float
+    )
+    cfg.new_host_confirm_scans = r.get(
+        "new_host_confirm_scans", d.new_host_confirm_scans, int
     )
 
     t = d.thresholds

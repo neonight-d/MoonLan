@@ -112,6 +112,20 @@ async def run_scan() -> None:
                     sw.own_macs.add(mac)
         for sw in collected:
             switch_data[sw.ip] = sw
+        # A MAC has to be seen more than once before it counts as a
+        # device (unless ARP vouches for it); the verdict is needed
+        # before the topology so that unconfirmed addresses stay out of
+        # the per-port device counts as well as off the map
+        db_rows = await asyncio.to_thread(db.hosts_by_mac)
+        # An empty database is the initial inventory — there is no map
+        # yet for a phantom to pollute, and waiting would only show the
+        # operator an empty screen on the first poll
+        confirm_scans = config.new_host_confirm_scans if db_rows else 1
+        unconfirmed = await asyncio.to_thread(
+            db.projected_unconfirmed,
+            {mac for sw in collected if sw.reachable for mac in sw.fdb},
+            confirm_scans,
+        )
         # What the database already knows about each port feeds the
         # unmanaged-switch threshold, so groups survive FDB aging
         switches, links, hosts, pseudo_switches, vlan_names = build_topology(
@@ -119,18 +133,17 @@ async def run_scan() -> None:
             config.unmanaged_threshold,
             fdb_stability=None if config.demo else fdb_stability,
             known_hosts_per_port=_known_hosts_per_port(
-                await asyncio.to_thread(db.hosts_by_mac),
+                db_rows,
                 {sw.ip for sw in collected if sw.reachable},
+                unconfirmed,
             ),
             sticky_pseudo_ports=prev_pseudo_ports,
+            unconfirmed_macs=unconfirmed,
         )
         prev_pseudo_ports = {
             (p["switch"], p["port"]) for p in pseudo_switches
         }
-        fdb_macs = {h["mac"] for h in hosts}
-        new_macs = await asyncio.to_thread(db.upsert_hosts, hosts)
-        if new_macs:
-            log.info("New MACs: %d", len(new_macs))
+        new_macs = await asyncio.to_thread(db.upsert_hosts, hosts, confirm_scans)
         if config.demo:
             await asyncio.to_thread(demo.enrich_db, db, hosts)
         else:
@@ -154,10 +167,24 @@ async def run_scan() -> None:
                         "port", created,
                     )
             await resolve_names()
+        # ARP vouches for an address, so a newcomer it knows joins the
+        # map in the same poll it first appeared in
+        new_macs += await asyncio.to_thread(db.confirm_hosts_with_ip)
+        if new_macs:
+            log.info("New MACs confirmed: %d", len(new_macs))
+        unconfirmed = await asyncio.to_thread(db.unconfirmed_macs)
+        if unconfirmed:
+            log.info(
+                "MACs awaiting confirmation (%d poll(s) each): %d",
+                confirm_scans, len(unconfirmed),
+            )
+        hosts = [h for h in hosts if h["mac"] not in unconfirmed]
+        fdb_macs = {h["mac"] for h in hosts}
         db_rows = await asyncio.to_thread(db.hosts_by_mac)
         await _release_unconfirmed_ips(db_rows)
         hosts, offline_groups, unlocated = _assemble_hosts(
-            hosts, db_rows, pseudo_switches, {sw["ip"] for sw in switches}
+            hosts, db_rows, pseudo_switches, {sw["ip"] for sw in switches},
+            unconfirmed,
         )
         _merge_db_fields(hosts, db_rows)
         _merge_db_fields(unlocated, db_rows)
@@ -238,7 +265,9 @@ async def _release_unconfirmed_ips(db_rows: dict[str, dict]) -> None:
 
 
 def _known_hosts_per_port(
-    db_rows: dict[str, dict], switch_ips: set[str]
+    db_rows: dict[str, dict],
+    switch_ips: set[str],
+    unconfirmed: set[str] | None = None,
 ) -> dict[tuple[str, str], int]:
     """How many devices the database knows behind each port, counting
     the ones inside the grace window — the same set that stays on the
@@ -246,8 +275,12 @@ def _known_hosts_per_port(
     not only the MACs this particular poll happened to catch."""
     grace = config.host_grace_hours * 3600
     now = time.time()
+    unconfirmed = unconfirmed or set()
     counts: Counter = Counter()
     for row in db_rows.values():
+        if row["mac"] in unconfirmed:
+            continue  # not a device yet: it must not push a port over
+                      # the unmanaged-switch threshold
         if row["switch_ip"] in switch_ips and row["port"]:
             if grace > 0 and now - row["last_seen"] < grace:
                 counts[(row["switch_ip"], row["port"])] += 1
@@ -259,6 +292,7 @@ def _assemble_hosts(
     db_rows: dict[str, dict],
     pseudo_switches: list[dict],
     switch_ips: set[str],
+    unconfirmed: set[str] | None = None,
 ) -> tuple[list[dict], list[dict], list[dict]]:
     """Splits the known inventory into map hosts, offline groups and
     off-map devices.
@@ -272,12 +306,15 @@ def _assemble_hosts(
 
     Off the map: everything else the DB knows — devices ARP sees but
     no switch port ever showed, and hosts whose grace window ran out.
+
+    Unconfirmed MACs are in neither list: they are stored, and nothing
+    more, until enough polls agree that they exist.
     """
     for h in fresh:
         h["stale"] = False
     now = time.time()
     grace = config.host_grace_hours * 3600
-    known = {h["mac"] for h in fresh} | _switch_macs()
+    known = {h["mac"] for h in fresh} | _switch_macs() | (unconfirmed or set())
     pseudo_by_port = {(p["switch"], p["port"]): p["id"] for p in pseudo_switches}
     on_map = list(fresh)
     unlocated: list[dict] = []

@@ -453,6 +453,12 @@ async def run_host_inventory(community: str, timeout: int, cfg) -> None:
     )
     print(f"  never located (no switch port): "
           f"{sum(1 for r in rows if not r['switch_ip'])}")
+    # Seen too few times to be called a device: stored, but on no map
+    # and in no alarm. A large number here means damaged frames.
+    print(
+        f"  unconfirmed (fewer than {cfg.new_host_confirm_scans} sightings, "
+        f"no IP): {sum(1 for r in rows if not r.get('confirmed'))}"
+    )
     print(f"  without an IP: {sum(1 for r in rows if not r['ip'])}")
     print(f"  without a name: {sum(1 for r in rows if not r['name'])}")
 

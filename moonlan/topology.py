@@ -470,6 +470,7 @@ def build_topology(
     fdb_stability: FdbStability | None = None,
     known_hosts_per_port: dict[tuple[str, str], int] | None = None,
     sticky_pseudo_ports: set[tuple[str, str]] | None = None,
+    unconfirmed_macs: set[str] | None = None,
 ) -> tuple[list[dict], list[dict], list[dict], list[dict], dict[int, str]]:
     """Turns poll data into nodes and links for the map.
 
@@ -481,9 +482,14 @@ def build_topology(
     dissolve from scan to scan. sticky_pseudo_ports are ports that had
     a pseudo node last time: they keep it while at least one device is
     still answering there.
+
+    unconfirmed_macs are addresses too new to count as devices: they
+    are still bound to their port (the caller stores them), but marked
+    and left out of the per-port device counts.
     """
     known_hosts_per_port = known_hosts_per_port or {}
     sticky_pseudo_ports = sticky_pseudo_ports or set()
+    unconfirmed_macs = unconfirmed_macs or set()
     switches = [sw for sw in collected if sw.reachable]
     fdb = normalized_fdb(switches)
 
@@ -545,6 +551,9 @@ def build_topology(
             "name": "",  # names and IPs are added from the DB (ARP/DNS)
         }
         hosts.append(host)
+        if mac in unconfirmed_macs:
+            host["unconfirmed"] = True
+            continue  # no vote on whether a switch hides behind the port
         hosts_per_port.setdefault((sw_ip, host["port"]), []).append(host)
 
     # 4. Many devices on a non-trunk port — an unmanaged switch behind

@@ -31,7 +31,9 @@ CREATE TABLE IF NOT EXISTS hosts (
     vlan       INTEGER DEFAULT 0,         -- PVID of the port the host is on
     monitored  INTEGER DEFAULT 0,         -- 1 = host_down alarms wanted
     last_arp   REAL DEFAULT 0,            -- last seen in a router's ARP table
-    ip_confirmed REAL DEFAULT 0           -- when ARP last tied this IP to this MAC
+    ip_confirmed REAL DEFAULT 0,          -- when ARP last tied this IP to this MAC
+    seen_count INTEGER DEFAULT 0,         -- polls this MAC was in an FDB
+    confirmed  INTEGER DEFAULT 0          -- 1 = real enough to go on the map
 );
 CREATE TABLE IF NOT EXISTS journal (
     id      INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -88,6 +90,26 @@ class Database:
                 "ALTER TABLE hosts ADD COLUMN ip_confirmed REAL DEFAULT 0"
             )
             log.info("DB migration: added hosts.ip_confirmed column")
+        if "seen_count" not in columns:
+            self._conn.execute(
+                "ALTER TABLE hosts ADD COLUMN seen_count INTEGER DEFAULT 0"
+            )
+            # Everything already in the database has been seen at least
+            # once; anything with an IP or an FDB sighting is a device
+            # the operator has been looking at, not a fresh guess.
+            self._conn.execute(
+                "UPDATE hosts SET seen_count = 1 "
+                "WHERE ip <> '' OR last_seen > 0"
+            )
+            log.info("DB migration: added hosts.seen_count column")
+        if "confirmed" not in columns:
+            self._conn.execute(
+                "ALTER TABLE hosts ADD COLUMN confirmed INTEGER DEFAULT 0"
+            )
+            self._conn.execute(
+                "UPDATE hosts SET confirmed = 1 WHERE ip <> '' OR last_seen > 0"
+            )
+            log.info("DB migration: added hosts.confirmed column")
         # An IP belongs to exactly one MAC. Stale ARP pairs (a device
         # changed its MAC, DHCP reassigned the address) used to leave
         # the same IP on several host rows, and then one unreachable
@@ -118,34 +140,117 @@ class Database:
 
     # ---------- hosts ----------
 
-    def upsert_hosts(self, hosts: list[dict]) -> list[str]:
-        """Updates hosts after an FDB poll; returns MACs seen for the first time.
+    def upsert_hosts(self, hosts: list[dict], confirm_scans: int = 1) -> list[str]:
+        """Updates hosts after an FDB poll; returns the MACs CONFIRMED now.
 
-        Writes a new_mac journal event for every new MAC.
+        seen_count counts the polls a MAC was present in some MAC table
+        — once per call, since one call is one poll. A MAC becomes a
+        device (and gets its new_mac journal event) only after
+        confirm_scans sightings, or at once if ARP already gave it an
+        IP. A damaged frame invents an address that is gone by the next
+        poll; making it wait costs nothing and keeps those out of the
+        map, the journal and the alarms.
         """
         now = time.time()
-        new_macs: list[str] = []
+        confirmed: list[str] = []
         with self._lock, self._conn:
             for h in hosts:
                 cur = self._conn.execute(
-                    "UPDATE hosts SET last_seen = ?, switch_ip = ?, port = ?, vlan = ? "
-                    "WHERE mac = ?",
+                    "UPDATE hosts SET last_seen = ?, switch_ip = ?, port = ?, "
+                    "vlan = ?, seen_count = seen_count + 1 WHERE mac = ?",
                     (now, h["switch"], h["port"], h.get("vlan", 0), h["mac"]),
                 )
                 if cur.rowcount == 0:
                     self._conn.execute(
-                        "INSERT INTO hosts (mac, switch_ip, port, vlan, first_seen, last_seen) "
-                        "VALUES (?, ?, ?, ?, ?, ?)",
+                        "INSERT INTO hosts (mac, switch_ip, port, vlan, "
+                        "first_seen, last_seen, seen_count) "
+                        "VALUES (?, ?, ?, ?, ?, ?, 1)",
                         (h["mac"], h["switch"], h["port"], h.get("vlan", 0), now, now),
                     )
-                    self._conn.execute(
-                        "INSERT INTO journal (ts, event, mac, details) VALUES (?, ?, ?, ?)",
-                        (now, "new_mac", h["mac"], f"{h['switch']} / {h['port']}"),
-                    )
-                    new_macs.append(h["mac"])
-        for mac in new_macs:
+                row = self._conn.execute(
+                    "SELECT seen_count, ip, confirmed FROM hosts WHERE mac = ?",
+                    (h["mac"],),
+                ).fetchone()
+                if row["confirmed"]:
+                    continue
+                if row["seen_count"] < confirm_scans and not row["ip"]:
+                    continue
+                self._confirm(h["mac"], now, f"{h['switch']} / {h['port']}")
+                confirmed.append(h["mac"])
+        for mac in confirmed:
             log.info("New MAC address: %s", mac)
-        return new_macs
+        return confirmed
+
+    def _confirm(self, mac: str, ts: float, details: str) -> None:
+        """Marks a MAC real and journals it (call inside the lock)."""
+        self._conn.execute(
+            "UPDATE hosts SET confirmed = 1 WHERE mac = ?", (mac,)
+        )
+        self._conn.execute(
+            "INSERT INTO journal (ts, event, mac, details) VALUES (?, ?, ?, ?)",
+            (ts, "new_mac", mac, details),
+        )
+
+    def confirm_hosts_with_ip(self) -> list[str]:
+        """Confirms unconfirmed hosts ARP has given an IP.
+
+        An address that answers ARP belongs to a device that exists —
+        there is nothing to wait for. Called after the ARP pass, so a
+        real newcomer reaches the map on its very first poll.
+        """
+        now = time.time()
+        with self._lock, self._conn:
+            rows = self._conn.execute(
+                "SELECT mac, ip, switch_ip, port FROM hosts "
+                "WHERE confirmed = 0 AND ip <> ''"
+            ).fetchall()
+            for row in rows:
+                self._confirm(
+                    row["mac"], now,
+                    row["ip"] or f"{row['switch_ip']} / {row['port']}",
+                )
+        for row in rows:
+            log.info("New MAC address: %s (%s, confirmed by ARP)",
+                     row["mac"], row["ip"])
+        return [row["mac"] for row in rows]
+
+    def unconfirmed_macs(self) -> set[str]:
+        """MACs stored but not yet accepted as devices."""
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT mac FROM hosts WHERE confirmed = 0"
+            ).fetchall()
+        return {row["mac"] for row in rows}
+
+    def projected_unconfirmed(
+        self, fdb_macs: set[str], confirm_scans: int
+    ) -> set[str]:
+        """Which of the MACs in this poll will still be unconfirmed
+        after it — the same verdict upsert_hosts is about to reach.
+
+        The topology needs the answer BEFORE the hosts are written, so
+        that unconfirmed addresses take part in neither the map nor the
+        per-port device counts.
+        """
+        if confirm_scans <= 1:
+            return set()
+        with self._lock:
+            rows = {
+                row["mac"]: row
+                for row in self._conn.execute(
+                    "SELECT mac, seen_count, ip, confirmed FROM hosts"
+                ).fetchall()
+            }
+        pending: set[str] = set()
+        for mac in fdb_macs:
+            row = rows.get(mac)
+            if row is None:
+                pending.add(mac)  # brand new: seen_count becomes 1
+            elif not row["confirmed"] and not row["ip"] and (
+                row["seen_count"] + 1 < confirm_scans
+            ):
+                pending.add(mac)
+        return pending
 
     def set_ips(
         self, mac_to_ip: dict[str, str], create_missing: bool = False
