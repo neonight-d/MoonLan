@@ -91,6 +91,49 @@ def _fmt_mac(raw: bytes) -> str:
     return ":".join(f"{b:02x}" for b in raw)
 
 
+# A MAC forwarding entry is indexed by the 6 address bytes (BRIDGE-MIB)
+# or by an fdbId plus those 6 bytes (Q-BRIDGE-MIB). Anything else is a
+# row of another table the walk ran into, or an agent numbering its
+# entries its own way — taking the last six components of such a
+# suffix invents devices that do not exist.
+FDB_SUFFIX_LEN = {6: "dot1dTpFdbPort", 7: "dot1qTpFdbPort"}
+BROADCAST_MAC = "ff:ff:ff:ff:ff:ff"
+ZERO_MAC = "00:00:00:00:00:00"
+
+
+def is_random_mac(mac: str) -> bool:
+    """True for a locally administered address — phones and laptops
+    randomize those per network, so they pile up as one-off devices."""
+    try:
+        return bool(int(mac.split(":")[0], 16) & 0x02)
+    except (ValueError, IndexError):
+        return False
+
+
+def parse_fdb_entry(
+    suffix: tuple[int, ...], value, expected_len: int
+) -> tuple[str, int, str]:
+    """Turns one FDB row into (mac, bridge_port, reason).
+
+    A non-empty reason means the row is rejected and says why.
+    """
+    if len(suffix) != expected_len:
+        return "", 0, f"suffix has {len(suffix)} components, expected {expected_len}"
+    octets = suffix[-6:]
+    if any(not 0 <= octet <= 255 for octet in octets):
+        return "", 0, "suffix component outside 0..255"
+    mac = ":".join(f"{octet:02x}" for octet in octets)
+    if mac in (ZERO_MAC, BROADCAST_MAC):
+        return mac, 0, "reserved MAC"
+    if octets[0] & 0x01:
+        return mac, 0, "multicast MAC"
+    try:
+        bridge_port = int(value)
+    except (TypeError, ValueError):
+        return mac, 0, f"bridge-port is not a number: {value!r}"
+    return mac, bridge_port, ""
+
+
 def infer_lag_groups(
     physical: set[int], mapped: set[int], synthetic: set[int]
 ) -> dict[int, list[int]]:
@@ -250,12 +293,23 @@ class SnmpCollector:
         # how LACP trunks look on some D-Link models) are not dropped:
         # they get a synthetic port with ifIndex = -bridge_port.
         unmapped: dict[int, int] = {}
-        for fdb_oid in (OID_FDB_PORT, OID_Q_FDB_PORT):
+        bad_suffix = bad_mac = 0
+        for fdb_oid, expected_len in (
+            (OID_FDB_PORT, 6), (OID_Q_FDB_PORT, 7)
+        ):
             async for suffix, value in self._walk(host, fdb_oid):
-                bridge_port = int(value)
+                mac, bridge_port, reason = parse_fdb_entry(
+                    suffix, value, expected_len
+                )
+                if reason:
+                    if "suffix" in reason:
+                        bad_suffix += 1
+                    else:
+                        bad_mac += 1
+                    log.debug("%s: FDB entry rejected (%s): %s", host, reason, mac)
+                    continue
                 if bridge_port == 0:  # 0 — the switch's own MAC / CPU
                     continue
-                mac = ":".join(f"{octet:02x}" for octet in suffix[-6:])
                 if mac in data.fdb:
                     continue
                 if_index = port_to_ifindex.get(bridge_port)
@@ -269,6 +323,12 @@ class SnmpCollector:
                             is_physical=False,
                         )
                 data.fdb[mac] = if_index
+        rejected = bad_suffix + bad_mac
+        log.log(
+            logging.INFO if rejected else logging.DEBUG,
+            "%s FDB: %d entries rejected (bad suffix: %d, bad MAC: %d)",
+            host, rejected, bad_suffix, bad_mac,
+        )
         if unmapped:
             log.debug(
                 "%s: FDB entries on unmapped bridge-ports: %s",
