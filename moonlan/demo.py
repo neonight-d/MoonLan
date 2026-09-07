@@ -85,6 +85,12 @@ CORRUPT_NEIGHBOR = "20:77:b5:7c:37:87"
 CORRUPT_NEIGHBOR_IP = "10.0.99.58"
 CORRUPT_PER_SCAN = 3        # invented addresses per poll
 
+# A device behind an unmanaged switch on the core—access-sw-3 trunk: no
+# switch has it on a host port, both ends of the trunk see it. Before
+# v0.5.8 it fell off the map into "not on map" although it answers ping.
+TRUNK_ONLY_MAC = "74:56:3c:9a:97:9f"
+TRUNK_ONLY_IP = "10.0.99.51"
+
 
 def _corrupt_copies(scan: int) -> list[str]:
     """The distorted copies this poll's damaged frames produced."""
@@ -229,6 +235,12 @@ def demo_network() -> list[SwitchData]:
         ray2.fdb[mac] = CORRUPT_PORT
         core.fdb[mac] = core_port_to_ray[ray2.ip]
 
+    # Seen on the core's trunk to ray3 and on ray3's own uplink, on no
+    # host port anywhere: it is placed on the trunk with the better
+    # claim — the core's downlink — and marked approximate
+    core.fdb[TRUNK_ONLY_MAC] = core_trunk_to_ray3
+    ray3.fdb[TRUNK_ONLY_MAC] = ray3_trunk
+
     if _scan_count == 1:
         _report_rejected_fdb(ray4)
 
@@ -295,10 +307,12 @@ def enrich_db(db: Database, hosts: list[dict]) -> None:
     # an IP, answers ping and stays on the map — only the copies of its
     # address do not. Its address is set aside from the positional
     # assignment below so it never drifts.
-    hosts = [h for h in hosts if h["mac"] not in (CORRUPT_REAL, CORRUPT_NEIGHBOR)]
+    fixed = (CORRUPT_REAL, CORRUPT_NEIGHBOR, TRUNK_ONLY_MAC)
+    hosts = [h for h in hosts if h["mac"] not in fixed]
     for mac, ip, name in (
         (CORRUPT_REAL, CORRUPT_IP, "cam-4floor.demo.lan"),
         (CORRUPT_NEIGHBOR, CORRUPT_NEIGHBOR_IP, "cam-4floor-2.demo.lan"),
+        (TRUNK_ONLY_MAC, TRUNK_ONLY_IP, "nvr-3floor.demo.lan"),
     ):
         db.set_ips({mac: ip})
         db.set_name(mac, name)
