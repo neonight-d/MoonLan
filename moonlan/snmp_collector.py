@@ -110,6 +110,23 @@ def is_random_mac(mac: str) -> bool:
         return False
 
 
+def is_valid_mac(mac: str) -> bool:
+    """A unicast, non-reserved address of the right shape — the same
+    test the FDB parser applies, for addresses already in the DB."""
+    parts = mac.split(":")
+    if len(parts) != 6:
+        return False
+    try:
+        octets = [int(part, 16) for part in parts]
+    except ValueError:
+        return False
+    if any(not 0 <= octet <= 255 for octet in octets):
+        return False
+    if octets[0] & 0x01:  # multicast, broadcast included
+        return False
+    return mac != ZERO_MAC
+
+
 def parse_fdb_entry(
     suffix: tuple[int, ...], value, expected_len: int
 ) -> tuple[str, int, str]:
