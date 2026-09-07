@@ -5,6 +5,7 @@ Usage:  python -m moonlan.diag <ip> [--community public] [--timeout 2]
         python -m moonlan.diag --hosts
         python -m moonlan.diag --port <ip> [--iface Gi0/1] [--watch 3]
         python -m moonlan.diag --config
+        python -m moonlan.diag --fdb <ip> [--iface 1/3]
 
 Community and timeout default to the values from config.yaml. The tool
 writes nothing to the database and does not need the running service.
@@ -15,7 +16,8 @@ inferred tree: the root, the branch split, the uplinks and the links.
 --hosts compares the FDB, the routers' ARP tables and the database to
 show how complete the host inventory is. --port prints the raw error,
 discard, octet and packet counters of a switch's ports and, with
---watch, the very rates the alarm engine works with.
+--watch, the very rates the alarm engine works with. --fdb dumps a
+switch's raw MAC table with the verdict on every row.
 """
 
 from __future__ import annotations
@@ -43,6 +45,7 @@ from .snmp_collector import (
     OID_IF_TYPE,
     OID_LAG_ATTACHED_ID,
     OID_PORT_IFINDEX,
+    OID_PVID,
     OID_Q_FDB_PORT,
     OID_SYS_DESCR,
     OID_SYS_NAME,
@@ -50,6 +53,8 @@ from .snmp_collector import (
     SwitchData,
     _fmt_mac,
     infer_lag_groups,
+    is_random_mac,
+    parse_fdb_entry,
 )
 
 MAX_IF_ROWS = 40
@@ -488,6 +493,115 @@ def run_config_audit(cfg) -> None:
         print("  none")
 
 
+FDB_TABLES = ((OID_FDB_PORT, 6, "dot1dTpFdbPort"),
+              (OID_Q_FDB_PORT, 7, "dot1qTpFdbPort"))
+
+
+async def _fdb_rows(collector: SnmpCollector, host: str) -> list[dict]:
+    """Every MAC-table row of a switch, raw OID and verdict included."""
+    rows: list[dict] = []
+    for oid, expected_len, table in FDB_TABLES:
+        async for suffix, value in collector._walk(host, oid):
+            mac, bridge_port, reason = parse_fdb_entry(
+                suffix, value, expected_len
+            )
+            rows.append({
+                "table": table,
+                "oid": oid + "." + ".".join(str(part) for part in suffix),
+                "suffix_len": len(suffix),
+                "mac": mac,
+                "bridge_port": bridge_port,
+                "reason": reason,
+            })
+    return rows
+
+
+async def _port_maps(
+    collector: SnmpCollector, host: str
+) -> tuple[dict[int, int], dict[int, str], dict[int, int]]:
+    """(bridge-port -> ifIndex, ifIndex -> name, ifIndex -> PVID)."""
+    port_to_ifindex: dict[int, int] = {}
+    async for suffix, value in collector._walk(host, OID_PORT_IFINDEX):
+        port_to_ifindex[suffix[0]] = int(value)
+    names, _speeds = await _port_labels(collector, host)
+    pvid: dict[int, int] = {}
+    async for suffix, value in collector._walk(host, OID_PVID):
+        if_index = port_to_ifindex.get(suffix[0])
+        if if_index is not None:
+            pvid[if_index] = int(value)
+    return port_to_ifindex, names, pvid
+
+
+async def run_fdb_dump(
+    host: str, port_filter: str | None, community: str, timeout: int
+) -> None:
+    """Section 12: the raw MAC table with the verdict on every row.
+
+    This is how a claim like "these 32 devices on port 1/3 are not
+    real" gets settled: the raw OID and its suffix length are printed
+    next to the address they would have produced.
+    """
+    _section(f"12. MAC table: {host}")
+    collector = SnmpCollector(community=community, timeout=timeout)
+    port_to_ifindex, names, _pvid = await _port_maps(collector, host)
+    if not names:
+        sys.exit(f"{host} does not respond to SNMP")
+    rows = await _fdb_rows(collector, host)
+    if not rows:
+        print("the MAC table is empty")
+        return
+
+    accepted = rejected = local_admin = 0
+    bad_suffix = 0
+    shown = 0
+    for row in rows:
+        if_index = port_to_ifindex.get(row["bridge_port"])
+        name = names.get(if_index, "")
+        if row["reason"]:
+            rejected += 1
+            if "suffix" in row["reason"]:
+                bad_suffix += 1
+        else:
+            accepted += 1
+            if is_random_mac(row["mac"]):
+                local_admin += 1
+        # A rejected row has no port to attribute it to, and those are
+        # exactly what a "what is on this port?" question is about, so
+        # the filter only applies to accepted rows.
+        if port_filter and not row["reason"] and not (
+            port_filter == name
+            or (if_index is not None and port_filter == str(if_index))
+            or port_filter == str(row["bridge_port"])
+        ):
+            continue
+        shown += 1
+        where = (
+            f"bridge-port {row['bridge_port']}"
+            + (f" -> ifIndex {if_index}" if if_index is not None else "")
+            + (f" ({name})" if name else "")
+        )
+        verdict = f"REJECTED: {row['reason']}" if row["reason"] else "ok"
+        if not row["reason"] and is_random_mac(row["mac"]):
+            verdict += ", locally administered"
+        print(
+            f"  {row['table']:<14} len {row['suffix_len']}  "
+            f"{row['mac'] or '—':<18} {where:<40} {verdict}"
+        )
+        print(f"      OID {row['oid']}")
+    if port_filter and not shown:
+        print(f"  no MAC-table row points at port {port_filter}")
+    elif port_filter:
+        print(f"\n(rejected rows are listed whatever port is asked for: "
+              f"they carry no usable port)")
+
+    print(
+        f"\nsummary: {len(rows)} rows, accepted {accepted}, "
+        f"rejected {rejected} (bad suffix: {bad_suffix}, "
+        f"bad MAC: {rejected - bad_suffix})"
+    )
+    print(f"locally administered (randomized) MACs among accepted: {local_admin}")
+
+
 WATCH_INTERVAL = 60  # seconds between --watch measurements
 
 
@@ -628,6 +742,11 @@ def main() -> None:
              "host inventory is and which subnets are missing from it",
     )
     parser.add_argument(
+        "--fdb", metavar="SWITCH_IP",
+        help="dump the raw MAC table of a switch: OID, suffix length, "
+             "parsed address and whether the row was rejected",
+    )
+    parser.add_argument(
         "--config", action="store_true",
         help="print the effective configuration: every setting, its "
              "value and whether it comes from config.yaml or a default",
@@ -638,7 +757,7 @@ def main() -> None:
              "the switch's ports",
     )
     parser.add_argument(
-        "--iface", help="one port for --port (name or ifIndex)"
+        "--iface", help="one port for --port and --fdb (name or ifIndex)"
     )
     parser.add_argument(
         "--watch", type=int, default=1, metavar="N",
@@ -646,19 +765,19 @@ def main() -> None:
              f"{WATCH_INTERVAL} s and print the rates the alarm engine sees",
     )
     args = parser.parse_args()
-    if (
-        not (args.topology or args.hosts or args.port or args.config)
-        and not args.ip
-    ):
+    modes = args.topology or args.hosts or args.port or args.config or args.fdb
+    if not modes and not args.ip:
         parser.error(
-            "an ip is required unless --topology, --hosts, --port or "
-            "--config is given"
+            "an ip is required unless --topology, --hosts, --fdb, "
+            "--port or --config is given"
         )
     cfg = load_config()
     community = args.community or cfg.snmp.community
     timeout = args.timeout or cfg.snmp.timeout
     if args.config:
         run_config_audit(cfg)
+    elif args.fdb:
+        asyncio.run(run_fdb_dump(args.fdb, args.iface, community, timeout))
     elif args.port:
         asyncio.run(
             run_port_counters(
