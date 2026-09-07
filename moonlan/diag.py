@@ -5,6 +5,7 @@ Usage:  python -m moonlan.diag <ip> [--community public] [--timeout 2]
         python -m moonlan.diag --hosts
         python -m moonlan.diag --port <ip> [--iface Gi0/1] [--watch 3]
         python -m moonlan.diag --config
+        python -m moonlan.diag --host <ip|mac>
         python -m moonlan.diag --fdb <ip> [--iface 1/3]
 
 Community and timeout default to the values from config.yaml. The tool
@@ -16,8 +17,9 @@ inferred tree: the root, the branch split, the uplinks and the links.
 --hosts compares the FDB, the routers' ARP tables and the database to
 show how complete the host inventory is. --port prints the raw error,
 discard, octet and packet counters of a switch's ports and, with
---watch, the very rates the alarm engine works with. --fdb dumps a
-switch's raw MAC table with the verdict on every row.
+--watch, the very rates the alarm engine works with. --host explains
+one device (database, FDB, ARP, ping) and --fdb dumps a switch's raw
+MAC table with the verdict on every row.
 """
 
 from __future__ import annotations
@@ -29,7 +31,7 @@ import sys
 import time
 from collections import Counter
 
-from . import counters
+from . import counters, pinger
 from .config import SECRET_KEYS, load_config
 from .counters import CounterStore, Sample
 from .topology import infer_tree, normalized_fdb, switch_sightings
@@ -602,6 +604,133 @@ async def run_fdb_dump(
     print(f"locally administered (randomized) MACs among accepted: {local_admin}")
 
 
+def _is_mac(text: str) -> bool:
+    parts = text.lower().split(":")
+    return len(parts) == 6 and all(
+        len(p) == 2 and all(c in "0123456789abcdef" for c in p) for p in parts
+    )
+
+
+async def run_host_diag(
+    target: str, community: str, timeout: int, cfg
+) -> None:
+    """Section 13: everything known about one device, and why it is
+    considered offline."""
+    _section(f"13. Device: {target}")
+    target = target.strip().lower()
+    mac = target if _is_mac(target) else ""
+    ip = "" if mac else target
+
+    rows = _db_snapshot(cfg.db_path) or []
+    record = next(
+        (r for r in rows if (mac and r["mac"] == mac) or (ip and r["ip"] == ip)),
+        None,
+    )
+    print("database record:")
+    if record is None:
+        print("  none — MoonLan has never stored this device")
+    else:
+        mac = mac or record["mac"]
+        ip = ip or record["ip"]
+        for key in sorted(record):
+            value = record[key]
+            if key in ("first_seen", "last_seen", "last_ping_ok",
+                       "last_arp", "ip_confirmed"):
+                value = (
+                    time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(value))
+                    if value else "never"
+                )
+            print(f"  {key:<13} {value}")
+    if not mac and not ip:
+        sys.exit("give an IP address or a MAC address")
+
+    collector = SnmpCollector(community=community, timeout=timeout)
+
+    print("\nMAC tables of the switches:")
+    seen_on: list[str] = []
+    for switch in cfg.switches:
+        if not mac:
+            print(f"  {switch}: no MAC known, nothing to look for")
+            continue
+        port_to_ifindex, names, pvid = await _port_maps(collector, switch)
+        if not names:
+            print(f"  {switch}: does not respond to SNMP")
+            continue
+        found = [r for r in await _fdb_rows(collector, switch) if r["mac"] == mac]
+        if not found:
+            print(f"  {switch}: not in the MAC table")
+            continue
+        for row in found:
+            if_index = port_to_ifindex.get(row["bridge_port"])
+            name = names.get(if_index, str(if_index))
+            state = f"REJECTED ({row['reason']})" if row["reason"] else "accepted"
+            if not row["reason"]:
+                seen_on.append(f"{switch} port {name}")
+            print(
+                f"  {switch}: port {name}, VLAN "
+                f"{pvid.get(if_index, '—')}, {state}"
+            )
+            print(f"      OID {row['oid']}")
+
+    print("\nARP tables of the routers:")
+    arp_says_ip = ""
+    arp_says_mac = ""
+    for router in cfg.routers:
+        table = await collector.collect_arp(router)
+        if not table:
+            print(f"  {router}: no answer or empty ARP table")
+            continue
+        by_ip = {value: key for key, value in table.items()}
+        mine = table.get(mac, "")
+        holder = by_ip.get(ip, "")
+        print(
+            f"  {router}: this MAC -> {mine or 'not listed'}; "
+            f"this IP -> {holder or 'not listed'}"
+        )
+        arp_says_ip = arp_says_ip or mine
+        arp_says_mac = arp_says_mac or holder
+    if not cfg.routers:
+        print("  no routers configured — MoonLan cannot confirm IP ownership")
+
+    replied = None
+    if ip:
+        print(f"\nping {ip}:")
+        replied = await pinger.ping(ip)
+        print("  replies" if replied else "  no reply")
+
+    print("\nsummary:")
+    print("  " + _host_summary(record, mac, ip, seen_on, arp_says_mac, replied))
+
+
+def _host_summary(
+    record, mac: str, ip: str, seen_on: list[str],
+    arp_holder: str, replied: bool | None,
+) -> str:
+    """One sentence on why the device looks the way it looks."""
+    if seen_on:
+        return f"the MAC is in the table of {', '.join(seen_on)} — the device is present"
+    if record is None:
+        return "nothing is known about this device"
+    parts = ["no switch reports this MAC, so the device counts as offline"]
+    if record["last_seen"]:
+        hours = (time.time() - record["last_seen"]) / 3600
+        parts.append(f"it was last seen on a port {hours:.1f} h ago")
+    if ip and replied:
+        if arp_holder and arp_holder != mac:
+            parts.append(
+                f"the address answers but ARP now maps it to {arp_holder} — "
+                "another device took it over"
+            )
+        else:
+            parts.append(
+                "the address still answers: the device may have changed its "
+                "MAC or moved behind equipment MoonLan does not poll"
+            )
+    elif ip:
+        parts.append("the address does not answer either")
+    return "; ".join(parts) + "."
+
+
 WATCH_INTERVAL = 60  # seconds between --watch measurements
 
 
@@ -742,6 +871,12 @@ def main() -> None:
              "host inventory is and which subnets are missing from it",
     )
     parser.add_argument(
+        "--host", metavar="IP_OR_MAC",
+        help="everything known about one device: the database record, "
+             "which switch tables and ARP tables hold it, a live ping "
+             "and why it is considered offline",
+    )
+    parser.add_argument(
         "--fdb", metavar="SWITCH_IP",
         help="dump the raw MAC table of a switch: OID, suffix length, "
              "parsed address and whether the row was rejected",
@@ -765,10 +900,13 @@ def main() -> None:
              f"{WATCH_INTERVAL} s and print the rates the alarm engine sees",
     )
     args = parser.parse_args()
-    modes = args.topology or args.hosts or args.port or args.config or args.fdb
+    modes = (
+        args.topology or args.hosts or args.port or args.config
+        or args.host or args.fdb
+    )
     if not modes and not args.ip:
         parser.error(
-            "an ip is required unless --topology, --hosts, --fdb, "
+            "an ip is required unless --topology, --hosts, --host, --fdb, "
             "--port or --config is given"
         )
     cfg = load_config()
@@ -776,6 +914,8 @@ def main() -> None:
     timeout = args.timeout or cfg.snmp.timeout
     if args.config:
         run_config_audit(cfg)
+    elif args.host:
+        asyncio.run(run_host_diag(args.host, community, timeout, cfg))
     elif args.fdb:
         asyncio.run(run_fdb_dump(args.fdb, args.iface, community, timeout))
     elif args.port:
