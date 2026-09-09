@@ -730,8 +730,19 @@ function showDetails(nodeId) {
     const bridge = (topology.bridges || []).find((b) => b.id === nodeId);
     if (!bridge) return;
     const caps = (bridge.capabilities || []).join(", ");
-    const link = bridge.mgmt_ip
-      ? `<a href="http://${bridge.mgmt_ip}" target="_blank" rel="noopener">${bridge.mgmt_ip}</a>`
+    // every address the device announced, the first one clickable
+    const addresses = bridge.mgmt_ips && bridge.mgmt_ips.length
+      ? bridge.mgmt_ips
+      : bridge.mgmt_ip
+      ? [bridge.mgmt_ip]
+      : [];
+    const link = addresses.length
+      ? addresses
+          .map(
+            (a) =>
+              `<a href="http://${a}" target="_blank" rel="noopener">${a}</a>`
+          )
+          .join(", ")
       : "—";
     html = `<h3>${bridge.name}</h3>
       <p class="hint">${
@@ -826,6 +837,18 @@ function showDetails(nodeId) {
   }
 }
 
+/* "10.0.0.1 and 37 more" — a router announces one management address
+   per VLAN interface, and all of them belong to the same device */
+function fmtAddresses(addresses, limit) {
+  const list = addresses || [];
+  const keep = limit || 3;
+  if (list.length <= keep) return list.join(", ");
+  return (
+    list.slice(0, keep).join(", ") +
+    " " + fmt("andMore", { n: list.length - keep })
+  );
+}
+
 /* What LLDP says about a device that is already a host on the map:
    the switch heard it on this very port, so the data belongs here
    rather than on a node of its own */
@@ -833,7 +856,7 @@ function lldpHostLine(lldp) {
   const parts = [
     lldp.sys_name,
     lldp.port_id ? t("portLabel") + " " + lldp.port_id : "",
-    (lldp.mgmt_ips || []).join(", "),
+    fmtAddresses(lldp.mgmt_ips),
     lldp.sys_desc,
   ].filter(Boolean);
   return parts.length ? parts.join(" · ") : t("lldpUnidentified");
@@ -1004,7 +1027,7 @@ function renderPorts(data) {
               [
                 t("lldpNeighbour") + ": " + (n.sys_name || n.chassis_id),
                 n.port_id ? t("portLabel") + " " + n.port_id : "",
-                (n.mgmt_ips || []).join(", "),
+                fmtAddresses(n.mgmt_ips),
                 n.cap_known
                   ? (n.capabilities || []).join(", ")
                   : t("lldpUnidentified"),

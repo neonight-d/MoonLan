@@ -391,12 +391,17 @@ async def run_topology_view(community: str, timeout: int, cfg) -> None:
                 flag = "  <- several devices on this port, no link inferred"
             else:
                 flag = ""
+            rows = (
+                f", {neighbor.rows} table rows merged"
+                if neighbor.rows > 1 else ""
+            )
             print(
                 f"  {label(sw.ip)} [{where}] -> "
                 f"{neighbor.sys_name or neighbor.chassis_id} "
                 f"({neighbor.chassis_id}) port {neighbor.port_id or '?'}"
-                + (f", {neighbor.mgmt_ip}" if neighbor.mgmt_ip else "")
-                + f", {caps}{flag}"
+                + (f", {_addresses(neighbor.mgmt_ips)}"
+                   if neighbor.mgmt_ips else "")
+                + f", {caps}{rows}{flag}"
             )
     if not any_lldp:
         print("  none — no switch reports an LLDP neighbour")

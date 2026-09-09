@@ -136,6 +136,14 @@ CAMERA_PORT = 9
 CAMERAS = [f"18:c0:4d:00:0a:{n:02x}" for n in range(1, 11)]
 CAMERA_DESC = "IPC-B140 v2.800.0000000.16.R"
 
+# The MikroTik router on core-sw Gi0/21. It fills lldpRemTable with
+# one row per VLAN interface, each announcing its own management
+# address — 38 rows for one device on one cable. The card must show one
+# device and all of its addresses.
+ROUTER_PORT = 21
+ROUTER_CHASSIS = "00:0e:04:b7:79:ab"
+ROUTER_IPS = ["10.0.0.1", "10.0.1.1"] + [f"10.3.{n}.1" for n in range(1, 9)]
+
 # A port whose link goes up and down on every counters cycle ->
 # port_flapping. Modelled on 2b0 port 21, which managed four cycles in
 # thirty seconds.
@@ -374,6 +382,13 @@ def _add_lldp(core, ray1, ray2, ray3, ray4, core_port_to_ray) -> None:
             )
             for member, remote in ((1, "Gi0/25"), (25, "Gi0/26"))
         ),
+        # One device, ten management addresses: the merge happens in
+        # lldp.merge_rows, and the card shows the whole list
+        _neighbor(
+            ROUTER_PORT, ROUTER_CHASSIS, "ether2", sys_name="MikroTik-core",
+            sys_desc="RouterOS x86 6.46.2", caps={"bridge", "router"},
+            mgmt_ips=ROUTER_IPS,
+        ),
         _neighbor(
             core_port_to_ray[ray2.ip], ray2.bridge_mac, "Gi0/24",
             sys_name=ray2.sys_name, sys_desc=ray2.sys_descr,
@@ -484,6 +499,7 @@ def _add_stp(core, ray1, ray2, ray3, ray4) -> None:
 
     root_id = f"4096/{core.bridge_mac}"
     uptime = 4_000_000  # ~11 hours in TimeTicks
+    core.ports[ROUTER_PORT].oper_up = True
     core.stp = judge(StpData(
         supported=True, protocol_spec=3, priority=4096,
         time_since_change=120_000, top_changes=7,
