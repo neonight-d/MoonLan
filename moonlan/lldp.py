@@ -96,6 +96,8 @@ class LldpNeighbor:
     # wrong one, and tying a bridge to its IP is the point of reading
     # LLDP at all.
     mgmt_ips: list[str] = field(default_factory=list)
+    # How many lldpRemTable rows were merged into this one entry
+    rows: int = 1
 
     @property
     def port_unmatched(self) -> bool:
@@ -371,7 +373,53 @@ async def collect_lldp(
             "not be matched to an interface — not used for links",
             host, unmatched, len(neighbors),
         )
+    rows_before = len(neighbors)
+    neighbors = merge_rows(neighbors)
+    if len(neighbors) < rows_before:
+        log.debug(
+            "%s LLDP: %d table rows describe %d devices — a router with "
+            "many VLAN interfaces sends one row per interface",
+            host, rows_before, len(neighbors),
+        )
     return neighbors, port_labels
+
+
+def merge_rows(neighbors: list[LldpNeighbor]) -> list[LldpNeighbor]:
+    """One entry per device per port, however many rows it sent.
+
+    The MikroTik x86 behind mb0 Slot0/21 fills lldpRemTable with one
+    row per VLAN interface — 38 of them, each announcing its own
+    management address. They are one device on one cable. Merging them
+    here rather than in each consumer also means a bridge node carries
+    every address the device announced instead of whichever row the
+    walk returned first: tying a bridge to its IP is the reason LLDP is
+    read at all, and the first address is as likely to be the wrong one
+    as the right one.
+    """
+    merged: dict[tuple, LldpNeighbor] = {}
+    for neighbor in neighbors:
+        key = (neighbor.local_ifindex, neighbor.local_port_num,
+               neighbor.chassis_id)
+        first = merged.get(key)
+        if first is None:
+            merged[key] = neighbor
+            continue
+        first.rows += 1
+        for address in neighbor.mgmt_ips:
+            if address not in first.mgmt_ips:
+                first.mgmt_ips.append(address)
+        if not first.mgmt_ip and first.mgmt_ips:
+            first.mgmt_ip = first.mgmt_ips[0]
+        first.sys_name = first.sys_name or neighbor.sys_name
+        first.sys_desc = first.sys_desc or neighbor.sys_desc
+        first.port_id = first.port_id or neighbor.port_id
+        first.port_desc = first.port_desc or neighbor.port_desc
+        if neighbor.cap_known and not first.cap_known:
+            first.cap_known = True
+            first.cap_enabled = set(neighbor.cap_enabled)
+        elif neighbor.cap_known:
+            first.cap_enabled |= neighbor.cap_enabled
+    return list(merged.values())
 
 
 def analyse_ports(
