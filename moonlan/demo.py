@@ -23,6 +23,20 @@ v0.5 scenarios (the demo doubles as the regression suite):
 - two latecomer hosts that appear from the second scan on -> new_mac
   alarms (the first scan is the initial inventory and stays silent).
 
+v0.6 scenarios:
+- the fourth ray is invisible in the core's MAC table and is placed by
+  LLDP alone -> a link with source "lldp", which is the whole point of
+  reading LLDP at all;
+- a named MikroTik bridge behind the access port that used to carry an
+  anonymous pseudo-switch -> unmanaged_bridge_detected, and the five
+  devices behind it hang off the named node;
+- spanning tree: the core is the root, one ray holds its uplink in
+  blocking, and the fourth ray has STP switched off while still
+  reporting priority 0 / cost 0 / itself as root — the trap the STP
+  verdict exists to catch;
+- one port that changes link state on every counters cycle ->
+  port_flapping.
+
 v0.5.8 scenarios:
 - a port whose cable starts failing on the second scan: the switch
   learns five distorted copies of the address of the device behind it
@@ -50,6 +64,8 @@ import time
 
 from .counters import Sample
 from .db import Database
+from .lldp import LldpNeighbor, forwarded_ports
+from .stp import StpData, StpPort
 from .snmp_collector import (
     PortInfo,
     SwitchData,
@@ -84,6 +100,22 @@ CORRUPT_IP = "10.0.99.57"
 CORRUPT_NEIGHBOR = "20:77:b5:7c:37:87"
 CORRUPT_NEIGHBOR_IP = "10.0.99.58"
 CORRUPT_PER_SCAN = 3        # invented addresses per poll
+
+# The MikroTik bridge behind access-sw-2 Gi0/5 — the port that already
+# carries five devices. Before v0.6 that port could only show an
+# anonymous "switch without SNMP"; LLDP gives it a name, a model and a
+# management address, and raises unmanaged_bridge_detected.
+BRIDGE_PORT = 5
+BRIDGE_CHASSIS = "18:fd:74:fd:b5:cf"
+BRIDGE_NAME = "RouterOS-Sport"
+BRIDGE_DESC = "RouterOS RB941-2nD 6.49.19"
+BRIDGE_MGMT_IP = "10.3.5.6"
+
+# A port whose link goes up and down on every counters cycle ->
+# port_flapping. Modelled on 2b0 port 21, which managed four cycles in
+# thirty seconds.
+FLAP_SWITCH = "10.0.0.22"
+FLAP_PORT = 7
 
 # A device behind an unmanaged switch on the core—access-sw-3 trunk: no
 # switch has it on a host port, both ends of the trunk see it. Before
@@ -187,8 +219,12 @@ def demo_network() -> list[SwitchData]:
     for ray in (ray2, ray4):
         core.ports[core_port_to_ray[ray.ip]].oper_up = True
         ray.ports[24].oper_up = True
-    for ray in (ray1, ray2, ray3, ray4):
+    for ray in (ray1, ray2, ray3):
         core.fdb[ray.bridge_mac] = core_port_to_ray[ray.ip]
+    # ray4's own MAC has aged out of the core's table and ray4 sees
+    # nobody, so the MAC tables cannot place it at all. LLDP can, and
+    # that link comes out with source "lldp" — the case the whole
+    # feature exists for.
 
     # Stray MACs of other rays leak through the core onto the rays'
     # uplinks: they reveal each ray's uplink port, and the branch
@@ -241,6 +277,9 @@ def demo_network() -> list[SwitchData]:
     core.fdb[TRUNK_ONLY_MAC] = core_trunk_to_ray3
     ray3.fdb[TRUNK_ONLY_MAC] = ray3_trunk
 
+    _add_lldp(core, ray1, ray2, ray3, ray4, core_port_to_ray)
+    _add_stp(core, ray1, ray2, ray3, ray4)
+
     if _scan_count == 1:
         _report_rejected_fdb(ray4)
 
@@ -253,6 +292,146 @@ def demo_network() -> list[SwitchData]:
             core.fdb[mac] = core_port_to_ray[ray1.ip]
 
     return switches
+
+
+def _neighbor(
+    if_index: int, chassis_id: str, port_id: str, *,
+    sys_name: str = "", sys_desc: str = "", caps: set[str] | None = None,
+    mgmt_ip: str = "", cap_known: bool = True,
+) -> LldpNeighbor:
+    return LldpNeighbor(
+        local_ifindex=if_index, local_port_num=if_index,
+        chassis_id=chassis_id, chassis_subtype=4,
+        port_id=port_id, port_subtype=5,
+        sys_name=sys_name, sys_desc=sys_desc,
+        cap_enabled=caps or set(), cap_known=cap_known, mgmt_ip=mgmt_ip,
+    )
+
+
+def _add_lldp(core, ray1, ray2, ray3, ray4, core_port_to_ray) -> None:
+    """LLDP as the four rays would report it.
+
+    Four situations at once, all taken from the real network:
+    the core and ray2 name each other (a link the MAC tables also
+    infer -> source "both"); the core and ray4 name each other where
+    the MAC tables cannot help at all (-> source "lldp"); ray2 has an
+    unmanaged MikroTik bridge behind an access port; ray1 forwards
+    foreign LLDP frames, so two neighbours appear on one port and
+    nothing may be inferred from it; and ray3 has a neighbour that
+    sends no optional TLVs at all.
+    """
+    core.lldp_neighbors = [
+        _neighbor(
+            core_port_to_ray[ray2.ip], ray2.bridge_mac, "Gi0/24",
+            sys_name=ray2.sys_name, sys_desc=ray2.sys_descr,
+            caps={"bridge"},
+        ),
+        _neighbor(
+            core_port_to_ray[ray4.ip], ray4.bridge_mac, "Gi0/24",
+            sys_name=ray4.sys_name, sys_desc=ray4.sys_descr,
+            caps={"bridge"},
+        ),
+    ]
+    ray2.lldp_neighbors = [
+        _neighbor(
+            24, core.bridge_mac, "Gi0/2",
+            sys_name=core.sys_name, sys_desc=core.sys_descr,
+            caps={"bridge"},
+        ),
+        _neighbor(
+            BRIDGE_PORT, BRIDGE_CHASSIS, "ether1",
+            sys_name=BRIDGE_NAME, sys_desc=BRIDGE_DESC,
+            caps={"bridge", "router"}, mgmt_ip=BRIDGE_MGMT_IP,
+        ),
+    ]
+    ray4.lldp_neighbors = [
+        _neighbor(
+            24, core.bridge_mac, "Gi0/5",
+            sys_name=core.sys_name, sys_desc=core.sys_descr,
+            caps={"bridge"},
+        ),
+    ]
+    # `LLDP Forward Message` on ray1: frames from two other switches
+    # come out of one access port, which would invent two links
+    ray1.lldp_neighbors = [
+        _neighbor(12, ray3.bridge_mac, "Gi0/1", sys_name=ray3.sys_name,
+                  caps={"bridge"}),
+        _neighbor(12, ray4.bridge_mac, "Gi0/1", sys_name=ray4.sys_name,
+                  caps={"bridge"}),
+    ]
+    # A neighbour with the optional TLVs switched off, the way a
+    # DES-3526 ships: a bare MAC with no name and no capabilities. The
+    # absence of the bridge flag proves nothing, so it is drawn as an
+    # unidentified LLDP device and raises no alarm.
+    ray3.lldp_neighbors = [
+        _neighbor(8, "00:1e:58:a9:00:63", "8", cap_known=False),
+    ]
+    for sw in (core, ray1, ray2, ray3, ray4):
+        sw.lldp_forwarded = forwarded_ports(sw.lldp_neighbors)
+
+
+def _stp_ports(
+    sw: SwitchData, states: dict[int, int], enabled: bool, root_id: str
+) -> dict[int, StpPort]:
+    ports: dict[int, StpPort] = {}
+    for if_index, state in states.items():
+        ports[if_index] = StpPort(
+            bridge_port=if_index,
+            if_index=if_index,
+            name=sw.ports[if_index].name if if_index in sw.ports else str(if_index),
+            state=state,
+            enabled=enabled,
+            path_cost=20000,
+            designated_root=root_id,
+            designated_bridge=root_id,
+        )
+    return ports
+
+
+def _add_stp(core, ray1, ray2, ray3, ray4) -> None:
+    """A spanning tree that is running — except on one switch.
+
+    The core is the root at priority 4096. ray2 holds its uplink in
+    blocking, which the map draws as a dashed red edge. ray4 has STP
+    switched off and still reports priority 0, cost 0 and itself as the
+    root: the exact trap the verdict in stp.py exists to catch, and the
+    reason a demo needs it.
+    """
+    from .stp import judge  # local import: demo data, real verdict
+
+    root_id = f"4096/{core.bridge_mac}"
+    uptime = 4_000_000  # ~11 hours in TimeTicks
+    core.stp = judge(StpData(
+        supported=True, protocol_spec=3, priority=4096,
+        time_since_change=120_000, top_changes=7,
+        designated_root=root_id, root_cost=0, root_port=0, version=2,
+        sys_uptime=uptime,
+        ports=_stp_ports(core, {1: 5, 2: 5, 5: 5, 25: 5}, True, root_id),
+    ))
+    for ray, root_port, blocking in (
+        (ray1, 25, None), (ray2, 24, 24), (ray3, 23, None),
+    ):
+        states = {root_port: 5}
+        if blocking is not None:
+            states[blocking] = 2  # blocking(2): the link carries nothing
+        ray.stp = judge(StpData(
+            supported=True, protocol_spec=3, priority=32768,
+            time_since_change=118_000 + _scan_count * 100,
+            top_changes=7 + _scan_count // 4,
+            designated_root=root_id, root_cost=20000, root_port=root_port,
+            version=2, sys_uptime=uptime,
+            ports=_stp_ports(ray, states, True, root_id),
+        ))
+    # STP disabled: every field still answers, and every field lies
+    ray4.stp = judge(StpData(
+        supported=True, protocol_spec=3, priority=0,
+        time_since_change=uptime, top_changes=0,
+        designated_root=f"0/{ray4.bridge_mac}", root_cost=0, root_port=0,
+        version=2, sys_uptime=uptime,
+        ports=_stp_ports(ray4, {i: 1 for i in range(1, 5)}, False, ""),
+    ))
+    for sw in (core, ray1, ray2, ray3, ray4):
+        sw.sys_uptime = uptime
 
 
 # Rows shaped like the ones that invented 32 phantom devices on a real
@@ -483,6 +662,9 @@ class DemoCounters:
     # edge label drops to "LACP 1×1 Gbit/s (1/2)"
     LAG_FLAP = {"10.0.0.10": 25, "10.0.0.21": 26}
     FLAP_PERIOD = 6  # counter cycles down, then the same up
+    # A port whose link changes state on EVERY cycle: within a few
+    # minutes it passes thresholds.flaps_per_window -> port_flapping
+    LINK_FLAP = (FLAP_SWITCH, FLAP_PORT)
 
     def __init__(self):
         self._rng = random.Random(11)
@@ -502,9 +684,22 @@ class DemoCounters:
             flap_port = self.LAG_FLAP.get(sw.ip)
             if flap_port in sw.ports:
                 sw.ports[flap_port].oper_up = not member_down
+            link_flap = (
+                self.LINK_FLAP[1] if sw.ip == self.LINK_FLAP[0] else None
+            )
+            if link_flap in sw.ports:
+                sw.ports[link_flap].oper_up = self._cycle % 2 == 0
+                # ifLastChange moves with every transition, which is
+                # what lets the tracker count a bounce it never saw
+                sw.ports[link_flap].last_change = self._cycle * 6000
             samples: dict[int, Sample] = {}
             for p in sw.ports.values():
-                if not p.is_physical or not p.oper_up:
+                # the flapping port keeps reporting while it is down:
+                # a real agent does the same, and ifLastChange is the
+                # whole point of polling it
+                if not p.is_physical or (
+                    not p.oper_up and p.if_index != link_flap
+                ):
                     continue
                 key = (sw.ip, p.if_index)
                 rate = self._rates.setdefault(
@@ -541,6 +736,7 @@ class DemoCounters:
                     in_errors=int(tot[2]), out_errors=int(tot[3]),
                     in_discards=int(tot[4]), out_discards=int(tot[5]),
                     in_pkts=int(tot[6]), out_pkts=int(tot[7]),
+                    last_change=p.last_change,
                 )
             out[sw.ip] = samples
         return out

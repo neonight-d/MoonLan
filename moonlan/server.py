@@ -794,8 +794,13 @@ async def _check_flaps(
     sw: SwitchData, oper: dict[int, bool], samples: dict[int, counters.Sample]
 ) -> None:
     """Link-state transitions of one switch, for the alarm and the panel."""
+    # only ports this poll actually returned: a port missing from the
+    # walk has no ifLastChange, and a zero there would read as the
+    # agent restarting its clock
     flaps = flap_tracker.update(
-        sw.ip, oper, {i: s.last_change for i, s in samples.items()}
+        sw.ip,
+        {i: up for i, up in oper.items() if i in samples},
+        {i: s.last_change for i, s in samples.items()},
     )
     entries = []
     for if_index, info in flaps.items():
