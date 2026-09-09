@@ -64,11 +64,12 @@ import time
 
 from .counters import Sample
 from .db import Database
-from .lldp import LldpNeighbor, forwarded_ports
+from .lldp import LldpNeighbor, analyse_ports
 from .stp import StpData, StpPort
 from .snmp_collector import (
     PortInfo,
     SwitchData,
+    aggregate_port,
     infer_lag_groups,
     parse_fdb_entry,
 )
@@ -355,6 +356,17 @@ def _add_lldp(core, ray1, ray2, ray3, ray4, core_port_to_ray) -> None:
     sends no optional TLVs at all.
     """
     core.lldp_neighbors = [
+        # Both members of the LACP bundle to ray1 see the neighbour.
+        # That is one logical port, not a neighbour on two ports, and
+        # v0.6.0 read it as forwarded LLDP — which cost the real
+        # network its mb0—mb1 uplink source.
+        *(
+            _neighbor(
+                member, ray1.bridge_mac, remote, sys_name=ray1.sys_name,
+                sys_desc=ray1.sys_descr, caps={"bridge"},
+            )
+            for member, remote in ((1, "Gi0/25"), (25, "Gi0/26"))
+        ),
         _neighbor(
             core_port_to_ray[ray2.ip], ray2.bridge_mac, "Gi0/24",
             sys_name=ray2.sys_name, sys_desc=ray2.sys_descr,
@@ -385,9 +397,15 @@ def _add_lldp(core, ray1, ray2, ray3, ray4, core_port_to_ray) -> None:
             caps={"bridge"},
         ),
     ]
-    # `LLDP Forward Message` on ray1: frames from two other switches
-    # come out of one access port, which would invent two links
     ray1.lldp_neighbors = [
+        # The other end of the LACP bundle, again on both members
+        *(
+            _neighbor(
+                member, core.bridge_mac, remote, sys_name=core.sys_name,
+                sys_desc=core.sys_descr, caps={"bridge"},
+            )
+            for member, remote in ((25, "Gi0/1"), (26, "Gi0/25"))
+        ),
         # Two bridges behind one access port, with four ordinary devices
         # on the same port: the pseudo-switch stays (the box on the
         # cable is real), and both bridges are drawn behind it
@@ -398,9 +416,11 @@ def _add_lldp(core, ray1, ray2, ray3, ray4, core_port_to_ray) -> None:
             )
             for chassis, name, desc, ip in CHAIN_BRIDGES
         ),
-        _neighbor(12, ray3.bridge_mac, "Gi0/1", sys_name=ray3.sys_name,
-                  caps={"bridge"}),
-        _neighbor(12, ray4.bridge_mac, "Gi0/1", sys_name=ray4.sys_name,
+        # `LLDP Forward Message`: ray3's frame comes out of an access
+        # port, while ray3's MAC sits in ray1's forwarding table behind
+        # the uplink. The table is what gives the forwarding away —
+        # several neighbours on one port never did.
+        _neighbor(12, _iface_mac(ray3), "Gi0/1", sys_name=ray3.sys_name,
                   caps={"bridge"}),
     ]
     # A neighbour with the optional TLVs switched off, the way a
@@ -419,7 +439,11 @@ def _add_lldp(core, ray1, ray2, ray3, ray4, core_port_to_ray) -> None:
         ),
     ]
     for sw in (core, ray1, ray2, ray3, ray4):
-        sw.lldp_forwarded = forwarded_ports(sw.lldp_neighbors)
+        sw.lldp_forwarded, sw.lldp_crowded = analyse_ports(
+            sw.lldp_neighbors,
+            lambda if_index, sw=sw: aggregate_port(sw, if_index),
+            sw.fdb,
+        )
 
 
 def _stp_ports(

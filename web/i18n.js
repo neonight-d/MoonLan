@@ -81,13 +81,19 @@ const I18N = {
       + "of them is behind.",
     lldpLabel: "LLDP",
     lldpUnidentified: "unidentified LLDP device",
+    lldpCrowded: "several LLDP devices",
+    lldpCrowdedHint:
+      "Several LLDP devices answer behind this port, so an unmanaged "
+      + "switch sits on the cable. They are all real and all shown — "
+      + "but which of them is on the cable itself cannot be told, so no "
+      + "link is drawn from this port.",
     lldpNeighbour: "LLDP neighbour",
     lldpForwarded: "LLDP forwarded",
     lldpForwardedHint:
-      "Several LLDP neighbours on this port — LLDP frame forwarding is "
-      + "most likely enabled on the switch, so a neighbour shows up on "
-      + "a port it is not attached to. The data is unreliable and is "
-      + "not used to draw links.",
+      "This LLDP did not come from the cable: the same neighbour is on "
+      + "another port, or its MAC sits in the switch's forwarding table "
+      + "behind a different one. LLDP frame forwarding is most likely "
+      + "enabled. The data is unreliable and is not used to draw links.",
     stpBtn: "STP",
     stpTitle: "Spanning tree",
     stpHint:
@@ -291,13 +297,19 @@ const I18N = {
       + "мостом каждое из них — данных нет.",
     lldpLabel: "LLDP",
     lldpUnidentified: "неопознанное устройство LLDP",
+    lldpCrowded: "несколько устройств LLDP",
+    lldpCrowdedHint:
+      "За портом отвечают несколько LLDP-устройств — значит, на кабеле "
+      + "стоит неуправляемый коммутатор. Все они настоящие и все "
+      + "показаны, но какое именно на кабеле — определить нельзя, "
+      + "поэтому связь по этому порту не строится.",
     lldpNeighbour: "Сосед по LLDP",
     lldpForwarded: "пересылка LLDP",
     lldpForwardedHint:
-      "На порту несколько LLDP-соседей — вероятно, на коммутаторе "
-      + "включена пересылка LLDP-кадров, и сосед виден не на своём "
-      + "порту. Данные ненадёжны и не используются для построения "
-      + "связей.",
+      "Эти LLDP-кадры пришли не с кабеля: тот же сосед виден на другом "
+      + "порту либо его MAC стоит в таблице коммутатора за другим "
+      + "портом. Вероятно, включена пересылка LLDP-кадров. Данные "
+      + "ненадёжны и для построения связей не используются.",
     stpBtn: "STP",
     stpTitle: "Остовное дерево (STP)",
     stpHint:

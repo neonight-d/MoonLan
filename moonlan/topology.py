@@ -43,7 +43,7 @@ v0.6 adds LLDP on top of steps 3-7. Where two polled switches name
 each other over LLDP, the link and both its ports come from LLDP and
 carry source="lldp"/"both"; the FDB inference then only fills the gaps
 (source="fdb"). Ports carrying forwarded LLDP frames are excluded —
-see lldp.forwarded_ports. Disagreements between the two sources are
+see lldp.analyse_ports. Disagreements between the two sources are
 collected in info["lldp_mismatches"] and printed by `diag --topology`
 rather than silently resolved.
 """
@@ -57,7 +57,7 @@ from collections import Counter
 from dataclasses import dataclass, field
 from typing import Iterable
 
-from .snmp_collector import SwitchData
+from .snmp_collector import SwitchData, aggregate_port
 
 log = logging.getLogger(__name__)
 
@@ -174,26 +174,6 @@ class FdbStability:
 def port_name(sw: SwitchData, if_index: int) -> str:
     port = sw.ports.get(if_index)
     return port.name if port and port.name else str(if_index)
-
-
-def aggregate_port(sw: SwitchData, if_index: int | None) -> int | None:
-    """The logical port a physical one belongs to, if any.
-
-    Two kinds of aggregate exist here: an IEEE8023-LAG-MIB one (a
-    positive aggregate ifIndex) and a D-Link trunk inferred from the
-    dot1dBasePortIfIndex gaps, whose FDB lives on a synthetic negative
-    ifIndex. LLDP always reports the physical member, so both have to
-    be resolved.
-    """
-    if if_index is None:
-        return None
-    aggregate = sw.lag_members.get(if_index)
-    if aggregate is not None:
-        return aggregate
-    for bridge_port, members in sw.lag_groups.items():
-        if if_index in members:
-            return -bridge_port
-    return if_index
 
 
 def _lag_info(sw: SwitchData, port: int) -> tuple[list[str], list[bool], int]:
@@ -316,9 +296,11 @@ def lldp_link_candidates(
     """Switch-to-switch links CONFIRMED by LLDP, keyed by the pair.
 
     A candidate needs one LLDP neighbour on the local port whose chassis
-    id belongs to another polled switch. Ports flagged by
-    `lldp.forwarded_ports` are skipped: on a switch that re-transmits
-    foreign LLDP frames the neighbour is not on the port it claims.
+    id belongs to another polled switch. Two kinds of port are skipped:
+    those `lldp.analyse_ports` found to carry forwarded frames (the
+    neighbour is not on the port it claims), and those with several
+    devices behind them (they are all real, but which of them is on the
+    cable is not knowable).
 
     Each side's own end comes from its own local port table, which is
     the reliable half of the exchange; the far end is resolved from
@@ -336,20 +318,30 @@ def lldp_link_candidates(
                 continue
             if neighbor.local_ifindex in sw.lldp_forwarded:
                 continue
+            if neighbor.local_ifindex in sw.lldp_crowded:
+                continue
             other = mac_to_switch.get(neighbor.chassis_id)
             if other is None or other.ip == sw.ip:
                 continue
             key = frozenset({sw.ip, other.ip})
             entry = candidates.setdefault(key, {})
+            # An aggregate is one link, not one per member: both members
+            # of a LACP bundle see the neighbour, and naming the link
+            # after whichever member came last would contradict the LAG
+            # the rest of the map draws.
+            local = aggregate_port(sw, neighbor.local_ifindex)
             entry[sw.ip] = {
-                "if_index": neighbor.local_ifindex,
-                "name": port_name(sw, neighbor.local_ifindex),
+                "if_index": local,
+                "name": port_name(sw, local),
             }
             # what this switch says the far end's port is — used only
             # when the far end does not report the link itself
             remote_index, remote_name = resolve_remote_port(
                 other, neighbor.port_id, neighbor.port_desc
             )
+            if remote_index is not None:
+                remote_index = aggregate_port(other, remote_index)
+                remote_name = port_name(other, remote_index)
             entry.setdefault(
                 "remote:" + other.ip,
                 {"if_index": remote_index, "name": remote_name},
@@ -415,6 +407,7 @@ def detect_bridges(
             forwarded = if_index in sw.lldp_forwarded
             is_trunk = aggregate_port(sw, if_index) in trunks.get(sw.ip, {})
             entry = {
+                "lldp_crowded": if_index in sw.lldp_crowded,
                 "chassis_id": neighbor.chassis_id,
                 "name": neighbor.sys_name or neighbor.chassis_id,
                 "sys_desc": neighbor.sys_desc,
