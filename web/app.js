@@ -756,11 +756,12 @@ function showDetails(nodeId) {
           )
           .join(", ")
       : "—";
+    // one hint, not two: "the devices behind this port hang off this
+    // node" and "they stay on the unmanaged switch" cannot both be true
     html = `<h3>${bridge.name}</h3>
       <p class="hint">${
-        bridge.unidentified ? t("lldpUnknownHint") : t("bridgeHint")
+        bridge.shares_port ? t("bridgeSharesPortHint") : t("bridgeHint")
       }</p>
-      ${bridge.shares_port ? `<p class="hint">${t("bridgeSharesPortHint")}</p>` : ""}
       ${bridge.lldp_crowded && !bridge.shares_port
         ? `<p class="hint">${t("lldpCrowdedHint")}</p>` : ""}
       ${bridge.lldp_forwarded ? `<p class="hint">${t("lldpForwardedHint")}</p>` : ""}
@@ -772,7 +773,9 @@ function showDetails(nodeId) {
       <dt>${t("portLabel")}</dt><dd>${bridge.port}</dd>
       <dt>${t("remotePort")}</dt><dd>${bridge.remote_port || "—"}</dd>
       <dt>${t("capabilities")}</dt><dd>${caps || t("capsUnknown")}</dd>
-      <dt>${t("devicesBehindPort")}</dt><dd>${bridge.host_count ?? 0}</dd>
+      ${bridge.shares_port
+        ? ""
+        : `<dt>${t("devicesBehindPort")}</dt><dd>${bridge.host_count ?? 0}</dd>`}
       <dt>${t("firstSeen")}</dt><dd>${fmtTime(bridge.first_seen)}</dd>
       <dt>${t("lastSeenLabel")}</dt><dd>${fmtTime(bridge.last_seen)}</dd>
       </dl>`;
