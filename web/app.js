@@ -737,6 +737,7 @@ function showDetails(nodeId) {
       <p class="hint">${
         bridge.unidentified ? t("lldpUnknownHint") : t("bridgeHint")
       }</p>
+      ${bridge.shares_port ? `<p class="hint">${t("bridgeSharesPortHint")}</p>` : ""}
       ${bridge.lldp_forwarded ? `<p class="hint">${t("lldpForwardedHint")}</p>` : ""}
       <dl>
       <dt>${t("descr")}</dt><dd>${bridge.sys_desc || "—"}</dd>

@@ -938,26 +938,49 @@ def build_topology(
                 "host_count_known": known,
             })
 
-    # 5. Bridges nobody polls, named by LLDP. Such a node replaces the
-    #    anonymous pseudo-switch on the same port and inherits its
-    #    devices: one node with a name beats two without.
+    # 5. Bridges nobody polls, named by LLDP.
+    #
+    #    One bridge behind a port: it IS the box on that cable, so it
+    #    replaces the anonymous pseudo-switch there and inherits its
+    #    devices — one node with a name beats two without.
+    #
+    #    Several bridges behind one port: an unmanaged box sits on the
+    #    cable and the bridges hang off it (mb1 port 28 is a chain of
+    #    Garage -> Workshop -> 10.3.6.124). The pseudo-switch keeps its
+    #    devices and the bridges are drawn as separate nodes on the same
+    #    port. Replacing it with one of them would claim the other
+    #    bridges' devices belong to whichever bridge happened to sort
+    #    first.
     bridges = detect_bridges(switches, switch_macs, trunks)
+    bridges_on_port: dict[tuple[str, str], list[dict]] = {}
+    for bridge in bridges:
+        bridges_on_port.setdefault(
+            (bridge["switch"], bridge["port"]), []
+        ).append(bridge)
     pseudo_by_port = {(p["switch"], p["port"]): p for p in pseudo_switches}
     hosts_on_port: dict[tuple[str, str], list[dict]] = {}
     for host in hosts:
         hosts_on_port.setdefault((host["switch"], host["port"]), []).append(host)
-    for bridge in bridges:
-        key = (bridge["switch"], bridge["port"])
-        replaced = pseudo_by_port.get(key)
-        if replaced is not None:
+    for key, group in bridges_on_port.items():
+        port_hosts = hosts_on_port.get(key, [])
+        alone = len(group) == 1 and not group[0]["trunk"]
+        replaced = pseudo_by_port.pop(key, None) if alone else None
+        if replaced is not None and replaced in pseudo_switches:
             pseudo_switches.remove(replaced)
-            bridge["host_count"] = replaced["host_count"]
-            bridge["host_count_live"] = replaced["host_count_live"]
-        if bridge["trunk"]:
-            continue  # a trunk: its devices belong to the switch behind it
-        for host in hosts_on_port.get(key, []):
-            host["via"] = bridge["id"]
-        bridge.setdefault("host_count", len(hosts_on_port.get(key, [])))
+        for bridge in group:
+            if replaced is not None:
+                bridge["host_count"] = replaced["host_count"]
+                bridge["host_count_live"] = replaced["host_count_live"]
+            if bridge["trunk"]:
+                continue  # a trunk: its devices belong to the switch behind it
+            if alone:
+                for host in port_hosts:
+                    host["via"] = bridge["id"]
+            bridge.setdefault("host_count", len(port_hosts) if alone else 0)
+            # several bridges share the port: their devices stay on the
+            # pseudo-switch, because nothing says which bridge they are
+            # behind
+            bridge["shares_port"] = not alone
     if bridges:
         log.info(
             "LLDP found %d device(s) behind our ports that we do not "

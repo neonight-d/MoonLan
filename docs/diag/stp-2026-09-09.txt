@@ -1,0 +1,128 @@
+
+=== 14. Spanning tree (BRIDGE-MIB dot1dStp*) ===
+verdict: STP is not running anywhere: not one switch passes the 'the tree actually converged' test
+
+--- comm-mb0-bsk-local (10.0.0.10) ---
+  dot1dStpProtocolSpecification  3 (ieee8021d)
+  dot1dStpVersion               2 (rstp)
+  dot1dStpPriority              0
+  dot1dStpDesignatedRoot        0/00:00:00:00:00:00
+  dot1dStpRootCost              0
+  dot1dStpRootPort              0
+  dot1dStpTopChanges            0
+  dot1dStpTimeSinceTopologyChange 0 ticks (0 s)
+  sysUpTime                     353574794 ticks (3535748 s)
+  ports with dot1dStpPortEnable = enabled: 26 of 26
+  ports not in state disabled(1):          0
+  verdict: NOT operating — every port is in state disabled(1)
+           root, cost and root port above are ignored
+  ports:
+    bridge-port    1 (unmapped)       disabled    enabled   cost 20000   designated bridge 0/00:00:00:00:00:00
+    bridge-port    2 (unmapped)       disabled    enabled   cost 20000   designated bridge 0/00:00:00:00:00:00
+    bridge-port    3 Slot0/3          disabled    enabled   cost 20000   designated bridge 0/00:00:00:00:00:00
+    bridge-port    4 Slot0/4          disabled    enabled   cost 0       designated bridge 0/00:00:00:00:00:00
+    bridge-port    5 Slot0/5          disabled    enabled   cost 200000  designated bridge 0/00:00:00:00:00:00
+    bridge-port    6 Slot0/6          disabled    enabled   cost 0       designated bridge 0/00:00:00:00:00:00
+    bridge-port    7 Slot0/7          disabled    enabled   cost 20000   designated bridge 0/00:00:00:00:00:00
+    bridge-port    8 Slot0/8          disabled    enabled   cost 0       designated bridge 0/00:00:00:00:00:00
+    bridge-port    9 Slot0/9          disabled    enabled   cost 200000  designated bridge 0/00:00:00:00:00:00
+    bridge-port   10 Slot0/10         disabled    enabled   cost 20000   designated bridge 0/00:00:00:00:00:00
+    bridge-port   11 Slot0/11         disabled    enabled   cost 20000   designated bridge 0/00:00:00:00:00:00
+    bridge-port   12 Slot0/12         disabled    enabled   cost 20000   designated bridge 0/00:00:00:00:00:00
+    bridge-port   13 Slot0/13         disabled    enabled   cost 20000   designated bridge 0/00:00:00:00:00:00
+    bridge-port   14 Slot0/14         disabled    enabled   cost 0       designated bridge 0/00:00:00:00:00:00
+    bridge-port   15 Slot0/15         disabled    enabled   cost 0       designated bridge 0/00:00:00:00:00:00
+    bridge-port   16 Slot0/16         disabled    enabled   cost 20000   designated bridge 0/00:00:00:00:00:00
+    bridge-port   17 Slot0/17         disabled    enabled   cost 200000  designated bridge 0/00:00:00:00:00:00
+    bridge-port   18 Slot0/18         disabled    enabled   cost 20000   designated bridge 0/00:00:00:00:00:00
+    bridge-port   19 Slot0/19         disabled    enabled   cost 0       designated bridge 0/00:00:00:00:00:00
+    bridge-port   20 Slot0/20         disabled    enabled   cost 0       designated bridge 0/00:00:00:00:00:00
+    bridge-port   21 Slot0/21         disabled    enabled   cost 20000   designated bridge 0/00:00:00:00:00:00
+    bridge-port   22 Slot0/22         disabled    enabled   cost 0       designated bridge 0/00:00:00:00:00:00
+    bridge-port   23 Slot0/23         disabled    enabled   cost 20000   designated bridge 0/00:00:00:00:00:00
+    bridge-port   24 Slot0/24         disabled    enabled   cost 0       designated bridge 0/00:00:00:00:00:00
+    bridge-port   25 Slot0/25         disabled    enabled   cost 20000   designated bridge 0/00:00:00:00:00:00
+    bridge-port   26 Slot0/26         disabled    enabled   cost 20000   designated bridge 0/00:00:00:00:00:00
+
+--- comm.mb1.bsk.local (10.0.0.21) ---
+  dot1dStpProtocolSpecification  3 (ieee8021d)
+  dot1dStpVersion               2 (rstp)
+  dot1dStpPriority              0
+  dot1dStpDesignatedRoot        0/00:00:00:00:00:00
+  dot1dStpRootCost              0
+  dot1dStpRootPort              0
+  dot1dStpTopChanges            0
+  dot1dStpTimeSinceTopologyChange 0 ticks (0 s)
+  sysUpTime                     353594923 ticks (3535949 s)
+  ports with dot1dStpPortEnable = enabled: 0 of 0
+  ports not in state disabled(1):          0
+  verdict: NOT operating — no port has dot1dStpPortEnable = enabled
+           root, cost and root port above are ignored
+
+--- comm.mb2.bsk.local (10.0.0.22) ---
+  dot1dStpProtocolSpecification  3 (ieee8021d)
+  dot1dStpVersion               2 (rstp)
+  dot1dStpPriority              0
+  dot1dStpDesignatedRoot        0/00:00:00:00:00:00
+  dot1dStpRootCost              0
+  dot1dStpRootPort              0
+  dot1dStpTopChanges            0
+  dot1dStpTimeSinceTopologyChange 0 ticks (0 s)
+  sysUpTime                     353595653 ticks (3535957 s)
+  ports with dot1dStpPortEnable = enabled: 0 of 0
+  ports not in state disabled(1):          0
+  verdict: NOT operating — no port has dot1dStpPortEnable = enabled
+           root, cost and root port above are ignored
+
+--- comm.mb4.bsk.local (10.0.0.44) ---
+  dot1dStp* is not answered at all
+
+--- comm.2b0.bsk.local (10.0.0.17) ---
+  dot1dStpProtocolSpecification  3 (ieee8021d)
+  dot1dStpPriority              32768
+  dot1dStpDesignatedRoot        32768/44:5b:ed:5b:39:40
+  dot1dStpRootCost              0
+  dot1dStpRootPort              0
+  dot1dStpTopChanges            0
+  dot1dStpTimeSinceTopologyChange 353591500 ticks (3535915 s)
+  sysUpTime                     353591500 ticks (3535915 s)
+  ports with dot1dStpPortEnable = enabled: 33 of 34
+  ports not in state disabled(1):          34
+  verdict: NOT operating — the tree never converged: topology changes 0, time since change 353591500 ticks vs uptime 353591500
+           root, cost and root port above are ignored
+  ports:
+    bridge-port    1 1                0           enabled   cost 0       designated bridge 32768/44:5b:ed:5b:39:40
+    bridge-port    2 2                0           enabled   cost 0       designated bridge 32768/44:5b:ed:5b:39:40
+    bridge-port    3 3                0           enabled   cost 0       designated bridge 32768/44:5b:ed:5b:39:40
+    bridge-port    4 4                0           enabled   cost 0       designated bridge 32768/44:5b:ed:5b:39:40
+    bridge-port    5 5                0           enabled   cost 0       designated bridge 32768/44:5b:ed:5b:39:40
+    bridge-port    6 6                0           enabled   cost 0       designated bridge 32768/44:5b:ed:5b:39:40
+    bridge-port    7 7                0           enabled   cost 0       designated bridge 32768/44:5b:ed:5b:39:40
+    bridge-port    8 8                0           enabled   cost 0       designated bridge 32768/44:5b:ed:5b:39:40
+    bridge-port    9 9                0           enabled   cost 0       designated bridge 32768/44:5b:ed:5b:39:40
+    bridge-port   10 10               0           enabled   cost 0       designated bridge 32768/44:5b:ed:5b:39:40
+    bridge-port   11 11               0           enabled   cost 0       designated bridge 32768/44:5b:ed:5b:39:40
+    bridge-port   12 12               0           enabled   cost 0       designated bridge 32768/44:5b:ed:5b:39:40
+    bridge-port   13 13               0           enabled   cost 0       designated bridge 32768/44:5b:ed:5b:39:40
+    bridge-port   14 14               0           enabled   cost 0       designated bridge 32768/44:5b:ed:5b:39:40
+    bridge-port   15 15               0           enabled   cost 0       designated bridge 32768/44:5b:ed:5b:39:40
+    bridge-port   16 16               0           enabled   cost 0       designated bridge 32768/44:5b:ed:5b:39:40
+    bridge-port   17 17               0           enabled   cost 0       designated bridge 32768/44:5b:ed:5b:39:40
+    bridge-port   18 18               0           enabled   cost 0       designated bridge 32768/44:5b:ed:5b:39:40
+    bridge-port   19 19               0           disabled  cost 0       designated bridge 32768/44:5b:ed:5b:39:40
+    bridge-port   20 20               0           enabled   cost 0       designated bridge 32768/44:5b:ed:5b:39:40
+    bridge-port   21 21               0           enabled   cost 0       designated bridge 32768/44:5b:ed:5b:39:40
+    bridge-port   22 22               0           enabled   cost 0       designated bridge 32768/44:5b:ed:5b:39:40
+    bridge-port   23 23               0           enabled   cost 0       designated bridge 32768/44:5b:ed:5b:39:40
+    bridge-port   24 24               0           enabled   cost 0       designated bridge 32768/44:5b:ed:5b:39:40
+    bridge-port   25 25               0           enabled   cost 0       designated bridge 32768/44:5b:ed:5b:39:40
+    bridge-port   26 26               0           enabled   cost 0       designated bridge 32768/44:5b:ed:5b:39:40
+    bridge-port   54 TRK1             0           enabled   cost 0       designated bridge 32768/44:5b:ed:5b:39:40
+    bridge-port   55 TRK2             0           enabled   cost 0       designated bridge 32768/44:5b:ed:5b:39:40
+    bridge-port   56 TRK3             0           enabled   cost 0       designated bridge 32768/44:5b:ed:5b:39:40
+    bridge-port   57 TRK4             0           enabled   cost 0       designated bridge 32768/44:5b:ed:5b:39:40
+    bridge-port   58 TRK5             0           enabled   cost 0       designated bridge 32768/44:5b:ed:5b:39:40
+    bridge-port   59 TRK6             0           enabled   cost 0       designated bridge 32768/44:5b:ed:5b:39:40
+    bridge-port   60 TRK7             0           enabled   cost 0       designated bridge 32768/44:5b:ed:5b:39:40
+    bridge-port   61 TRK8             0           enabled   cost 0       designated bridge 32768/44:5b:ed:5b:39:40
+

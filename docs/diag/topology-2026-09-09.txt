@@ -1,0 +1,306 @@
+
+=== 8. Topology view ===
+polling 5 switches from config.yaml…
+root: comm-mb0-bsk-local (10.0.0.10), sees 4 of 4 switches
+branches by root port:
+  bridge-port 1: comm.mb1.bsk.local (10.0.0.21)
+  Slot0/3: comm.mb2.bsk.local (10.0.0.22)
+  Slot0/7: comm.mb4.bsk.local (10.0.0.44)
+  Slot0/26: comm.2b0.bsk.local (10.0.0.17)
+uplinks:
+  comm.2b0.bsk.local (10.0.0.17): 24
+  comm.mb1.bsk.local (10.0.0.21): bridge-port 25
+  comm.mb2.bsk.local (10.0.0.22): 1/25
+  comm.mb4.bsk.local (10.0.0.44): 1/25
+trunk ports (excluded from host binding):
+  comm-mb0-bsk-local (10.0.0.10): bridge-port 1 (sees 10.0.0.21), Slot0/3 (sees 10.0.0.22), Slot0/7 (sees 10.0.0.44), Slot0/26 (sees 10.0.0.17)
+  comm.2b0.bsk.local (10.0.0.17): 1 (LLDP neighbour 10.0.0.10), 24 (sees 10.0.0.10, 10.0.0.21, 10.0.0.22)
+  comm.mb1.bsk.local (10.0.0.21): bridge-port 25 (sees 10.0.0.10, 10.0.0.17, 10.0.0.22)
+  comm.mb2.bsk.local (10.0.0.22): 1/25 (sees 10.0.0.10, 10.0.0.17, 10.0.0.21)
+  comm.mb4.bsk.local (10.0.0.44): 1/25 (sees 10.0.0.10, 10.0.0.17, 10.0.0.21, 10.0.0.22)
+LAG groups:
+  comm-mb0-bsk-local (10.0.0.10): LAG on bridge-port 1: members 1, 2 (2×1000 Mbit/s)
+  comm.mb1.bsk.local (10.0.0.21): LAG on bridge-port 25: members 25, 26 (2×1000 Mbit/s)
+links:
+  comm-mb0-bsk-local (10.0.0.10) [bridge-port 1] — comm.mb1.bsk.local (10.0.0.21) [bridge-port 25]  source: fdb  (LAG trunk)  (LACP ×2)
+  comm-mb0-bsk-local (10.0.0.10) [Slot0/3] — comm.mb2.bsk.local (10.0.0.22) [1/25]  source: both
+  comm-mb0-bsk-local (10.0.0.10) [Slot0/7] — comm.mb4.bsk.local (10.0.0.44) [1/25]  source: both
+  comm-mb0-bsk-local (10.0.0.10) [Slot0/26] — comm.2b0.bsk.local (10.0.0.17) [1]  source: both
+
+LLDP neighbours:
+  comm-mb0-bsk-local (10.0.0.10) [Slot0/25] -> CE6851-48S6Q-HI (10:c1:72:bd:44:e1) port 10GE1/0/22, 172.16.0.3, bridge, router
+  comm-mb0-bsk-local (10.0.0.10) [Slot0/26] -> comm.2b0.bsk.local (44:5b:ed:5b:39:40) port 44:5b:ed:5b:39:42, 10.0.0.17, bridge
+  comm-mb0-bsk-local (10.0.0.10) [Slot0/5] -> 08:8a:f1:5e:39:10 (08:8a:f1:5e:39:10) port 08:8a:f1:5e:39:11, no capabilities TLV  <- LLDP forwarding suspected, not used for links
+  comm-mb0-bsk-local (10.0.0.10) [Slot0/21] -> MikroTik (00:0e:04:b7:79:ab) port ether2, 10.0.0.1, router
+  comm-mb0-bsk-local (10.0.0.10) [Slot0/21] -> MikroTik (00:0e:04:b7:79:ab) port VLAN_MGT, 10.0.1.1, router
+  comm-mb0-bsk-local (10.0.0.10) [Slot0/21] -> MikroTik (00:0e:04:b7:79:ab) port prihod, 10.16.0.1, router
+  comm-mb0-bsk-local (10.0.0.10) [Slot0/21] -> MikroTik (00:0e:04:b7:79:ab) port WIFI_122, 172.16.3.1, router
+  comm-mb0-bsk-local (10.0.0.10) [Slot0/21] -> MikroTik (00:0e:04:b7:79:ab) port AUDIT 330, 10.3.33.1, router
+  comm-mb0-bsk-local (10.0.0.10) [Slot0/21] -> MikroTik (00:0e:04:b7:79:ab) port 230, 10.2.230.1, router
+  comm-mb0-bsk-local (10.0.0.10) [Slot0/21] -> MikroTik (00:0e:04:b7:79:ab) port AUDIT 235, 10.4.28.1, router
+  comm-mb0-bsk-local (10.0.0.10) [Slot0/21] -> MikroTik (00:0e:04:b7:79:ab) port AUDIT 219, 10.4.22.1, router
+  comm-mb0-bsk-local (10.0.0.10) [Slot0/21] -> MikroTik (00:0e:04:b7:79:ab) port AUDIT 220, 10.4.23.1, router
+  comm-mb0-bsk-local (10.0.0.10) [Slot0/21] -> MikroTik (00:0e:04:b7:79:ab) port AUDIT 221, 10.4.24.1, router
+  comm-mb0-bsk-local (10.0.0.10) [Slot0/21] -> MikroTik (00:0e:04:b7:79:ab) port 201, 10.3.2.1, router
+  comm-mb0-bsk-local (10.0.0.10) [Slot0/21] -> MikroTik (00:0e:04:b7:79:ab) port 300, 10.3.3.1, router
+  comm-mb0-bsk-local (10.0.0.10) [Slot0/21] -> MikroTik (00:0e:04:b7:79:ab) port 400, 10.3.4.1, router
+  comm-mb0-bsk-local (10.0.0.10) [Slot0/21] -> MikroTik (00:0e:04:b7:79:ab) port 500, 10.3.5.1, router
+  comm-mb0-bsk-local (10.0.0.10) [Slot0/21] -> MikroTik (00:0e:04:b7:79:ab) port 600, 10.3.6.1, router
+  comm-mb0-bsk-local (10.0.0.10) [Slot0/21] -> MikroTik (00:0e:04:b7:79:ab) port 100, 10.3.1.1, router
+  comm-mb0-bsk-local (10.0.0.10) [Slot0/21] -> MikroTik (00:0e:04:b7:79:ab) port 700, 10.3.7.1, router
+  comm-mb0-bsk-local (10.0.0.10) [Slot0/21] -> MikroTik (00:0e:04:b7:79:ab) port AUDIT 225, 10.4.27.1, router
+  comm-mb0-bsk-local (10.0.0.10) [Slot0/21] -> MikroTik (00:0e:04:b7:79:ab) port AUDIT 119, 10.4.11.1, router
+  comm-mb0-bsk-local (10.0.0.10) [Slot0/21] -> MikroTik (00:0e:04:b7:79:ab) port AUDIT 222, 10.4.25.1, router
+  comm-mb0-bsk-local (10.0.0.10) [Slot0/21] -> MikroTik (00:0e:04:b7:79:ab) port VLAN_BUH, 10.2.218.1, router
+  comm-mb0-bsk-local (10.0.0.10) [Slot0/21] -> MikroTik (00:0e:04:b7:79:ab) port AUDIT 223, 10.4.26.1, router
+  comm-mb0-bsk-local (10.0.0.10) [Slot0/21] -> MikroTik (00:0e:04:b7:79:ab) port 701, 10.7.0.1, router
+  comm-mb0-bsk-local (10.0.0.10) [Slot0/21] -> MikroTik (00:0e:04:b7:79:ab) port AUDIT 413, 10.4.42.1, router
+  comm-mb0-bsk-local (10.0.0.10) [Slot0/21] -> MikroTik (00:0e:04:b7:79:ab) port AUDIT 419, 10.4.43.1, router
+  comm-mb0-bsk-local (10.0.0.10) [Slot0/21] -> MikroTik (00:0e:04:b7:79:ab) port AUDIT 420, 10.4.44.1, router
+  comm-mb0-bsk-local (10.0.0.10) [Slot0/21] -> MikroTik (00:0e:04:b7:79:ab) port AUDIT 426, 10.4.46.1, router
+  comm-mb0-bsk-local (10.0.0.10) [Slot0/21] -> MikroTik (00:0e:04:b7:79:ab) port AUDIT 425, 10.4.45.1, router
+  comm-mb0-bsk-local (10.0.0.10) [Slot0/21] -> MikroTik (00:0e:04:b7:79:ab) port AUDIT 209, 10.4.21.1, router
+  comm-mb0-bsk-local (10.0.0.10) [Slot0/21] -> MikroTik (00:0e:04:b7:79:ab) port AUDIT 403, 10.4.41.1, router
+  comm-mb0-bsk-local (10.0.0.10) [Slot0/21] -> MikroTik (00:0e:04:b7:79:ab) port 12: Security Cameras, 10.1.2.1, router
+  comm-mb0-bsk-local (10.0.0.10) [Slot0/21] -> MikroTik (00:0e:04:b7:79:ab) port AUDIT 318, 10.4.32.1, router
+  comm-mb0-bsk-local (10.0.0.10) [Slot0/21] -> MikroTik (00:0e:04:b7:79:ab) port AUDIT 118, 10.4.10.1, router
+  comm-mb0-bsk-local (10.0.0.10) [Slot0/21] -> MikroTik (00:0e:04:b7:79:ab) port AUDIT 317, 10.4.31.1, router
+  comm-mb0-bsk-local (10.0.0.10) [Slot0/21] -> MikroTik (00:0e:04:b7:79:ab) port AUDIT 411, 10.4.47.1, router
+  comm-mb0-bsk-local (10.0.0.10) [Slot0/21] -> MikroTik (00:0e:04:b7:79:ab) port 8: Server host, 172.16.10.1, router
+  comm-mb0-bsk-local (10.0.0.10) [Slot0/3] -> c0:a0:bb:6a:9c:1b (c0:a0:bb:6a:9c:1b) port 25, no capabilities TLV
+  comm-mb0-bsk-local (10.0.0.10) [Slot0/7] -> 00:1e:58:a9:00:63 (00:1e:58:a9:00:63) port 1/25, 10.0.0.44, no capabilities TLV
+  comm-mb0-bsk-local (10.0.0.10) [Slot0/1] -> c0:a0:bb:6a:9c:db (c0:a0:bb:6a:9c:db) port 25, no capabilities TLV  <- LLDP forwarding suspected, not used for links
+  comm-mb0-bsk-local (10.0.0.10) [Slot0/2] -> c0:a0:bb:6a:9c:db (c0:a0:bb:6a:9c:db) port 26, no capabilities TLV  <- LLDP forwarding suspected, not used for links
+  comm-mb0-bsk-local (10.0.0.10) [Slot0/10] -> 74:56:3c:9a:97:9f (74:56:3c:9a:97:9f) port 74:56:3c:9a:97:9f, no capabilities TLV  <- LLDP forwarding suspected, not used for links
+  comm-mb0-bsk-local (10.0.0.10) [Slot0/23] -> 18:c0:4d:a8:6c:d8 (18:c0:4d:a8:6c:d8) port 18:c0:4d:a8:6c:d8, no capabilities TLV
+  comm-mb0-bsk-local (10.0.0.10) [Slot0/5] -> 10:ff:e0:44:02:64 (10:ff:e0:44:02:64) port 10:ff:e0:44:02:64, no capabilities TLV  <- LLDP forwarding suspected, not used for links
+  comm-mb0-bsk-local (10.0.0.10) [Slot0/10] -> 10:ff:e0:45:4e:e4 (10:ff:e0:45:4e:e4) port 10:ff:e0:45:4e:e4, no capabilities TLV  <- LLDP forwarding suspected, not used for links
+  comm-mb0-bsk-local (10.0.0.10) [Slot0/5] -> f4:4d:30:1a:7b:25 (f4:4d:30:1a:7b:25) port f4:4d:30:1a:7b:25, no capabilities TLV  <- LLDP forwarding suspected, not used for links
+  comm-mb0-bsk-local (10.0.0.10) [Slot0/5] -> c8:7f:54:00:e8:ec (c8:7f:54:00:e8:ec) port c8:7f:54:00:e8:ec, no capabilities TLV  <- LLDP forwarding suspected, not used for links
+  comm-mb0-bsk-local (10.0.0.10) [Slot0/5] -> 58:11:22:ba:3c:c2 (58:11:22:ba:3c:c2) port 58:11:22:ba:3c:c2, no capabilities TLV  <- LLDP forwarding suspected, not used for links
+  comm.mb1.bsk.local (10.0.0.21) [1/27] -> RouterOS-Sport (18:fd:74:fd:b5:cf) port bridge/ether1, 10.3.5.6, bridge, router  <- LLDP forwarding suspected, not used for links
+  comm.mb1.bsk.local (10.0.0.21) [1/25] -> 34:0a:33:bc:ca:f0 (34:0a:33:bc:ca:f0) port 1, no capabilities TLV  <- LLDP forwarding suspected, not used for links
+  comm.mb1.bsk.local (10.0.0.21) [1/26] -> 34:0a:33:bc:ca:f0 (34:0a:33:bc:ca:f0) port 2, no capabilities TLV  <- LLDP forwarding suspected, not used for links
+  comm.mb1.bsk.local (10.0.0.21) [1/2] -> 74:56:3c:fc:69:4d (74:56:3c:fc:69:4d) port 74:56:3c:fc:69:4d, no capabilities TLV
+  comm.mb1.bsk.local (10.0.0.21) [1/24] -> 74:56:3c:9c:ac:1a (74:56:3c:9c:ac:1a) port 74:56:3c:9c:ac:1a, no capabilities TLV
+  comm.mb1.bsk.local (10.0.0.21) [1/1] -> a8:a1:59:60:68:d5 (a8:a1:59:60:68:d5) port a8:a1:59:60:68:d5, no capabilities TLV  <- LLDP forwarding suspected, not used for links
+  comm.mb1.bsk.local (10.0.0.21) [1/1] -> 04:42:1a:eb:d0:ed (04:42:1a:eb:d0:ed) port 04:42:1a:eb:d0:ed, no capabilities TLV  <- LLDP forwarding suspected, not used for links
+  comm.mb1.bsk.local (10.0.0.21) [1/1] -> c0:3f:d5:e6:88:d1 (c0:3f:d5:e6:88:d1) port c0:3f:d5:e6:88:d1, no capabilities TLV  <- LLDP forwarding suspected, not used for links
+  comm.mb1.bsk.local (10.0.0.21) [1/27] -> 44:8a:5b:2c:52:52 (44:8a:5b:2c:52:52) port 44:8a:5b:2c:52:52, no capabilities TLV  <- LLDP forwarding suspected, not used for links
+  comm.mb1.bsk.local (10.0.0.21) [1/1] -> 04:42:1a:ea:7a:e7 (04:42:1a:ea:7a:e7) port 04:42:1a:ea:7a:e7, no capabilities TLV  <- LLDP forwarding suspected, not used for links
+  comm.mb1.bsk.local (10.0.0.21) [1/27] -> 70:85:c2:c1:21:0f (70:85:c2:c1:21:0f) port 70:85:c2:c1:21:0f, no capabilities TLV  <- LLDP forwarding suspected, not used for links
+  comm.mb1.bsk.local (10.0.0.21) [1/15] -> 1c:1b:0d:87:f8:8a (1c:1b:0d:87:f8:8a) port 1c:1b:0d:87:f8:8a, no capabilities TLV
+  comm.mb1.bsk.local (10.0.0.21) [1/27] -> 74:56:3c:dc:bf:f6 (74:56:3c:dc:bf:f6) port 74:56:3c:dc:bf:f6, no capabilities TLV  <- LLDP forwarding suspected, not used for links
+  comm.mb1.bsk.local (10.0.0.21) [1/27] -> b4:a9:fc:c4:04:be (b4:a9:fc:c4:04:be) port b4:a9:fc:c4:04:be, no capabilities TLV  <- LLDP forwarding suspected, not used for links
+  comm.mb1.bsk.local (10.0.0.21) [1/28] -> bc:5f:f4:0f:0f:7c (bc:5f:f4:0f:0f:7c) port bc:5f:f4:0f:0f:7c, no capabilities TLV  <- LLDP forwarding suspected, not used for links
+  comm.mb1.bsk.local (10.0.0.21) [1/28] -> RouterOS-Workshop (18:fd:74:fd:b3:af) port bridge/ether1, 10.3.6.2, bridge, router, wlanAccessPoint  <- LLDP forwarding suspected, not used for links
+  comm.mb1.bsk.local (10.0.0.21) [1/28] -> 08:97:98:75:e4:a4 (08:97:98:75:e4:a4) port 08:97:98:75:e4:a4, no capabilities TLV  <- LLDP forwarding suspected, not used for links
+  comm.mb1.bsk.local (10.0.0.21) [1/28] -> 70:72:cf:63:22:2d (70:72:cf:63:22:2d) port 70:72:cf:63:22:46, bridge  <- LLDP forwarding suspected, not used for links
+  comm.mb1.bsk.local (10.0.0.21) [1/28] -> 98:28:a6:3d:7e:ee (98:28:a6:3d:7e:ee) port 98:28:a6:3d:7e:ee, no capabilities TLV  <- LLDP forwarding suspected, not used for links
+  comm.mb1.bsk.local (10.0.0.21) [1/4] -> 1c:1b:0d:87:f8:85 (1c:1b:0d:87:f8:85) port 1c:1b:0d:87:f8:85, no capabilities TLV
+  comm.mb2.bsk.local (10.0.0.22) [1/25] -> 34:0a:33:bc:ca:f0 (34:0a:33:bc:ca:f0) port 3, no capabilities TLV
+  comm.mb2.bsk.local (10.0.0.22) [1/2] -> b4:2e:99:42:20:dd (b4:2e:99:42:20:dd) port b4:2e:99:42:20:dd, no capabilities TLV
+  comm.mb2.bsk.local (10.0.0.22) [1/10] -> b4:2e:99:1e:82:42 (b4:2e:99:1e:82:42) port b4:2e:99:1e:82:42, no capabilities TLV
+  comm.mb2.bsk.local (10.0.0.22) [1/16] -> 34:5a:60:fa:15:1b (34:5a:60:fa:15:1b) port 34:5a:60:fa:15:1b, no capabilities TLV  <- LLDP forwarding suspected, not used for links
+  comm.mb2.bsk.local (10.0.0.22) [1/6] -> 18:c0:4d:90:59:5d (18:c0:4d:90:59:5d) port 18:c0:4d:90:59:5d, no capabilities TLV  <- LLDP forwarding suspected, not used for links
+  comm.mb2.bsk.local (10.0.0.22) [1/6] -> 18:c0:4d:90:5e:b6 (18:c0:4d:90:5e:b6) port 18:c0:4d:90:5e:b6, no capabilities TLV  <- LLDP forwarding suspected, not used for links
+  comm.mb2.bsk.local (10.0.0.22) [1/6] -> 18:c0:4d:90:58:f1 (18:c0:4d:90:58:f1) port 18:c0:4d:90:58:f1, no capabilities TLV  <- LLDP forwarding suspected, not used for links
+  comm.mb2.bsk.local (10.0.0.22) [1/6] -> 18:c0:4d:90:58:ef (18:c0:4d:90:58:ef) port 18:c0:4d:90:58:ef, no capabilities TLV  <- LLDP forwarding suspected, not used for links
+  comm.mb2.bsk.local (10.0.0.22) [1/6] -> 18:c0:4d:90:59:1e (18:c0:4d:90:59:1e) port 18:c0:4d:90:59:1e, no capabilities TLV  <- LLDP forwarding suspected, not used for links
+  comm.mb2.bsk.local (10.0.0.22) [1/6] -> 18:c0:4d:90:62:d1 (18:c0:4d:90:62:d1) port 18:c0:4d:90:62:d1, no capabilities TLV  <- LLDP forwarding suspected, not used for links
+  comm.mb2.bsk.local (10.0.0.22) [1/6] -> 18:c0:4d:90:5e:cf (18:c0:4d:90:5e:cf) port 18:c0:4d:90:5e:cf, no capabilities TLV  <- LLDP forwarding suspected, not used for links
+  comm.mb2.bsk.local (10.0.0.22) [1/6] -> 18:c0:4d:90:58:f0 (18:c0:4d:90:58:f0) port 18:c0:4d:90:58:f0, no capabilities TLV  <- LLDP forwarding suspected, not used for links
+  comm.mb2.bsk.local (10.0.0.22) [1/6] -> 18:c0:4d:90:68:d6 (18:c0:4d:90:68:d6) port 18:c0:4d:90:68:d6, no capabilities TLV  <- LLDP forwarding suspected, not used for links
+  comm.mb2.bsk.local (10.0.0.22) [1/3] -> 18:c0:4d:6d:ff:f4 (18:c0:4d:6d:ff:f4) port 18:c0:4d:6d:ff:f4, no capabilities TLV  <- LLDP forwarding suspected, not used for links
+  comm.mb2.bsk.local (10.0.0.22) [1/22] -> 18:c0:4d:a4:bc:bb (18:c0:4d:a4:bc:bb) port 18:c0:4d:a4:bc:bb, no capabilities TLV
+  comm.mb2.bsk.local (10.0.0.22) [1/3] -> 38:2c:4a:e7:2f:a9 (38:2c:4a:e7:2f:a9) port 38:2c:4a:e7:2f:a9, no capabilities TLV  <- LLDP forwarding suspected, not used for links
+  comm.mb2.bsk.local (10.0.0.22) [1/6] -> 18:c0:4d:6d:f9:cc (18:c0:4d:6d:f9:cc) port 18:c0:4d:6d:f9:cc, no capabilities TLV  <- LLDP forwarding suspected, not used for links
+  comm.mb2.bsk.local (10.0.0.22) [1/6] -> 18:c0:4d:90:5e:c0 (18:c0:4d:90:5e:c0) port 18:c0:4d:90:5e:c0, no capabilities TLV  <- LLDP forwarding suspected, not used for links
+  comm.mb2.bsk.local (10.0.0.22) [1/7] -> 10:ff:e0:44:06:5a (10:ff:e0:44:06:5a) port 10:ff:e0:44:06:5a, no capabilities TLV
+  comm.mb2.bsk.local (10.0.0.22) [1/11] -> a8:a1:59:60:69:a2 (a8:a1:59:60:69:a2) port a8:a1:59:60:69:a2, no capabilities TLV
+  comm.mb2.bsk.local (10.0.0.22) [1/19] -> 10:ff:e0:43:ff:c4 (10:ff:e0:43:ff:c4) port 10:ff:e0:43:ff:c4, no capabilities TLV
+  comm.mb2.bsk.local (10.0.0.22) [1/3] -> 18:c0:4d:6e:05:54 (18:c0:4d:6e:05:54) port 18:c0:4d:6e:05:54, no capabilities TLV  <- LLDP forwarding suspected, not used for links
+  comm.mb2.bsk.local (10.0.0.22) [1/3] -> 18:c0:4d:6e:00:b4 (18:c0:4d:6e:00:b4) port 18:c0:4d:6e:00:b4, no capabilities TLV  <- LLDP forwarding suspected, not used for links
+  comm.mb2.bsk.local (10.0.0.22) [1/3] -> 18:c0:4d:6d:f9:d0 (18:c0:4d:6d:f9:d0) port 18:c0:4d:6d:f9:d0, no capabilities TLV  <- LLDP forwarding suspected, not used for links
+  comm.mb2.bsk.local (10.0.0.22) [1/3] -> 18:c0:4d:6d:f7:35 (18:c0:4d:6d:f7:35) port 18:c0:4d:6d:f7:35, no capabilities TLV  <- LLDP forwarding suspected, not used for links
+  comm.mb2.bsk.local (10.0.0.22) [1/3] -> 18:c0:4d:6d:fe:73 (18:c0:4d:6d:fe:73) port 18:c0:4d:6d:fe:73, no capabilities TLV  <- LLDP forwarding suspected, not used for links
+  comm.mb2.bsk.local (10.0.0.22) [1/3] -> 18:c0:4d:6e:00:e6 (18:c0:4d:6e:00:e6) port 18:c0:4d:6e:00:e6, no capabilities TLV  <- LLDP forwarding suspected, not used for links
+  comm.mb2.bsk.local (10.0.0.22) [1/3] -> 18:c0:4d:6e:01:3f (18:c0:4d:6e:01:3f) port 18:c0:4d:6e:01:3f, no capabilities TLV  <- LLDP forwarding suspected, not used for links
+  comm.mb2.bsk.local (10.0.0.22) [1/24] -> b4:2e:99:c0:ec:c3 (b4:2e:99:c0:ec:c3) port b4:2e:99:c0:ec:c3, no capabilities TLV
+  comm.mb2.bsk.local (10.0.0.22) [1/6] -> 18:c0:4d:6d:ff:c7 (18:c0:4d:6d:ff:c7) port 18:c0:4d:6d:ff:c7, no capabilities TLV  <- LLDP forwarding suspected, not used for links
+  comm.mb2.bsk.local (10.0.0.22) [1/15] -> 18:c0:4d:04:0d:87 (18:c0:4d:04:0d:87) port 18:c0:4d:04:0d:87, no capabilities TLV  <- LLDP forwarding suspected, not used for links
+  comm.mb2.bsk.local (10.0.0.22) [1/15] -> 18:c0:4d:55:13:74 (18:c0:4d:55:13:74) port 18:c0:4d:55:13:74, no capabilities TLV  <- LLDP forwarding suspected, not used for links
+  comm.mb2.bsk.local (10.0.0.22) [1/15] -> 18:c0:4d:6a:f5:55 (18:c0:4d:6a:f5:55) port 18:c0:4d:6a:f5:55, no capabilities TLV  <- LLDP forwarding suspected, not used for links
+  comm.mb2.bsk.local (10.0.0.22) [1/15] -> 18:c0:4d:6a:f5:f5 (18:c0:4d:6a:f5:f5) port 18:c0:4d:6a:f5:f5, no capabilities TLV  <- LLDP forwarding suspected, not used for links
+  comm.mb2.bsk.local (10.0.0.22) [1/15] -> b4:2e:99:ba:5d:74 (b4:2e:99:ba:5d:74) port b4:2e:99:ba:5d:74, no capabilities TLV  <- LLDP forwarding suspected, not used for links
+  comm.mb2.bsk.local (10.0.0.22) [1/15] -> b4:2e:99:ba:5d:73 (b4:2e:99:ba:5d:73) port b4:2e:99:ba:5d:73, no capabilities TLV  <- LLDP forwarding suspected, not used for links
+  comm.mb2.bsk.local (10.0.0.22) [1/15] -> 18:c0:4d:55:18:77 (18:c0:4d:55:18:77) port 18:c0:4d:55:18:77, no capabilities TLV  <- LLDP forwarding suspected, not used for links
+  comm.mb2.bsk.local (10.0.0.22) [1/15] -> b4:2e:99:ba:5f:4e (b4:2e:99:ba:5f:4e) port b4:2e:99:ba:5f:4e, no capabilities TLV  <- LLDP forwarding suspected, not used for links
+  comm.mb2.bsk.local (10.0.0.22) [1/15] -> b4:2e:99:ba:5c:42 (b4:2e:99:ba:5c:42) port b4:2e:99:ba:5c:42, no capabilities TLV  <- LLDP forwarding suspected, not used for links
+  comm.mb2.bsk.local (10.0.0.22) [1/15] -> 18:c0:4d:55:1d:a0 (18:c0:4d:55:1d:a0) port 18:c0:4d:55:1d:a0, no capabilities TLV  <- LLDP forwarding suspected, not used for links
+  comm.mb2.bsk.local (10.0.0.22) [1/15] -> b4:2e:99:ba:5d:6d (b4:2e:99:ba:5d:6d) port b4:2e:99:ba:5d:6d, no capabilities TLV  <- LLDP forwarding suspected, not used for links
+  comm.mb2.bsk.local (10.0.0.22) [1/4] -> 1c:1b:0d:45:23:63 (1c:1b:0d:45:23:63) port 1c:1b:0d:45:23:63, no capabilities TLV
+  comm.mb2.bsk.local (10.0.0.22) [1/3] -> 18:c0:4d:6d:ff:e7 (18:c0:4d:6d:ff:e7) port 18:c0:4d:6d:ff:e7, no capabilities TLV  <- LLDP forwarding suspected, not used for links
+  comm.mb2.bsk.local (10.0.0.22) [1/3] -> 18:c0:4d:6e:05:52 (18:c0:4d:6e:05:52) port 18:c0:4d:6e:05:52, no capabilities TLV  <- LLDP forwarding suspected, not used for links
+  comm.mb2.bsk.local (10.0.0.22) [1/3] -> 18:c0:4d:6d:ff:f3 (18:c0:4d:6d:ff:f3) port 18:c0:4d:6d:ff:f3, no capabilities TLV  <- LLDP forwarding suspected, not used for links
+  comm.mb2.bsk.local (10.0.0.22) [1/3] -> 18:c0:4d:6e:01:40 (18:c0:4d:6e:01:40) port 18:c0:4d:6e:01:40, no capabilities TLV  <- LLDP forwarding suspected, not used for links
+  comm.mb2.bsk.local (10.0.0.22) [1/16] -> 70:85:c2:9e:48:d0 (70:85:c2:9e:48:d0) port 70:85:c2:9e:48:d0, no capabilities TLV  <- LLDP forwarding suspected, not used for links
+  comm.mb2.bsk.local (10.0.0.22) [1/9] -> 34:5a:60:fa:18:5a (34:5a:60:fa:18:5a) port 34:5a:60:fa:18:5a, no capabilities TLV
+  comm.mb4.bsk.local (10.0.0.44) [1/20] -> 00:e0:4c:40:5c:a0 (00:e0:4c:40:5c:a0) port ?, no capabilities TLV
+  comm.mb4.bsk.local (10.0.0.44) [1/6] -> fc:34:97:a1:3f:cd (fc:34:97:a1:3f:cd) port fc:34:97:a1:3f:cd, no capabilities TLV  <- LLDP forwarding suspected, not used for links
+  comm.mb4.bsk.local (10.0.0.44) [1/4] -> 18:c0:4d:c2:a8:72 (18:c0:4d:c2:a8:72) port 18:c0:4d:c2:a8:72, no capabilities TLV  <- LLDP forwarding suspected, not used for links
+  comm.mb4.bsk.local (10.0.0.44) [1/4] -> 18:c0:4d:c2:bf:ee (18:c0:4d:c2:bf:ee) port 18:c0:4d:c2:bf:ee, no capabilities TLV  <- LLDP forwarding suspected, not used for links
+  comm.mb4.bsk.local (10.0.0.44) [1/2] -> b4:2e:99:cf:2d:e0 (b4:2e:99:cf:2d:e0) port b4:2e:99:cf:2d:e0, no capabilities TLV  <- LLDP forwarding suspected, not used for links
+  comm.mb4.bsk.local (10.0.0.44) [1/4] -> 18:c0:4d:c2:a7:e4 (18:c0:4d:c2:a7:e4) port 18:c0:4d:c2:a7:e4, no capabilities TLV  <- LLDP forwarding suspected, not used for links
+  comm.mb4.bsk.local (10.0.0.44) [1/2] -> 74:d4:dd:09:08:cc (74:d4:dd:09:08:cc) port 74:d4:dd:09:08:cc, no capabilities TLV  <- LLDP forwarding suspected, not used for links
+  comm.mb4.bsk.local (10.0.0.44) [1/6] -> fc:34:97:a1:42:c0 (fc:34:97:a1:42:c0) port fc:34:97:a1:42:c0, no capabilities TLV  <- LLDP forwarding suspected, not used for links
+  comm.mb4.bsk.local (10.0.0.44) [1/4] -> 18:c0:4d:c2:a7:e5 (18:c0:4d:c2:a7:e5) port 18:c0:4d:c2:a7:e5, no capabilities TLV  <- LLDP forwarding suspected, not used for links
+  comm.mb4.bsk.local (10.0.0.44) [1/4] -> 18:c0:4d:c2:a6:c4 (18:c0:4d:c2:a6:c4) port 18:c0:4d:c2:a6:c4, no capabilities TLV  <- LLDP forwarding suspected, not used for links
+  comm.mb4.bsk.local (10.0.0.44) [1/4] -> 18:c0:4d:c2:af:e8 (18:c0:4d:c2:af:e8) port 18:c0:4d:c2:af:e8, no capabilities TLV  <- LLDP forwarding suspected, not used for links
+  comm.mb4.bsk.local (10.0.0.44) [1/4] -> 18:c0:4d:c2:a6:bc (18:c0:4d:c2:a6:bc) port 18:c0:4d:c2:a6:bc, no capabilities TLV  <- LLDP forwarding suspected, not used for links
+  comm.mb4.bsk.local (10.0.0.44) [1/4] -> 18:c0:4d:c2:a6:c3 (18:c0:4d:c2:a6:c3) port 18:c0:4d:c2:a6:c3, no capabilities TLV  <- LLDP forwarding suspected, not used for links
+  comm.mb4.bsk.local (10.0.0.44) [1/2] -> b4:2e:99:cf:24:34 (b4:2e:99:cf:24:34) port b4:2e:99:cf:24:34, no capabilities TLV  <- LLDP forwarding suspected, not used for links
+  comm.mb4.bsk.local (10.0.0.44) [1/2] -> b4:2e:99:cf:2e:14 (b4:2e:99:cf:2e:14) port b4:2e:99:cf:2e:14, no capabilities TLV  <- LLDP forwarding suspected, not used for links
+  comm.mb4.bsk.local (10.0.0.44) [1/4] -> 18:c0:4d:c2:a6:e2 (18:c0:4d:c2:a6:e2) port 18:c0:4d:c2:a6:e2, no capabilities TLV  <- LLDP forwarding suspected, not used for links
+  comm.mb4.bsk.local (10.0.0.44) [1/4] -> 18:c0:4d:c2:a8:10 (18:c0:4d:c2:a8:10) port 18:c0:4d:c2:a8:10, no capabilities TLV  <- LLDP forwarding suspected, not used for links
+  comm.mb4.bsk.local (10.0.0.44) [1/4] -> 18:c0:4d:c2:a1:87 (18:c0:4d:c2:a1:87) port 18:c0:4d:c2:a1:87, no capabilities TLV  <- LLDP forwarding suspected, not used for links
+  comm.mb4.bsk.local (10.0.0.44) [1/2] -> b4:2e:99:cf:2d:e4 (b4:2e:99:cf:2d:e4) port b4:2e:99:cf:2d:e4, no capabilities TLV  <- LLDP forwarding suspected, not used for links
+  comm.mb4.bsk.local (10.0.0.44) [1/4] -> 18:c0:4d:c2:a8:0e (18:c0:4d:c2:a8:0e) port 18:c0:4d:c2:a8:0e, no capabilities TLV  <- LLDP forwarding suspected, not used for links
+  comm.mb4.bsk.local (10.0.0.44) [1/6] -> fc:34:97:9e:e1:81 (fc:34:97:9e:e1:81) port fc:34:97:9e:e1:81, no capabilities TLV  <- LLDP forwarding suspected, not used for links
+  comm.mb4.bsk.local (10.0.0.44) [1/6] -> fc:34:97:9e:e2:0f (fc:34:97:9e:e2:0f) port fc:34:97:9e:e2:0f, no capabilities TLV  <- LLDP forwarding suspected, not used for links
+  comm.mb4.bsk.local (10.0.0.44) [1/6] -> fc:34:97:a1:42:89 (fc:34:97:a1:42:89) port fc:34:97:a1:42:89, no capabilities TLV  <- LLDP forwarding suspected, not used for links
+  comm.mb4.bsk.local (10.0.0.44) [1/6] -> fc:34:97:a1:42:c1 (fc:34:97:a1:42:c1) port fc:34:97:a1:42:c1, no capabilities TLV  <- LLDP forwarding suspected, not used for links
+  comm.mb4.bsk.local (10.0.0.44) [1/6] -> d8:5e:d3:96:26:d8 (d8:5e:d3:96:26:d8) port d8:5e:d3:96:26:d8, no capabilities TLV  <- LLDP forwarding suspected, not used for links
+  comm.mb4.bsk.local (10.0.0.44) [1/2] -> b4:2e:99:cf:31:49 (b4:2e:99:cf:31:49) port b4:2e:99:cf:31:49, no capabilities TLV  <- LLDP forwarding suspected, not used for links
+  comm.mb4.bsk.local (10.0.0.44) [1/2] -> b4:2e:99:cf:2d:e3 (b4:2e:99:cf:2d:e3) port b4:2e:99:cf:2d:e3, no capabilities TLV  <- LLDP forwarding suspected, not used for links
+  comm.mb4.bsk.local (10.0.0.44) [1/6] -> fc:34:97:9e:e0:f3 (fc:34:97:9e:e0:f3) port fc:34:97:9e:e0:f3, no capabilities TLV  <- LLDP forwarding suspected, not used for links
+  comm.mb4.bsk.local (10.0.0.44) [1/6] -> fc:34:97:9e:e1:85 (fc:34:97:9e:e1:85) port fc:34:97:9e:e1:85, no capabilities TLV  <- LLDP forwarding suspected, not used for links
+  comm.mb4.bsk.local (10.0.0.44) [1/2] -> b4:2e:99:cf:28:9f (b4:2e:99:cf:28:9f) port b4:2e:99:cf:28:9f, no capabilities TLV  <- LLDP forwarding suspected, not used for links
+  comm.mb4.bsk.local (10.0.0.44) [1/6] -> fc:34:97:9e:e2:10 (fc:34:97:9e:e2:10) port fc:34:97:9e:e2:10, no capabilities TLV  <- LLDP forwarding suspected, not used for links
+  comm.mb4.bsk.local (10.0.0.44) [1/2] -> b4:2e:99:cf:2e:11 (b4:2e:99:cf:2e:11) port b4:2e:99:cf:2e:11, no capabilities TLV  <- LLDP forwarding suspected, not used for links
+  comm.mb4.bsk.local (10.0.0.44) [1/2] -> b4:2e:99:cf:2d:e1 (b4:2e:99:cf:2d:e1) port b4:2e:99:cf:2d:e1, no capabilities TLV  <- LLDP forwarding suspected, not used for links
+  comm.mb4.bsk.local (10.0.0.44) [1/25] -> 34:0a:33:bc:ca:f0 (34:0a:33:bc:ca:f0) port 7, no capabilities TLV
+  comm.mb4.bsk.local (10.0.0.44) [1/6] -> d8:5e:d3:96:76:ba (d8:5e:d3:96:76:ba) port d8:5e:d3:96:76:ba, no capabilities TLV  <- LLDP forwarding suspected, not used for links
+  comm.2b0.bsk.local (10.0.0.17) [1] -> RouterOS-Old_building (18:fd:74:fd:b5:c5) port bridge/ether1, 10.3.7.15, no capabilities TLV  <- LLDP forwarding suspected, not used for links
+  comm.2b0.bsk.local (10.0.0.17) [1] -> 34:0a:33:bc:ca:f0 (34:0a:33:bc:ca:f0) port 26, no capabilities TLV  <- LLDP forwarding suspected, not used for links
+  comm.2b0.bsk.local (10.0.0.17) [1] -> 74:56:3c:9a:2e:4b (74:56:3c:9a:2e:4b) port 74:56:3c:9a:2e:4b, no capabilities TLV  <- LLDP forwarding suspected, not used for links
+  comm.2b0.bsk.local (10.0.0.17) [1] -> 74:56:3c:c7:92:3e (74:56:3c:c7:92:3e) port 74:56:3c:c7:92:3e, no capabilities TLV  <- LLDP forwarding suspected, not used for links
+  comm.2b0.bsk.local (10.0.0.17) [1] -> 38:d5:47:b3:b5:fc (38:d5:47:b3:b5:fc) port 38:d5:47:b3:b5:fc, no capabilities TLV  <- LLDP forwarding suspected, not used for links
+  comm.2b0.bsk.local (10.0.0.17) [1] -> 38:d5:47:b3:a0:20 (38:d5:47:b3:a0:20) port 38:d5:47:b3:a0:20, no capabilities TLV  <- LLDP forwarding suspected, not used for links
+
+LLDP vs FDB mismatches:
+  comm-mb0-bsk-local (10.0.0.10) — comm.2b0.bsk.local (10.0.0.17): LLDP says Slot0/26/1, the MAC tables suggested Slot0/26/24
+
+bridges we do not poll (LLDP capability 'bridge'):
+  00:e0:4c:40:5c:a0 (00:e0:4c:40:5c:a0) behind comm.mb4.bsk.local (10.0.0.44) 1/20 (no capabilities TLV — unidentified)
+  04:42:1a:ea:7a:e7 (04:42:1a:ea:7a:e7) behind comm.mb1.bsk.local (10.0.0.21) 1/1 (no capabilities TLV — unidentified)
+  04:42:1a:eb:d0:ed (04:42:1a:eb:d0:ed) behind comm.mb1.bsk.local (10.0.0.21) 1/1 (no capabilities TLV — unidentified)
+  08:8a:f1:5e:39:10 (08:8a:f1:5e:39:10) behind comm-mb0-bsk-local (10.0.0.10) Slot0/5 (no capabilities TLV — unidentified)
+  08:97:98:75:e4:a4 (08:97:98:75:e4:a4) behind comm.mb1.bsk.local (10.0.0.21) 1/28 (no capabilities TLV — unidentified)
+  CE6851-48S6Q-HI (10:c1:72:bd:44:e1) 172.16.0.3 behind comm-mb0-bsk-local (10.0.0.10) Slot0/25
+  10:ff:e0:43:ff:c4 (10:ff:e0:43:ff:c4) behind comm.mb2.bsk.local (10.0.0.22) 1/19 (no capabilities TLV — unidentified)
+  10:ff:e0:44:02:64 (10:ff:e0:44:02:64) behind comm-mb0-bsk-local (10.0.0.10) Slot0/5 (no capabilities TLV — unidentified)
+  10:ff:e0:44:06:5a (10:ff:e0:44:06:5a) behind comm.mb2.bsk.local (10.0.0.22) 1/7 (no capabilities TLV — unidentified)
+  10:ff:e0:45:4e:e4 (10:ff:e0:45:4e:e4) behind comm-mb0-bsk-local (10.0.0.10) Slot0/10 (no capabilities TLV — unidentified)
+  18:c0:4d:04:0d:87 (18:c0:4d:04:0d:87) behind comm.mb2.bsk.local (10.0.0.22) 1/15 (no capabilities TLV — unidentified)
+  18:c0:4d:55:13:74 (18:c0:4d:55:13:74) behind comm.mb2.bsk.local (10.0.0.22) 1/15 (no capabilities TLV — unidentified)
+  18:c0:4d:55:18:77 (18:c0:4d:55:18:77) behind comm.mb2.bsk.local (10.0.0.22) 1/15 (no capabilities TLV — unidentified)
+  18:c0:4d:55:1d:a0 (18:c0:4d:55:1d:a0) behind comm.mb2.bsk.local (10.0.0.22) 1/15 (no capabilities TLV — unidentified)
+  18:c0:4d:6a:f5:55 (18:c0:4d:6a:f5:55) behind comm.mb2.bsk.local (10.0.0.22) 1/15 (no capabilities TLV — unidentified)
+  18:c0:4d:6a:f5:f5 (18:c0:4d:6a:f5:f5) behind comm.mb2.bsk.local (10.0.0.22) 1/15 (no capabilities TLV — unidentified)
+  18:c0:4d:6d:f7:35 (18:c0:4d:6d:f7:35) behind comm.mb2.bsk.local (10.0.0.22) 1/3 (no capabilities TLV — unidentified)
+  18:c0:4d:6d:f9:cc (18:c0:4d:6d:f9:cc) behind comm.mb2.bsk.local (10.0.0.22) 1/6 (no capabilities TLV — unidentified)
+  18:c0:4d:6d:f9:d0 (18:c0:4d:6d:f9:d0) behind comm.mb2.bsk.local (10.0.0.22) 1/3 (no capabilities TLV — unidentified)
+  18:c0:4d:6d:fe:73 (18:c0:4d:6d:fe:73) behind comm.mb2.bsk.local (10.0.0.22) 1/3 (no capabilities TLV — unidentified)
+  18:c0:4d:6d:ff:c7 (18:c0:4d:6d:ff:c7) behind comm.mb2.bsk.local (10.0.0.22) 1/6 (no capabilities TLV — unidentified)
+  18:c0:4d:6d:ff:e7 (18:c0:4d:6d:ff:e7) behind comm.mb2.bsk.local (10.0.0.22) 1/3 (no capabilities TLV — unidentified)
+  18:c0:4d:6d:ff:f3 (18:c0:4d:6d:ff:f3) behind comm.mb2.bsk.local (10.0.0.22) 1/3 (no capabilities TLV — unidentified)
+  18:c0:4d:6d:ff:f4 (18:c0:4d:6d:ff:f4) behind comm.mb2.bsk.local (10.0.0.22) 1/3 (no capabilities TLV — unidentified)
+  18:c0:4d:6e:00:b4 (18:c0:4d:6e:00:b4) behind comm.mb2.bsk.local (10.0.0.22) 1/3 (no capabilities TLV — unidentified)
+  18:c0:4d:6e:00:e6 (18:c0:4d:6e:00:e6) behind comm.mb2.bsk.local (10.0.0.22) 1/3 (no capabilities TLV — unidentified)
+  18:c0:4d:6e:01:3f (18:c0:4d:6e:01:3f) behind comm.mb2.bsk.local (10.0.0.22) 1/3 (no capabilities TLV — unidentified)
+  18:c0:4d:6e:01:40 (18:c0:4d:6e:01:40) behind comm.mb2.bsk.local (10.0.0.22) 1/3 (no capabilities TLV — unidentified)
+  18:c0:4d:6e:05:52 (18:c0:4d:6e:05:52) behind comm.mb2.bsk.local (10.0.0.22) 1/3 (no capabilities TLV — unidentified)
+  18:c0:4d:6e:05:54 (18:c0:4d:6e:05:54) behind comm.mb2.bsk.local (10.0.0.22) 1/3 (no capabilities TLV — unidentified)
+  18:c0:4d:90:58:ef (18:c0:4d:90:58:ef) behind comm.mb2.bsk.local (10.0.0.22) 1/6 (no capabilities TLV — unidentified)
+  18:c0:4d:90:58:f0 (18:c0:4d:90:58:f0) behind comm.mb2.bsk.local (10.0.0.22) 1/6 (no capabilities TLV — unidentified)
+  18:c0:4d:90:58:f1 (18:c0:4d:90:58:f1) behind comm.mb2.bsk.local (10.0.0.22) 1/6 (no capabilities TLV — unidentified)
+  18:c0:4d:90:59:1e (18:c0:4d:90:59:1e) behind comm.mb2.bsk.local (10.0.0.22) 1/6 (no capabilities TLV — unidentified)
+  18:c0:4d:90:59:5d (18:c0:4d:90:59:5d) behind comm.mb2.bsk.local (10.0.0.22) 1/6 (no capabilities TLV — unidentified)
+  18:c0:4d:90:5e:b6 (18:c0:4d:90:5e:b6) behind comm.mb2.bsk.local (10.0.0.22) 1/6 (no capabilities TLV — unidentified)
+  18:c0:4d:90:5e:c0 (18:c0:4d:90:5e:c0) behind comm.mb2.bsk.local (10.0.0.22) 1/6 (no capabilities TLV — unidentified)
+  18:c0:4d:90:5e:cf (18:c0:4d:90:5e:cf) behind comm.mb2.bsk.local (10.0.0.22) 1/6 (no capabilities TLV — unidentified)
+  18:c0:4d:90:62:d1 (18:c0:4d:90:62:d1) behind comm.mb2.bsk.local (10.0.0.22) 1/6 (no capabilities TLV — unidentified)
+  18:c0:4d:90:68:d6 (18:c0:4d:90:68:d6) behind comm.mb2.bsk.local (10.0.0.22) 1/6 (no capabilities TLV — unidentified)
+  18:c0:4d:a4:bc:bb (18:c0:4d:a4:bc:bb) behind comm.mb2.bsk.local (10.0.0.22) 1/22 (no capabilities TLV — unidentified)
+  18:c0:4d:a8:6c:d8 (18:c0:4d:a8:6c:d8) behind comm-mb0-bsk-local (10.0.0.10) Slot0/23 (no capabilities TLV — unidentified)
+  18:c0:4d:c2:a1:87 (18:c0:4d:c2:a1:87) behind comm.mb4.bsk.local (10.0.0.44) 1/4 (no capabilities TLV — unidentified)
+  18:c0:4d:c2:a6:bc (18:c0:4d:c2:a6:bc) behind comm.mb4.bsk.local (10.0.0.44) 1/4 (no capabilities TLV — unidentified)
+  18:c0:4d:c2:a6:c3 (18:c0:4d:c2:a6:c3) behind comm.mb4.bsk.local (10.0.0.44) 1/4 (no capabilities TLV — unidentified)
+  18:c0:4d:c2:a6:c4 (18:c0:4d:c2:a6:c4) behind comm.mb4.bsk.local (10.0.0.44) 1/4 (no capabilities TLV — unidentified)
+  18:c0:4d:c2:a6:e2 (18:c0:4d:c2:a6:e2) behind comm.mb4.bsk.local (10.0.0.44) 1/4 (no capabilities TLV — unidentified)
+  18:c0:4d:c2:a7:e4 (18:c0:4d:c2:a7:e4) behind comm.mb4.bsk.local (10.0.0.44) 1/4 (no capabilities TLV — unidentified)
+  18:c0:4d:c2:a7:e5 (18:c0:4d:c2:a7:e5) behind comm.mb4.bsk.local (10.0.0.44) 1/4 (no capabilities TLV — unidentified)
+  18:c0:4d:c2:a8:0e (18:c0:4d:c2:a8:0e) behind comm.mb4.bsk.local (10.0.0.44) 1/4 (no capabilities TLV — unidentified)
+  18:c0:4d:c2:a8:10 (18:c0:4d:c2:a8:10) behind comm.mb4.bsk.local (10.0.0.44) 1/4 (no capabilities TLV — unidentified)
+  18:c0:4d:c2:a8:72 (18:c0:4d:c2:a8:72) behind comm.mb4.bsk.local (10.0.0.44) 1/4 (no capabilities TLV — unidentified)
+  18:c0:4d:c2:af:e8 (18:c0:4d:c2:af:e8) behind comm.mb4.bsk.local (10.0.0.44) 1/4 (no capabilities TLV — unidentified)
+  18:c0:4d:c2:bf:ee (18:c0:4d:c2:bf:ee) behind comm.mb4.bsk.local (10.0.0.44) 1/4 (no capabilities TLV — unidentified)
+  RouterOS-Workshop (18:fd:74:fd:b3:af) 10.3.6.2 behind comm.mb1.bsk.local (10.0.0.21) 1/28
+  RouterOS-Sport (18:fd:74:fd:b5:cf) 10.3.5.6 behind comm.mb1.bsk.local (10.0.0.21) 1/27
+  1c:1b:0d:45:23:63 (1c:1b:0d:45:23:63) behind comm.mb2.bsk.local (10.0.0.22) 1/4 (no capabilities TLV — unidentified)
+  1c:1b:0d:87:f8:85 (1c:1b:0d:87:f8:85) behind comm.mb1.bsk.local (10.0.0.21) 1/4 (no capabilities TLV — unidentified)
+  1c:1b:0d:87:f8:8a (1c:1b:0d:87:f8:8a) behind comm.mb1.bsk.local (10.0.0.21) 1/15 (no capabilities TLV — unidentified)
+  34:5a:60:fa:15:1b (34:5a:60:fa:15:1b) behind comm.mb2.bsk.local (10.0.0.22) 1/16 (no capabilities TLV — unidentified)
+  34:5a:60:fa:18:5a (34:5a:60:fa:18:5a) behind comm.mb2.bsk.local (10.0.0.22) 1/9 (no capabilities TLV — unidentified)
+  38:2c:4a:e7:2f:a9 (38:2c:4a:e7:2f:a9) behind comm.mb2.bsk.local (10.0.0.22) 1/3 (no capabilities TLV — unidentified)
+  38:d5:47:b3:a0:20 (38:d5:47:b3:a0:20) behind comm.2b0.bsk.local (10.0.0.17) 1  [trunk port] (no capabilities TLV — unidentified)
+  38:d5:47:b3:b5:fc (38:d5:47:b3:b5:fc) behind comm.2b0.bsk.local (10.0.0.17) 1  [trunk port] (no capabilities TLV — unidentified)
+  44:8a:5b:2c:52:52 (44:8a:5b:2c:52:52) behind comm.mb1.bsk.local (10.0.0.21) 1/27 (no capabilities TLV — unidentified)
+  58:11:22:ba:3c:c2 (58:11:22:ba:3c:c2) behind comm-mb0-bsk-local (10.0.0.10) Slot0/5 (no capabilities TLV — unidentified)
+  70:72:cf:63:22:2d (70:72:cf:63:22:2d) behind comm.mb1.bsk.local (10.0.0.21) 1/28
+  70:85:c2:9e:48:d0 (70:85:c2:9e:48:d0) behind comm.mb2.bsk.local (10.0.0.22) 1/16 (no capabilities TLV — unidentified)
+  70:85:c2:c1:21:0f (70:85:c2:c1:21:0f) behind comm.mb1.bsk.local (10.0.0.21) 1/27 (no capabilities TLV — unidentified)
+  74:56:3c:9a:2e:4b (74:56:3c:9a:2e:4b) behind comm.2b0.bsk.local (10.0.0.17) 1  [trunk port] (no capabilities TLV — unidentified)
+  74:56:3c:9a:97:9f (74:56:3c:9a:97:9f) behind comm-mb0-bsk-local (10.0.0.10) Slot0/10 (no capabilities TLV — unidentified)
+  74:56:3c:9c:ac:1a (74:56:3c:9c:ac:1a) behind comm.mb1.bsk.local (10.0.0.21) 1/24 (no capabilities TLV — unidentified)
+  74:56:3c:c7:92:3e (74:56:3c:c7:92:3e) behind comm.2b0.bsk.local (10.0.0.17) 1  [trunk port] (no capabilities TLV — unidentified)
+  74:56:3c:dc:bf:f6 (74:56:3c:dc:bf:f6) behind comm.mb1.bsk.local (10.0.0.21) 1/27 (no capabilities TLV — unidentified)
+  74:56:3c:fc:69:4d (74:56:3c:fc:69:4d) behind comm.mb1.bsk.local (10.0.0.21) 1/2 (no capabilities TLV — unidentified)
+  74:d4:dd:09:08:cc (74:d4:dd:09:08:cc) behind comm.mb4.bsk.local (10.0.0.44) 1/2 (no capabilities TLV — unidentified)
+  98:28:a6:3d:7e:ee (98:28:a6:3d:7e:ee) behind comm.mb1.bsk.local (10.0.0.21) 1/28 (no capabilities TLV — unidentified)
+  a8:a1:59:60:68:d5 (a8:a1:59:60:68:d5) behind comm.mb1.bsk.local (10.0.0.21) 1/1 (no capabilities TLV — unidentified)
+  a8:a1:59:60:69:a2 (a8:a1:59:60:69:a2) behind comm.mb2.bsk.local (10.0.0.22) 1/11 (no capabilities TLV — unidentified)
+  b4:2e:99:1e:82:42 (b4:2e:99:1e:82:42) behind comm.mb2.bsk.local (10.0.0.22) 1/10 (no capabilities TLV — unidentified)
+  b4:2e:99:42:20:dd (b4:2e:99:42:20:dd) behind comm.mb2.bsk.local (10.0.0.22) 1/2 (no capabilities TLV — unidentified)
+  b4:2e:99:ba:5c:42 (b4:2e:99:ba:5c:42) behind comm.mb2.bsk.local (10.0.0.22) 1/15 (no capabilities TLV — unidentified)
+  b4:2e:99:ba:5d:6d (b4:2e:99:ba:5d:6d) behind comm.mb2.bsk.local (10.0.0.22) 1/15 (no capabilities TLV — unidentified)
+  b4:2e:99:ba:5d:73 (b4:2e:99:ba:5d:73) behind comm.mb2.bsk.local (10.0.0.22) 1/15 (no capabilities TLV — unidentified)
+  b4:2e:99:ba:5d:74 (b4:2e:99:ba:5d:74) behind comm.mb2.bsk.local (10.0.0.22) 1/15 (no capabilities TLV — unidentified)
+  b4:2e:99:ba:5f:4e (b4:2e:99:ba:5f:4e) behind comm.mb2.bsk.local (10.0.0.22) 1/15 (no capabilities TLV — unidentified)
+  b4:2e:99:c0:ec:c3 (b4:2e:99:c0:ec:c3) behind comm.mb2.bsk.local (10.0.0.22) 1/24 (no capabilities TLV — unidentified)
+  b4:2e:99:cf:24:34 (b4:2e:99:cf:24:34) behind comm.mb4.bsk.local (10.0.0.44) 1/2 (no capabilities TLV — unidentified)
+  b4:2e:99:cf:28:9f (b4:2e:99:cf:28:9f) behind comm.mb4.bsk.local (10.0.0.44) 1/2 (no capabilities TLV — unidentified)
+  b4:2e:99:cf:2d:e0 (b4:2e:99:cf:2d:e0) behind comm.mb4.bsk.local (10.0.0.44) 1/2 (no capabilities TLV — unidentified)
+  b4:2e:99:cf:2d:e1 (b4:2e:99:cf:2d:e1) behind comm.mb4.bsk.local (10.0.0.44) 1/2 (no capabilities TLV — unidentified)
+  b4:2e:99:cf:2d:e3 (b4:2e:99:cf:2d:e3) behind comm.mb4.bsk.local (10.0.0.44) 1/2 (no capabilities TLV — unidentified)
+  b4:2e:99:cf:2d:e4 (b4:2e:99:cf:2d:e4) behind comm.mb4.bsk.local (10.0.0.44) 1/2 (no capabilities TLV — unidentified)
+  b4:2e:99:cf:2e:11 (b4:2e:99:cf:2e:11) behind comm.mb4.bsk.local (10.0.0.44) 1/2 (no capabilities TLV — unidentified)
+  b4:2e:99:cf:2e:14 (b4:2e:99:cf:2e:14) behind comm.mb4.bsk.local (10.0.0.44) 1/2 (no capabilities TLV — unidentified)
+  b4:2e:99:cf:31:49 (b4:2e:99:cf:31:49) behind comm.mb4.bsk.local (10.0.0.44) 1/2 (no capabilities TLV — unidentified)
+  b4:a9:fc:c4:04:be (b4:a9:fc:c4:04:be) behind comm.mb1.bsk.local (10.0.0.21) 1/27 (no capabilities TLV — unidentified)
+  bc:5f:f4:0f:0f:7c (bc:5f:f4:0f:0f:7c) behind comm.mb1.bsk.local (10.0.0.21) 1/28 (no capabilities TLV — unidentified)
+  c0:3f:d5:e6:88:d1 (c0:3f:d5:e6:88:d1) behind comm.mb1.bsk.local (10.0.0.21) 1/1 (no capabilities TLV — unidentified)
+  c8:7f:54:00:e8:ec (c8:7f:54:00:e8:ec) behind comm-mb0-bsk-local (10.0.0.10) Slot0/5 (no capabilities TLV — unidentified)
+  d8:5e:d3:96:26:d8 (d8:5e:d3:96:26:d8) behind comm.mb4.bsk.local (10.0.0.44) 1/6 (no capabilities TLV — unidentified)
+  d8:5e:d3:96:76:ba (d8:5e:d3:96:76:ba) behind comm.mb4.bsk.local (10.0.0.44) 1/6 (no capabilities TLV — unidentified)
+  f4:4d:30:1a:7b:25 (f4:4d:30:1a:7b:25) behind comm-mb0-bsk-local (10.0.0.10) Slot0/5 (no capabilities TLV — unidentified)
+  fc:34:97:9e:e0:f3 (fc:34:97:9e:e0:f3) behind comm.mb4.bsk.local (10.0.0.44) 1/6 (no capabilities TLV — unidentified)
+  fc:34:97:9e:e1:81 (fc:34:97:9e:e1:81) behind comm.mb4.bsk.local (10.0.0.44) 1/6 (no capabilities TLV — unidentified)
+  fc:34:97:9e:e1:85 (fc:34:97:9e:e1:85) behind comm.mb4.bsk.local (10.0.0.44) 1/6 (no capabilities TLV — unidentified)
+  fc:34:97:9e:e2:0f (fc:34:97:9e:e2:0f) behind comm.mb4.bsk.local (10.0.0.44) 1/6 (no capabilities TLV — unidentified)
+  fc:34:97:9e:e2:10 (fc:34:97:9e:e2:10) behind comm.mb4.bsk.local (10.0.0.44) 1/6 (no capabilities TLV — unidentified)
+  fc:34:97:a1:3f:cd (fc:34:97:a1:3f:cd) behind comm.mb4.bsk.local (10.0.0.44) 1/6 (no capabilities TLV — unidentified)
+  fc:34:97:a1:42:89 (fc:34:97:a1:42:89) behind comm.mb4.bsk.local (10.0.0.44) 1/6 (no capabilities TLV — unidentified)
+  fc:34:97:a1:42:c0 (fc:34:97:a1:42:c0) behind comm.mb4.bsk.local (10.0.0.44) 1/6 (no capabilities TLV — unidentified)
+  fc:34:97:a1:42:c1 (fc:34:97:a1:42:c1) behind comm.mb4.bsk.local (10.0.0.44) 1/6 (no capabilities TLV — unidentified)
