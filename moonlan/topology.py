@@ -38,6 +38,14 @@ Algorithm (v0.4.4) — a tree grown from the root:
    It is placed on the trunk of the switch that has the best claim to
    it — a downlink before an uplink, the deeper switch before the
    shallower one — and marked approximate, instead of disappearing.
+
+v0.6 adds LLDP on top of steps 3-7. Where two polled switches name
+each other over LLDP, the link and both its ports come from LLDP and
+carry source="lldp"/"both"; the FDB inference then only fills the gaps
+(source="fdb"). Ports carrying forwarded LLDP frames are excluded —
+see lldp.forwarded_ports. Disagreements between the two sources are
+collected in info["lldp_mismatches"] and printed by `diag --topology`
+rather than silently resolved.
 """
 
 from __future__ import annotations
@@ -158,6 +166,26 @@ def port_name(sw: SwitchData, if_index: int) -> str:
     return port.name if port and port.name else str(if_index)
 
 
+def aggregate_port(sw: SwitchData, if_index: int | None) -> int | None:
+    """The logical port a physical one belongs to, if any.
+
+    Two kinds of aggregate exist here: an IEEE8023-LAG-MIB one (a
+    positive aggregate ifIndex) and a D-Link trunk inferred from the
+    dot1dBasePortIfIndex gaps, whose FDB lives on a synthetic negative
+    ifIndex. LLDP always reports the physical member, so both have to
+    be resolved.
+    """
+    if if_index is None:
+        return None
+    aggregate = sw.lag_members.get(if_index)
+    if aggregate is not None:
+        return aggregate
+    for bridge_port, members in sw.lag_groups.items():
+        if if_index in members:
+            return -bridge_port
+    return if_index
+
+
 def _lag_info(sw: SwitchData, port: int) -> tuple[list[str], list[bool], int]:
     """The aggregate's physical members: names, oper states and the
     total speed of the ACTIVE members only — a degraded LAG must not
@@ -182,9 +210,16 @@ def _lag_info(sw: SwitchData, port: int) -> tuple[list[str], list[bool], int]:
 
 
 def _make_link(
-    a: SwitchData, pa: int | None, b: SwitchData, pb: int | None
+    a: SwitchData, pa: int | None, b: SwitchData, pb: int | None,
+    source: str = "fdb",
 ) -> dict:
-    """Link A(pA)—B(pB); a None port means that side is unknown ("?")."""
+    """Link A(pA)—B(pB); a None port means that side is unknown ("?").
+
+    `source` says where the link came from: "fdb" — inferred from the
+    MAC tables, "lldp" — the two devices told us about each other,
+    "both" — inferred and then confirmed. A reader deserves to know
+    which of the two it is looking at.
+    """
     link = {
         "a": a.ip,
         "b": b.ip,
@@ -192,6 +227,7 @@ def _make_link(
         "b_port": port_name(b, pb) if pb is not None else "?",
         "speed_mbps": 0,
         "lag": None,
+        "source": source,
     }
     a_members, a_states, a_speed = (
         _lag_info(a, pa) if pa is not None else ([], [], 0)
@@ -236,6 +272,86 @@ def _make_link(
         else:
             link["lag"]["trunk"] = True
     return link
+
+
+def resolve_remote_port(
+    sw: SwitchData, port_id: str, port_desc: str
+) -> tuple[int | None, str]:
+    """A neighbour's port id, as OUR port table knows it.
+
+    LLDP reports the far end's port the way that device names it
+    (ifName, a port MAC, or a private "local" string). When it can be
+    matched to a real interface of the polled switch, the ifIndex comes
+    with it — links then get speeds and LAG composition. Otherwise the
+    raw string is kept: naming the port wrongly is worse than quoting
+    the neighbour.
+    """
+    for candidate in (port_id, port_desc):
+        key = (candidate or "").strip().lower()
+        if not key:
+            continue
+        for port in sw.ports.values():
+            if port.if_index < 0:
+                continue
+            if key in {
+                (port.name or "").lower(), str(port.if_index), port.mac
+            }:
+                return port.if_index, port.name or str(port.if_index)
+    return None, (port_id or port_desc or "?")
+
+
+def lldp_link_candidates(
+    switches: list[SwitchData],
+) -> dict[frozenset, dict]:
+    """Switch-to-switch links CONFIRMED by LLDP, keyed by the pair.
+
+    A candidate needs one LLDP neighbour on the local port whose chassis
+    id belongs to another polled switch. Ports flagged by
+    `lldp.forwarded_ports` are skipped: on a switch that re-transmits
+    foreign LLDP frames the neighbour is not on the port it claims.
+
+    Each side's own end comes from its own local port table, which is
+    the reliable half of the exchange; the far end is resolved from
+    lldpRemPortId and only falls back to the raw string.
+    """
+    mac_to_switch: dict[str, SwitchData] = {}
+    for sw in switches:
+        for mac in sw.own_macs | ({sw.bridge_mac} if sw.bridge_mac else set()):
+            mac_to_switch.setdefault(mac, sw)
+
+    candidates: dict[frozenset, dict] = {}
+    for sw in switches:
+        for neighbor in sw.lldp_neighbors:
+            if neighbor.local_ifindex is None:
+                continue
+            if neighbor.local_ifindex in sw.lldp_forwarded:
+                continue
+            other = mac_to_switch.get(neighbor.chassis_id)
+            if other is None or other.ip == sw.ip:
+                continue
+            key = frozenset({sw.ip, other.ip})
+            entry = candidates.setdefault(key, {})
+            entry[sw.ip] = {
+                "if_index": neighbor.local_ifindex,
+                "name": port_name(sw, neighbor.local_ifindex),
+            }
+            # what this switch says the far end's port is — used only
+            # when the far end does not report the link itself
+            remote_index, remote_name = resolve_remote_port(
+                other, neighbor.port_id, neighbor.port_desc
+            )
+            entry.setdefault(
+                "remote:" + other.ip,
+                {"if_index": remote_index, "name": remote_name},
+            )
+    resolved: dict[frozenset, dict] = {}
+    for key, entry in candidates.items():
+        sides = {}
+        for ip in key:
+            sides[ip] = entry.get(ip) or entry.get("remote:" + ip)
+        if all(sides.values()):
+            resolved[key] = sides
+    return resolved
 
 
 def normalized_fdb(switches: list[SwitchData]) -> dict[str, dict[str, int]]:
@@ -439,10 +555,82 @@ def infer_tree(
     return links, uplinks, info
 
 
+def merge_lldp_links(
+    links: list[dict],
+    lldp_pairs: dict[frozenset, dict],
+    by_ip: dict[str, SwitchData],
+) -> list[dict]:
+    """Applies LLDP to the tree the MAC tables produced.
+
+    LLDP wins where the two disagree: it is a direct statement by both
+    devices, while the FDB tree is an inference. But the disagreement
+    is never swallowed — every difference is returned so the operator
+    can see it in `diag --topology` and in the log.
+    """
+    mismatches: list[dict] = []
+    matched: set[frozenset] = set()
+    for link in links:
+        key = frozenset({link["a"], link["b"]})
+        sides = lldp_pairs.get(key)
+        if sides is None:
+            link.setdefault("source", "fdb")
+            continue
+        matched.add(key)
+        link["source"] = "both"
+        was = (link["a_port"], link["b_port"])
+        now = (sides[link["a"]]["name"], sides[link["b"]]["name"])
+        if was != now:
+            mismatches.append({
+                "kind": "ports",
+                "a": link["a"], "b": link["b"],
+                "fdb_ports": was, "lldp_ports": now,
+            })
+        link["a_port"], link["b_port"] = now
+    for key, sides in sorted(lldp_pairs.items(), key=lambda kv: sorted(kv[0])):
+        if key in matched:
+            continue
+        a_ip, b_ip = sorted(key)
+        a, b = by_ip.get(a_ip), by_ip.get(b_ip)
+        if a is None or b is None:
+            continue
+        # the aggregate, when the LLDP port is a LACP member: the link
+        # then carries the members and the real capacity
+        pa = sides[a_ip]["if_index"]
+        pb = sides[b_ip]["if_index"]
+        link = _make_link(
+            a, aggregate_port(a, pa), b, aggregate_port(b, pb),
+            source="lldp",
+        )
+        link["a_port"] = sides[a_ip]["name"]
+        link["b_port"] = sides[b_ip]["name"]
+        links.append(link)
+        mismatches.append({
+            "kind": "missing_in_fdb",
+            "a": a_ip, "b": b_ip,
+            "fdb_ports": None,
+            "lldp_ports": (link["a_port"], link["b_port"]),
+        })
+    for m in mismatches:
+        if m["kind"] == "ports":
+            log.info(
+                "LLDP vs FDB: %s—%s is on %s/%s per LLDP, the MAC tables "
+                "suggested %s/%s — LLDP wins",
+                m["a"], m["b"], *m["lldp_ports"], *m["fdb_ports"],
+            )
+        else:
+            log.info(
+                "LLDP vs FDB: %s [%s] — %s [%s] is reported by LLDP only; "
+                "the MAC tables do not show this link",
+                m["a"], m["lldp_ports"][0], m["b"], m["lldp_ports"][1],
+            )
+    return mismatches
+
+
 def trunk_ports(
     switches: list[SwitchData],
     switches_on_port: dict[str, dict[int, set[str]]],
     uplinks: dict[str, int | None],
+    lldp_pairs: dict[frozenset, dict] | None = None,
 ) -> dict[str, dict[int, str]]:
     """Ports leading to other switches: ip -> {ifIndex: why it is a trunk}.
 
@@ -464,6 +652,19 @@ def trunk_ports(
         uplink = uplinks.get(sw.ip)
         if uplink is not None:
             ports.setdefault(uplink, "uplink toward the root")
+        # A port LLDP confirms as a switch-to-switch link is a trunk
+        # even when the MAC tables never showed the neighbour there —
+        # one-way visibility is exactly the case LLDP was added for
+        for key, sides in (lldp_pairs or {}).items():
+            if sw.ip not in key:
+                continue
+            other = next(ip for ip in key if ip != sw.ip)
+            if_index = sides[sw.ip]["if_index"]
+            if if_index is None:
+                continue
+            ports.setdefault(
+                aggregate_port(sw, if_index), f"LLDP neighbour {other}"
+            )
         trunks[sw.ip] = ports
     return trunks
 
@@ -495,7 +696,9 @@ def build_topology(
     sticky_pseudo_ports: set[tuple[str, str]] | None = None,
     unconfirmed_macs: set[str] | None = None,
     place_trunk_only: bool = True,
-) -> tuple[list[dict], list[dict], list[dict], list[dict], dict[int, str]]:
+) -> tuple[
+    list[dict], list[dict], list[dict], list[dict], dict[int, str], dict
+]:
     """Turns poll data into nodes and links for the map.
 
     known_hosts_per_port ((switch ip, port name) -> count) is how many
@@ -525,16 +728,25 @@ def build_topology(
         link_fdb = fdb
 
     switches_on_port, sees = switch_sightings(switches, link_fdb)
+    switch_by_ip = {sw.ip: sw for sw in switches}
 
-    # 1. Switch-to-switch links: a tree grown from the root
+    # 1. Switch-to-switch links: a tree grown from the root, then
+    #    corrected where LLDP has the two devices naming each other.
+    #    LLDP is a statement, the FDB tree an inference — but the
+    #    disagreements are reported, never quietly "fixed".
     links, uplinks, info = infer_tree(switches, switches_on_port, sees)
+    lldp_pairs = lldp_link_candidates(switches)
+    info["lldp_mismatches"] = merge_lldp_links(links, lldp_pairs, switch_by_ip)
+    info["lldp_forwarded"] = {
+        sw.ip: sorted(port_name(sw, i) for i in sw.lldp_forwarded)
+        for sw in switches if sw.lldp_forwarded
+    }
 
     # 2. Trunk ports: they lead to other switches and carry no hosts
-    trunks = trunk_ports(switches, switches_on_port, uplinks)
+    trunks = trunk_ports(switches, switches_on_port, uplinks, lldp_pairs)
     uplink_ports: dict[str, set[int]] = {
         ip: set(ports) for ip, ports in trunks.items()
     }
-    switch_by_ip = {sw.ip: sw for sw in switches}
     for ip, ports in sorted(trunks.items()):
         # one line per poll: a device silently vanishing from the map
         # is almost always a port that became a trunk by mistake
@@ -676,4 +888,4 @@ def build_topology(
             if name:
                 vlan_names.setdefault(vlan_id, name)
 
-    return switch_dicts, links, hosts, pseudo_switches, vlan_names
+    return switch_dicts, links, hosts, pseudo_switches, vlan_names, info
