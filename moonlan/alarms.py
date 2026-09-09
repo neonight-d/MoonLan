@@ -558,6 +558,90 @@ class AlarmEngine:
                 f"gone from LLDP for {_fmt_window(window)}",
             )
 
+    async def on_stp(self, report: dict) -> None:
+        """One scan's spanning-tree picture.
+
+        Every rule here applies ONLY to switches the report calls
+        operating. That is the whole discipline of this feature: a
+        switch with STP disabled reports priority 0, cost 0 and itself
+        as root, and alarming on those numbers is how a network with no
+        spanning tree at all acquires five root bridges and a stream of
+        root-change alarms.
+        """
+        operating = [s for s in report.get("switches", []) if s["operating"]]
+        for entry in operating:
+            ip = entry["ip"]
+            root = entry["designated_root"]
+            previous = self._stp_root.get(ip)
+            self._stp_root[ip] = root
+            if previous and root and previous != root:
+                await self._raise(
+                    "stp_root_changed", ip,
+                    f"{entry['name']} now follows root {root} "
+                    f"(was {previous})",
+                )
+            elif previous == root:
+                await self._clear(
+                    "stp_root_changed", ip, f"root {root} is stable again"
+                )
+
+            changes = entry["top_changes"]
+            before = self._stp_changes.get(ip)
+            self._stp_changes[ip] = changes
+            if before is None:
+                continue  # first scan: a baseline, not a delta
+            delta = changes - before
+            limit = self._thresholds.stp_changes_per_cycle
+            if delta > limit:
+                await self._raise(
+                    "stp_topology_change", ip,
+                    f"{entry['name']}: {delta} topology changes since the "
+                    f"previous scan (limit {limit}), "
+                    f"{entry['top_changes']} in total",
+                )
+            elif delta >= 0:
+                await self._clear(
+                    "stp_topology_change", ip,
+                    f"{delta} topology changes since the previous scan",
+                )
+
+        # Switches that stopped operating must not keep a stale root in
+        # memory: coming back would look like a root change
+        alive = {entry["ip"] for entry in operating}
+        for ip in list(self._stp_root):
+            if ip not in alive:
+                del self._stp_root[ip]
+                self._stp_changes.pop(ip, None)
+                await self._clear(
+                    "stp_root_changed", ip, "the switch is no longer in a tree"
+                )
+                await self._clear(
+                    "stp_topology_change", ip,
+                    "the switch is no longer in a tree",
+                )
+
+        verdict = report.get("verdict", {})
+        if verdict.get("verdict") == "fragmented":
+            self._stp_fragmented_cycles += 1
+            # one scan is not evidence: a converging tree passes through
+            # disagreement on its way to agreement
+            if self._stp_fragmented_cycles >= 2:
+                roots = verdict.get("roots", {})
+                detail = "; ".join(
+                    f"{root}: {', '.join(ips)}" for root, ips in sorted(roots.items())
+                )
+                await self._raise(
+                    "stp_fragmented", "network",
+                    f"{len(roots)} separate spanning trees — {detail}",
+                )
+        else:
+            self._stp_fragmented_cycles = 0
+            await self._clear(
+                "stp_fragmented", "network",
+                "one tree" if verdict.get("verdict") == "single"
+                else "no switch is running a spanning tree",
+            )
+
     async def on_new_macs(self, new_macs: list[str], details: dict[str, str]) -> None:
         for mac in new_macs:
             await self._raise("new_mac", mac, details.get(mac, ""), auto_clear=True)

@@ -121,6 +121,7 @@ class TopologyState:
                 "vlan_names": self.vlan_names,
                 "unlocated": self.unlocated,
                 "offline_groups": self.offline_groups,
+                "stp": self.stp,
                 "last_scan": self.last_scan,
                 "scanning": self.scanning,
             }
@@ -969,11 +970,29 @@ def build_topology(
         )
     info["bridges"] = bridges
 
+    # 6. Spanning tree on the map: a port STP holds in discarding
+    #    carries no traffic, and the root bridge is worth seeing at a
+    #    glance. Only switches whose tree actually operates count — a
+    #    disabled one still answers dot1dStp* and names itself root.
+    for sw in switches:
+        if sw.stp is None or not sw.stp.operating:
+            continue
+        blocking = {p.name for p in sw.stp.blocking_ports() if p.name}
+        if not blocking:
+            continue
+        for link in links:
+            for side in ("a", "b"):
+                if link[side] == sw.ip and link[f"{side}_port"] in blocking:
+                    link["stp_blocking"] = True
+                    link["stp_blocking_side"] = sw.ip
+
     switch_dicts = [{
         "ip": sw.ip,
         "name": sw.sys_name or sw.ip,
         "mac": sw.bridge_mac,
         "descr": sw.sys_descr,
+        "stp_operating": bool(sw.stp and sw.stp.operating),
+        "stp_root": bool(sw.stp and sw.stp.is_root(sw.own_macs)),
         # Physical ports only (ifType 6/62/69/117): aggregates, CPU and
         # VLAN interfaces must not inflate the counters
         "ports_total": sum(1 for p in sw.ports.values() if p.is_physical),

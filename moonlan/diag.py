@@ -7,6 +7,8 @@ Usage:  python -m moonlan.diag <ip> [--community public] [--timeout 2]
         python -m moonlan.diag --config
         python -m moonlan.diag --host <ip|mac>
         python -m moonlan.diag --fdb <ip> [--iface 1/3]
+        python -m moonlan.diag --stp
+        python -m moonlan.diag --walk <ip> <oid> [--limit 500]
 
 Community and timeout default to the values from config.yaml. The tool
 writes nothing to the database and does not need the running service.
@@ -19,7 +21,12 @@ show how complete the host inventory is. --port prints the raw error,
 discard, octet and packet counters of a switch's ports and, with
 --watch, the very rates the alarm engine works with. --host explains
 one device (database, FDB, ARP, ping) and --fdb dumps a switch's raw
-MAC table with the verdict on every row.
+MAC table with the verdict on every row. --stp prints the raw
+dot1dStp* values of every switch next to the verdict they produce, so
+"STP is not running here" can be checked rather than believed.
+--walk dumps any OID subtree, which is how a private MIB (D-Link
+1.3.6.1.4.1.171, HPE 1.3.6.1.4.1.11) gets explored before it becomes
+a feature.
 """
 
 from __future__ import annotations
@@ -31,12 +38,15 @@ import sys
 import time
 from collections import Counter
 
-from . import counters, pinger
+from . import counters, pinger, stp
 from .config import SECRET_KEYS, load_config
 from .corruption import find_suspects, sample_mac
 from .counters import CounterStore, Sample
 from .topology import (
+    detect_bridges,
     infer_tree,
+    lldp_link_candidates,
+    merge_lldp_links,
     normalized_fdb,
     switch_sightings,
     trunk_ports,
@@ -286,6 +296,8 @@ async def run_topology_view(community: str, timeout: int, cfg) -> None:
     fdb = normalized_fdb(switches)
     switches_on_port, sees = switch_sightings(switches, fdb)
     links, uplinks, info = infer_tree(switches, switches_on_port, sees)
+    lldp_pairs = lldp_link_candidates(switches)
+    mismatches = merge_lldp_links(links, lldp_pairs, by_ip)
 
     def label(ip: str) -> str:
         sw = by_ip.get(ip)
@@ -313,7 +325,9 @@ async def run_topology_view(community: str, timeout: int, cfg) -> None:
     # Everything else carries hosts. A port wrongly listed here takes
     # every device behind it off the map, so the reason is spelled out.
     print("trunk ports (excluded from host binding):")
-    for ip, ports in sorted(trunk_ports(switches, switches_on_port, uplinks).items()):
+    for ip, ports in sorted(
+        trunk_ports(switches, switches_on_port, uplinks, lldp_pairs).items()
+    ):
         listed = ", ".join(
             f"{port_name(ip, i)} ({why})" for i, why in sorted(ports.items())
         )
@@ -340,12 +354,75 @@ async def run_topology_view(community: str, timeout: int, cfg) -> None:
         )
         print(
             f"  {label(link['a'])} [{link['a_port']}] — "
-            f"{label(link['b'])} [{link['b_port']}]{trunk}{lacp}"
+            f"{label(link['b'])} [{link['b_port']}]"
+            f"  source: {link.get('source', 'fdb')}{trunk}{lacp}"
         )
     if info["unplaced"]:
         print("unplaced (not visible from the root):")
         for ip in info["unplaced"]:
             print(f"  {label(ip)}")
+
+    # LLDP: what the devices say about each other, and where that
+    # disagrees with what the MAC tables implied
+    print("\nLLDP neighbours:")
+    any_lldp = False
+    for sw in switches:
+        for neighbor in sw.lldp_neighbors:
+            any_lldp = True
+            where = (
+                port_name(sw.ip, neighbor.local_ifindex)
+                if neighbor.local_ifindex is not None
+                else f"lldpLocPortNum {neighbor.local_port_num} (UNMATCHED)"
+            )
+            caps = ", ".join(sorted(neighbor.cap_enabled)) or "no capabilities TLV"
+            flag = (
+                "  <- LLDP forwarding suspected, not used for links"
+                if neighbor.local_ifindex in sw.lldp_forwarded else ""
+            )
+            print(
+                f"  {label(sw.ip)} [{where}] -> "
+                f"{neighbor.sys_name or neighbor.chassis_id} "
+                f"({neighbor.chassis_id}) port {neighbor.port_id or '?'}"
+                + (f", {neighbor.mgmt_ip}" if neighbor.mgmt_ip else "")
+                + f", {caps}{flag}"
+            )
+    if not any_lldp:
+        print("  none — no switch reports an LLDP neighbour")
+
+    print("\nLLDP vs FDB mismatches:")
+    if not mismatches:
+        print("  none — every LLDP-confirmed link matches the inference")
+    for m in mismatches:
+        if m["kind"] == "ports":
+            print(
+                f"  {label(m['a'])} — {label(m['b'])}: LLDP says "
+                f"{m['lldp_ports'][0]}/{m['lldp_ports'][1]}, the MAC tables "
+                f"suggested {m['fdb_ports'][0]}/{m['fdb_ports'][1]}"
+            )
+        else:
+            print(
+                f"  {label(m['a'])} [{m['lldp_ports'][0]}] — "
+                f"{label(m['b'])} [{m['lldp_ports'][1]}]: reported by LLDP "
+                f"only, the MAC tables do not show this link"
+            )
+
+    print("\nbridges we do not poll (LLDP capability 'bridge'):")
+    switch_macs = {mac for sw in switches for mac in sw.own_macs}
+    bridges = detect_bridges(
+        switches, switch_macs,
+        trunk_ports(switches, switches_on_port, uplinks, lldp_pairs),
+    )
+    if not bridges:
+        print("  none")
+    for bridge in bridges:
+        note = " (no capabilities TLV — unidentified)" if bridge["unidentified"] else ""
+        print(
+            f"  {bridge['name']} ({bridge['chassis_id']})"
+            + (f" {bridge['mgmt_ip']}" if bridge["mgmt_ip"] else "")
+            + f" behind {label(bridge['switch'])} {bridge['port']}"
+            + ("  [trunk port]" if bridge["trunk"] else "")
+            + note
+        )
 
 
 def _subnet(ip: str) -> str:
@@ -950,6 +1027,139 @@ async def run_port_counters(
             )
 
 
+async def run_stp_view(community: str, timeout: int, cfg) -> None:
+    """Section 14: the raw dot1dStp* values next to the verdict.
+
+    The point is that the verdict can be checked. A switch with STP
+    disabled reports priority 0, cost 0 and itself as root; printing
+    those numbers together with the reason they are being ignored is
+    the difference between a diagnosis and a guess.
+    """
+    _section("14. Spanning tree (BRIDGE-MIB dot1dStp*)")
+    if not cfg.switches:
+        sys.exit("no switches in config.yaml")
+    collector = SnmpCollector(community=community, timeout=timeout)
+    collected = list(
+        await asyncio.gather(*(collector.collect(ip) for ip in cfg.switches))
+    )
+    reachable = [sw for sw in collected if sw.reachable]
+    for sw in collected:
+        if not sw.reachable:
+            print(f"{sw.ip}: does not respond to SNMP — excluded")
+    if not reachable:
+        sys.exit("no reachable switches")
+
+    per_switch = {sw.ip: sw.stp for sw in reachable if sw.stp is not None}
+    verdict = stp.network_verdict(per_switch)
+    if verdict["verdict"] == "not_operating":
+        headline = (
+            "STP is not running anywhere: not one switch passes the "
+            "'the tree actually converged' test"
+        )
+    elif verdict["verdict"] == "single":
+        root = next(iter(verdict["roots"]))
+        headline = f"one spanning tree, root {root}"
+    else:
+        headline = f"the tree is fragmented: {len(verdict['roots'])} roots"
+    print(f"verdict: {headline}\n")
+
+    for sw in reachable:
+        data = sw.stp
+        name = f"{sw.sys_name} ({sw.ip})" if sw.sys_name else sw.ip
+        print(f"--- {name} ---")
+        if data is None or not data.supported:
+            print("  dot1dStp* is not answered at all\n")
+            continue
+        enabled = sum(1 for p in data.ports.values() if p.enabled)
+        active = sum(
+            1 for p in data.ports.values() if p.state != stp.STATE_DISABLED
+        )
+        print(f"  dot1dStpProtocolSpecification  {data.protocol_spec} "
+              f"({data.protocol_name})")
+        if data.version is not None:
+            print(f"  dot1dStpVersion               {data.version} "
+                  f"({data.version_name})")
+        print(f"  dot1dStpPriority              {data.priority}")
+        print(f"  dot1dStpDesignatedRoot        {data.designated_root or '—'}")
+        print(f"  dot1dStpRootCost              {data.root_cost}")
+        print(f"  dot1dStpRootPort              {data.root_port}")
+        print(f"  dot1dStpTopChanges            {data.top_changes}")
+        print(f"  dot1dStpTimeSinceTopologyChange {data.time_since_change} "
+              f"ticks ({data.time_since_change / 100:.0f} s)")
+        print(f"  sysUpTime                     {data.sys_uptime} ticks "
+              f"({data.sys_uptime / 100:.0f} s)")
+        print(f"  ports with dot1dStpPortEnable = enabled: {enabled} "
+              f"of {len(data.ports)}")
+        print(f"  ports not in state disabled(1):          {active}")
+        if data.operating:
+            role = "ROOT BRIDGE" if data.is_root(sw.own_macs) else "in the tree"
+            print(f"  verdict: operating — {role}")
+        else:
+            print(f"  verdict: NOT operating — {data.reason}")
+            print("           root, cost and root port above are ignored")
+        if data.ports:
+            print("  ports:")
+            for bridge_port in sorted(data.ports):
+                port = data.ports[bridge_port]
+                edge = ""
+                if port.oper_edge is not None:
+                    edge = f"  edge {'yes' if port.oper_edge else 'no'}"
+                print(
+                    f"    bridge-port {bridge_port:>4} "
+                    f"{port.name or '(unmapped)':<16} "
+                    f"{port.state_name:<11} "
+                    f"{'enabled' if port.enabled else 'disabled':<9} "
+                    f"cost {port.path_cost:<7} "
+                    f"designated bridge {port.designated_bridge or '—'}{edge}"
+                )
+        print()
+
+    if verdict["verdict"] == "fragmented":
+        print("roots and who follows them:")
+        for root, ips in sorted(verdict["roots"].items()):
+            print(f"  {root}: {', '.join(ips)}")
+
+
+WALK_DEFAULT_LIMIT = 500
+
+
+async def run_walk(
+    host: str, oid: str, limit: int, community: str, timeout: int
+) -> None:
+    """Section 15: a raw walk of any subtree.
+
+    Private MIBs are where Loopback Detection lives (D-Link
+    1.3.6.1.4.1.171, HPE 1.3.6.1.4.1.11), and there is no way to write
+    a feature against one without first seeing what the agent actually
+    returns. Strings are printed both as text and as hex, because half
+    of what comes back from these branches is neither.
+    """
+    _section(f"15. Walk {oid} on {host}")
+    collector = SnmpCollector(community=community, timeout=timeout)
+    count = 0
+    async for suffix, value in collector._walk(host, oid):
+        count += 1
+        if count > limit:
+            print(f"  … stopped at {limit} rows (--limit raises the ceiling)")
+            return
+        full = oid + ("." + ".".join(str(part) for part in suffix) if suffix else "")
+        kind = type(value).__name__
+        try:
+            raw = bytes(value)
+        except (TypeError, ValueError):
+            raw = b""
+        text = str(value)
+        print(f"  {full}  ({kind}) = {text}")
+        if raw and raw != text.encode("utf-8", "replace"):
+            print(f"      hex: {raw.hex(' ')}")
+        elif raw and not text.isprintable():
+            print(f"      hex: {raw.hex(' ')}")
+    if count == 0:
+        print("  the subtree is empty, or the agent does not implement it")
+    else:
+        print(f"\n{min(count, limit)} row(s)")
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(
         prog="python -m moonlan.diag",
@@ -983,6 +1193,22 @@ def main() -> None:
              "parsed address and whether the row was rejected",
     )
     parser.add_argument(
+        "--stp", action="store_true",
+        help="poll all switches from config.yaml and print the raw "
+             "dot1dStp* values together with the verdict on whether "
+             "the spanning tree is operating at all",
+    )
+    parser.add_argument(
+        "--walk", nargs=2, metavar=("SWITCH_IP", "OID"),
+        help="walk any OID subtree and print raw OIDs, types and values "
+             "(strings as text and as hex) — for exploring private MIBs",
+    )
+    parser.add_argument(
+        "--limit", type=int, default=WALK_DEFAULT_LIMIT, metavar="N",
+        help=f"maximum rows for --walk (default {WALK_DEFAULT_LIMIT}), so a "
+             f"stray subtree is not downloaded whole",
+    )
+    parser.add_argument(
         "--config", action="store_true",
         help="print the effective configuration: every setting, its "
              "value and whether it comes from config.yaml or a default",
@@ -1003,18 +1229,24 @@ def main() -> None:
     args = parser.parse_args()
     modes = (
         args.topology or args.hosts or args.port or args.config
-        or args.host or args.fdb
+        or args.host or args.fdb or args.stp or args.walk
     )
     if not modes and not args.ip:
         parser.error(
             "an ip is required unless --topology, --hosts, --host, --fdb, "
-            "--port or --config is given"
+            "--stp, --walk, --port or --config is given"
         )
     cfg = load_config()
     community = args.community or cfg.snmp.community
     timeout = args.timeout or cfg.snmp.timeout
     if args.config:
         run_config_audit(cfg)
+    elif args.walk:
+        asyncio.run(
+            run_walk(args.walk[0], args.walk[1], args.limit, community, timeout)
+        )
+    elif args.stp:
+        asyncio.run(run_stp_view(community, timeout, cfg))
     elif args.host:
         asyncio.run(run_host_diag(args.host, community, timeout, cfg))
     elif args.fdb:
