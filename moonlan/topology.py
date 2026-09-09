@@ -83,6 +83,13 @@ class TopologyState:
     # spanning tree: the per-switch report and the network verdict
     stp: dict = field(default_factory=dict)
     last_scan: float = 0.0
+    # A scan that raises leaves the previous map in place. Without
+    # these three the UI showed "no data yet" — the same thing it shows
+    # a second after startup — and a crash in the topology builder was
+    # indistinguishable from a service that had only just come up.
+    last_scan_ok: float = 0.0
+    last_error: str = ""
+    last_error_ts: float = 0.0
     scanning: bool = False
     _lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
 
@@ -109,6 +116,17 @@ class TopologyState:
             self.bridges = bridges or []
             self.stp = stp or {}
             self.last_scan = time.time()
+            self.last_scan_ok = self.last_scan
+            self.last_error = ""
+            self.last_error_ts = 0.0
+
+    def scan_failed(self, error: BaseException) -> None:
+        """Records a failed scan without touching the map it produced
+        last time: stale data with a visible warning beats an empty
+        screen that says nothing."""
+        with self._lock:
+            self.last_error = f"{type(error).__name__}: {error}"
+            self.last_error_ts = time.time()
 
     def as_dict(self) -> dict:
         with self._lock:
@@ -123,6 +141,9 @@ class TopologyState:
                 "offline_groups": self.offline_groups,
                 "stp": self.stp,
                 "last_scan": self.last_scan,
+                "last_scan_ok": self.last_scan_ok,
+                "last_error": self.last_error,
+                "last_error_ts": self.last_error_ts,
                 "scanning": self.scanning,
             }
 
