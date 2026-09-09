@@ -69,16 +69,18 @@ const I18N = {
       + "not poll. It was not configured here; the devices behind it "
       + "hang off this node.",
     lldpUnknownHint:
-      "An LLDP device that announces neither a name nor its "
-      + "capabilities (the optional TLVs are disabled on it). It may "
-      + "well be a switch — the absence of the bridge flag proves "
-      + "nothing, so no alarm is raised for it.",
+      "An LLDP device that announces no capabilities (the optional TLVs "
+      + "are disabled on it). The absence of the bridge flag proves "
+      + "nothing about what it is, so it gets no node of its own and "
+      + "raises no alarm — it is listed on its port instead.",
     al_unmanaged_bridge_detected: "Unmanaged bridge",
     bridgeSharesPortHint:
       "Several LLDP devices answer behind this port, so an unmanaged "
       + "switch sits on the cable and they hang off it. The devices on "
       + "the port stay with that switch: nothing says which bridge each "
       + "of them is behind.",
+    lldpLabel: "LLDP",
+    lldpUnidentified: "unidentified LLDP device",
     lldpNeighbour: "LLDP neighbour",
     lldpForwarded: "LLDP forwarded",
     lldpForwardedHint:
@@ -276,16 +278,19 @@ const I18N = {
       + "который MoonLan не опрашивает. В конфигурации его нет; "
       + "устройства за ним показаны через этот узел.",
     lldpUnknownHint:
-      "Устройство LLDP, которое не объявляет ни имени, ни своих "
-      + "возможностей (необязательные TLV на нём выключены). Это вполне "
-      + "может быть коммутатор — отсутствие признака bridge ничего не "
-      + "доказывает, поэтому тревога по нему не поднимается.",
+      "Устройство LLDP, которое не объявляет своих возможностей "
+      + "(необязательные TLV на нём выключены). Отсутствие признака "
+      + "bridge ничего не говорит о том, что это за устройство, поэтому "
+      + "своего узла оно не получает и тревог не поднимает — его видно "
+      + "в карточке порта.",
     al_unmanaged_bridge_detected: "Неучтённый мост",
     bridgeSharesPortHint:
       "За этим портом отвечают несколько LLDP-устройств — значит, на "
       + "кабеле стоит неуправляемый коммутатор, а они подключены за ним. "
       + "Устройства порта остаются за этим коммутатором: за каким именно "
       + "мостом каждое из них — данных нет.",
+    lldpLabel: "LLDP",
+    lldpUnidentified: "неопознанное устройство LLDP",
     lldpNeighbour: "Сосед по LLDP",
     lldpForwarded: "пересылка LLDP",
     lldpForwardedHint:

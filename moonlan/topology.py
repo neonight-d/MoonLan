@@ -368,19 +368,32 @@ def detect_bridges(
     switches: list[SwitchData],
     own_macs: set[str],
     trunks: dict[str, dict[int, str]],
-) -> list[dict]:
-    """LLDP neighbours that are switches nobody polls.
+) -> tuple[list[dict], list[dict]]:
+    """LLDP neighbours split into (bridges, unidentified devices).
 
-    A neighbour with the `bridge` capability whose chassis id belongs to
-    no polled switch is a bridge living behind one of our ports — the
-    six MikroTik bridges the September survey found, none of which
-    answers SNMP. Until now the map could only show them as an
-    anonymous "switch without SNMP", or not at all.
+    A bridge is a neighbour that SAYS it is one: `lldpRemSysCapEnabled`
+    with the bridge bit, and a chassis id belonging to no polled switch
+    — the six MikroTik boxes the September survey found, none of which
+    answers SNMP.
 
-    A neighbour that sends no capabilities TLV at all (D-Link DES-3526
-    ships with System Name / Description / Capabilities disabled) is
-    kept as an unidentified LLDP device: the ABSENCE of the bridge bit
-    proves nothing, so it is shown and never alarmed on.
+    v0.6.0 also made a node out of every neighbour that sent no
+    capabilities TLV, on the grounds that the absence proves nothing.
+    On the real network that is a hundred and thirty IP cameras and
+    desk phones: they would have been drawn as bridges and each would
+    have raised an alarm. The absence still proves nothing — which is
+    why such a device is returned separately and shown as an
+    unidentified LLDP device, on its port and in its host card, with no
+    node and no alarm.
+
+    One exception, and it is about the switch rather than the
+    neighbour: some agents (the HPE 1820 among them) never fill
+    lldpRemSysCapEnabled for ANYONE. There the empty column says
+    nothing about any particular neighbour, so a device that announces
+    both a system name and a management address — a managed box, not a
+    bare camera MAC — is taken as a bridge and marked `cap_assumed`.
+    On the production network that is exactly one device,
+    RouterOS-Old_building behind 2b0, and no cameras: every one of them
+    is a bare MAC with neither name nor address.
 
     One node per chassis id: a switch that forwards foreign LLDP frames
     would otherwise scatter the same device over several ports. The
@@ -389,38 +402,54 @@ def detect_bridges(
     """
     best: dict[str, tuple] = {}
     found: dict[str, dict] = {}
+    unidentified: list[dict] = []
     for sw in switches:
+        # does this agent fill the capabilities column at all?
+        reports_caps = any(n.cap_known for n in sw.lldp_neighbors)
         for neighbor in sw.lldp_neighbors:
             if neighbor.local_ifindex is None:
                 continue
             if neighbor.chassis_id in own_macs:
                 continue  # a switch we poll ourselves — already a node
-            if neighbor.cap_known and not neighbor.is_bridge:
-                continue  # a host, a phone, a router: not a bridge
             if_index = neighbor.local_ifindex
             forwarded = if_index in sw.lldp_forwarded
             is_trunk = aggregate_port(sw, if_index) in trunks.get(sw.ip, {})
-            claim = (forwarded, is_trunk, sw.ip, if_index)
-            if neighbor.chassis_id in best and claim >= best[neighbor.chassis_id]:
-                continue
-            best[neighbor.chassis_id] = claim
-            found[neighbor.chassis_id] = {
-                "id": "bridge:" + neighbor.chassis_id,
+            entry = {
                 "chassis_id": neighbor.chassis_id,
                 "name": neighbor.sys_name or neighbor.chassis_id,
                 "sys_desc": neighbor.sys_desc,
                 "mgmt_ip": neighbor.mgmt_ip,
+                "mgmt_ips": list(neighbor.mgmt_ips),
                 "switch": sw.ip,
                 "port": port_name(sw, if_index),
                 "remote_port": neighbor.port_id or neighbor.port_desc,
                 "capabilities": sorted(neighbor.cap_enabled),
-                # no capabilities TLV: the device is shown, but nothing
-                # is claimed about what it is
-                "unidentified": not neighbor.cap_known,
                 "lldp_forwarded": forwarded,
                 "trunk": is_trunk,
             }
-    return [found[chassis] for chassis in sorted(found)]
+            if neighbor.cap_known:
+                claims_bridge = neighbor.is_bridge
+                assumed = False
+            else:
+                claims_bridge = (
+                    not reports_caps
+                    and bool(neighbor.sys_name)
+                    and bool(neighbor.mgmt_ip)
+                )
+                assumed = claims_bridge
+            if not claims_bridge:
+                entry["unidentified"] = True
+                unidentified.append(entry)
+                continue
+            entry["unidentified"] = False
+            entry["cap_assumed"] = assumed
+            entry["id"] = "bridge:" + neighbor.chassis_id
+            claim = (forwarded, is_trunk, sw.ip, if_index)
+            if neighbor.chassis_id in best and claim >= best[neighbor.chassis_id]:
+                continue
+            best[neighbor.chassis_id] = claim
+            found[neighbor.chassis_id] = entry
+    return [found[chassis] for chassis in sorted(found)], unidentified
 
 
 def normalized_fdb(switches: list[SwitchData]) -> dict[str, dict[str, int]]:
@@ -951,7 +980,7 @@ def build_topology(
     #    port. Replacing it with one of them would claim the other
     #    bridges' devices belong to whichever bridge happened to sort
     #    first.
-    bridges = detect_bridges(switches, switch_macs, trunks)
+    bridges, unidentified = detect_bridges(switches, switch_macs, trunks)
     bridges_on_port: dict[tuple[str, str], list[dict]] = {}
     for bridge in bridges:
         bridges_on_port.setdefault(
@@ -981,17 +1010,46 @@ def build_topology(
             # pseudo-switch, because nothing says which bridge they are
             # behind
             bridge["shares_port"] = not alone
+    # A device that sent no capabilities TLV is not a bridge, but it is
+    # not nothing either: where its chassis id is the MAC of a host we
+    # already draw on that very port, the LLDP data belongs on that
+    # host's card. The rest are visible in the port card only.
+    host_by_location = {
+        (h["switch"], h["port"], h["mac"]): h for h in hosts
+    }
+    attached = 0
+    for device in unidentified:
+        host = host_by_location.get(
+            (device["switch"], device["port"], device["chassis_id"])
+        )
+        if host is None:
+            continue
+        host["lldp"] = {
+            "sys_name": device["name"] if device["name"] != device["chassis_id"]
+            else "",
+            "sys_desc": device["sys_desc"],
+            "port_id": device["remote_port"],
+            "mgmt_ips": device["mgmt_ips"],
+        }
+        attached += 1
     if bridges:
         log.info(
-            "LLDP found %d device(s) behind our ports that we do not "
+            "LLDP found %d bridge(s) behind our ports that we do not "
             "poll: %s", len(bridges),
             "; ".join(
                 f"{b['name']} on {b['switch']} {b['port']}"
-                + (" (unidentified)" if b["unidentified"] else "")
+                + (" (capability assumed)" if b.get("cap_assumed") else "")
                 for b in bridges
             ),
         )
+    if unidentified:
+        log.info(
+            "LLDP: %d neighbour(s) sent no capabilities TLV — shown as "
+            "unidentified devices, %d of them matched to a host we "
+            "already draw", len(unidentified), attached,
+        )
     info["bridges"] = bridges
+    info["unidentified"] = unidentified
 
     # 6. Spanning tree on the map: a port STP holds in discarding
     #    carries no traffic, and the root bridge is worth seeing at a

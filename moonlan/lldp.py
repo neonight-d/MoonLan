@@ -84,6 +84,12 @@ class LldpNeighbor:
     # optional TLVs disabled)
     cap_known: bool = False
     mgmt_ip: str = ""
+    # Every management address the neighbour announced. A MikroTik with
+    # a dozen VLAN interfaces sends one row per interface, each with its
+    # own address; taking whichever came first can easily take the
+    # wrong one, and tying a bridge to its IP is the point of reading
+    # LLDP at all.
+    mgmt_ips: list[str] = field(default_factory=list)
 
     @property
     def port_unmatched(self) -> bool:
@@ -249,7 +255,9 @@ async def collect_lldp(
     ):
         address = parse_man_addr(suffix)
         if address:
-            row(suffix).setdefault("mgmt_ip", address)
+            addresses = row(suffix).setdefault("mgmt_ips", [])
+            if address not in addresses:
+                addresses.append(address)
 
     neighbors: list[LldpNeighbor] = []
     unmatched = 0
@@ -280,7 +288,8 @@ async def collect_lldp(
             sys_desc=data.get("sys_desc", ""),
             cap_enabled=parse_capabilities(cap_raw) if cap_raw else set(),
             cap_known=cap_raw is not None and any(cap_raw),
-            mgmt_ip=data.get("mgmt_ip", ""),
+            mgmt_ip=(data.get("mgmt_ips") or [""])[0],
+            mgmt_ips=list(data.get("mgmt_ips") or []),
         )
         if not neighbor.chassis_id:
             continue

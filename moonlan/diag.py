@@ -78,6 +78,15 @@ from .snmp_collector import (
 MAX_IF_ROWS = 40
 
 
+def _addresses(addresses: list[str], limit: int = 3) -> str:
+    """'10.0.0.1 and 37 more' — a MikroTik announces one per VLAN."""
+    if not addresses:
+        return ""
+    if len(addresses) <= limit:
+        return ", ".join(addresses)
+    return f"{', '.join(addresses[:limit])} and {len(addresses) - limit} more"
+
+
 def _section(title: str) -> None:
     print(f"\n=== {title} ===")
 
@@ -406,22 +415,39 @@ async def run_topology_view(community: str, timeout: int, cfg) -> None:
                 f"only, the MAC tables do not show this link"
             )
 
-    print("\nbridges we do not poll (LLDP capability 'bridge'):")
     switch_macs = {mac for sw in switches for mac in sw.own_macs}
-    bridges = detect_bridges(
+    bridges, unidentified = detect_bridges(
         switches, switch_macs,
         trunk_ports(switches, switches_on_port, uplinks, lldp_pairs),
     )
+    print("\nbridges (LLDP capability 'bridge'):")
     if not bridges:
         print("  none")
     for bridge in bridges:
-        note = " (no capabilities TLV — unidentified)" if bridge["unidentified"] else ""
         print(
             f"  {bridge['name']} ({bridge['chassis_id']})"
-            + (f" {bridge['mgmt_ip']}" if bridge["mgmt_ip"] else "")
+            + (f" {_addresses(bridge['mgmt_ips'])}" if bridge["mgmt_ips"] else "")
             + f" behind {label(bridge['switch'])} {bridge['port']}"
             + ("  [trunk port]" if bridge["trunk"] else "")
-            + note
+            + ("  [capability assumed: this agent reports none for anyone]"
+               if bridge.get("cap_assumed") else "")
+        )
+    # These are NOT bridges. The heading used to claim they were, and on
+    # the real network it covered a hundred and thirty IP cameras.
+    print("\nunidentified LLDP devices (no capabilities TLV):")
+    if not unidentified:
+        print("  none")
+    for device in unidentified:
+        print(
+            f"  {device['name']} ({device['chassis_id']})"
+            + (f" {_addresses(device['mgmt_ips'])}" if device["mgmt_ips"] else "")
+            + f" behind {label(device['switch'])} {device['port']}"
+        )
+    if unidentified:
+        print(
+            "  ^ these sent no capabilities TLV. That proves nothing about "
+            "what they are, so they get no node on the map and raise no "
+            "alarm — most of them are cameras and phones."
         )
 
 
