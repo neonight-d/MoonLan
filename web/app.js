@@ -252,13 +252,25 @@ function fmtDate(ts) {
 }
 
 function updateScanStatus() {
+  els.scanStatus.classList.remove("failed");
+  els.scanStatus.title = "";
   if (isScanning) {
     els.scanStatus.textContent = t("scanning");
-  } else {
-    els.scanStatus.textContent = topology.last_scan
-      ? t("scanPrefix") + new Date(topology.last_scan * 1000).toLocaleString(locale())
-      : t("noData");
+    return;
   }
+  // A failed scan used to read exactly like a service that had just
+  // started. It now says so, and keeps the map from the last good one.
+  if (topology.last_error) {
+    els.scanStatus.classList.add("failed");
+    els.scanStatus.textContent =
+      t("scanFailed") +
+      new Date(topology.last_error_ts * 1000).toLocaleString(locale());
+    els.scanStatus.title = topology.last_error;
+    return;
+  }
+  els.scanStatus.textContent = topology.last_scan
+    ? t("scanPrefix") + new Date(topology.last_scan * 1000).toLocaleString(locale())
+    : t("noData");
 }
 
 /* ---------- data loading and rendering ---------- */

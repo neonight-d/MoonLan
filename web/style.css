@@ -437,3 +437,6 @@ main { flex: 1; display: flex; min-height: 0; }
   font-style: italic;
   font-family: system-ui, sans-serif;
 }
+
+/* a scan that raised: the map is the previous one, and it says so */
+#scan-status.failed { color: #d96b6b; cursor: help; }

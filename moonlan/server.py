@@ -621,7 +621,11 @@ async def periodic_scan() -> None:
     while True:
         try:
             await run_scan()
-        except Exception:
+        except Exception as exc:
+            # The map from the previous scan stays on screen; what
+            # changes is that the header now says the last attempt
+            # failed, and with what
+            state.scan_failed(exc)
             log.exception("Network scan failed")
         interval = config.scan_interval_minutes
         await asyncio.sleep(interval * 60 if interval > 0 else 3600)
@@ -1279,9 +1283,18 @@ async def api_patch_host(mac: str, body: HostPatch):
     return {"mac": mac, "monitored": body.monitored}
 
 
+async def _scan_once() -> None:
+    """A manual scan, recording a failure the same way the loop does."""
+    try:
+        await run_scan()
+    except Exception as exc:
+        state.scan_failed(exc)
+        log.exception("Network scan failed")
+
+
 @app.post("/api/scan")
 async def api_scan() -> dict:
-    asyncio.create_task(run_scan())
+    asyncio.create_task(_scan_once())
     return {"status": "started"}
 
 
@@ -1303,6 +1316,9 @@ async def api_status() -> dict:
         "host_count": len(state.hosts),
         "unlocated_count": len(state.unlocated),
         "last_scan": state.last_scan,
+        "last_scan_ok": state.last_scan_ok,
+        "last_error": state.last_error,
+        "last_error_ts": state.last_error_ts,
         "scanning": state.scanning,
         "uptime_hint": time.time(),
         "open_fds": open_fds,
