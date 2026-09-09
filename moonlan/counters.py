@@ -18,7 +18,11 @@ import time
 from collections import deque
 from dataclasses import dataclass
 
-from .snmp_collector import OID_IF_OPER_STATUS, SnmpCollector
+from .snmp_collector import (
+    OID_IF_LAST_CHANGE,
+    OID_IF_OPER_STATUS,
+    SnmpCollector,
+)
 
 log = logging.getLogger(__name__)
 
@@ -59,6 +63,10 @@ class Sample:
     in_pkts: int = 0
     out_pkts: int = 0
     hc: bool = True  # octet counters are 64-bit (no wraparound possible)
+    # ifLastChange, TimeTicks since the agent's epoch. Two polls that
+    # show the same oper status but a moved ifLastChange mean the link
+    # bounced in between — which is exactly what a flapping port does.
+    last_change: int = 0
 
 
 @dataclass
@@ -149,6 +157,8 @@ async def collect_samples(
 
     async for suffix, value in collector._walk(host, OID_IF_OPER_STATUS):
         oper[suffix[0]] = int(value) == 1
+    async for suffix, value in collector._walk(host, OID_IF_LAST_CHANGE):
+        sample(suffix[0]).last_change = int(value)
 
     return samples, oper
 
@@ -280,3 +290,81 @@ class CounterStore:
 
     def history(self, ip: str, if_index: int) -> list[PortRates]:
         return list(self._rates.get((ip, if_index), ()))
+
+
+FLAP_HISTORY = 64  # transitions remembered per port
+
+
+@dataclass
+class PortFlaps:
+    """How often one port changed link state inside the window."""
+
+    count: int
+    last: float  # unix time of the most recent transition
+
+
+class FlapTracker:
+    """Link-state transitions per port, counted over a sliding window.
+
+    A counters cycle is a minute apart, and a flapping port can go up
+    and down four times in thirty seconds — polling oper status alone
+    would see none of it. ifLastChange closes the gap: when it moves
+    between two polls that report the SAME status, the link went down
+    and came back (or up and went down) while nobody was looking, so
+    the pair counts as two transitions rather than none.
+
+    ifLastChange going BACKWARDS means the agent restarted its clock;
+    the port's history is dropped rather than reinterpreted.
+    """
+
+    def __init__(self, window_seconds: float = 600.0):
+        self.window_seconds = window_seconds
+        self._oper: dict[tuple[str, int], bool] = {}
+        self._last_change: dict[tuple[str, int], int] = {}
+        self._events: dict[tuple[str, int], deque[float]] = {}
+
+    def update(
+        self,
+        ip: str,
+        oper: dict[int, bool],
+        last_change: dict[int, int],
+        now: float | None = None,
+    ) -> dict[int, PortFlaps]:
+        now = time.time() if now is None else now
+        for if_index, up in oper.items():
+            key = (ip, if_index)
+            changed = last_change.get(if_index, 0)
+            previous_up = self._oper.get(key)
+            previous_change = self._last_change.get(key)
+            self._oper[key] = up
+            self._last_change[key] = changed
+            if previous_up is None:
+                continue  # first cycle: a baseline, not a transition
+            if previous_change is not None and changed < previous_change:
+                # the agent's uptime restarted: nothing here is comparable
+                self._events.pop(key, None)
+                continue
+            moved = (
+                previous_change is not None and changed > previous_change
+            )
+            if moved and previous_up == up:
+                transitions = 2  # down and back up between two polls
+            elif moved or previous_up != up:
+                transitions = 1
+            else:
+                transitions = 0
+            if not transitions:
+                continue
+            history = self._events.setdefault(key, deque(maxlen=FLAP_HISTORY))
+            for _ in range(transitions):
+                history.append(now)
+        result: dict[int, PortFlaps] = {}
+        for (sw_ip, if_index), history in self._events.items():
+            if sw_ip != ip:
+                continue
+            while history and now - history[0] > self.window_seconds:
+                history.popleft()
+            result[if_index] = PortFlaps(
+                count=len(history), last=history[-1] if history else 0.0
+            )
+        return result

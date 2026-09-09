@@ -954,6 +954,16 @@ function renderPorts(data) {
       nameCell.textContent = name;
       // addresses this port's damaged frames invented, with the real
       // one each of them is a distortion of
+      if (p.flaps) {
+        const chip = document.createElement("span");
+        chip.className = "chip warn";
+        chip.textContent = "⇅ " + p.flaps;
+        chip.title = fmt("portFlappingHint", {
+          n: p.flaps,
+          when: p.flaps_last ? fmtTime(p.flaps_last) : "—",
+        });
+        nameCell.append(" ", chip);
+      }
       const neighbours = p.lldp || [];
       if (neighbours.length) {
         const chip = document.createElement("span");

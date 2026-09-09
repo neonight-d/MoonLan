@@ -49,6 +49,15 @@ fdb_stability = FdbStability()
 switch_data: dict[str, SwitchData] = {}
 
 counter_store = counters.CounterStore()
+# Link-state transitions per port over a sliding window: a port can
+# bounce four times between two counter polls, and oper status alone
+# would show none of it
+flap_tracker = counters.FlapTracker(
+    config.thresholds.flap_window_minutes * 60
+)
+# (switch ip, port name) -> the flap count shown in the ports panel
+flap_by_port: dict[tuple[str, str], counters.PortFlaps] = {}
+ZERO_FLAPS = counters.PortFlaps(count=0, last=0.0)
 notifier = Notifier(config, demo=config.demo)
 alarm_engine = AlarmEngine(
     db, notifier, config.thresholds, config.notifications
@@ -760,6 +769,9 @@ async def run_counters() -> None:
             continue
         sw = switch_data.get(ip)
         oper = oper_by_ip.get(ip) or {}
+        if not oper and sw is not None:
+            # demo mode drives the port states directly in switch_data
+            oper = {p.if_index: p.oper_up for p in sw.ports.values()}
         if sw is not None:
             # fresh port states at the counters cadence: LAG degradation
             # and the ports panel must not wait for the next full scan
@@ -774,7 +786,29 @@ async def run_counters() -> None:
         rates = counter_store.update(ip, samples, speeds)
         if sw is not None:
             await alarm_engine.on_counters(ip, _port_metrics(sw, rates))
+            await _check_flaps(sw, oper, samples)
     await alarm_engine.janitor(_observed_subjects())
+
+
+async def _check_flaps(
+    sw: SwitchData, oper: dict[int, bool], samples: dict[int, counters.Sample]
+) -> None:
+    """Link-state transitions of one switch, for the alarm and the panel."""
+    flaps = flap_tracker.update(
+        sw.ip, oper, {i: s.last_change for i, s in samples.items()}
+    )
+    entries = []
+    for if_index, info in flaps.items():
+        port = sw.ports.get(if_index)
+        if port is None or not port.is_physical:
+            continue
+        name = port.name or str(if_index)
+        flap_by_port[(sw.ip, name)] = info
+        entries.append(
+            {"port": name, "flaps": info.count, "last": info.last}
+        )
+    if entries:
+        await alarm_engine.on_flaps(sw.ip, entries)
 
 
 def _observed_subjects() -> set[tuple[str, str]]:
@@ -791,7 +825,7 @@ def _observed_subjects() -> set[tuple[str, str]]:
             subject = f"{ip}:{label}"
             for alarm_type in (
                 "port_errors", "port_discards", "port_util", "port_hosts_down",
-                "port_frame_corruption",
+                "port_frame_corruption", "port_flapping",
             ):
                 observed.add((alarm_type, subject))
             if label.startswith("lag["):
@@ -1051,6 +1085,10 @@ async def api_switch_ports(ip: str) -> dict:
     for aggregate, members in _lag_groups(sw).items():
         for m in members:
             member_of[m] = port_name(sw, aggregate)
+    flapping = {
+        port: info for (sw_ip, port), info in flap_by_port.items()
+        if sw_ip == ip
+    }
     lldp_by_port: dict[int, list[dict]] = {}
     for neighbor in sw.lldp_neighbors:
         if neighbor.local_ifindex is None:
@@ -1078,6 +1116,9 @@ async def api_switch_ports(ip: str) -> dict:
             "monitored_hosts": monitored_counts.get(name, 0),
             # MACs that look like damaged copies of a real one here
             "suspect_macs": suspect_by_port.get((ip, name), []),
+            # link-state transitions inside the flap window
+            "flaps": flapping.get(name, ZERO_FLAPS).count,
+            "flaps_last": flapping.get(name, ZERO_FLAPS).last,
             # what the device on the other end says about itself
             "lldp": lldp_by_port.get(p.if_index, []),
             # …and whether that can be believed: a switch forwarding
