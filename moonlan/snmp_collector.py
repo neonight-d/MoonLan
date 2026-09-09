@@ -9,12 +9,17 @@ We collect the minimum needed to build the topology:
                                             Q-BRIDGE-MIB, dot1qTpFdbPort)
 - LACP membership                          (IEEE8023-LAG-MIB)
 - port PVIDs and VLAN names                (Q-BRIDGE-MIB)
+- LLDP neighbours                          (LLDP-MIB, see lldp.py)
+- spanning tree state                      (BRIDGE-MIB, see stp.py)
 """
 
 from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, field
+
+from . import lldp as lldp_mod
+from . import stp as stp_mod
 
 from pysnmp.hlapi.v3arch.asyncio import (
     CommunityData,
@@ -37,6 +42,7 @@ OID_IF_TYPE = "1.3.6.1.2.1.2.2.1.3"           # ifType.<ifIndex>
 OID_IF_PHYS_ADDRESS = "1.3.6.1.2.1.2.2.1.6"   # ifPhysAddress.<ifIndex>
 OID_IF_NAME = "1.3.6.1.2.1.31.1.1.1.1"        # ifName.<ifIndex>
 OID_IF_OPER_STATUS = "1.3.6.1.2.1.2.2.1.8"    # 1=up, 2=down
+OID_IF_LAST_CHANGE = "1.3.6.1.2.1.2.2.1.9"    # ifLastChange, TimeTicks
 OID_IF_HIGH_SPEED = "1.3.6.1.2.1.31.1.1.1.15" # Mbit/s
 OID_BRIDGE_ADDRESS = "1.3.6.1.2.1.17.1.1.0"   # dot1dBaseBridgeAddress
 OID_PORT_IFINDEX = "1.3.6.1.2.1.17.1.4.1.2"   # dot1dBasePortIfIndex.<port>
@@ -62,6 +68,8 @@ class PortInfo:
     oper_up: bool = False
     speed_mbps: int = 0
     is_physical: bool = True  # ifType 6; aggregates/CPU/VLAN interfaces — False
+    mac: str = ""             # ifPhysAddress: some agents use it as an LLDP port id
+    last_change: int = 0      # ifLastChange, TimeTicks since sysUpTime epoch
 
 
 @dataclass
@@ -85,10 +93,23 @@ class SwitchData:
     lag_groups: dict[int, list[int]] = field(default_factory=dict)
     port_pvid: dict[int, int] = field(default_factory=dict)    # ifIndex -> PVID (untagged VLAN)
     vlan_names: dict[int, str] = field(default_factory=dict)   # VLAN ID -> name
+    # LLDP neighbours and the local ports whose LLDP data is unusable
+    # because foreign frames are being forwarded onto them
+    lldp_neighbors: list = field(default_factory=list)
+    lldp_forwarded: set[int] = field(default_factory=set)
+    # Spanning tree as the switch reports it, verdict included
+    stp: object | None = None
+    sys_uptime: int = 0  # sysUpTime in TimeTicks, for the STP verdict
 
 
 def _fmt_mac(raw: bytes) -> str:
     return ":".join(f"{b:02x}" for b in raw)
+
+
+def port_display(data: "SwitchData", if_index: int) -> str:
+    """Port name as the operator knows it, ifIndex as the fallback."""
+    port = data.ports.get(if_index)
+    return port.name if port and port.name else str(if_index)
 
 
 # A MAC forwarding entry is indexed by the 6 address bytes (BRIDGE-MIB)
@@ -255,11 +276,15 @@ class SnmpCollector:
             data.own_macs.add(data.bridge_mac)
 
         # Interface MACs: real frames leave the switch with these source
-        # addresses, not with the bridge base MAC
-        async for _suffix, value in self._walk(host, OID_IF_PHYS_ADDRESS):
+        # addresses, not with the bridge base MAC. They are also what
+        # some agents put in lldpLocPortId, so they are kept per port.
+        phys_addr: dict[int, str] = {}
+        async for suffix, value in self._walk(host, OID_IF_PHYS_ADDRESS):
             raw = bytes(value)
             if len(raw) == 6 and any(raw):
-                data.own_macs.add(_fmt_mac(raw))
+                mac = _fmt_mac(raw)
+                data.own_macs.add(mac)
+                phys_addr[suffix[0]] = mac
 
         # Interfaces. Port name comes from ifName; ifDescr is only a
         # fallback: D-Link puts the whole model and firmware into ifDescr.
@@ -283,6 +308,14 @@ class SnmpCollector:
             port = data.ports.get(suffix[0])
             if port:
                 port.speed_mbps = int(value)
+        async for suffix, value in self._walk(host, OID_IF_LAST_CHANGE):
+            port = data.ports.get(suffix[0])
+            if port:
+                port.last_change = int(value)
+        for if_index, mac in phys_addr.items():
+            port = data.ports.get(if_index)
+            if port:
+                port.mac = mac
 
         # LACP: membership of physical ports in aggregates. If the switch
         # does not support IEEE8023-LAG-MIB, the walk simply yields nothing.
@@ -295,6 +328,35 @@ class SnmpCollector:
         port_to_ifindex: dict[int, int] = {}
         async for suffix, value in self._walk(host, OID_PORT_IFINDEX):
             port_to_ifindex[suffix[0]] = int(value)
+
+        # LLDP: who the neighbours actually are. The local port table is
+        # resolved against our own interfaces here, because that is the
+        # only place where both are known.
+        data.lldp_neighbors = await lldp_mod.collect_lldp(
+            self, host,
+            lldp_mod.build_port_names(data.ports, phys_addr),
+            set(data.ports),
+        )
+        data.lldp_forwarded = lldp_mod.forwarded_ports(data.lldp_neighbors)
+        if data.lldp_forwarded:
+            log.warning(
+                "%s: LLDP data on port(s) %s is unusable — several "
+                "neighbours on one port, or one neighbour on several "
+                "ports. `LLDP Forward Message` is most likely enabled; "
+                "these ports are excluded from link inference.",
+                host,
+                ", ".join(
+                    port_display(data, i) for i in sorted(data.lldp_forwarded)
+                ),
+            )
+
+        # Spanning tree, read with the "disabled STP still answers"
+        # trap in mind (see stp.py)
+        data.stp = await stp_mod.collect_stp(self, host, port_to_ifindex)
+        for entry in data.stp.ports.values():
+            if entry.if_index is not None:
+                entry.name = port_display(data, entry.if_index)
+        data.sys_uptime = data.stp.sys_uptime
 
         # VLANs: port PVIDs (Q-BRIDGE-MIB, indexed by bridge-port) and names
         async for suffix, value in self._walk(host, OID_PVID):
@@ -374,8 +436,11 @@ class SnmpCollector:
             )
 
         log.info(
-            "%s (%s): %d ports, %d MAC addresses",
+            "%s (%s): %d ports, %d MAC addresses, %d LLDP neighbour(s), "
+            "STP %s",
             data.sys_name, host, len(data.ports), len(data.fdb),
+            len(data.lldp_neighbors),
+            "operating" if data.stp and data.stp.operating else "not operating",
         )
         return data
 
