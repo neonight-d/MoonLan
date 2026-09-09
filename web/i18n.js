@@ -59,6 +59,21 @@ const I18N = {
       "Inferred from the MAC address tables. The devices do not "
       + "announce each other over LLDP (it may be off, or the frames "
       + "may not reach), so the ports are the best available guess.",
+    chassisId: "Chassis ID",
+    mgmtIp: "Management address",
+    remotePort: "Port on the neighbour",
+    capabilities: "Capabilities",
+    capsUnknown: "not announced",
+    bridgeHint:
+      "LLDP reports a bridge behind this port — a switch MoonLan does "
+      + "not poll. It was not configured here; the devices behind it "
+      + "hang off this node.",
+    lldpUnknownHint:
+      "An LLDP device that announces neither a name nor its "
+      + "capabilities (the optional TLVs are disabled on it). It may "
+      + "well be a switch — the absence of the bridge flag proves "
+      + "nothing, so no alarm is raised for it.",
+    al_unmanaged_bridge_detected: "Unmanaged bridge",
     lldpNeighbour: "LLDP neighbour",
     lldpForwarded: "LLDP forwarded",
     lldpForwardedHint:
@@ -210,6 +225,21 @@ const I18N = {
       "Связь выведена из таблиц MAC-адресов. По LLDP устройства друг "
       + "друга не объявляют (LLDP выключен или кадры не доходят), "
       + "поэтому порты — наилучшее предположение.",
+    chassisId: "Chassis ID",
+    mgmtIp: "Управляющий адрес",
+    remotePort: "Порт со стороны соседа",
+    capabilities: "Возможности",
+    capsUnknown: "не объявлены",
+    bridgeHint:
+      "LLDP сообщает, что за этим портом стоит мост — коммутатор, "
+      + "который MoonLan не опрашивает. В конфигурации его нет; "
+      + "устройства за ним показаны через этот узел.",
+    lldpUnknownHint:
+      "Устройство LLDP, которое не объявляет ни имени, ни своих "
+      + "возможностей (необязательные TLV на нём выключены). Это вполне "
+      + "может быть коммутатор — отсутствие признака bridge ничего не "
+      + "доказывает, поэтому тревога по нему не поднимается.",
+    al_unmanaged_bridge_detected: "Неучтённый мост",
     lldpNeighbour: "Сосед по LLDP",
     lldpForwarded: "пересылка LLDP",
     lldpForwardedHint:

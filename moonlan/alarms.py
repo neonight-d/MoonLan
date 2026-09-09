@@ -38,6 +38,19 @@ Rules:
   table of one port grew corruption_macs_threshold distorted copies of
   confirmed addresses inside the flap window; cleared when the window
   passes without a new one.
+- unmanaged_bridge_detected (warning): LLDP reports a device with the
+  bridge capability behind a port that is not a trunk — a switch
+  nobody put on the map and nobody polls. Cleared when the neighbour
+  has been gone from LLDP for the flap window. Bridges listed in
+  config.known_bridges (by chassis id or management IP) never raise it.
+- stp_root_changed (critical) / stp_topology_change (warning) /
+  stp_fragmented (warning): see moonlan/stp.py. Raised ONLY for
+  switches whose spanning tree is actually operating — a switch with
+  STP disabled answers every dot1dStp* object and names itself root.
+- port_flapping (warning): a port changed link state
+  thresholds.flaps_per_window times inside
+  thresholds.flap_window_minutes; cleared by a window without a single
+  transition.
 """
 
 from __future__ import annotations
@@ -64,6 +77,11 @@ SEVERITIES = {
     "port_hosts_down": "critical",
     "lag_degraded": "warning",
     "port_frame_corruption": "warning",
+    "unmanaged_bridge_detected": "warning",
+    "stp_root_changed": "critical",
+    "stp_topology_change": "warning",
+    "stp_fragmented": "warning",
+    "port_flapping": "warning",
 }
 
 HOST_DOWN_AFTER = 3    # consecutive failed pings
@@ -78,7 +96,7 @@ MASS_DOWN_MIN_UP_STREAK = 2
 # must stay missing before its alarm is auto-cleared
 JANITOR_TYPES = {
     "lag_degraded", "port_errors", "port_discards", "port_util",
-    "port_hosts_down", "port_frame_corruption",
+    "port_hosts_down", "port_frame_corruption", "port_flapping",
 }
 JANITOR_CYCLES = 5
 JANITOR_NOTE = "auto-cleared: subject no longer present"
@@ -86,7 +104,7 @@ JANITOR_NOTE = "auto-cleared: subject no longer present"
 # Flap damping applies to alarms that can oscillate on their own
 FLAP_TYPES = {
     "host_down", "port_hosts_down", "port_errors", "port_discards",
-    "port_util", "lag_degraded",
+    "port_util", "lag_degraded", "stp_topology_change",
 }
 
 
@@ -141,6 +159,13 @@ class AlarmEngine:
         # when port_errors was last active on a subject, so a corruption
         # alarm can say the error counters agree with it
         self._errors_seen: dict[str, float] = {}
+        # unmanaged bridges: chassis id -> when LLDP last showed it
+        self._bridges_seen: dict[str, float] = {}
+        # spanning tree: ip -> last designated root, ip -> last
+        # dot1dStpTopChanges, and how long the network has been split
+        self._stp_root: dict[str, str] = {}
+        self._stp_changes: dict[str, int] = {}
+        self._stp_fragmented_cycles: int = 0
 
     async def load(self) -> None:
         """Restores the active set from the DB after a restart.
@@ -490,6 +515,48 @@ class AlarmEngine:
             return True
         last = self._errors_seen.get(subject, 0)
         return bool(last) and now - last <= window
+
+    async def on_bridges(
+        self, bridges: list[dict], known: set[str]
+    ) -> None:
+        """LLDP found switches behind our access ports.
+
+        Only devices that actually claim the bridge capability count:
+        a neighbour that sends no capabilities TLV is shown on the map
+        but never alarmed on, because the absence of the bit proves
+        nothing about what the device is.
+
+        A bridge on a trunk port is the network working as designed —
+        that is what a trunk is. A bridge on an access port is someone
+        plugging a switch in, and that is the whole point of the alarm.
+        """
+        now = time.time()
+        window = self._notif_cfg.flap_window_seconds
+        for bridge in bridges:
+            if bridge.get("trunk") or bridge.get("unidentified"):
+                continue
+            chassis_id = bridge["chassis_id"]
+            self._bridges_seen[chassis_id] = now
+            if chassis_id.lower() in known:
+                continue
+            if bridge.get("mgmt_ip", "").lower() in known:
+                continue
+            where = f"{bridge['switch']} port {bridge['port']}"
+            name = bridge.get("name") or chassis_id
+            address = f", {bridge['mgmt_ip']}" if bridge.get("mgmt_ip") else ""
+            await self._raise(
+                "unmanaged_bridge_detected", chassis_id,
+                f"{name} ({chassis_id}{address}) announces itself as a "
+                f"bridge behind {where} — a switch nobody polls",
+            )
+        for chassis_id, last in list(self._bridges_seen.items()):
+            if now - last <= window:
+                continue
+            del self._bridges_seen[chassis_id]
+            await self._clear(
+                "unmanaged_bridge_detected", chassis_id,
+                f"gone from LLDP for {_fmt_window(window)}",
+            )
 
     async def on_new_macs(self, new_macs: list[str], details: dict[str, str]) -> None:
         for mac in new_macs:

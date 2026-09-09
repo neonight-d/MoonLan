@@ -16,7 +16,7 @@ from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from . import __version__, corruption, counters, demo, pinger
+from . import __version__, corruption, counters, demo, pinger, stp
 from .alarms import AlarmEngine
 from .config import Config, load_config
 from .db import Database
@@ -133,7 +133,8 @@ async def run_scan() -> None:
         # What the database already knows about each port feeds the
         # unmanaged-switch threshold, so groups survive FDB aging
         (
-            switches, links, hosts, pseudo_switches, vlan_names, topo_info
+            switches, links, hosts, pseudo_switches, vlan_names, bridges,
+            topo_info,
         ) = build_topology(
             collected,
             config.unmanaged_threshold,
@@ -209,9 +210,36 @@ async def run_scan() -> None:
         )
         _merge_db_fields(hosts, db_rows)
         _merge_db_fields(unlocated, db_rows)
+        # LLDP: remember the neighbours and the bridges nobody polls, so
+        # a card can say since when a device has been behind that port
+        now = time.time()
+        await asyncio.to_thread(db.upsert_lldp, _lldp_rows(collected), now)
+        await asyncio.to_thread(
+            db.upsert_bridges,
+            [
+                {
+                    "chassis_id": b["chassis_id"],
+                    "sys_name": b["name"],
+                    "sys_desc": b["sys_desc"],
+                    "mgmt_ip": b["mgmt_ip"],
+                    "switch_ip": b["switch"],
+                    "port": b["port"],
+                    "capabilities": ",".join(b["capabilities"]),
+                }
+                for b in bridges
+            ],
+            now,
+        )
+        bridge_rows = await asyncio.to_thread(db.bridges)
+        for bridge in bridges:
+            row = bridge_rows.get(bridge["chassis_id"], {})
+            bridge["first_seen"] = row.get("first_seen", now)
+            bridge["last_seen"] = row.get("last_seen", now)
+            bridge["known"] = _is_known_bridge(bridge)
+        stp_report = _stp_report(collected)
         state.update(
             switches, links, hosts, pseudo_switches, vlan_names, unlocated,
-            offline_groups,
+            offline_groups, bridges, stp_report,
         )
         if config.demo:
             await run_ping()  # set the switches' ping state right away
@@ -220,6 +248,7 @@ async def run_scan() -> None:
             {sw.ip: sw.reachable for sw in collected},
             {sw.ip: sw.sys_name or sw.ip for sw in collected},
         )
+        await alarm_engine.on_bridges(bridges, set(config.known_bridges))
         await alarm_engine.on_corruption(
             {f"{sw_ip}:{port}": found
              for (sw_ip, port), found in suspects.items()}
@@ -240,6 +269,85 @@ async def run_scan() -> None:
         )
     finally:
         state.scanning = False
+
+
+def _lldp_rows(collected: list[SwitchData]) -> list[dict]:
+    """This poll's LLDP neighbours, flattened for the database."""
+    rows: list[dict] = []
+    for sw in collected:
+        if not sw.reachable:
+            continue
+        for neighbor in sw.lldp_neighbors:
+            rows.append({
+                "switch_ip": sw.ip,
+                "local_port": (
+                    port_name(sw, neighbor.local_ifindex)
+                    if neighbor.local_ifindex is not None
+                    else f"lldpLocPortNum {neighbor.local_port_num}"
+                ),
+                "chassis_id": neighbor.chassis_id,
+                "port_id": neighbor.port_id,
+                "port_desc": neighbor.port_desc,
+                "sys_name": neighbor.sys_name,
+                "sys_desc": neighbor.sys_desc,
+                "capabilities": ",".join(sorted(neighbor.cap_enabled)),
+                "mgmt_ip": neighbor.mgmt_ip,
+            })
+    return rows
+
+
+def _stp_report(collected: list[SwitchData]) -> dict:
+    """Spanning tree of every polled switch plus the network verdict.
+
+    The root, the cost and the root port are reported only for a switch
+    whose tree is actually operating. A switch with STP turned off
+    answers every dot1dStp* object, names itself root and reports cost
+    0 — believing that is how five disabled switches turn into five
+    root bridges (see moonlan/stp.py).
+    """
+    per_switch = {
+        sw.ip: sw.stp for sw in collected if sw.reachable and sw.stp is not None
+    }
+    verdict = stp.network_verdict(per_switch)
+    switches = []
+    for ip, data in sorted(per_switch.items()):
+        sw = switch_data.get(ip)
+        own_macs = sw.own_macs if sw else set()
+        switches.append({
+            "ip": ip,
+            "name": sw.sys_name or ip if sw else ip,
+            "supported": data.supported,
+            "operating": data.operating,
+            "reason": data.reason,
+            "is_root": data.is_root(own_macs),
+            "protocol": data.protocol_name,
+            "version": data.version_name,
+            "priority": data.priority,
+            "designated_root": data.designated_root,
+            "root_cost": data.root_cost,
+            "root_port": (
+                port_name(sw, data.ports[data.root_port].if_index)
+                if sw and data.root_port in data.ports
+                and data.ports[data.root_port].if_index is not None
+                else str(data.root_port) if data.root_port else ""
+            ),
+            "top_changes": data.top_changes,
+            "time_since_change": data.time_since_change / 100.0,
+            "sys_uptime": data.sys_uptime / 100.0,
+            "blocking_ports": [
+                p.name or str(p.bridge_port) for p in data.blocking_ports()
+            ],
+        })
+    return {"verdict": verdict, "switches": switches}
+
+
+def _is_known_bridge(bridge: dict) -> bool:
+    """Listed in config.known_bridges by chassis id or management IP."""
+    known = set(config.known_bridges)
+    return (
+        bridge["chassis_id"].lower() in known
+        or bridge.get("mgmt_ip", "").lower() in known
+    )
 
 
 def _apply_suspects(
@@ -1015,8 +1123,22 @@ def _alarm_meta(
         meta["display"] = host.get("name") or host.get("ip") or subject
         meta["switch_ip"] = host.get("switch_ip", "")
         meta["port"] = host.get("port", "")
-    elif row["type"] == "switch_down":
+    elif row["type"] in ("switch_down", "stp_root_changed",
+                         "stp_topology_change"):
         meta["switch_ip"] = subject
+    elif row["type"] == "unmanaged_bridge_detected":
+        # the subject is a chassis id, which is a MAC — splitting it on
+        # ":" the way port subjects are split would produce nonsense
+        bridge = next(
+            (b for b in state.as_dict()["bridges"]
+             if b["chassis_id"] == subject),
+            {},
+        )
+        meta["display"] = bridge.get("name") or subject
+        meta["switch_ip"] = bridge.get("switch", "")
+        meta["port"] = bridge.get("port", "")
+    elif row["type"] == "stp_fragmented":
+        meta["display"] = subject
     else:
         ip, sep, port = subject.partition(":")
         if sep:

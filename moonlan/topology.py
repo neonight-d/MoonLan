@@ -72,12 +72,16 @@ class TopologyState:
     links: list[dict] = field(default_factory=list)
     hosts: list[dict] = field(default_factory=list)
     pseudo_switches: list[dict] = field(default_factory=list)
+    # switches LLDP found behind our ports that nobody polls
+    bridges: list[dict] = field(default_factory=list)
     vlan_names: dict[int, str] = field(default_factory=dict)
     # known devices that sit on no port of a polled switch: they are
     # inventory and search results, but nothing is drawn for them
     unlocated: list[dict] = field(default_factory=list)
     # one node per port whose devices are all offline right now
     offline_groups: list[dict] = field(default_factory=list)
+    # spanning tree: the per-switch report and the network verdict
+    stp: dict = field(default_factory=dict)
     last_scan: float = 0.0
     scanning: bool = False
     _lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
@@ -91,6 +95,8 @@ class TopologyState:
         vlan_names: dict[int, str],
         unlocated: list[dict] | None = None,
         offline_groups: list[dict] | None = None,
+        bridges: list[dict] | None = None,
+        stp: dict | None = None,
     ) -> None:
         with self._lock:
             self.switches = switches
@@ -100,6 +106,8 @@ class TopologyState:
             self.vlan_names = vlan_names
             self.unlocated = unlocated or []
             self.offline_groups = offline_groups or []
+            self.bridges = bridges or []
+            self.stp = stp or {}
             self.last_scan = time.time()
 
     def as_dict(self) -> dict:
@@ -109,6 +117,7 @@ class TopologyState:
                 "links": self.links,
                 "hosts": self.hosts,
                 "pseudo_switches": self.pseudo_switches,
+                "bridges": self.bridges,
                 "vlan_names": self.vlan_names,
                 "unlocated": self.unlocated,
                 "offline_groups": self.offline_groups,
@@ -352,6 +361,65 @@ def lldp_link_candidates(
         if all(sides.values()):
             resolved[key] = sides
     return resolved
+
+
+def detect_bridges(
+    switches: list[SwitchData],
+    own_macs: set[str],
+    trunks: dict[str, dict[int, str]],
+) -> list[dict]:
+    """LLDP neighbours that are switches nobody polls.
+
+    A neighbour with the `bridge` capability whose chassis id belongs to
+    no polled switch is a bridge living behind one of our ports — the
+    six MikroTik bridges the September survey found, none of which
+    answers SNMP. Until now the map could only show them as an
+    anonymous "switch without SNMP", or not at all.
+
+    A neighbour that sends no capabilities TLV at all (D-Link DES-3526
+    ships with System Name / Description / Capabilities disabled) is
+    kept as an unidentified LLDP device: the ABSENCE of the bridge bit
+    proves nothing, so it is shown and never alarmed on.
+
+    One node per chassis id: a switch that forwards foreign LLDP frames
+    would otherwise scatter the same device over several ports. The
+    placement with the strongest claim wins — an untainted port before
+    a forwarded one, an access port before a trunk.
+    """
+    best: dict[str, tuple] = {}
+    found: dict[str, dict] = {}
+    for sw in switches:
+        for neighbor in sw.lldp_neighbors:
+            if neighbor.local_ifindex is None:
+                continue
+            if neighbor.chassis_id in own_macs:
+                continue  # a switch we poll ourselves — already a node
+            if neighbor.cap_known and not neighbor.is_bridge:
+                continue  # a host, a phone, a router: not a bridge
+            if_index = neighbor.local_ifindex
+            forwarded = if_index in sw.lldp_forwarded
+            is_trunk = aggregate_port(sw, if_index) in trunks.get(sw.ip, {})
+            claim = (forwarded, is_trunk, sw.ip, if_index)
+            if neighbor.chassis_id in best and claim >= best[neighbor.chassis_id]:
+                continue
+            best[neighbor.chassis_id] = claim
+            found[neighbor.chassis_id] = {
+                "id": "bridge:" + neighbor.chassis_id,
+                "chassis_id": neighbor.chassis_id,
+                "name": neighbor.sys_name or neighbor.chassis_id,
+                "sys_desc": neighbor.sys_desc,
+                "mgmt_ip": neighbor.mgmt_ip,
+                "switch": sw.ip,
+                "port": port_name(sw, if_index),
+                "remote_port": neighbor.port_id or neighbor.port_desc,
+                "capabilities": sorted(neighbor.cap_enabled),
+                # no capabilities TLV: the device is shown, but nothing
+                # is claimed about what it is
+                "unidentified": not neighbor.cap_known,
+                "lldp_forwarded": forwarded,
+                "trunk": is_trunk,
+            }
+    return [found[chassis] for chassis in sorted(found)]
 
 
 def normalized_fdb(switches: list[SwitchData]) -> dict[str, dict[str, int]]:
@@ -697,7 +765,8 @@ def build_topology(
     unconfirmed_macs: set[str] | None = None,
     place_trunk_only: bool = True,
 ) -> tuple[
-    list[dict], list[dict], list[dict], list[dict], dict[int, str], dict
+    list[dict], list[dict], list[dict], list[dict], dict[int, str],
+    list[dict], dict,
 ]:
     """Turns poll data into nodes and links for the map.
 
@@ -868,6 +937,38 @@ def build_topology(
                 "host_count_known": known,
             })
 
+    # 5. Bridges nobody polls, named by LLDP. Such a node replaces the
+    #    anonymous pseudo-switch on the same port and inherits its
+    #    devices: one node with a name beats two without.
+    bridges = detect_bridges(switches, switch_macs, trunks)
+    pseudo_by_port = {(p["switch"], p["port"]): p for p in pseudo_switches}
+    hosts_on_port: dict[tuple[str, str], list[dict]] = {}
+    for host in hosts:
+        hosts_on_port.setdefault((host["switch"], host["port"]), []).append(host)
+    for bridge in bridges:
+        key = (bridge["switch"], bridge["port"])
+        replaced = pseudo_by_port.get(key)
+        if replaced is not None:
+            pseudo_switches.remove(replaced)
+            bridge["host_count"] = replaced["host_count"]
+            bridge["host_count_live"] = replaced["host_count_live"]
+        if bridge["trunk"]:
+            continue  # a trunk: its devices belong to the switch behind it
+        for host in hosts_on_port.get(key, []):
+            host["via"] = bridge["id"]
+        bridge.setdefault("host_count", len(hosts_on_port.get(key, [])))
+    if bridges:
+        log.info(
+            "LLDP found %d device(s) behind our ports that we do not "
+            "poll: %s", len(bridges),
+            "; ".join(
+                f"{b['name']} on {b['switch']} {b['port']}"
+                + (" (unidentified)" if b["unidentified"] else "")
+                for b in bridges
+            ),
+        )
+    info["bridges"] = bridges
+
     switch_dicts = [{
         "ip": sw.ip,
         "name": sw.sys_name or sw.ip,
@@ -888,4 +989,7 @@ def build_topology(
             if name:
                 vlan_names.setdefault(vlan_id, name)
 
-    return switch_dicts, links, hosts, pseudo_switches, vlan_names, info
+    return (
+        switch_dicts, links, hosts, pseudo_switches, vlan_names,
+        bridges, info,
+    )
