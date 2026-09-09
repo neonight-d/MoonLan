@@ -74,6 +74,11 @@ const I18N = {
       + "well be a switch — the absence of the bridge flag proves "
       + "nothing, so no alarm is raised for it.",
     al_unmanaged_bridge_detected: "Unmanaged bridge",
+    bridgeSharesPortHint:
+      "Several LLDP devices answer behind this port, so an unmanaged "
+      + "switch sits on the cable and they hang off it. The devices on "
+      + "the port stay with that switch: nothing says which bridge each "
+      + "of them is behind.",
     lldpNeighbour: "LLDP neighbour",
     lldpForwarded: "LLDP forwarded",
     lldpForwardedHint:
@@ -276,6 +281,11 @@ const I18N = {
       + "может быть коммутатор — отсутствие признака bridge ничего не "
       + "доказывает, поэтому тревога по нему не поднимается.",
     al_unmanaged_bridge_detected: "Неучтённый мост",
+    bridgeSharesPortHint:
+      "За этим портом отвечают несколько LLDP-устройств — значит, на "
+      + "кабеле стоит неуправляемый коммутатор, а они подключены за ним. "
+      + "Устройства порта остаются за этим коммутатором: за каким именно "
+      + "мостом каждое из них — данных нет.",
     lldpNeighbour: "Сосед по LLDP",
     lldpForwarded: "пересылка LLDP",
     lldpForwardedHint:

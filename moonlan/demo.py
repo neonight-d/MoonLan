@@ -111,6 +111,20 @@ BRIDGE_NAME = "RouterOS-Sport"
 BRIDGE_DESC = "RouterOS RB941-2nD 6.49.19"
 BRIDGE_MGMT_IP = "10.3.5.6"
 
+# The chain behind access-sw-1 Gi0/14: an unmanaged box on the cable
+# with TWO MikroTik bridges behind it, plus four ordinary devices.
+# This is mb1 port 28 (Garage -> Workshop -> 10.3.6.124) and the shape
+# that crashed build_topology in v0.6.0: one port, one pseudo-switch
+# and several bridges.
+CHAIN_PORT = 14
+CHAIN_HOSTS = 4
+CHAIN_BRIDGES = (
+    ("18:fd:74:fd:e3:7f", "RouterOS-Garage", "RouterOS RB941-2nD 6.49.19",
+     "10.3.6.4"),
+    ("18:fd:74:fd:b3:af", "RouterOS-Workshop", "RouterOS hAP lite 6.49.10",
+     "10.3.6.2"),
+)
+
 # A port whose link goes up and down on every counters cycle ->
 # port_flapping. Modelled on 2b0 port 21, which managed four cycles in
 # thirty seconds.
@@ -277,6 +291,11 @@ def demo_network() -> list[SwitchData]:
     core.fdb[TRUNK_ONLY_MAC] = core_trunk_to_ray3
     ray3.fdb[TRUNK_ONLY_MAC] = ray3_trunk
 
+    # Four devices behind the unmanaged box on access-sw-1 Gi0/14, with
+    # two bridges of their own further down the chain
+    for _ in range(CHAIN_HOSTS):
+        connect_host(ray1, CHAIN_PORT, 8)
+
     _add_lldp(core, ray1, ray2, ray3, ray4, core_port_to_ray)
     _add_stp(core, ray1, ray2, ray3, ray4)
 
@@ -354,6 +373,16 @@ def _add_lldp(core, ray1, ray2, ray3, ray4, core_port_to_ray) -> None:
     # `LLDP Forward Message` on ray1: frames from two other switches
     # come out of one access port, which would invent two links
     ray1.lldp_neighbors = [
+        # Two bridges behind one access port, with four ordinary devices
+        # on the same port: the pseudo-switch stays (the box on the
+        # cable is real), and both bridges are drawn behind it
+        *(
+            _neighbor(
+                CHAIN_PORT, chassis, "ether1", sys_name=name,
+                sys_desc=desc, caps={"bridge", "router"}, mgmt_ip=ip,
+            )
+            for chassis, name, desc, ip in CHAIN_BRIDGES
+        ),
         _neighbor(12, ray3.bridge_mac, "Gi0/1", sys_name=ray3.sys_name,
                   caps={"bridge"}),
         _neighbor(12, ray4.bridge_mac, "Gi0/1", sys_name=ray4.sys_name,
