@@ -516,6 +516,37 @@ class AlarmEngine:
         last = self._errors_seen.get(subject, 0)
         return bool(last) and now - last <= window
 
+    async def on_flaps(self, ip: str, ports: list[dict]) -> None:
+        """One counters cycle's link-state transitions.
+
+        Each entry is {"port": name, "flaps": n, "last": unix time},
+        already counted over thresholds.flap_window_minutes by
+        counters.FlapTracker. The alarm is raised at the first cycle
+        over the threshold — a port bouncing four times in half a
+        minute is not a condition to confirm over three cycles, and the
+        window itself already does the smoothing.
+        """
+        threshold = self._thresholds.flaps_per_window
+        if threshold <= 0:
+            return
+        window = self._thresholds.flap_window_minutes
+        for entry in ports:
+            subject = f"{ip}:{entry['port']}"
+            if entry["flaps"] >= threshold:
+                when = time.strftime(
+                    "%H:%M:%S", time.localtime(entry["last"])
+                ) if entry["last"] else "?"
+                await self._raise(
+                    "port_flapping", subject,
+                    f"the link changed state {entry['flaps']} times in "
+                    f"{window:g} min, last at {when}",
+                )
+            elif entry["flaps"] == 0:
+                await self._clear(
+                    "port_flapping", subject,
+                    f"no link transition in {window:g} min",
+                )
+
     async def on_bridges(
         self, bridges: list[dict], known: set[str]
     ) -> None:
