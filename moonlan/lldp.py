@@ -305,31 +305,72 @@ async def collect_lldp(
     return neighbors
 
 
-def forwarded_ports(neighbors: list[LldpNeighbor]) -> set[int]:
-    """Local ports whose LLDP data cannot be trusted.
+def analyse_ports(
+    neighbors: list[LldpNeighbor],
+    aggregate,
+    fdb: dict[str, int],
+) -> tuple[set[int], set[int]]:
+    """Local ports whose LLDP needs care: (forwarded, crowded).
 
-    With `LLDP Forward Message` enabled a switch re-transmits foreign
-    LLDP frames, so a neighbour appears on a port it is not attached
-    to. Two symptoms give it away and both are treated the same way —
-    the port's neighbours are kept for display and dropped from link
-    inference:
+    **forwarded** — the frames did not come from the cable. With
+    `LLDP Forward Message` enabled a switch re-transmits foreign LLDP
+    frames, and the neighbour then appears on a port it is not attached
+    to. Two symptoms give it away, and both compare LOGICAL ports, so
+    the two members of a LACP aggregate seeing the same neighbour are
+    one port and not evidence of anything:
 
-    1. more than one remote entry on a single local port;
-    2. one chassis id seen on more than one local port of this switch.
+    1. one chassis id on more than one logical port of this switch;
+    2. the neighbour's MAC is in this switch's own forwarding table on
+       a DIFFERENT logical port — the frame demonstrably belongs
+       elsewhere.
+
+    A chassis missing from the forwarding table altogether is not
+    evidence either way: plenty of bridges never source a frame from
+    their chassis MAC. v0.6.1 reads "absent from this port's FDB" that
+    way on purpose; the looser reading would flag every one of them.
+
+    **crowded** — several neighbours on one logical port with none of
+    the above. That is not forwarding, it is an unmanaged switch on the
+    cable with several talkers behind it, which is the normal shape of
+    an access port here. Links cannot be inferred (which of them is on
+    the cable?), but the devices are real and are shown as such.
+
+    v0.6.0 flagged both cases as forwarding, which cost the network its
+    LACP uplink source (mb0—mb1 fell back to `fdb`) and suppressed the
+    very ports the version was written for: mb1 27 and 28 and 2b0 20,
+    where the MikroTik bridges live.
     """
-    by_port: dict[int, set[str]] = {}
-    for n in neighbors:
-        if n.local_ifindex is None:
+    by_logical: dict[int, set[str]] = {}
+    physical_of: dict[int, set[int]] = {}
+    for neighbor in neighbors:
+        if neighbor.local_ifindex is None:
             continue
-        by_port.setdefault(n.local_ifindex, set()).add(n.chassis_id)
-    suspect = {port for port, chassis in by_port.items() if len(chassis) > 1}
+        logical = aggregate(neighbor.local_ifindex)
+        by_logical.setdefault(logical, set()).add(neighbor.chassis_id)
+        physical_of.setdefault(logical, set()).add(neighbor.local_ifindex)
+
     ports_of_chassis: dict[str, set[int]] = {}
-    for port, chassis_ids in by_port.items():
-        if port in suspect:
-            continue
+    for logical, chassis_ids in by_logical.items():
         for chassis_id in chassis_ids:
-            ports_of_chassis.setdefault(chassis_id, set()).add(port)
-    for ports in ports_of_chassis.values():
-        if len(ports) > 1:
-            suspect |= ports
-    return suspect
+            ports_of_chassis.setdefault(chassis_id, set()).add(logical)
+    forwarded_logical = {
+        logical
+        for ports in ports_of_chassis.values() if len(ports) > 1
+        for logical in ports
+    }
+    for neighbor in neighbors:
+        if neighbor.local_ifindex is None:
+            continue
+        logical = aggregate(neighbor.local_ifindex)
+        seen_on = fdb.get(neighbor.chassis_id)
+        if seen_on is not None and aggregate(seen_on) != logical:
+            forwarded_logical.add(logical)
+
+    crowded_logical = {
+        logical for logical, chassis_ids in by_logical.items()
+        if len(chassis_ids) > 1
+    } - forwarded_logical
+    return (
+        {p for lg in forwarded_logical for p in physical_of.get(lg, ())},
+        {p for lg in crowded_logical for p in physical_of.get(lg, ())},
+    )

@@ -738,6 +738,8 @@ function showDetails(nodeId) {
         bridge.unidentified ? t("lldpUnknownHint") : t("bridgeHint")
       }</p>
       ${bridge.shares_port ? `<p class="hint">${t("bridgeSharesPortHint")}</p>` : ""}
+      ${bridge.lldp_crowded && !bridge.shares_port
+        ? `<p class="hint">${t("lldpCrowdedHint")}</p>` : ""}
       ${bridge.lldp_forwarded ? `<p class="hint">${t("lldpForwardedHint")}</p>` : ""}
       <dl>
       <dt>${t("descr")}</dt><dd>${bridge.sys_desc || "—"}</dd>
@@ -1003,7 +1005,11 @@ function renderPorts(data) {
                 .join(" · ")
             )
             .join("\n") +
-          (p.lldp_forwarded ? "\n\n" + t("lldpForwardedHint") : "");
+          (p.lldp_forwarded
+            ? "\n\n" + t("lldpForwardedHint")
+            : p.lldp_crowded
+            ? "\n\n" + t("lldpCrowdedHint")
+            : "");
         nameCell.append(" ", chip);
       }
       const suspect = p.suspect_macs || [];

@@ -1136,6 +1136,9 @@ async def api_switch_ports(ip: str) -> dict:
             # …and whether that can be believed: a switch forwarding
             # foreign LLDP frames shows neighbours on the wrong ports
             "lldp_forwarded": p.if_index in sw.lldp_forwarded,
+            # several devices behind one port is not forwarding, it is
+            # an unmanaged switch on the cable
+            "lldp_crowded": p.if_index in sw.lldp_crowded,
         })
     # active ports first, then by port number
     ports.sort(key=lambda p: (not p["oper_up"], abs(p["if_index"])))

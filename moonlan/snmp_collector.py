@@ -93,10 +93,12 @@ class SwitchData:
     lag_groups: dict[int, list[int]] = field(default_factory=dict)
     port_pvid: dict[int, int] = field(default_factory=dict)    # ifIndex -> PVID (untagged VLAN)
     vlan_names: dict[int, str] = field(default_factory=dict)   # VLAN ID -> name
-    # LLDP neighbours and the local ports whose LLDP data is unusable
-    # because foreign frames are being forwarded onto them
+    # LLDP neighbours, the local ports whose data is unusable because
+    # foreign frames are forwarded onto them, and the ports that simply
+    # have several devices behind an unmanaged switch
     lldp_neighbors: list = field(default_factory=list)
     lldp_forwarded: set[int] = field(default_factory=set)
+    lldp_crowded: set[int] = field(default_factory=set)
     # Spanning tree as the switch reports it, verdict included
     stp: object | None = None
     sys_uptime: int = 0  # sysUpTime in TimeTicks, for the STP verdict
@@ -104,6 +106,26 @@ class SwitchData:
 
 def _fmt_mac(raw: bytes) -> str:
     return ":".join(f"{b:02x}" for b in raw)
+
+
+def aggregate_port(sw: SwitchData, if_index: int | None) -> int | None:
+    """The logical port a physical one belongs to, if any.
+
+    Two kinds of aggregate exist here: an IEEE8023-LAG-MIB one (a
+    positive aggregate ifIndex) and a D-Link trunk inferred from the
+    dot1dBasePortIfIndex gaps, whose FDB lives on a synthetic negative
+    ifIndex. LLDP always reports the physical member, so both have to
+    be resolved.
+    """
+    if if_index is None:
+        return None
+    aggregate = sw.lag_members.get(if_index)
+    if aggregate is not None:
+        return aggregate
+    for bridge_port, members in sw.lag_groups.items():
+        if if_index in members:
+            return -bridge_port
+    return if_index
 
 
 def port_display(data: "SwitchData", if_index: int) -> str:
@@ -337,18 +359,6 @@ class SnmpCollector:
             lldp_mod.build_port_names(data.ports, phys_addr),
             set(data.ports),
         )
-        data.lldp_forwarded = lldp_mod.forwarded_ports(data.lldp_neighbors)
-        if data.lldp_forwarded:
-            log.warning(
-                "%s: LLDP data on port(s) %s is unusable — several "
-                "neighbours on one port, or one neighbour on several "
-                "ports. `LLDP Forward Message` is most likely enabled; "
-                "these ports are excluded from link inference.",
-                host,
-                ", ".join(
-                    port_display(data, i) for i in sorted(data.lldp_forwarded)
-                ),
-            )
 
         # Spanning tree, read with the "disabled STP still answers"
         # trap in mind (see stp.py)
@@ -432,6 +442,37 @@ class SnmpCollector:
                 "; ".join(
                     f"bridge-port {s}: members {', '.join(map(str, members))}"
                     for s, members in sorted(data.lag_groups.items())
+                ),
+            )
+
+        # Which LLDP data can be trusted is decided here, at the end:
+        # the forwarding test compares a neighbour against this
+        # switch's own MAC table, which does not exist until now
+        data.lldp_forwarded, data.lldp_crowded = lldp_mod.analyse_ports(
+            data.lldp_neighbors,
+            lambda if_index: aggregate_port(data, if_index),
+            data.fdb,
+        )
+        if data.lldp_forwarded:
+            log.warning(
+                "%s: LLDP on port(s) %s did not come from the cable — a "
+                "neighbour is on several ports, or its MAC is in the "
+                "forwarding table behind another one. `LLDP Forward "
+                "Message` is most likely enabled; these ports are "
+                "excluded from link inference.",
+                host,
+                ", ".join(
+                    port_display(data, i) for i in sorted(data.lldp_forwarded)
+                ),
+            )
+        if data.lldp_crowded:
+            log.debug(
+                "%s: several LLDP devices behind port(s) %s — an "
+                "unmanaged switch, most likely; no links are inferred "
+                "from them",
+                host,
+                ", ".join(
+                    port_display(data, i) for i in sorted(data.lldp_crowded)
                 ),
             )
 
