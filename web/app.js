@@ -28,6 +28,10 @@ const els = {
   alarmsBadge: document.getElementById("alarms-badge"),
   alarmsBody: document.getElementById("alarms-body"),
   alarmsClose: document.getElementById("alarms-close"),
+  stp: document.getElementById("stp"),
+  stpBtn: document.getElementById("stp-btn"),
+  stpBody: document.getElementById("stp-body"),
+  stpClose: document.getElementById("stp-close"),
   emptyState: document.getElementById("empty-state"),
   freezeBtn: document.getElementById("freeze-btn"),
   langRu: document.getElementById("lang-ru"),
@@ -43,6 +47,7 @@ let shownDetails = null; // {type: "node"|"link", id} — to re-render on langua
 let lastEvents = null; // cached journal events for re-render
 let activeAlarms = []; // refreshed with the topology — badge and red borders
 let lastAlarms = null; // {active, cleared} cached for the alarms panel
+let lastStp = null; // cached STP report for re-render on language switch
 let flapWindowHours = 2; // from the API, for the FLAP tooltip
 let portsIp = null; // switch whose ports panel is open
 let portsTimer = null; // its 30 s auto-refresh
@@ -134,6 +139,9 @@ function setLang(newLang) {
   }
   if (!els.alarms.classList.contains("hidden") && lastAlarms) {
     renderAlarms();
+  }
+  if (!els.stp.classList.contains("hidden") && lastStp) {
+    renderStp();
   }
 }
 
@@ -379,11 +387,16 @@ function buildGraphData() {
   const edges = [];
 
   for (const sw of topology.switches) {
-    // a switch_down alarm paints the node border red
-    const border = switchHasAlarm(sw.ip) ? colors.alarm : colors.moon;
+    // a switch_down alarm paints the node border red; the root bridge
+    // of a working spanning tree gets a thicker outline
+    const border = switchHasAlarm(sw.ip)
+      ? colors.alarm
+      : sw.stp_root
+      ? colors.ok
+      : colors.moon;
     nodes.push({
       id: "sw:" + sw.ip,
-      label: sw.name + "\n" + sw.ip,
+      label: sw.name + "\n" + sw.ip + (sw.stp_root ? "\n" + t("stpRootMark") : ""),
       shape: "box",
       color: {
         background: colors.panel,
@@ -391,7 +404,7 @@ function buildGraphData() {
         highlight: { background: "#1c2739", border: border },
       },
       font: nodeFont("sw:" + sw.ip),
-      borderWidth: switchHasAlarm(sw.ip) ? 3 : 2,
+      borderWidth: switchHasAlarm(sw.ip) || sw.stp_root ? 3 : 2,
       margin: 10,
     });
   }
@@ -791,6 +804,7 @@ function showDetails(nodeId) {
   els.details.classList.remove("hidden");
   els.journal.classList.add("hidden");
   els.alarms.classList.add("hidden");
+  els.stp.classList.add("hidden");
   closePorts();
   const portsBtn = document.getElementById("ports-btn");
   if (portsBtn) {
@@ -836,6 +850,7 @@ async function openPorts(ip, highlightPort) {
   hideDetails();
   els.journal.classList.add("hidden");
   els.alarms.classList.add("hidden");
+  els.stp.classList.add("hidden");
   await refreshPorts();
   els.ports.classList.remove("hidden");
   clearInterval(portsTimer);
@@ -1040,6 +1055,7 @@ function showLinkDetails(edgeId) {
   els.details.classList.remove("hidden");
   els.journal.classList.add("hidden");
   els.alarms.classList.add("hidden");
+  els.stp.classList.add("hidden");
   closePorts();
 }
 
@@ -1081,6 +1097,7 @@ async function toggleAlarms() {
   await refreshAlarms();
   hideDetails();
   els.journal.classList.add("hidden");
+  els.stp.classList.add("hidden");
   closePorts();
   els.alarms.classList.remove("hidden");
 }
@@ -1177,6 +1194,120 @@ function renderAlarms() {
   section("alarmsCleared", lastAlarms.cleared, false);
 }
 
+/* ---------- STP panel ---------- */
+
+/* "1 h 12 m", or "—" when the switch never reported a change */
+function fmtSince(seconds) {
+  if (seconds == null) return "—";
+  return fmtDuration(seconds);
+}
+
+function stpVerdictText(v) {
+  if (!v || v.verdict === "not_operating") return t("stpVerdictNone");
+  if (v.verdict === "single") {
+    const root = Object.keys(v.roots)[0] || "";
+    return fmt("stpVerdictSingle", { root: root });
+  }
+  return fmt("stpVerdictFragmented", { n: Object.keys(v.roots).length });
+}
+
+function renderStp() {
+  const body = els.stpBody;
+  body.replaceChildren();
+  const data = lastStp || { verdict: null, switches: [] };
+  const verdict = document.createElement("p");
+  verdict.className =
+    "stp-verdict" +
+    (!data.verdict || data.verdict.verdict === "not_operating"
+      ? " none"
+      : data.verdict.verdict === "fragmented"
+      ? " bad"
+      : " ok");
+  verdict.textContent = stpVerdictText(data.verdict);
+  body.append(verdict);
+  const hint = document.createElement("p");
+  hint.className = "hint";
+  hint.textContent = t("stpHint");
+  body.append(hint);
+
+  if (!data.switches.length) {
+    const empty = document.createElement("p");
+    empty.className = "no-alarms";
+    empty.textContent = t("noData");
+    body.append(empty);
+    return;
+  }
+  const table = document.createElement("table");
+  table.className = "ports-table stp-table";
+  const head = document.createElement("tr");
+  for (const key of [
+    "switchLabel", "stpState", "stpPriority", "stpRoot", "stpCost",
+    "stpRootPort", "stpChanges", "stpLastChange",
+  ]) {
+    const th = document.createElement("th");
+    th.textContent = t(key);
+    head.append(th);
+  }
+  const thead = document.createElement("thead");
+  thead.append(head);
+  table.append(thead);
+  const tbody = document.createElement("tbody");
+  for (const sw of data.switches) {
+    const tr = document.createElement("tr");
+    const cells = sw.operating
+      ? [
+          sw.name,
+          sw.is_root ? t("stpStateRoot") : t("stpStateMember"),
+          String(sw.priority),
+          sw.designated_root || "—",
+          String(sw.root_cost),
+          sw.root_port || "—",
+          String(sw.top_changes),
+          fmtSince(sw.time_since_change),
+        ]
+      : // root, cost and root port are meaningless here and are shown
+        // as such rather than as the zeros the switch reports
+        [sw.name, t("stpStateOff"), "—", "—", "—", "—", "—", "—"];
+    cells.forEach((value, i) => {
+      const td = document.createElement("td");
+      td.textContent = value;
+      if (i === 1 && !sw.operating) {
+        td.className = "stp-off";
+        td.title = sw.reason || "";
+      }
+      if (i === 1 && sw.is_root) td.className = "stp-root";
+      tr.append(td);
+    });
+    tbody.append(tr);
+    if (sw.blocking_ports && sw.blocking_ports.length) {
+      const note = document.createElement("tr");
+      const td = document.createElement("td");
+      td.colSpan = 8;
+      td.className = "stp-blocking";
+      td.textContent =
+        t("stpBlocking") + ": " + sw.blocking_ports.join(", ");
+      note.append(td);
+      tbody.append(note);
+    }
+  }
+  table.append(tbody);
+  body.append(table);
+}
+
+async function toggleStp() {
+  if (!els.stp.classList.contains("hidden")) {
+    els.stp.classList.add("hidden");
+    return;
+  }
+  lastStp = await (await fetch("/api/stp")).json();
+  renderStp();
+  hideDetails();
+  closePorts();
+  els.journal.classList.add("hidden");
+  els.alarms.classList.add("hidden");
+  els.stp.classList.remove("hidden");
+}
+
 /* ---------- journal ---------- */
 
 function renderJournal(events) {
@@ -1224,6 +1355,7 @@ async function toggleJournal() {
   hideDetails();
   closePorts();
   els.alarms.classList.add("hidden");
+  els.stp.classList.add("hidden");
   els.journal.classList.remove("hidden");
 }
 
@@ -1272,6 +1404,8 @@ els.alarmsBtn.addEventListener("click", toggleAlarms);
 els.alarmsClose.addEventListener("click", () =>
   els.alarms.classList.add("hidden")
 );
+els.stpBtn.addEventListener("click", toggleStp);
+els.stpClose.addEventListener("click", () => els.stp.classList.add("hidden"));
 els.langRu.addEventListener("click", () => setLang("ru"));
 els.langEn.addEventListener("click", () => setLang("en"));
 

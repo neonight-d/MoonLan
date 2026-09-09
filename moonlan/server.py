@@ -249,6 +249,7 @@ async def run_scan() -> None:
             {sw.ip: sw.sys_name or sw.ip for sw in collected},
         )
         await alarm_engine.on_bridges(bridges, set(config.known_bridges))
+        await alarm_engine.on_stp(stp_report)
         await alarm_engine.on_corruption(
             {f"{sw_ip}:{port}": found
              for (sw_ip, port), found in suspects.items()}
@@ -1153,6 +1154,21 @@ def _alarm_meta(
         if row["type"] not in ("host_down", "new_mac"):
             meta["display"] = meta["switch_name"]
     return meta
+
+
+@app.get("/api/stp")
+async def api_stp() -> dict:
+    """Spanning tree per switch plus the verdict for the network.
+
+    Deliberately flat: whether the switch's tree is operating at all
+    comes first, and root / cost / root port are empty strings for a
+    switch where they would be meaningless.
+    """
+    return state.as_dict()["stp"] or {
+        "verdict": {"verdict": "not_operating", "roots": {}, "operating": [],
+                    "total": 0},
+        "switches": [],
+    }
 
 
 @app.get("/api/alarms")

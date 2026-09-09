@@ -398,3 +398,35 @@ main { flex: 1; display: flex; min-height: 0; }
   main { flex-direction: column; }
   #sidebar { width: 100%; max-height: 40vh; border-right: none; border-bottom: 1px solid var(--line); }
 }
+
+/* STP panel: the verdict first, then the raw per-switch numbers */
+#stp {
+  position: absolute;
+  top: 14px; right: 14px;
+  width: 760px;
+  max-width: calc(100% - 28px);
+  max-height: calc(100% - 28px);
+  overflow: auto;
+  background: var(--bg-panel);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 14px;
+  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.5);
+}
+#stp h3 { margin: 0 0 8px; font-size: 1rem; color: var(--moon); }
+#stp-close {
+  position: absolute; top: 6px; right: 8px;
+  border: none; font-size: 1.1rem; padding: 2px 6px;
+}
+#stp .no-alarms { margin: 0; color: var(--text-dim); font-size: 0.85rem; }
+.stp-verdict { margin: 0 0 6px; font-size: 0.95rem; font-weight: 600; }
+.stp-verdict.ok { color: var(--ok); }
+.stp-verdict.bad { color: var(--warn); }
+.stp-verdict.none { color: var(--text-dim); }
+.stp-table { margin-top: 10px; }
+.stp-table td { white-space: nowrap; }
+.stp-table td.stp-off { color: var(--text-dim); cursor: help; }
+.stp-table td.stp-root { color: var(--ok); font-weight: 600; }
+.stp-table td.stp-blocking {
+  color: #d96b6b; font-size: 0.8rem; white-space: normal;
+}

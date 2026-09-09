@@ -81,6 +81,42 @@ const I18N = {
       + "most likely enabled on the switch, so a neighbour shows up on "
       + "a port it is not attached to. The data is unreliable and is "
       + "not used to draw links.",
+    stpBtn: "STP",
+    stpTitle: "Spanning tree",
+    stpHint:
+      "A switch with STP disabled still answers every dot1dStp* object: "
+      + "priority 0, cost 0 and itself as the root. Root, cost and root "
+      + "port are therefore shown only where the tree demonstrably "
+      + "operates — at least one port enabled and not disabled, and a "
+      + "topology change that actually happened.",
+    stpState: "State",
+    stpStateOff: "not operating",
+    stpStateMember: "in the tree",
+    stpStateRoot: "root bridge",
+    stpPriority: "Priority",
+    stpRoot: "Root",
+    stpCost: "Cost to root",
+    stpRootPort: "Root port",
+    stpChanges: "Topology changes",
+    stpLastChange: "Since the last one",
+    stpRootMark: "STP root",
+    stpBlocking: "BLOCKING",
+    stpBlockingHint:
+      "Spanning tree holds this port in the blocking state: the link "
+      + "exists but carries no user traffic. It is the standby path of "
+      + "a redundant pair.",
+    stpVerdictNone: "STP is not running anywhere in this network",
+    stpVerdictSingle: "One spanning tree, root {root}",
+    stpVerdictFragmented: "The tree is fragmented: {n} separate roots",
+    al_stp_root_changed: "STP root changed",
+    al_stp_topology_change: "STP topology changes",
+    al_stp_fragmented: "STP fragmented",
+    al_port_flapping: "Port flapping",
+    portFlapping: "flapping",
+    portFlappingHint:
+      "The port has changed link state {n} time(s) inside the window; "
+      + "the last transition was {when}. A cable, a connector, a dying "
+      + "transceiver — or someone unplugging it.",
     lagAggregate: "Aggregate (LACP)",
     portsOf: "Ports of {name}",
     lacp: "LACP",
@@ -247,6 +283,42 @@ const I18N = {
       + "включена пересылка LLDP-кадров, и сосед виден не на своём "
       + "порту. Данные ненадёжны и не используются для построения "
       + "связей.",
+    stpBtn: "STP",
+    stpTitle: "Остовное дерево (STP)",
+    stpHint:
+      "Коммутатор с выключенным STP всё равно отвечает на все объекты "
+      + "dot1dStp*: приоритет 0, стоимость 0 и он сам в роли корня. "
+      + "Поэтому корень, стоимость и корневой порт показываются только "
+      + "там, где дерево доказуемо работает: есть включённые и не "
+      + "выключенные порты и реально произошедшее изменение топологии.",
+    stpState: "Состояние",
+    stpStateOff: "не работает",
+    stpStateMember: "участвует",
+    stpStateRoot: "корень",
+    stpPriority: "Приоритет",
+    stpRoot: "Корень",
+    stpCost: "Стоимость до корня",
+    stpRootPort: "Корневой порт",
+    stpChanges: "Изменений топологии",
+    stpLastChange: "С последнего",
+    stpRootMark: "корень STP",
+    stpBlocking: "BLOCKING",
+    stpBlockingHint:
+      "Остовное дерево держит этот порт в состоянии blocking: связь "
+      + "есть, но пользовательский трафик через неё не идёт. Это "
+      + "резервный путь избыточной пары.",
+    stpVerdictNone: "STP в этой сети не работает",
+    stpVerdictSingle: "Единое дерево, корень {root}",
+    stpVerdictFragmented: "Дерево фрагментировано: {n} корней",
+    al_stp_root_changed: "Смена корня STP",
+    al_stp_topology_change: "Изменения топологии STP",
+    al_stp_fragmented: "Фрагментация STP",
+    al_port_flapping: "Флаппинг порта",
+    portFlapping: "флаппинг",
+    portFlappingHint:
+      "Порт менял состояние линка {n} раз(а) за окно; последний переход "
+      + "— {when}. Кабель, разъём, умирающий трансивер — или кто-то "
+      + "выдёргивает шнур.",
     lagAggregate: "Агрегат (LACP)",
     portsOf: "Порты {name}",
     lacp: "LACP",
