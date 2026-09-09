@@ -85,7 +85,10 @@ class StpPort:
 
     @property
     def state_name(self) -> str:
-        return PORT_STATES.get(self.state, str(self.state))
+        # 2b0 answers dot1dStpPortState with 0, which is outside the
+        # enum. Printing the raw number invites it to be read as a
+        # state; it is the absence of one.
+        return PORT_STATES.get(self.state, "n/a")
 
     @property
     def blocking(self) -> bool:

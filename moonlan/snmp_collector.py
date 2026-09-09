@@ -131,6 +131,42 @@ def aggregate_port(sw: SwitchData, if_index: int | None) -> int | None:
     return if_index
 
 
+def _name_stp_ports(data: "SwitchData") -> None:
+    """Gives every dot1dStpPortTable row the port name an operator knows.
+
+    A bridge-port missing from dot1dBasePortIfIndex used to print as
+    "(unmapped)". On D-Link those are exactly the LACP members and the
+    synthetic trunk port the aggregate's FDB lives on — the map already
+    names both, and so should the STP table.
+    """
+    if data.stp is None:
+        return
+    members = {
+        member: bridge_port
+        for bridge_port, group in data.lag_groups.items()
+        for member in group
+    }
+    for entry in data.stp.ports.values():
+        if entry.if_index is not None:
+            entry.name = port_display(data, entry.if_index)
+            continue
+        trunk = data.ports.get(-entry.bridge_port)
+        if entry.bridge_port in data.lag_groups and trunk is not None:
+            entry.if_index = -entry.bridge_port
+            entry.name = trunk.name
+            continue
+        # a member of an aggregate: on these models the bridge-port
+        # number is the member's ifIndex
+        aggregate = members.get(entry.bridge_port)
+        port = data.ports.get(entry.bridge_port)
+        if aggregate is not None and port is not None and port.is_physical:
+            entry.if_index = entry.bridge_port
+            trunk = data.ports.get(-aggregate)
+            entry.name = port.name or str(entry.bridge_port)
+            if trunk is not None:
+                entry.name += f" (in {trunk.name})"
+
+
 def port_display(data: "SwitchData", if_index: int) -> str:
     """Port name as the operator knows it, ifIndex as the fallback."""
     port = data.ports.get(if_index)
@@ -357,9 +393,6 @@ class SnmpCollector:
         # Spanning tree, read with the "disabled STP still answers"
         # trap in mind (see stp.py)
         data.stp = await stp_mod.collect_stp(self, host, port_to_ifindex)
-        for entry in data.stp.ports.values():
-            if entry.if_index is not None:
-                entry.name = port_display(data, entry.if_index)
         data.sys_uptime = data.stp.sys_uptime
 
         # VLANs: port PVIDs (Q-BRIDGE-MIB, indexed by bridge-port) and names
@@ -438,6 +471,8 @@ class SnmpCollector:
                     for s, members in sorted(data.lag_groups.items())
                 ),
             )
+
+        _name_stp_ports(data)
 
         # LLDP comes last on purpose: both halves of it need this
         # switch's own MAC table. Placing a neighbour whose local port
