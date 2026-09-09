@@ -16,7 +16,7 @@ An open-source alternative to LanTopoLog. MIT license.
 
 *Alarm panel: port errors, discards and host outages with one-click access to the switch port table.*
 
-## Features (v0.5.8)
+## Features (v0.6.0)
 
 - SNMP v2c polling of switches: device name, ports, speeds, statuses.
 - MAC address tables (BRIDGE-MIB and Q-BRIDGE-MIB) from every switch,
@@ -82,6 +82,34 @@ An open-source alternative to LanTopoLog. MIT license.
   visible only on trunk ports is drawn on the trunk with the best claim
   to it, marked "approximate" with a dashed edge, instead of
   disappearing into "Not on map" (`place_trunk_only_hosts`).
+- LLDP (LLDP-MIB): every switch's neighbours — chassis id, port, name,
+  model, management address and capabilities. Where two polled switches
+  announce each other, the link and both its ports come from LLDP and
+  the link card says so; every link carries a source (`lldp`, `fdb` or
+  `both`), because "the two devices told us" and "we worked it out from
+  the MAC tables" are not the same claim. See "LLDP" below.
+- Switches nobody polls, by name: an LLDP neighbour with the `bridge`
+  capability behind one of your ports becomes a named node with its
+  model and a clickable management address, replacing the anonymous
+  "switch without SNMP" on that port and inheriting its devices. A new
+  `unmanaged_bridge_detected` alarm fires when one turns up behind a
+  port that is not a trunk; `known_bridges` suppresses it for the ones
+  that belong there.
+- Honest spanning-tree status: a switch with STP disabled still answers
+  every `dot1dStp*` object — priority 0, cost 0, itself as the root —
+  and MoonLan refuses to draw a root out of that. The "STP" panel gives
+  the network verdict first (not running / fragmented into N roots /
+  one tree with root X), then the raw per-switch numbers; blocking
+  ports are dashed red edges labelled BLOCKING and the root bridge is
+  outlined. Alarms `stp_root_changed`, `stp_topology_change` and
+  `stp_fragmented` fire only for switches whose tree actually operates.
+  See "STP status" below.
+- Port flapping: `ifLastChange` is read alongside `ifOperStatus`, so a
+  link that bounces several times between two counter polls is counted
+  rather than missed. `port_flapping` fires at
+  `thresholds.flaps_per_window` transitions inside
+  `thresholds.flap_window_minutes`, and the ports panel marks the port
+  with the count and the time of the last transition.
 - Port traffic and error monitoring: a light counters poll (ifHC* octets
   with a 32-bit fallback, errors, discards) turns deltas into Mbit/s and
   errors/min per port. The "Ports" panel of a switch shows live rates;
@@ -132,7 +160,8 @@ An open-source alternative to LanTopoLog. MIT license.
 | v0.3 ✓  | Ping monitoring, journal of new MAC addresses, last-reply time, host IPs and names (ARP/DNS) |
 | v0.4 ✓  | Accurate link inference, LACP, VLAN, unmanaged switches |
 | v0.5 ✓  | Alerts and notifications: email, Telegram, Syslog; traffic thresholds; port error counters (ifInErrors etc.) |
-| v0.6    | Spanning Tree monitoring, topology change notifications |
+| v0.6 ✓  | LLDP neighbours and link verification, unmanaged bridge detection, honest STP status, port flapping |
+| v0.6.1  | Loop Detection from the private D-Link/HPE MIBs |
 | v0.7    | Export to PDF and Draw.io, MAC address info import |
 | v0.8    | Windows computer inventory (WMI/WinRM) |
 
@@ -193,6 +222,9 @@ filter_suspect_macs: true    # keep damaged copies of a real address off
                              # the map (false — draw them)
 place_trunk_only_hosts: true # a MAC seen only on trunks is drawn there,
                              # marked "approximate"
+known_bridges: []            # bridges that are supposed to be behind an
+                             # access port (chassis id or management IP):
+                             # found and named, but never alarmed on
 
 thresholds:
   errors_per_minute: 5           # port_errors: damaged frames only
@@ -207,6 +239,10 @@ thresholds:
                                  # on the same port and still be its copy
   corruption_macs_threshold: 5   # copies on one port within the flap
                                  # window -> port_frame_corruption
+  stp_changes_per_cycle: 3       # stp_topology_change: topology changes
+                                 # per scan on an operating switch
+  flaps_per_window: 4            # port_flapping: link state transitions…
+  flap_window_minutes: 10        # …inside this window
 
 notifications:
   cooldown_seconds: 300      # anti-spam per (alarm type, subject)
@@ -238,6 +274,11 @@ alarm_notify:                # which alarm types go to which channels
   port_discards: [syslog]
   port_util: [telegram, syslog]
   new_mac: [syslog]
+  unmanaged_bridge_detected: [telegram, syslog]
+  stp_root_changed: [telegram, syslog]
+  stp_topology_change: [telegram, syslog]
+  stp_fragmented: [telegram, syslog]
+  port_flapping: [telegram, syslog]
 ```
 
 All new sections are optional — an old config without them keeps
@@ -301,8 +342,15 @@ The service generates a virtual network — a star of five switches with
 LACP, VLANs, an unmanaged switch and a couple dozen hosts. The demo
 also exercises the monitoring: live traffic curves on ports, one port
 with growing errors (a port_errors alarm within a couple of minutes),
-a host_down that raises and clears, new devices on a rescan. Instead
-of sending anything, notifications are logged as `NOTIFY (demo): …`.
+a host_down that raises and clears, new devices on a rescan. It also
+covers everything v0.6 added: a switch the MAC tables cannot place at
+all and LLDP can (a link with source `lldp`), a named MikroTik bridge
+behind an access port with its `unmanaged_bridge_detected` alarm, a
+port carrying forwarded LLDP frames, a neighbour with its optional
+TLVs switched off, a spanning tree with a root and a blocking port
+next to a switch whose STP is off but still reports itself as root,
+and a port that flaps on every cycle. Instead of sending anything,
+notifications are logged as `NOTIFY (demo): …`.
 
 ### Diagnostics
 
@@ -467,6 +515,114 @@ the candidate set. A device that never gets an IP and sits near another
 one can be flagged — `filter_suspect_macs: false` draws such addresses
 anyway, and `--fdb` always shows what was matched against what.
 
+### LLDP
+
+```bash
+python -m moonlan.diag --topology   # neighbours, sources, mismatches
+```
+
+MAC tables say which addresses are reachable through a port. They never
+say what the device on the other end is. LLDP says both, which is why
+v0.6 reads it:
+
+- **Links become statements.** Where two polled switches announce each
+  other, the link and the ports on both ends come from LLDP, not from
+  inference. Every link carries `source`: `lldp`, `fdb` or `both`, and
+  the link card names it. This matters most in networks with one-way
+  visibility, where an access switch never sees the core in its MAC
+  table and the uplink port could only ever be a guess.
+- **Bridges get names.** A neighbour with the `bridge` capability whose
+  chassis id belongs to no polled switch is a switch nobody polls. It
+  becomes a node with its name, model and management address instead of
+  an anonymous "switch without SNMP" — or instead of nothing at all,
+  where too few devices sat behind it to trip `unmanaged_threshold`.
+
+Two cautions are built in, both learned the hard way:
+
+**LLDP frame forwarding.** Some switches can be told to re-transmit
+foreign LLDP frames (`LLDP Forward Message` on D-Link DES-1210). A
+neighbour then shows up on a port it is not attached to, and two
+devices show up on one port. MoonLan detects this — several neighbours
+on one local port, or one chassis id on several ports of the same
+switch — marks the port in the ports panel with an explanation, and
+uses none of that data to draw links. If you see the mark, turn the
+setting off: it is not doing anything useful for you either.
+
+**A missing capability proves nothing.** LLDP's System Name,
+Description and Capabilities are optional TLVs, and some devices ship
+with them disabled (D-Link DES-3526 does). Such a neighbour appears as
+an unidentified LLDP device — shown on the map, never alarmed on. The
+absence of the `bridge` flag is not evidence that the device is not a
+switch.
+
+Where LLDP and the MAC tables disagree, LLDP wins and the disagreement
+is recorded: `diag --topology` prints an "LLDP vs FDB mismatches"
+section, and the same lines go to the log at INFO. Nothing is quietly
+"fixed".
+
+### STP status
+
+```bash
+python -m moonlan.diag --stp        # raw dot1dStp* next to the verdict
+```
+
+MoonLan may tell you STP is not running on a switch that other tools
+show as a root bridge with a priority and a cost. It is not being
+coy — the other tools are reading placeholders.
+
+A switch with spanning tree **disabled** still answers every
+`dot1dStp*` object. It reports priority 0, root cost 0 and, most
+misleadingly, itself as the designated root. Read at face value, five
+such switches become five root bridges of five trees. That is exactly
+the false diagnosis this project started from.
+
+So root, cost and root port are used only for a switch that passes all
+three tests:
+
+1. at least one port has `dot1dStpPortEnable` = enabled(1);
+2. at least one port is in a state other than disabled(1);
+3. the tree demonstrably converged at some point — either
+   `dot1dStpTopChanges` > 0, or `dot1dStpTimeSinceTopologyChange` is
+   meaningfully younger than `sysUpTime` (a change happened after
+   boot).
+
+Anything else reads **not operating**, and the reported root, cost and
+root port are shown as dashes rather than as the zeros the switch
+offers. The reason is kept and printed by `diag --stp`, so the verdict
+can be checked rather than believed.
+
+The network verdict on top of the panel is one of three:
+
+- **STP is not running in this network** — no switch passes the tests;
+- **one spanning tree, root X** — every operating switch agrees;
+- **fragmented: N roots** — operating switches follow different roots,
+  which happens when segments are isolated from each other's BPDUs.
+  Held for two scans before `stp_fragmented` is raised: a converging
+  tree passes through disagreement on its way to agreement.
+
+A partial tree is a normal state here, not an error. Bridges that
+answer no SNMP (the MikroTik boxes behind the access ports) take part
+in spanning tree without appearing in any of these numbers, and the map
+says so through the LLDP bridge nodes instead.
+
+`stp_root_changed`, `stp_topology_change` and `stp_fragmented` are
+raised for operating switches only. A switch that stops operating drops
+its remembered root, so coming back does not read as a root change.
+
+### Walking an arbitrary MIB
+
+```bash
+python -m moonlan.diag --walk 10.0.0.10 1.3.6.1.4.1.171 --limit 200
+```
+
+Dumps any OID subtree: raw OID, SNMP type, the value as text and, where
+it is not text, as hex. It exists for exploring private MIBs before
+writing anything against them — D-Link lives under `1.3.6.1.4.1.171`
+and HPE under `1.3.6.1.4.1.11`, and that is where the Loopback
+Detection state sits that the next version turns into a `loop_detected`
+alarm. The default 500-row ceiling keeps a stray subtree from being
+downloaded whole.
+
 ## How it works
 
 1. MoonLan polls every switch from `config.yaml` via SNMP: `sysName`,
@@ -497,10 +653,16 @@ anyway, and `--fdb` always shows what was matched against what.
    evaluates the rules after every ping/scan/counters cycle, stores
    alarms in SQLite, mirrors transitions into the journal and routes
    notifications to email/Telegram/Syslog with a cooldown.
-8. Hosts, the event journal and alarms are stored in SQLite
+8. LLDP is polled in the same cycle. Neighbours are resolved against
+   the local port table (`lldpRemLocalPortNum` is not an ifIndex), ports
+   carrying forwarded LLDP frames are excluded, links both devices
+   announce override the inference, and neighbours with the `bridge`
+   capability that belong to no polled switch become named nodes.
+   BRIDGE-MIB `dot1dStp*` is read alongside and judged before use.
+9. Hosts, the event journal and alarms are stored in SQLite
    (`moonlan.db`), so `first_seen` and history survive restarts.
-9. The result is available through the REST API (`/api/topology`)
-   and in the web UI.
+10. The result is available through the REST API (`/api/topology`)
+    and in the web UI.
 
 ## Project structure
 
@@ -515,6 +677,8 @@ MoonLan/
 │   ├── topology.py         # topology inference
 │   ├── counters.py         # port traffic/error counters and rates
 │   ├── corruption.py       # damaged copies of a real MAC on one port
+│   ├── lldp.py             # LLDP neighbours, capabilities, forwarding guard
+│   ├── stp.py              # BRIDGE-MIB dot1dStp* and the "is it running" verdict
 │   ├── alarms.py           # stateful alarm engine
 │   ├── notify.py           # email/Telegram/Syslog notifications
 │   ├── db.py               # SQLite: hosts, event journal, alarms
@@ -530,8 +694,9 @@ MoonLan/
 
 | Method | Path              | Description |
 |--------|-------------------|-------------|
-| GET    | `/api/topology`   | Current topology: nodes, links (ports, LACP, current load), hosts (IP, name, ping, VLAN, `stale`), `unlocated` (known devices on no port), `pseudo_switches`, `vlan_names` |
-| GET    | `/api/switch/{ip}/ports` | Port table of a switch: status, speed, PVID, LAG, In/Out Mbit/s, errors and discards per minute, known devices |
+| GET    | `/api/topology`   | Current topology: nodes, links (ports, LACP, current load), hosts (IP, name, ping, VLAN, `stale`), `unlocated` (known devices on no port), `pseudo_switches`, `bridges` (switches found by LLDP that nobody polls), `vlan_names` |
+| GET    | `/api/switch/{ip}/ports` | Port table of a switch: status, speed, PVID, LAG, In/Out Mbit/s, errors and discards per minute, known devices, LLDP neighbours, link flaps |
+| GET    | `/api/stp`        | Spanning tree per switch plus the verdict for the network |
 | GET    | `/api/alarms?active=1\|0&limit=50` | Active or recently cleared alarms |
 | PATCH  | `/api/host/{mac}` | Set the host's monitoring flag: `{"monitored": true\|false}` |
 | POST   | `/api/alarms/{id}/clear` | Manually clear one active alarm |

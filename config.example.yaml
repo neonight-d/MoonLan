@@ -109,6 +109,16 @@ filter_suspect_macs: true
 # «приблизительно»; false — не показывать на карте.
 place_trunk_only_hosts: true
 
+# Bridges that are supposed to be behind an access port: LLDP finds
+# them, the map names them, but no unmanaged_bridge_detected alarm is
+# raised. List a chassis id (MAC) or a management IP address.
+# Мосты, которым положено стоять за портом доступа: LLDP их находит,
+# карта показывает по имени, но тревога unmanaged_bridge_detected по
+# ним не поднимается. Указывайте chassis id (MAC) или управляющий IP.
+known_bridges: []
+#  - 18:fd:74:fd:b5:cf
+#  - 10.3.5.6
+
 # Alarm thresholds / Пороги тревог
 thresholds:
   # Errors are damaged frames (cable, duplex, transceiver) — rare and
@@ -139,6 +149,25 @@ thresholds:
   # notifications.flap_window_seconds поднимают port_frame_corruption.
   corruption_hamming_bits: 8
   corruption_macs_threshold: 5
+  # Spanning tree. A converging tree produces a handful of topology
+  # changes; a flapping link produces a stream. Raised only for
+  # switches whose tree actually operates — a switch with STP off
+  # still answers dot1dStp* and names itself root.
+  # Остовное дерево. Сходящееся дерево даёт единицы изменений
+  # топологии, «дребезжащая» связь — поток. Тревоги поднимаются только
+  # по коммутаторам, у которых дерево реально работает: с выключенным
+  # STP коммутатор всё равно отвечает на dot1dStp* и называет корнем
+  # себя.
+  stp_changes_per_cycle: 3       # stp_topology_change: changes per scan
+                                 # изменений топологии за один опрос
+  # Port flapping. A port can bounce several times between two counter
+  # polls, so ifLastChange is read alongside ifOperStatus.
+  # Флаппинг порта. Порт может несколько раз «моргнуть» между двумя
+  # опросами счётчиков, поэтому вместе с ifOperStatus читается
+  # ifLastChange.
+  flaps_per_window: 4            # port_flapping: link transitions
+                                 # переходов состояния линка
+  flap_window_minutes: 10        # …inside this window / …за это окно
   mass_down_hosts: 3             # port_hosts_down: devices (unique IPs)
                                  # of one port gone silent in one ping
                                  # cycle (0 — disable)
@@ -189,3 +218,8 @@ alarm_notify:
   port_hosts_down: [email, telegram, syslog]
   lag_degraded: [telegram, syslog]
   port_frame_corruption: [telegram, syslog]
+  unmanaged_bridge_detected: [telegram, syslog]
+  stp_root_changed: [telegram, syslog]
+  stp_topology_change: [telegram, syslog]
+  stp_fragmented: [telegram, syslog]
+  port_flapping: [telegram, syslog]
