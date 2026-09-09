@@ -332,14 +332,21 @@ def demo_network() -> list[SwitchData]:
 def _neighbor(
     if_index: int, chassis_id: str, port_id: str, *,
     sys_name: str = "", sys_desc: str = "", caps: set[str] | None = None,
-    mgmt_ip: str = "", cap_known: bool = True,
+    mgmt_ip: str = "", mgmt_ips: list[str] | None = None,
+    cap_known: bool = True, matched_by: str = "loc_id",
 ) -> LldpNeighbor:
+    addresses = mgmt_ips if mgmt_ips is not None else (
+        [mgmt_ip] if mgmt_ip else []
+    )
     return LldpNeighbor(
         local_ifindex=if_index, local_port_num=if_index,
+        port_matched_by=matched_by,
         chassis_id=chassis_id, chassis_subtype=4,
         port_id=port_id, port_subtype=5,
         sys_name=sys_name, sys_desc=sys_desc,
-        cap_enabled=caps or set(), cap_known=cap_known, mgmt_ip=mgmt_ip,
+        cap_enabled=caps or set(), cap_known=cap_known,
+        mgmt_ip=addresses[0] if addresses else "",
+        mgmt_ips=list(addresses),
     )
 
 

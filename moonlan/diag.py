@@ -379,15 +379,18 @@ async def run_topology_view(community: str, timeout: int, cfg) -> None:
         for neighbor in sw.lldp_neighbors:
             any_lldp = True
             where = (
-                port_name(sw.ip, neighbor.local_ifindex)
+                f"{port_name(sw.ip, neighbor.local_ifindex)}"
+                f" via {neighbor.port_matched_by}"
                 if neighbor.local_ifindex is not None
                 else f"lldpLocPortNum {neighbor.local_port_num} (UNMATCHED)"
             )
             caps = ", ".join(sorted(neighbor.cap_enabled)) or "no capabilities TLV"
-            flag = (
-                "  <- LLDP forwarding suspected, not used for links"
-                if neighbor.local_ifindex in sw.lldp_forwarded else ""
-            )
+            if neighbor.local_ifindex in sw.lldp_forwarded:
+                flag = "  <- did not come from this cable, not used for links"
+            elif neighbor.local_ifindex in sw.lldp_crowded:
+                flag = "  <- several devices on this port, no link inferred"
+            else:
+                flag = ""
             print(
                 f"  {label(sw.ip)} [{where}] -> "
                 f"{neighbor.sys_name or neighbor.chassis_id} "
@@ -402,7 +405,14 @@ async def run_topology_view(community: str, timeout: int, cfg) -> None:
     if not mismatches:
         print("  none — every LLDP-confirmed link matches the inference")
     for m in mismatches:
-        if m["kind"] == "ports":
+        if m["kind"] == "weak_port":
+            print(
+                f"  {label(m['side'])}: LLDP puts the link on "
+                f"{m['lldp_ports'][0]}, but only from lldpRemLocalPortNum "
+                f"({m['matched_by']}); the MAC tables say "
+                f"{m['fdb_ports'][0]} and are taken instead"
+            )
+        elif m["kind"] == "ports":
             print(
                 f"  {label(m['a'])} — {label(m['b'])}: LLDP says "
                 f"{m['lldp_ports'][0]}/{m['lldp_ports'][1]}, the MAC tables "

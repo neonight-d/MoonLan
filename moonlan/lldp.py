@@ -71,6 +71,12 @@ class LldpNeighbor:
 
     local_ifindex: int | None       # None — the local port was not matched
     local_port_num: int             # lldpRemLocalPortNum, as reported
+    # How local_ifindex was arrived at: "loc_id" / "loc_desc" from the
+    # local port table, "fdb" from this switch's own MAC table, "num"
+    # from lldpRemLocalPortNum taken as an ifIndex. The last is a
+    # convention that happens to hold on most agents, not a fact, so
+    # links built on it must not override the MAC tables.
+    port_matched_by: str = ""
     chassis_id: str = ""            # normalized MAC when subtype = macAddress
     chassis_subtype: int = 0
     port_id: str = ""
@@ -173,46 +179,89 @@ def match_local_port(
     port_desc: str,
     port_names: dict[str, int],
     if_indexes: set[int],
-) -> int | None:
-    """lldpRemLocalPortNum -> ifIndex, or None when nothing matches.
+    fdb_port: int | None = None,
+) -> tuple[int | None, str]:
+    """lldpRemLocalPortNum -> (ifIndex, how it was found).
 
-    port_names maps a lowercased port name (ifName, ifDescr, the port
-    MAC) to its ifIndex. The local port number is tried last: on many
-    agents it coincides with the ifIndex, but assuming that up front
-    would silently attach neighbours to the wrong ports elsewhere.
+    Order of preference, strongest evidence first:
+
+    1. `lldpLocPortId` / `lldpLocPortDesc` matched against our own port
+       table — the switch naming its own port;
+    2. this switch's MAC table: the neighbour's chassis address is
+       behind a port of ours, and a forwarding table is hard evidence;
+    3. `lldpRemLocalPortNum` read as an ifIndex. On most agents the two
+       coincide, but that is a convention, not a rule, which is why the
+       result is labelled and treated as the weakest of the three.
     """
-    for candidate in (port_id, port_desc):
+    for candidate, how in ((port_id, "loc_id"), (port_desc, "loc_desc")):
         key = (candidate or "").strip().lower()
-        if key and key in port_names:
-            return port_names[key]
+        if not key:
+            continue
+        if key in port_names:
+            return port_names[key], how
         if key.isdigit() and int(key) in if_indexes:
-            return int(key)
+            return int(key), how
+    if fdb_port is not None:
+        return fdb_port, "fdb"
     if port_num in if_indexes:
-        return port_num
-    return None
+        return port_num, "num"
+    return None, ""
 
 
 def build_port_names(ports, phys_addr: dict[int, str]) -> dict[str, int]:
-    """Everything a switch may call its own port -> ifIndex."""
+    """Everything a switch may call its own port -> ifIndex.
+
+    A value that leads to two different ports is thrown away rather
+    than resolved to whichever came first. That single line is what
+    put all seven of the HPE 1820's LLDP neighbours on port 1: the
+    1820 answers `lldpLocPortId` with one system MAC on all 26 ports,
+    so the first port holding that address won every lookup.
+    """
     names: dict[str, int] = {}
+    ambiguous: set[str] = set()
     for if_index, port in ports.items():
         if if_index < 0:
             continue  # synthetic bridge-port, not a real interface
         for key in (port.name, str(if_index), phys_addr.get(if_index, "")):
             key = (key or "").strip().lower()
-            if key:
-                names.setdefault(key, if_index)
+            if not key:
+                continue
+            if names.setdefault(key, if_index) != if_index:
+                ambiguous.add(key)
+    for key in ambiguous:
+        del names[key]
     return names
 
 
+def usable_local_ids(loc_id: dict[int, str], subtype: dict[int, int]) -> bool:
+    """False when lldpLocPortId carries no per-port information.
+
+    The HPE 1820 reports subtype macAddress and the same system MAC for
+    every port. Matching on a value that is identical everywhere places
+    every neighbour on whichever port that value happens to resolve to.
+    """
+    values = {value for value in loc_id.values() if value}
+    return not (len(loc_id) > 1 and len(values) <= 1)
+
+
 async def collect_lldp(
-    collector, host: str, port_names: dict[str, int], if_indexes: set[int]
-) -> list[LldpNeighbor]:
+    collector,
+    host: str,
+    port_names: dict[str, int],
+    if_indexes: set[int],
+    fdb: dict[str, int] | None = None,
+) -> tuple[list[LldpNeighbor], dict[int, str]]:
     """Walks lldpRemTable of one switch and resolves the local ports.
 
-    A switch without LLDP simply yields nothing — the walks return no
-    rows and the caller gets an empty list.
+    Returns (neighbours, port labels): `lldpLocPortDesc` carries the
+    administrative name an operator typed into the switch ("Library",
+    "403 audit" on the 1820), which is worth showing next to the port.
+
+    `fdb` is this switch's MAC table, used to place a neighbour whose
+    local port the LLDP tables cannot identify. A switch without LLDP
+    simply yields nothing — the walks return no rows.
     """
+    fdb = fdb or {}
     # 1. Our own port table: lldpLocPortNum -> what this port is called
     loc_id: dict[int, str] = {}
     loc_subtype: dict[int, int] = {}
@@ -225,6 +274,24 @@ async def collect_lldp(
         )
     async for suffix, value in collector._walk(host, OID_LLDP_LOC_PORT_DESC):
         loc_desc[suffix[0]] = _printable(_as_bytes(value))
+    if not usable_local_ids(loc_id, loc_subtype):
+        log.info(
+            "%s: lldpLocPortId is the same on all %d local ports — it "
+            "says nothing about which port is which, so neighbours are "
+            "placed by port number and by the MAC table instead",
+            host, len(loc_id),
+        )
+        loc_id = {}
+
+    # Administrative port names an operator typed into the switch.
+    # They belong to lldpLocPortNum, which is an ifIndex on every agent
+    # seen so far; a number that is not one of our ifIndexes is skipped
+    # rather than guessed at.
+    port_labels = {
+        port_num: label
+        for port_num, label in loc_desc.items()
+        if label and port_num in if_indexes
+    }
 
     # 2. The remote table, one entry per (timeMark, localPort, remIndex)
     rows: dict[tuple[int, ...], dict] = {}
@@ -268,16 +335,18 @@ async def collect_lldp(
         chassis_subtype = data.get("chassis_subtype", 0)
         port_subtype = data.get("port_subtype", 0)
         cap_raw = data.get("cap_raw")
+        chassis_id = normalize_id(
+            chassis_subtype, data.get("chassis_raw", b""), CHASSIS_SUBTYPE_MAC
+        )
+        if_index, matched_by = match_local_port(
+            port_num, loc_id.get(port_num, ""), loc_desc.get(port_num, ""),
+            port_names, if_indexes, fdb.get(chassis_id),
+        )
         neighbor = LldpNeighbor(
-            local_ifindex=match_local_port(
-                port_num, loc_id.get(port_num, ""), loc_desc.get(port_num, ""),
-                port_names, if_indexes,
-            ),
+            local_ifindex=if_index,
+            port_matched_by=matched_by,
             local_port_num=port_num,
-            chassis_id=normalize_id(
-                chassis_subtype, data.get("chassis_raw", b""),
-                CHASSIS_SUBTYPE_MAC,
-            ),
+            chassis_id=chassis_id,
             chassis_subtype=chassis_subtype,
             port_id=normalize_id(
                 port_subtype, data.get("port_raw", b""), PORT_SUBTYPE_MAC
@@ -302,7 +371,7 @@ async def collect_lldp(
             "not be matched to an interface — not used for links",
             host, unmatched, len(neighbors),
         )
-    return neighbors
+    return neighbors, port_labels
 
 
 def analyse_ports(

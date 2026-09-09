@@ -430,3 +430,10 @@ main { flex: 1; display: flex; min-height: 0; }
 .stp-table td.stp-blocking {
   color: #d96b6b; font-size: 0.8rem; white-space: normal;
 }
+
+/* lldpLocPortDesc — the operator's own name for the port */
+.port-label {
+  color: var(--text-dim);
+  font-style: italic;
+  font-family: system-ui, sans-serif;
+}

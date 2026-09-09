@@ -333,6 +333,7 @@ def lldp_link_candidates(
             entry[sw.ip] = {
                 "if_index": local,
                 "name": port_name(sw, local),
+                "matched_by": neighbor.port_matched_by,
             }
             # what this switch says the far end's port is — used only
             # when the far end does not report the link itself
@@ -344,7 +345,11 @@ def lldp_link_candidates(
                 remote_name = port_name(other, remote_index)
             entry.setdefault(
                 "remote:" + other.ip,
-                {"if_index": remote_index, "name": remote_name},
+                {
+                    "if_index": remote_index,
+                    "name": remote_name,
+                    "matched_by": "remote",
+                },
             )
     resolved: dict[frozenset, dict] = {}
     for key, entry in candidates.items():
@@ -416,6 +421,7 @@ def detect_bridges(
                 "switch": sw.ip,
                 "port": port_name(sw, if_index),
                 "remote_port": neighbor.port_id or neighbor.port_desc,
+                "port_matched_by": neighbor.port_matched_by,
                 "capabilities": sorted(neighbor.cap_enabled),
                 "lldp_forwarded": forwarded,
                 "trunk": is_trunk,
@@ -669,7 +675,27 @@ def merge_lldp_links(
         matched.add(key)
         link["source"] = "both"
         was = (link["a_port"], link["b_port"])
-        now = (sides[link["a"]]["name"], sides[link["b"]]["name"])
+        now = []
+        for side in ("a", "b"):
+            reported = sides[link[side]]
+            # A port taken from lldpRemLocalPortNum is a convention, not
+            # a statement; where the MAC tables say otherwise they win.
+            # This is the HPE 1820 insurance: it named port 1 for a
+            # neighbour the forwarding table clearly had on port 24.
+            weak = reported.get("matched_by") in ("num", "remote", "")
+            if weak and reported["name"] != link[f"{side}_port"]:
+                mismatches.append({
+                    "kind": "weak_port",
+                    "a": link["a"], "b": link["b"],
+                    "fdb_ports": (link[f"{side}_port"],),
+                    "lldp_ports": (reported["name"],),
+                    "side": link[side],
+                    "matched_by": reported.get("matched_by") or "unmatched",
+                })
+                now.append(link[f"{side}_port"])
+            else:
+                now.append(reported["name"])
+        now = tuple(now)
         if was != now:
             mismatches.append({
                 "kind": "ports",
@@ -702,7 +728,15 @@ def merge_lldp_links(
             "lldp_ports": (link["a_port"], link["b_port"]),
         })
     for m in mismatches:
-        if m["kind"] == "ports":
+        if m["kind"] == "weak_port":
+            log.info(
+                "LLDP vs FDB: %s reports port %s for the link to its "
+                "neighbour, but only from lldpRemLocalPortNum (%s); the "
+                "MAC tables say %s and are taken instead",
+                m["side"], m["lldp_ports"][0], m["matched_by"],
+                m["fdb_ports"][0],
+            )
+        elif m["kind"] == "ports":
             log.info(
                 "LLDP vs FDB: %s—%s is on %s/%s per LLDP, the MAC tables "
                 "suggested %s/%s — LLDP wins",

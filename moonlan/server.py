@@ -1139,6 +1139,8 @@ async def api_switch_ports(ip: str) -> dict:
             # several devices behind one port is not forwarding, it is
             # an unmanaged switch on the cable
             "lldp_crowded": p.if_index in sw.lldp_crowded,
+            # the administrative name an operator typed into the switch
+            "label": sw.port_labels.get(p.if_index, ""),
         })
     # active ports first, then by port number
     ports.sort(key=lambda p: (not p["oper_up"], abs(p["if_index"])))

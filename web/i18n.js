@@ -87,6 +87,7 @@ const I18N = {
       + "switch sits on the cable. They are all real and all shown — "
       + "but which of them is on the cable itself cannot be told, so no "
       + "link is drawn from this port.",
+    portLabelName: "Port name configured on the switch (LLDP)",
     lldpNeighbour: "LLDP neighbour",
     lldpForwarded: "LLDP forwarded",
     lldpForwardedHint:
@@ -303,6 +304,7 @@ const I18N = {
       + "стоит неуправляемый коммутатор. Все они настоящие и все "
       + "показаны, но какое именно на кабеле — определить нельзя, "
       + "поэтому связь по этому порту не строится.",
+    portLabelName: "Подпись порта, заданная на коммутаторе (LLDP)",
     lldpNeighbour: "Сосед по LLDP",
     lldpForwarded: "пересылка LLDP",
     lldpForwardedHint:
