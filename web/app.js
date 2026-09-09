@@ -969,6 +969,15 @@ function renderPorts(data) {
       }
       const nameCell = document.createElement("td");
       nameCell.textContent = name;
+      // lldpLocPortDesc: what the operator called this port on the
+      // switch itself ("Library", "403 audit")
+      if (p.label) {
+        const label = document.createElement("span");
+        label.className = "port-label";
+        label.textContent = p.label;
+        label.title = t("portLabelName");
+        nameCell.append(" ", label);
+      }
       // addresses this port's damaged frames invented, with the real
       // one each of them is a distortion of
       if (p.flaps) {

@@ -99,6 +99,9 @@ class SwitchData:
     lldp_neighbors: list = field(default_factory=list)
     lldp_forwarded: set[int] = field(default_factory=set)
     lldp_crowded: set[int] = field(default_factory=set)
+    # lldpLocPortDesc: the administrative port name an operator typed
+    # into the switch ("Library", "403 audit")
+    port_labels: dict[int, str] = field(default_factory=dict)
     # Spanning tree as the switch reports it, verdict included
     stp: object | None = None
     sys_uptime: int = 0  # sysUpTime in TimeTicks, for the STP verdict
@@ -351,15 +354,6 @@ class SnmpCollector:
         async for suffix, value in self._walk(host, OID_PORT_IFINDEX):
             port_to_ifindex[suffix[0]] = int(value)
 
-        # LLDP: who the neighbours actually are. The local port table is
-        # resolved against our own interfaces here, because that is the
-        # only place where both are known.
-        data.lldp_neighbors = await lldp_mod.collect_lldp(
-            self, host,
-            lldp_mod.build_port_names(data.ports, phys_addr),
-            set(data.ports),
-        )
-
         # Spanning tree, read with the "disabled STP still answers"
         # trap in mind (see stp.py)
         data.stp = await stp_mod.collect_stp(self, host, port_to_ifindex)
@@ -445,9 +439,17 @@ class SnmpCollector:
                 ),
             )
 
-        # Which LLDP data can be trusted is decided here, at the end:
-        # the forwarding test compares a neighbour against this
-        # switch's own MAC table, which does not exist until now
+        # LLDP comes last on purpose: both halves of it need this
+        # switch's own MAC table. Placing a neighbour whose local port
+        # the LLDP tables cannot identify uses the table, and so does
+        # deciding whether a frame arrived on the cable or was
+        # forwarded onto it from somewhere else.
+        data.lldp_neighbors, data.port_labels = await lldp_mod.collect_lldp(
+            self, host,
+            lldp_mod.build_port_names(data.ports, phys_addr),
+            set(data.ports),
+            data.fdb,
+        )
         data.lldp_forwarded, data.lldp_crowded = lldp_mod.analyse_ports(
             data.lldp_neighbors,
             lambda if_index: aggregate_port(data, if_index),
