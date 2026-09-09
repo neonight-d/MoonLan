@@ -399,15 +399,26 @@ function buildGraphData() {
   for (const link of topology.links) {
     const isLacp = link.lag && link.lag.count > 1;
     const isTrunk = link.lag && link.lag.trunk;
-    edges.push({
+    // LLDP-confirmed links are drawn solid and at full strength: both
+    // devices named each other, there is nothing being guessed at
+    const confirmed = link.source === "lldp" || link.source === "both";
+    const edge = {
       id: linkId(link),
       from: "sw:" + link.a,
       to: "sw:" + link.b,
       label: linkLabel(link),
-      color: { color: colors.moon, opacity: 0.8 },
+      color: { color: colors.moon, opacity: confirmed ? 1 : 0.8 },
       width: isLacp ? 5 : isTrunk ? 4 : 3,
       font: { color: colors.dim, size: 11, strokeWidth: 0 },
-    });
+      dashes: false,
+    };
+    // a port STP is holding in discarding carries no traffic at all
+    if (link.stp_blocking) {
+      edge.color = { color: colors.alarm, opacity: 1 };
+      edge.dashes = [6, 4];
+      edge.label = (edge.label ? edge.label + " · " : "") + t("stpBlocking");
+    }
+    edges.push(edge);
   }
 
   for (const ps of topology.pseudo_switches || []) {
@@ -876,6 +887,31 @@ function renderPorts(data) {
       nameCell.textContent = name;
       // addresses this port's damaged frames invented, with the real
       // one each of them is a distortion of
+      const neighbours = p.lldp || [];
+      if (neighbours.length) {
+        const chip = document.createElement("span");
+        chip.className = "chip" + (p.lldp_forwarded ? " warn" : "");
+        const first = neighbours[0];
+        chip.textContent =
+          "⇄ " + (first.sys_name || first.chassis_id) +
+          (neighbours.length > 1 ? " +" + (neighbours.length - 1) : "");
+        chip.title =
+          neighbours
+            .map((n) =>
+              [
+                t("lldpNeighbour") + ": " + (n.sys_name || n.chassis_id),
+                n.port_id ? t("portLabel") + " " + n.port_id : "",
+                n.mgmt_ip,
+                (n.capabilities || []).join(", "),
+                n.sys_desc,
+              ]
+                .filter(Boolean)
+                .join(" · ")
+            )
+            .join("\n") +
+          (p.lldp_forwarded ? "\n\n" + t("lldpForwardedHint") : "");
+        nameCell.append(" ", chip);
+      }
       const suspect = p.suspect_macs || [];
       if (suspect.length) {
         const chip = document.createElement("span");
@@ -938,7 +974,15 @@ function showLinkDetails(edgeId) {
     if ((link.lag.b_members || []).length)
       html += `<dt>${fmt("portsOf", { name: swName(link.b) })}</dt><dd>${memberList(link.lag.b_members, link.lag.b_states)}</dd>`;
   }
+  const source = link.source || "fdb";
+  const sourceLabel =
+    source === "both" ? t("srcBoth") : source === "lldp" ? t("srcLldp") : t("srcFdb");
+  const sourceHint = source === "fdb" ? t("srcHintFdb") : t("srcHintLldp");
+  html += `<dt>${t("linkSource")}</dt><dd title="${sourceHint}">${sourceLabel}</dd>`;
   html += "</dl>";
+  if (link.stp_blocking) {
+    html += `<p class="hint">${t("stpBlockingHint")}</p>`;
+  }
   shownDetails = { type: "link", id: edgeId };
   els.detailsBody.innerHTML = html;
   els.details.classList.remove("hidden");

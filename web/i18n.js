@@ -48,6 +48,24 @@ const I18N = {
     devicesBehindPort: "Devices behind port",
     devicesCount: "{n} ({live} seen right now)",
     portOnSide: "Port on {name} side",
+    linkSource: "Source",
+    srcLldp: "LLDP",
+    srcFdb: "MAC tables",
+    srcBoth: "LLDP and MAC tables",
+    srcHintLldp:
+      "Both devices announce each other over LLDP: the link and the "
+      + "ports on both ends are their own statement, not an inference.",
+    srcHintFdb:
+      "Inferred from the MAC address tables. The devices do not "
+      + "announce each other over LLDP (it may be off, or the frames "
+      + "may not reach), so the ports are the best available guess.",
+    lldpNeighbour: "LLDP neighbour",
+    lldpForwarded: "LLDP forwarded",
+    lldpForwardedHint:
+      "Several LLDP neighbours on this port — LLDP frame forwarding is "
+      + "most likely enabled on the switch, so a neighbour shows up on "
+      + "a port it is not attached to. The data is unreliable and is "
+      + "not used to draw links.",
     lagAggregate: "Aggregate (LACP)",
     portsOf: "Ports of {name}",
     lacp: "LACP",
@@ -181,6 +199,24 @@ const I18N = {
     devicesBehindPort: "Устройств за портом",
     devicesCount: "{n} (сейчас активно {live})",
     portOnSide: "Порт со стороны {name}",
+    linkSource: "Источник",
+    srcLldp: "LLDP",
+    srcFdb: "таблицы MAC",
+    srcBoth: "LLDP и таблицы MAC",
+    srcHintLldp:
+      "Устройства объявляют друг друга по LLDP: связь и порты с обеих "
+      + "сторон — их собственные слова, а не вывод алгоритма.",
+    srcHintFdb:
+      "Связь выведена из таблиц MAC-адресов. По LLDP устройства друг "
+      + "друга не объявляют (LLDP выключен или кадры не доходят), "
+      + "поэтому порты — наилучшее предположение.",
+    lldpNeighbour: "Сосед по LLDP",
+    lldpForwarded: "пересылка LLDP",
+    lldpForwardedHint:
+      "На порту несколько LLDP-соседей — вероятно, на коммутаторе "
+      + "включена пересылка LLDP-кадров, и сосед виден не на своём "
+      + "порту. Данные ненадёжны и не используются для построения "
+      + "связей.",
     lagAggregate: "Агрегат (LACP)",
     portsOf: "Порты {name}",
     lacp: "LACP",

@@ -132,7 +132,9 @@ async def run_scan() -> None:
         )
         # What the database already knows about each port feeds the
         # unmanaged-switch threshold, so groups survive FDB aging
-        switches, links, hosts, pseudo_switches, vlan_names = build_topology(
+        (
+            switches, links, hosts, pseudo_switches, vlan_names, topo_info
+        ) = build_topology(
             collected,
             config.unmanaged_threshold,
             fdb_stability=None if config.demo else fdb_stability,
@@ -940,6 +942,13 @@ async def api_switch_ports(ip: str) -> dict:
     for aggregate, members in _lag_groups(sw).items():
         for m in members:
             member_of[m] = port_name(sw, aggregate)
+    lldp_by_port: dict[int, list[dict]] = {}
+    for neighbor in sw.lldp_neighbors:
+        if neighbor.local_ifindex is None:
+            continue
+        lldp_by_port.setdefault(neighbor.local_ifindex, []).append(
+            _lldp_dict(neighbor)
+        )
     ports = []
     for p in sw.ports.values():
         r = rates.get(p.if_index)
@@ -960,6 +969,11 @@ async def api_switch_ports(ip: str) -> dict:
             "monitored_hosts": monitored_counts.get(name, 0),
             # MACs that look like damaged copies of a real one here
             "suspect_macs": suspect_by_port.get((ip, name), []),
+            # what the device on the other end says about itself
+            "lldp": lldp_by_port.get(p.if_index, []),
+            # …and whether that can be believed: a switch forwarding
+            # foreign LLDP frames shows neighbours on the wrong ports
+            "lldp_forwarded": p.if_index in sw.lldp_forwarded,
         })
     # active ports first, then by port number
     ports.sort(key=lambda p: (not p["oper_up"], abs(p["if_index"])))
@@ -972,6 +986,20 @@ async def api_switch_ports(ip: str) -> dict:
             "errors_per_minute": config.thresholds.errors_per_minute,
             "discards_per_minute": config.thresholds.discards_per_minute,
         },
+    }
+
+
+def _lldp_dict(neighbor) -> dict:
+    """One LLDP neighbour as the API returns it."""
+    return {
+        "chassis_id": neighbor.chassis_id,
+        "port_id": neighbor.port_id,
+        "port_desc": neighbor.port_desc,
+        "sys_name": neighbor.sys_name,
+        "sys_desc": neighbor.sys_desc,
+        "capabilities": sorted(neighbor.cap_enabled),
+        "cap_known": neighbor.cap_known,
+        "mgmt_ip": neighbor.mgmt_ip,
     }
 
 
