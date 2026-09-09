@@ -987,11 +987,18 @@ async def purge_invalid_macs() -> None:
 
 
 async def purge_old_hosts() -> None:
-    """Startup cleanup: drop hosts nothing has seen for retention days."""
+    """Startup cleanup: drop hosts nothing has seen for retention days.
+
+    LLDP rows follow the same retention: a neighbour that has not been
+    seen since a cable was moved is history nobody asked to keep.
+    """
     days = config.host_retention_days
     if days <= 0:
         return
     now = time.time()
+    dropped = await asyncio.to_thread(db.purge_lldp, now - days * 86400)
+    if dropped:
+        log.info("Removed %d LLDP records older than %g days", dropped, days)
     removed = await asyncio.to_thread(db.purge_old_hosts, now - days * 86400)
     if removed:
         log.info(
