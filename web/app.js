@@ -793,6 +793,7 @@ function showDetails(nodeId) {
         host.approximate ? ` <span class="chip">${t("approximate")}</span>` : ""
       }</dd>
       <dt>${t("vlan")}</dt><dd>${vlanLabel(host.vlan)}</dd>
+      ${host.lldp ? `<dt>${t("lldpLabel")}</dt><dd>${lldpHostLine(host.lldp)}</dd>` : ""}
       <dt>${t("lastReply")}</dt><dd>${fmtTime(host.last_ping_ok)}</dd>
       <dt>${t("lastSeenLabel")}</dt><dd>${fmtTime(host.last_seen)}</dd>
       ${offMap ? `<dt>${t("lastArpLabel")}</dt><dd>${fmtTime(host.last_arp)}</dd>` : ""}
@@ -821,6 +822,19 @@ function showDetails(nodeId) {
   for (const row of els.detailsBody.querySelectorAll(".offline-list li")) {
     row.addEventListener("click", () => focusNode("host:" + row.dataset.mac));
   }
+}
+
+/* What LLDP says about a device that is already a host on the map:
+   the switch heard it on this very port, so the data belongs here
+   rather than on a node of its own */
+function lldpHostLine(lldp) {
+  const parts = [
+    lldp.sys_name,
+    lldp.port_id ? t("portLabel") + " " + lldp.port_id : "",
+    (lldp.mgmt_ips || []).join(", "),
+    lldp.sys_desc,
+  ].filter(Boolean);
+  return parts.length ? parts.join(" · ") : t("lldpUnidentified");
 }
 
 /* Flip the host_down alarm flag of a host and re-render */
@@ -979,8 +993,10 @@ function renderPorts(data) {
               [
                 t("lldpNeighbour") + ": " + (n.sys_name || n.chassis_id),
                 n.port_id ? t("portLabel") + " " + n.port_id : "",
-                n.mgmt_ip,
-                (n.capabilities || []).join(", "),
+                (n.mgmt_ips || []).join(", "),
+                n.cap_known
+                  ? (n.capabilities || []).join(", ")
+                  : t("lldpUnidentified"),
                 n.sys_desc,
               ]
                 .filter(Boolean)

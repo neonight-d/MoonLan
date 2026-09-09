@@ -125,6 +125,16 @@ CHAIN_BRIDGES = (
      "10.3.6.2"),
 )
 
+# Ten IP cameras behind an unmanaged switch on access-sw-3 Gi0/9.
+# They speak LLDP but send no optional TLVs — a bare chassis MAC, no
+# name, no capabilities. This is mb2 1/6 and mb4 1/2 on the real
+# network, where v0.6.0 would have drawn ten bridge nodes and fired ten
+# alarms. They must produce neither: the LLDP data belongs on each
+# camera's own host card.
+CAMERA_PORT = 9
+CAMERAS = [f"18:c0:4d:00:0a:{n:02x}" for n in range(1, 11)]
+CAMERA_DESC = "IPC-B140 v2.800.0000000.16.R"
+
 # A port whose link goes up and down on every counters cycle ->
 # port_flapping. Modelled on 2b0 port 21, which managed four cycles in
 # thirty seconds.
@@ -248,8 +258,10 @@ def demo_network() -> list[SwitchData]:
     ray3.fdb[_iface_mac(ray2)] = ray3_trunk  # synthetic uplink
     # ray4 sees nobody at all -> its link port stays "?"
 
-    def connect_host(sw: SwitchData, port: int, vlan: int) -> str:
-        mac = _rand_mac()
+    def connect_host(
+        sw: SwitchData, port: int, vlan: int, mac: str = ""
+    ) -> str:
+        mac = mac or _rand_mac()
         sw.ports[port].oper_up = True
         sw.fdb[mac] = port
         sw.port_pvid[port] = vlan
@@ -295,6 +307,9 @@ def demo_network() -> list[SwitchData]:
     # two bridges of their own further down the chain
     for _ in range(CHAIN_HOSTS):
         connect_host(ray1, CHAIN_PORT, 8)
+    # Ten cameras behind an unmanaged switch, each of them talking LLDP
+    for mac in CAMERAS:
+        connect_host(ray3, CAMERA_PORT, 8, mac)
 
     _add_lldp(core, ray1, ray2, ray3, ray4, core_port_to_ray)
     _add_stp(core, ray1, ray2, ray3, ray4)
@@ -394,6 +409,14 @@ def _add_lldp(core, ray1, ray2, ray3, ray4, core_port_to_ray) -> None:
     # unidentified LLDP device and raises no alarm.
     ray3.lldp_neighbors = [
         _neighbor(8, "00:1e:58:a9:00:63", "8", cap_known=False),
+        # Ten cameras on one port, all of them bare MACs. Neither a
+        # node nor an alarm: their LLDP data goes on their host cards.
+        *(
+            _neighbor(
+                CAMERA_PORT, mac, mac, sys_desc=CAMERA_DESC, cap_known=False
+            )
+            for mac in CAMERAS
+        ),
     ]
     for sw in (core, ray1, ray2, ray3, ray4):
         sw.lldp_forwarded = forwarded_ports(sw.lldp_neighbors)
@@ -515,12 +538,16 @@ def enrich_db(db: Database, hosts: list[dict]) -> None:
     # an IP, answers ping and stays on the map — only the copies of its
     # address do not. Its address is set aside from the positional
     # assignment below so it never drifts.
-    fixed = (CORRUPT_REAL, CORRUPT_NEIGHBOR, TRUNK_ONLY_MAC)
+    fixed = (CORRUPT_REAL, CORRUPT_NEIGHBOR, TRUNK_ONLY_MAC, *CAMERAS)
     hosts = [h for h in hosts if h["mac"] not in fixed]
     for mac, ip, name in (
         (CORRUPT_REAL, CORRUPT_IP, "cam-4floor.demo.lan"),
         (CORRUPT_NEIGHBOR, CORRUPT_NEIGHBOR_IP, "cam-4floor-2.demo.lan"),
         (TRUNK_ONLY_MAC, TRUNK_ONLY_IP, "nvr-3floor.demo.lan"),
+        *(
+            (mac, f"10.0.98.{n}", f"cam-hall-{n:02d}.demo.lan")
+            for n, mac in enumerate(CAMERAS, start=1)
+        ),
     ):
         db.set_ips({mac: ip})
         db.set_name(mac, name)

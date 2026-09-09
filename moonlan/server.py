@@ -1162,6 +1162,7 @@ def _lldp_dict(neighbor) -> dict:
         "capabilities": sorted(neighbor.cap_enabled),
         "cap_known": neighbor.cap_known,
         "mgmt_ip": neighbor.mgmt_ip,
+        "mgmt_ips": list(neighbor.mgmt_ips),
     }
 
 
