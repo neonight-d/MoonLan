@@ -64,7 +64,7 @@ import time
 
 from .counters import Sample
 from .db import Database
-from .lldp import LldpNeighbor, analyse_ports
+from .lldp import LldpNeighbor, analyse_ports, merge_rows
 from .stp import StpData, StpPort
 from .snmp_collector import (
     PortInfo,
@@ -382,12 +382,17 @@ def _add_lldp(core, ray1, ray2, ray3, ray4, core_port_to_ray) -> None:
             )
             for member, remote in ((1, "Gi0/25"), (25, "Gi0/26"))
         ),
-        # One device, ten management addresses: the merge happens in
-        # lldp.merge_rows, and the card shows the whole list
-        _neighbor(
-            ROUTER_PORT, ROUTER_CHASSIS, "ether2", sys_name="MikroTik-core",
-            sys_desc="RouterOS x86 6.46.2", caps={"bridge", "router"},
-            mgmt_ips=ROUTER_IPS,
+        # One device sending one row per VLAN interface, each with its
+        # own management address — the shape mb0 Slot0/21 really has.
+        # merge_rows below turns them back into one device.
+        *(
+            _neighbor(
+                ROUTER_PORT, ROUTER_CHASSIS, f"vlan{n}",
+                sys_name="MikroTik-core" if n == 0 else "",
+                sys_desc="RouterOS x86 6.46.2" if n == 0 else "",
+                caps={"bridge", "router"}, mgmt_ips=[address],
+            )
+            for n, address in enumerate(ROUTER_IPS)
         ),
         _neighbor(
             core_port_to_ray[ray2.ip], ray2.bridge_mac, "Gi0/24",
@@ -461,6 +466,8 @@ def _add_lldp(core, ray1, ray2, ray3, ray4, core_port_to_ray) -> None:
         ),
     ]
     for sw in (core, ray1, ray2, ray3, ray4):
+        # a real collect_lldp does this before anyone sees the rows
+        sw.lldp_neighbors = merge_rows(sw.lldp_neighbors)
         sw.lldp_forwarded, sw.lldp_crowded = analyse_ports(
             sw.lldp_neighbors,
             lambda if_index, sw=sw: aggregate_port(sw, if_index),

@@ -16,7 +16,7 @@ An open-source alternative to LanTopoLog. MIT license.
 
 *Alarm panel: port errors, discards and host outages with one-click access to the switch port table.*
 
-## Features (v0.6.0)
+## Features (v0.6.1)
 
 - SNMP v2c polling of switches: device name, ports, speeds, statuses.
 - MAC address tables (BRIDGE-MIB and Q-BRIDGE-MIB) from every switch,
@@ -90,8 +90,12 @@ An open-source alternative to LanTopoLog. MIT license.
   the MAC tables" are not the same claim. See "LLDP" below.
 - Switches nobody polls, by name: an LLDP neighbour with the `bridge`
   capability behind one of your ports becomes a named node with its
-  model and a clickable management address, replacing the anonymous
-  "switch without SNMP" on that port and inheriting its devices. A new
+  model and every management address it announced, clickable. Where it
+  is the only device behind that port it replaces the anonymous
+  "switch without SNMP" and inherits its devices; where several answer
+  on one port an unmanaged box is on the cable, so that node stays and
+  the bridges are drawn behind it. A neighbour that announces no
+  capabilities is not treated as a bridge at all. A new
   `unmanaged_bridge_detected` alarm fires when one turns up behind a
   port that is not a trunk; `known_bridges` suppresses it for the ones
   that belong there.
@@ -143,6 +147,10 @@ An open-source alternative to LanTopoLog. MIT license.
   3 raises in 2 hours with a single FLAPPING notice and a FLAP mark in
   the panel), manual clear buttons, and a stale-alarm janitor that
   auto-clears alarms whose subject disappeared from the network data.
+- A failed poll says so: if the topology build raises, the previous map
+  stays on screen and the header turns red with "Last scan failed" and
+  the error text, instead of the empty "no data yet" that a service
+  which has only just started shows.
 - Event journal: new MAC addresses, hosts going down and coming back,
   alarm raises/clears. Data is stored in SQLite and survives restarts.
 - Two-panel web UI: device list with search (name, IP or MAC) on the left,
@@ -161,7 +169,8 @@ An open-source alternative to LanTopoLog. MIT license.
 | v0.4 ✓  | Accurate link inference, LACP, VLAN, unmanaged switches |
 | v0.5 ✓  | Alerts and notifications: email, Telegram, Syslog; traffic thresholds; port error counters (ifInErrors etc.) |
 | v0.6 ✓  | LLDP neighbours and link verification, unmanaged bridge detection, honest STP status, port flapping |
-| v0.6.1  | Loop Detection from the private D-Link/HPE MIBs |
+| v0.6.1 ✓| Fixes from the production network: multi-bridge ports, capability-less neighbours, LLDP port matching |
+| v0.6.2  | Loop Detection from the private D-Link/HPE MIBs |
 | v0.7    | Export to PDF and Draw.io, MAC address info import |
 | v0.8    | Windows computer inventory (WMI/WinRM) |
 
@@ -537,23 +546,50 @@ v0.6 reads it:
   an anonymous "switch without SNMP" — or instead of nothing at all,
   where too few devices sat behind it to trip `unmanaged_threshold`.
 
-Two cautions are built in, both learned the hard way:
+Several cautions are built in, all of them learned the hard way:
+
+**A missing capability proves nothing — and buys nothing.** LLDP's
+System Name, Description and Capabilities are optional TLVs, and some
+devices ship with them disabled (D-Link DES-3526 does). A neighbour
+that sends none of them is shown as an unidentified LLDP device: it
+appears on its port, and on its own host card when it is a device the
+map already draws, but it gets **no bridge node and raises no alarm**.
+The absence of the `bridge` flag is not evidence that the device is a
+switch either — on this network it is a hundred and thirty IP cameras
+and desk phones, and v0.6.0 drew every one of them as a bridge.
+
+The exception is about the switch, not the neighbour: an agent that
+fills `lldpRemSysCapEnabled` for nobody at all (the HPE 1820) says
+nothing about any particular neighbour by leaving it empty. There a
+device announcing both a system name and a management address is taken
+as a bridge and marked as such in its card.
 
 **LLDP frame forwarding.** Some switches can be told to re-transmit
-foreign LLDP frames (`LLDP Forward Message` on D-Link DES-1210). A
-neighbour then shows up on a port it is not attached to, and two
-devices show up on one port. MoonLan detects this — several neighbours
-on one local port, or one chassis id on several ports of the same
-switch — marks the port in the ports panel with an explanation, and
-uses none of that data to draw links. If you see the mark, turn the
-setting off: it is not doing anything useful for you either.
+foreign LLDP frames (`LLDP Forward Message` on D-Link DES-1210), and
+the neighbour then shows up on a port it is not attached to. Two things
+give that away: the same chassis on more than one **logical** port
+(both members of a LACP bundle are one port, not two), or a neighbour
+whose MAC sits in the switch's own forwarding table behind a different
+port. Such a port is marked in the ports panel and none of its data is
+used to draw links. If you see the mark, turn the setting off: it is
+not doing anything useful for you either.
 
-**A missing capability proves nothing.** LLDP's System Name,
-Description and Capabilities are optional TLVs, and some devices ship
-with them disabled (D-Link DES-3526 does). Such a neighbour appears as
-an unidentified LLDP device — shown on the map, never alarmed on. The
-absence of the `bridge` flag is not evidence that the device is not a
-switch.
+**Several devices behind one port is not forwarding.** It is an
+unmanaged switch on the cable with several talkers behind it — the
+normal shape of an access port. All of them are found and shown, and
+the bridges among them get their nodes; what cannot be done is drawing
+a link, because which of them is on the cable is not knowable. The
+port card says so.
+
+**Which port a neighbour is really on.** `lldpRemLocalPortNum` is not
+an ifIndex, and `lldpLocPortId` is not always usable: the HPE 1820
+answers it with one system MAC on all 26 ports, which put all seven of
+its neighbours on port 1. MoonLan resolves the local port in order of
+evidence — the local port table, then the switch's own MAC table, then
+the port number read as an ifIndex — throws away any key that points
+at more than one port, and records which of the three it used
+(`port_matched_by`, printed by `diag --topology`). A link resting on
+the weakest of them does not override the MAC tables.
 
 Where LLDP and the MAC tables disagree, LLDP wins and the disagreement
 is recorded: `diag --topology` prints an "LLDP vs FDB mismatches"
