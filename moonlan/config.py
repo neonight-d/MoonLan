@@ -34,6 +34,14 @@ class Thresholds:
     # many such copies raise port_frame_corruption within the flap window
     corruption_hamming_bits: int = 8
     corruption_macs_threshold: int = 5
+    # Spanning tree: how many topology changes inside one scan cycle
+    # are still routine. A converging tree produces a handful; a
+    # flapping link produces a stream.
+    stp_changes_per_cycle: int = 3
+    # A port that goes up and down this many times inside the window
+    # is flapping, whatever the counters say about it
+    flaps_per_window: int = 4
+    flap_window_minutes: float = 10.0
 
 
 @dataclass
@@ -91,6 +99,12 @@ DEFAULT_ALARM_NOTIFY: dict[str, list[str]] = {
     "lag_degraded": ["telegram", "syslog"],
     # a physical fault: worth waking someone, but not by email
     "port_frame_corruption": ["telegram", "syslog"],
+    # a switch appeared behind an access port and nobody put it there
+    "unmanaged_bridge_detected": ["telegram", "syslog"],
+    "stp_root_changed": ["telegram", "syslog"],
+    "stp_topology_change": ["telegram", "syslog"],
+    "stp_fragmented": ["telegram", "syslog"],
+    "port_flapping": ["telegram", "syslog"],
 }
 
 
@@ -129,6 +143,9 @@ class Config:
     # with the best claim to it, marked approximate, rather than
     # dropped off the map
     place_trunk_only_hosts: bool = True
+    # Bridges that are known and expected behind an access port, by
+    # chassis id (MAC) or management IP: no unmanaged_bridge_detected
+    known_bridges: list[str] = field(default_factory=list)
     thresholds: Thresholds = field(default_factory=Thresholds)
     notifications: NotificationsConfig = field(default_factory=NotificationsConfig)
     alarm_notify: dict[str, list[str]] = field(
@@ -288,6 +305,11 @@ def load_config(path: Path | None = None) -> Config:
     cfg.place_trunk_only_hosts = r.get(
         "place_trunk_only_hosts", d.place_trunk_only_hosts, bool
     )
+    cfg.known_bridges = [
+        entry.strip().lower()
+        for entry in r.get("known_bridges", d.known_bridges, _as_str_list)
+        if entry.strip()
+    ]
 
     t = d.thresholds
     cfg.thresholds = Thresholds(
@@ -316,6 +338,15 @@ def load_config(path: Path | None = None) -> Config:
         corruption_macs_threshold=r.get(
             "thresholds.corruption_macs_threshold",
             t.corruption_macs_threshold, int,
+        ),
+        stp_changes_per_cycle=r.get(
+            "thresholds.stp_changes_per_cycle", t.stp_changes_per_cycle, int
+        ),
+        flaps_per_window=r.get(
+            "thresholds.flaps_per_window", t.flaps_per_window, int
+        ),
+        flap_window_minutes=r.get(
+            "thresholds.flap_window_minutes", t.flap_window_minutes, float
         ),
     )
 

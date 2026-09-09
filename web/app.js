@@ -446,6 +446,34 @@ function buildGraphData() {
     });
   }
 
+  // switches LLDP found behind our ports that nobody polls: a named
+  // node replaces the anonymous "switch without SNMP" on that port
+  for (const bridge of topology.bridges || []) {
+    const border = bridge.unidentified ? colors.dim : colors.link;
+    nodes.push({
+      id: bridge.id,
+      label: bridge.name + (bridge.mgmt_ip ? "\n" + bridge.mgmt_ip : ""),
+      shape: "box",
+      color: {
+        background: "#1b2436",
+        border: border,
+        highlight: { background: "#26314a", border: colors.moon },
+      },
+      shapeProperties: { borderDashes: [5, 3] },
+      borderWidth: 2,
+      margin: 8,
+      font: { color: colors.dim, size: 12 },
+    });
+    edges.push({
+      id: "bredge:" + bridge.id,
+      from: "sw:" + bridge.switch,
+      to: bridge.id,
+      dashes: [5, 3],
+      color: { color: colors.link, opacity: 0.6 },
+      width: 2,
+    });
+  }
+
   // one node per port whose devices are all offline, so the switches
   // are not surrounded by a cloud of grey dots
   for (const group of topology.offline_groups || []) {
@@ -685,6 +713,30 @@ function showDetails(nodeId) {
       <dt>${t("portLabel")}</dt><dd>${group.port}</dd>
       <dt>${t("lastSeenLabel")}</dt><dd>${fmtTime(group.last_seen_max)}</dd>
       </dl><ul class="offline-list">${rows}</ul>`;
+  } else if (nodeId.startsWith("bridge:")) {
+    const bridge = (topology.bridges || []).find((b) => b.id === nodeId);
+    if (!bridge) return;
+    const caps = (bridge.capabilities || []).join(", ");
+    const link = bridge.mgmt_ip
+      ? `<a href="http://${bridge.mgmt_ip}" target="_blank" rel="noopener">${bridge.mgmt_ip}</a>`
+      : "—";
+    html = `<h3>${bridge.name}</h3>
+      <p class="hint">${
+        bridge.unidentified ? t("lldpUnknownHint") : t("bridgeHint")
+      }</p>
+      ${bridge.lldp_forwarded ? `<p class="hint">${t("lldpForwardedHint")}</p>` : ""}
+      <dl>
+      <dt>${t("descr")}</dt><dd>${bridge.sys_desc || "—"}</dd>
+      <dt>${t("chassisId")}</dt><dd>${bridge.chassis_id}</dd>
+      <dt>${t("mgmtIp")}</dt><dd>${link}</dd>
+      <dt>${t("switchLabel")}</dt><dd>${bridge.switch}</dd>
+      <dt>${t("portLabel")}</dt><dd>${bridge.port}</dd>
+      <dt>${t("remotePort")}</dt><dd>${bridge.remote_port || "—"}</dd>
+      <dt>${t("capabilities")}</dt><dd>${caps || t("capsUnknown")}</dd>
+      <dt>${t("devicesBehindPort")}</dt><dd>${bridge.host_count ?? 0}</dd>
+      <dt>${t("firstSeen")}</dt><dd>${fmtTime(bridge.first_seen)}</dd>
+      <dt>${t("lastSeenLabel")}</dt><dd>${fmtTime(bridge.last_seen)}</dd>
+      </dl>`;
   } else if (nodeId.startsWith("pseudo:")) {
     const ps = (topology.pseudo_switches || []).find((p) => p.id === nodeId);
     if (!ps) return;

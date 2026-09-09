@@ -43,6 +43,31 @@ CREATE TABLE IF NOT EXISTS journal (
     mac     TEXT NOT NULL,                -- alarm events store the subject here
     details TEXT DEFAULT ''
 );
+CREATE TABLE IF NOT EXISTS lldp_neighbors (
+    switch_ip  TEXT NOT NULL,             -- the polled switch
+    local_port TEXT NOT NULL,             -- its port, by name
+    chassis_id TEXT NOT NULL,             -- normalized MAC where possible
+    port_id    TEXT DEFAULT '',           -- the neighbour's own port id
+    port_desc  TEXT DEFAULT '',
+    sys_name   TEXT DEFAULT '',
+    sys_desc   TEXT DEFAULT '',
+    capabilities TEXT DEFAULT '',         -- comma separated, '' = no TLV
+    mgmt_ip    TEXT DEFAULT '',
+    first_seen REAL NOT NULL,
+    last_seen  REAL NOT NULL,
+    PRIMARY KEY (switch_ip, local_port, chassis_id)
+);
+CREATE TABLE IF NOT EXISTS bridges (
+    chassis_id TEXT PRIMARY KEY,          -- a switch nobody polls
+    sys_name   TEXT DEFAULT '',
+    sys_desc   TEXT DEFAULT '',
+    mgmt_ip    TEXT DEFAULT '',
+    switch_ip  TEXT DEFAULT '',           -- where it is currently seen
+    port       TEXT DEFAULT '',
+    capabilities TEXT DEFAULT '',
+    first_seen REAL NOT NULL,
+    last_seen  REAL NOT NULL
+);
 CREATE TABLE IF NOT EXISTS alarms (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     type TEXT NOT NULL,        -- host_down|switch_down|port_errors|port_util|new_mac
@@ -396,6 +421,105 @@ class Database:
                 "SELECT mac, ip FROM hosts WHERE ip != '' AND name = ''"
             ).fetchall()
         return [(row["mac"], row["ip"]) for row in rows]
+
+    # ---------- LLDP neighbours and unmanaged bridges ----------
+
+    def upsert_lldp(self, rows: list[dict], ts: float) -> None:
+        """Records this poll's LLDP neighbours, keeping first_seen.
+
+        The table is history, not state: the map is drawn from the
+        current poll. What it adds is "since when" — the first and last
+        time a neighbour was seen behind a port, which is what turns a
+        newly appeared bridge into a dated fact.
+        """
+        with self._lock, self._conn:
+            for row in rows:
+                key = (row["switch_ip"], row["local_port"], row["chassis_id"])
+                cur = self._conn.execute(
+                    "UPDATE lldp_neighbors SET port_id = ?, port_desc = ?, "
+                    "sys_name = ?, sys_desc = ?, capabilities = ?, "
+                    "mgmt_ip = ?, last_seen = ? "
+                    "WHERE switch_ip = ? AND local_port = ? AND chassis_id = ?",
+                    (
+                        row.get("port_id", ""), row.get("port_desc", ""),
+                        row.get("sys_name", ""), row.get("sys_desc", ""),
+                        row.get("capabilities", ""), row.get("mgmt_ip", ""),
+                        ts, *key,
+                    ),
+                )
+                if cur.rowcount == 0:
+                    self._conn.execute(
+                        "INSERT INTO lldp_neighbors (switch_ip, local_port, "
+                        "chassis_id, port_id, port_desc, sys_name, sys_desc, "
+                        "capabilities, mgmt_ip, first_seen, last_seen) "
+                        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                        (
+                            *key, row.get("port_id", ""),
+                            row.get("port_desc", ""), row.get("sys_name", ""),
+                            row.get("sys_desc", ""),
+                            row.get("capabilities", ""), row.get("mgmt_ip", ""),
+                            ts, ts,
+                        ),
+                    )
+
+    def upsert_bridges(self, rows: list[dict], ts: float) -> list[str]:
+        """Stores the bridges LLDP found; returns the ones seen first now."""
+        fresh: list[str] = []
+        with self._lock, self._conn:
+            for row in rows:
+                cur = self._conn.execute(
+                    "UPDATE bridges SET sys_name = ?, sys_desc = ?, "
+                    "mgmt_ip = ?, switch_ip = ?, port = ?, capabilities = ?, "
+                    "last_seen = ? WHERE chassis_id = ?",
+                    (
+                        row.get("sys_name", ""), row.get("sys_desc", ""),
+                        row.get("mgmt_ip", ""), row.get("switch_ip", ""),
+                        row.get("port", ""), row.get("capabilities", ""),
+                        ts, row["chassis_id"],
+                    ),
+                )
+                if cur.rowcount == 0:
+                    self._conn.execute(
+                        "INSERT INTO bridges (chassis_id, sys_name, sys_desc, "
+                        "mgmt_ip, switch_ip, port, capabilities, first_seen, "
+                        "last_seen) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                        (
+                            row["chassis_id"], row.get("sys_name", ""),
+                            row.get("sys_desc", ""), row.get("mgmt_ip", ""),
+                            row.get("switch_ip", ""), row.get("port", ""),
+                            row.get("capabilities", ""), ts, ts,
+                        ),
+                    )
+                    fresh.append(row["chassis_id"])
+        for chassis_id in fresh:
+            log.info("LLDP: a bridge we do not poll appeared — %s", chassis_id)
+        return fresh
+
+    def bridges(self) -> dict[str, dict]:
+        with self._lock:
+            rows = self._conn.execute("SELECT * FROM bridges").fetchall()
+        return {row["chassis_id"]: dict(row) for row in rows}
+
+    def lldp_neighbors(self, switch_ip: str = "") -> list[dict]:
+        with self._lock:
+            if switch_ip:
+                rows = self._conn.execute(
+                    "SELECT * FROM lldp_neighbors WHERE switch_ip = ? "
+                    "ORDER BY local_port", (switch_ip,),
+                ).fetchall()
+            else:
+                rows = self._conn.execute(
+                    "SELECT * FROM lldp_neighbors ORDER BY switch_ip, local_port"
+                ).fetchall()
+        return [dict(row) for row in rows]
+
+    def purge_lldp(self, cutoff: float) -> int:
+        """Drops LLDP rows nothing has seen since cutoff."""
+        with self._lock, self._conn:
+            cur = self._conn.execute(
+                "DELETE FROM lldp_neighbors WHERE last_seen < ?", (cutoff,)
+            )
+        return cur.rowcount
 
     # ---------- ping ----------
 
