@@ -16,7 +16,7 @@ An open-source alternative to LanTopoLog. MIT license.
 
 *Alarm panel: port errors, discards and host outages with one-click access to the switch port table.*
 
-## Features (v0.6.2)
+## Features (v0.6.3)
 
 - SNMP v2c polling of switches: device name, ports, speeds, statuses.
 - MAC address tables (BRIDGE-MIB and Q-BRIDGE-MIB) from every switch,
@@ -100,7 +100,11 @@ An open-source alternative to LanTopoLog. MIT license.
   port that is not a trunk; `known_bridges` suppresses it for the ones
   that belong there, and `uplink_ports` marks the ports that leave the
   network — a provider handover — so what is behind them is collected
-  under one "External network" node and raises nothing.
+  under one "External network" node and raises nothing. A port that
+  looks like a way out — a public address behind it, or a neighbour
+  managed from a subnet nothing else shows — says so in its card and
+  in `diag --topology`, so the setting is discoverable rather than
+  something to be found in the example config.
 - One device, one node: a bridge whose MAC is also in the MAC table of
   its own port (they usually are) is drawn once, with its IP, its name
   and its ping state, instead of once as a named bridge and once as a
@@ -177,7 +181,8 @@ An open-source alternative to LanTopoLog. MIT license.
 | v0.6 ✓  | LLDP neighbours and link verification, unmanaged bridge detection, honest STP status, port flapping |
 | v0.6.1 ✓| Fixes from the production network: multi-bridge ports, capability-less neighbours, LLDP port matching |
 | v0.6.2 ✓| One node per device, LLDP names on the map, external uplink ports, a usable ports panel |
-| v0.6.3  | Loop Detection from the private D-Link/HPE MIBs |
+| v0.6.3 ✓| Readable links, honest external-network demo, safe development against a live service |
+| v0.6.4  | Loop Detection from the private D-Link/HPE MIBs |
 | v0.7    | Export to PDF and Draw.io, MAC address info import |
 | v0.8    | Windows computer inventory (WMI/WinRM) |
 
@@ -244,7 +249,8 @@ known_bridges: []            # bridges that are supposed to be behind an
 uplink_ports: []             # ports that leave the network, as
                              # "<switch ip>:<port name>": what is behind
                              # them is one "External network" node and
-                             # raises no bridge alarms
+                             # raises no bridge alarms. A port that
+                             # looks like one says so in its card.
 
 thresholds:
   errors_per_minute: 5           # port_errors: damaged frames only
@@ -371,6 +377,22 @@ TLVs switched off, a spanning tree with a root and a blocking port
 next to a switch whose STP is off but still reports itself as root,
 and a port that flaps on every cycle. Instead of sending anything,
 notifications are logged as `NOTIFY (demo): …`.
+
+#### A second instance beside a running service
+
+```bash
+MOONLAN_CONFIG=/tmp/dev.yaml MOONLAN_DEMO=1 python run.py
+```
+
+`MOONLAN_CONFIG` points at another `config.yaml`, so a run started for
+a quick look takes its own `db_path` and its own port instead of the
+production ones. Without it, everything started in the project
+directory loads the production config — and a demo started that way
+writes demo hosts into the real inventory. The startup log prints the
+absolute path of both the config file and the database, so it is
+always clear which instance is talking to what. The database runs in
+WAL mode, so a `diag` run or a test alongside the service does not
+hand it `database is locked`.
 
 ### Diagnostics
 

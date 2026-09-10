@@ -443,7 +443,7 @@ def suspect_uplink_ports(
     switches: list[SwitchData],
     host_ips: list[tuple[str, str, str]],
     configured: set[tuple[str, str]],
-) -> dict[tuple[str, str], str]:
+) -> dict[tuple[str, str], dict]:
     """Ports that look like a way out of the network, and why.
 
     `uplink_ports` works, but the only way to learn it exists is to
@@ -459,6 +459,10 @@ def suspect_uplink_ports(
     host_ips is (switch ip, port, address) for everything the map
     knows, which is also where the set of "subnets we can see" comes
     from.
+
+    A reason is returned as {kind, ip, name, text}: the parts so the UI
+    can say it in the operator's language, and the English sentence for
+    the log and for `diag`.
     """
     known_subnets = {
         _subnet24(ip) for _sw, _port, ip in host_ips if ip
@@ -475,12 +479,17 @@ def suspect_uplink_ports(
         if ip and is_private_ipv4(ip) and _subnet24(ip) in known_subnets:
             leads_inward.add((sw_ip, port))
 
-    suspects: dict[tuple[str, str], str] = {}
+    suspects: dict[tuple[str, str], dict] = {}
     for sw_ip, port, ip in host_ips:
         if (sw_ip, port) in configured or (sw_ip, port) in suspects:
             continue
         if ip and not is_private_ipv4(ip):
-            suspects[(sw_ip, port)] = f"a device behind it answers at {ip}"
+            suspects[(sw_ip, port)] = {
+                "kind": "public_address",
+                "ip": ip,
+                "name": "",
+                "text": f"a device behind it answers at {ip}",
+            }
     for sw in switches:
         for neighbor in sw.lldp_neighbors:
             if neighbor.local_ifindex is None:
@@ -490,12 +499,17 @@ def suspect_uplink_ports(
                 continue
             for address in neighbor.mgmt_ips:
                 if _subnet24(address) and _subnet24(address) not in known_subnets:
-                    suspects[key] = (
-                        f"{neighbor.sys_name or neighbor.chassis_id} is "
-                        f"managed at {address}, in a subnet MoonLan sees "
-                        f"nowhere else, and nothing of ours answers behind "
-                        f"this port"
-                    )
+                    name = neighbor.sys_name or neighbor.chassis_id
+                    suspects[key] = {
+                        "kind": "foreign_subnet",
+                        "ip": address,
+                        "name": name,
+                        "text": (
+                            f"{name} is managed at {address}, in a subnet "
+                            f"MoonLan sees nowhere else, and nothing of "
+                            f"ours answers behind this port"
+                        ),
+                    }
                     break
     return suspects
 
@@ -1170,6 +1184,18 @@ def build_topology(
             log.warning(
                 "uplink_ports names %s:%s, but %s is not a polled switch",
                 sw_ip, port, sw_ip,
+            )
+            continue
+        if port not in {
+            port_name(switch_by_ip[sw_ip], i)
+            for i in switch_by_ip[sw_ip].ports
+        }:
+            # a typo would otherwise show up as an empty node rather
+            # than as something to fix
+            log.warning(
+                "uplink_ports names %s:%s, but %s has no port called %s "
+                "— the name must match the ports panel exactly",
+                sw_ip, port, sw_ip, port,
             )
             continue
         members = hosts_on_port_all.get((sw_ip, port), [])

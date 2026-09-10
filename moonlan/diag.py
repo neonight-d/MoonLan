@@ -452,7 +452,7 @@ async def run_topology_view(community: str, timeout: int, cfg) -> None:
     if not suspects:
         print("  none")
     for (sw_ip, port), why in sorted(suspects.items()):
-        print(f"  {label(sw_ip)} {port}: {why}")
+        print(f"  {label(sw_ip)} {port}: {why['text']}")
         print(f'    add "{sw_ip}:{port}" to uplink_ports in config.yaml')
 
     print("\nbridges (LLDP capability 'bridge'):")
