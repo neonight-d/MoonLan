@@ -158,6 +158,28 @@ EDGE_ROUTER_PORT = 22
 EDGE_ROUTER_CHASSIS = "00:0e:04:aa:bb:cc"
 EDGE_ROUTER_IPS = ["10.9.0.1", "10.9.1.1"]
 
+# The provider handover on core-sw Gi0/26. Their switch announces
+# itself over LLDP and its MAC is in our table on the same port, so it
+# must come out as ONE node; the addresses behind it are not ours to
+# draw one by one, and it must raise no "someone plugged a switch in"
+# alarm — it is the edge of the network.
+UPLINK_PORT = 26
+UPLINK_CHASSIS = "10:c1:72:bd:44:e1"
+UPLINK_NAME = "CE6851-48S6Q-HI"
+UPLINK_MGMT_IP = "172.16.0.3"
+UPLINK_HOSTS = 4
+UPLINK_PORTS = {("10.0.0.10", f"Gi0/{UPLINK_PORT}")}
+
+# access-sw-4 stands in for the HPE 1820: its agent fills
+# lldpRemSysCapEnabled for nobody at all. A neighbour there that
+# announces a name and a management address is taken for a bridge on
+# that evidence alone — worth recording, not worth waking anyone, so
+# its alarm is info rather than warning.
+ASSUMED_PORT = 7
+ASSUMED_CHASSIS = "18:fd:74:fd:b5:c5"
+ASSUMED_NAME = "RouterOS-Old_building"
+ASSUMED_MGMT_IP = "10.3.7.15"
+
 # A port whose link goes up and down on every counters cycle ->
 # port_flapping. Modelled on 2b0 port 21, which managed four cycles in
 # thirty seconds.
@@ -340,6 +362,11 @@ def demo_network() -> list[SwitchData]:
     connect_host(core, ROUTER_PORT, 1, ROUTER_CHASSIS)
     # …and an edge router that gets no address from us at all
     connect_host(core, EDGE_ROUTER_PORT, 1, EDGE_ROUTER_CHASSIS)
+    # The provider handover: their switch plus a handful of addresses
+    # that live past it
+    connect_host(core, UPLINK_PORT, 1, UPLINK_CHASSIS)
+    for _ in range(UPLINK_HOSTS):
+        connect_host(core, UPLINK_PORT, 1)
 
     _add_lldp(core, ray1, ray2, ray3, ray4, core_port_to_ray)
     _add_stp(core, ray1, ray2, ray3, ray4)
@@ -422,6 +449,13 @@ def _add_lldp(core, ray1, ray2, ray3, ray4, core_port_to_ray) -> None:
             sys_name="MikroTik-edge", sys_desc="RouterOS CCR1009 7.11",
             caps={"router"}, mgmt_ips=EDGE_ROUTER_IPS,
         ),
+        # the provider's switch: a bridge, but the boundary of the
+        # network rather than a stray one
+        _neighbor(
+            UPLINK_PORT, UPLINK_CHASSIS, "10GE1/0/22", sys_name=UPLINK_NAME,
+            sys_desc="Huawei CE6851-48S6Q-HI V200R005C10",
+            caps={"bridge", "router"}, mgmt_ip=UPLINK_MGMT_IP,
+        ),
         _neighbor(
             core_port_to_ray[ray2.ip], ray2.bridge_mac, "Gi0/24",
             sys_name=ray2.sys_name, sys_desc=ray2.sys_descr,
@@ -445,11 +479,16 @@ def _add_lldp(core, ray1, ray2, ray3, ray4, core_port_to_ray) -> None:
             caps={"bridge", "router"}, mgmt_ip=BRIDGE_MGMT_IP,
         ),
     ]
+    # This agent reports capabilities for nobody — the HPE 1820 does
+    # exactly that — so the empty column says nothing about any one
+    # neighbour, and a named, addressed device is taken for a bridge
     ray4.lldp_neighbors = [
+        _neighbor(24, core.bridge_mac, "Gi0/5", sys_name=core.sys_name,
+                  cap_known=False),
         _neighbor(
-            24, core.bridge_mac, "Gi0/5",
-            sys_name=core.sys_name, sys_desc=core.sys_descr,
-            caps={"bridge"},
+            ASSUMED_PORT, ASSUMED_CHASSIS, "bridge/ether1",
+            sys_name=ASSUMED_NAME, sys_desc="RouterOS hAP lite 6.49.10",
+            mgmt_ip=ASSUMED_MGMT_IP, cap_known=False,
         ),
     ]
     ray1.lldp_neighbors = [
@@ -549,6 +588,8 @@ def _add_stp(core, ray1, ray2, ray3, ray4) -> None:
     uptime = 4_000_000  # ~11 hours in TimeTicks
     core.ports[ROUTER_PORT].oper_up = True
     core.ports[EDGE_ROUTER_PORT].oper_up = True
+    core.ports[UPLINK_PORT].oper_up = True
+    ray4.ports[ASSUMED_PORT].oper_up = True
     core.stp = judge(StpData(
         supported=True, protocol_spec=3, priority=4096,
         time_since_change=120_000, top_changes=7,
@@ -638,7 +679,7 @@ def enrich_db(db: Database, hosts: list[dict]) -> None:
     # whole point is a device the inventory cannot name
     fixed = (
         CORRUPT_REAL, CORRUPT_NEIGHBOR, TRUNK_ONLY_MAC, ROUTER_CHASSIS,
-        EDGE_ROUTER_CHASSIS, *CAMERAS,
+        EDGE_ROUTER_CHASSIS, UPLINK_CHASSIS, *CAMERAS,
     )
     hosts = [h for h in hosts if h["mac"] not in fixed]
     for mac, ip, name in (
@@ -646,6 +687,7 @@ def enrich_db(db: Database, hosts: list[dict]) -> None:
         (CORRUPT_NEIGHBOR, CORRUPT_NEIGHBOR_IP, "cam-4floor-2.demo.lan"),
         (TRUNK_ONLY_MAC, TRUNK_ONLY_IP, "nvr-3floor.demo.lan"),
         (ROUTER_CHASSIS, ROUTER_IPS[0], "gw.demo.lan"),
+        (UPLINK_CHASSIS, UPLINK_MGMT_IP, ""),
         *(
             (mac, f"10.0.98.{n}", f"cam-hall-{n:02d}.demo.lan")
             for n, mac in enumerate(CAMERAS, start=1)

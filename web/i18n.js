@@ -103,6 +103,14 @@ const I18N = {
       "The caption comes from LLDP: the device named itself, but no ARP "
       + "table gave it an address and reverse DNS has no record of it. "
       + "Routers are deliberately kept out of the host inventory.",
+    externalNetwork: "External network",
+    externalPort: "external uplink",
+    externalHint:
+      "This port leaves the network — a provider handover or an uplink "
+      + "to someone else's equipment (config.uplink_ports). What is "
+      + "behind it is collected under one node instead of being drawn "
+      + "device by device, and switches there raise no alarms: they are "
+      + "the boundary, not something anyone forgot to configure.",
     lldpNeighbour: "LLDP neighbour",
     lldpForwarded: "LLDP forwarded",
     lldpForwardedHint:
@@ -335,6 +343,14 @@ const I18N = {
       "Подпись взята из LLDP: устройство назвало себя само, но адреса "
       + "ему не дала ни одна ARP-таблица, и обратный DNS о нём не знает. "
       + "Маршрутизаторы сознательно не входят в инвентарь хостов.",
+    externalNetwork: "Внешняя сеть",
+    externalPort: "внешний аплинк",
+    externalHint:
+      "Этот порт ведёт наружу — стык с провайдером или аплинк к чужому "
+      + "оборудованию (config.uplink_ports). То, что за ним, собрано в "
+      + "один узел вместо россыпи устройств, и коммутаторы там не "
+      + "поднимают тревог: это граница сети, а не то, что кто-то забыл "
+      + "настроить.",
     lldpNeighbour: "Сосед по LLDP",
     lldpForwarded: "пересылка LLDP",
     lldpForwardedHint:

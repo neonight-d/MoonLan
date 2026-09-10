@@ -42,7 +42,10 @@ Rules:
   bridge capability behind a port that is not a trunk — a switch
   nobody put on the map and nobody polls. Cleared when the neighbour
   has been gone from LLDP for the flap window. Bridges listed in
-  config.known_bridges (by chassis id or management IP) never raise it.
+  config.known_bridges (by chassis id or management IP) never raise
+  it, nor do the ones behind a port in config.uplink_ports. A bridge
+  inferred rather than self-declared (cap_assumed: the switch reports
+  no capabilities for anyone) raises the same alarm at severity info.
 - stp_root_changed (critical) / stp_topology_change (warning) /
   stp_fragmented (warning): see moonlan/stp.py. Raised ONLY for
   switches whose spanning tree is actually operating — a switch with
@@ -566,6 +569,8 @@ class AlarmEngine:
         for bridge in bridges:
             if bridge.get("trunk") or bridge.get("unidentified"):
                 continue
+            if bridge.get("external"):
+                continue  # a port that leaves the network: not ours
             chassis_id = bridge["chassis_id"]
             self._bridges_seen[chassis_id] = now
             if chassis_id.lower() in known:
@@ -575,6 +580,21 @@ class AlarmEngine:
             where = f"{bridge['switch']} port {bridge['port']}"
             name = bridge.get("name") or chassis_id
             address = f", {bridge['mgmt_ip']}" if bridge.get("mgmt_ip") else ""
+            if bridge.get("cap_assumed"):
+                # The switch fills lldpRemSysCapEnabled for nobody, so
+                # this device was called a bridge because it announced a
+                # name and an address — which a managed access point or
+                # a printer does too. Worth recording, not worth waking
+                # anyone.
+                await self._raise(
+                    "unmanaged_bridge_detected", chassis_id,
+                    f"{name} ({chassis_id}{address}) behind {where} is "
+                    f"probably a bridge — the switch reports no "
+                    f"capabilities for any neighbour, so this is an "
+                    f"inference, not its own claim",
+                    severity="info",
+                )
+                continue
             await self._raise(
                 "unmanaged_bridge_detected", chassis_id,
                 f"{name} ({chassis_id}{address}) announces itself as a "

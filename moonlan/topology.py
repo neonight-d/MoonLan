@@ -74,6 +74,8 @@ class TopologyState:
     pseudo_switches: list[dict] = field(default_factory=list)
     # switches LLDP found behind our ports that nobody polls
     bridges: list[dict] = field(default_factory=list)
+    # one node per port that leaves the network (config.uplink_ports)
+    external_networks: list[dict] = field(default_factory=list)
     vlan_names: dict[int, str] = field(default_factory=dict)
     # known devices that sit on no port of a polled switch: they are
     # inventory and search results, but nothing is drawn for them
@@ -104,6 +106,7 @@ class TopologyState:
         offline_groups: list[dict] | None = None,
         bridges: list[dict] | None = None,
         stp: dict | None = None,
+        external_networks: list[dict] | None = None,
     ) -> None:
         with self._lock:
             self.switches = switches
@@ -114,6 +117,7 @@ class TopologyState:
             self.unlocated = unlocated or []
             self.offline_groups = offline_groups or []
             self.bridges = bridges or []
+            self.external_networks = external_networks or []
             self.stp = stp or {}
             self.last_scan = time.time()
             self.last_scan_ok = self.last_scan
@@ -136,6 +140,7 @@ class TopologyState:
                 "hosts": self.hosts,
                 "pseudo_switches": self.pseudo_switches,
                 "bridges": self.bridges,
+                "external_networks": self.external_networks,
                 "vlan_names": self.vlan_names,
                 "unlocated": self.unlocated,
                 "offline_groups": self.offline_groups,
@@ -883,6 +888,7 @@ def build_topology(
     sticky_pseudo_ports: set[tuple[str, str]] | None = None,
     unconfirmed_macs: set[str] | None = None,
     place_trunk_only: bool = True,
+    uplink_ports: set[tuple[str, str]] | None = None,
 ) -> tuple[
     list[dict], list[dict], list[dict], list[dict], dict[int, str],
     list[dict], dict,
@@ -904,6 +910,7 @@ def build_topology(
     """
     known_hosts_per_port = known_hosts_per_port or {}
     sticky_pseudo_ports = sticky_pseudo_ports or set()
+    uplink_ports = uplink_ports or set()
     unconfirmed_macs = unconfirmed_macs or set()
     switches = [sw for sw in collected if sw.reachable]
     fdb = normalized_fdb(switches)
@@ -932,7 +939,9 @@ def build_topology(
 
     # 2. Trunk ports: they lead to other switches and carry no hosts
     trunks = trunk_ports(switches, switches_on_port, uplinks, lldp_pairs)
-    uplink_ports: dict[str, set[int]] = {
+    # ifIndexes of every trunk port per switch — NOT config.uplink_ports,
+    # which is about ports leaving the network
+    trunk_port_ids: dict[str, set[int]] = {
         ip: set(ports) for ip, ports in trunks.items()
     }
     for ip, ports in sorted(trunks.items()):
@@ -956,7 +965,7 @@ def build_topology(
     for sw in switches:
         macs_per_port = Counter(fdb[sw.ip].values())
         for mac, if_index in fdb[sw.ip].items():
-            if mac in switch_macs or if_index in uplink_ports[sw.ip]:
+            if mac in switch_macs or if_index in trunk_port_ids[sw.ip]:
                 continue
             candidate = (macs_per_port[if_index], sw.ip, if_index)
             if mac not in best_location or candidate < best_location[mac]:
@@ -976,7 +985,7 @@ def build_topology(
             for mac, if_index in fdb[sw.ip].items():
                 if mac in switch_macs or mac in best_location:
                     continue
-                if if_index not in uplink_ports[sw.ip]:
+                if if_index not in trunk_port_ids[sw.ip]:
                     continue
                 downlink = if_index != uplinks.get(sw.ip)
                 claim = (downlink, depth.get(sw.ip, 0), sw.ip, if_index)
@@ -1024,7 +1033,7 @@ def build_topology(
     pseudo_switches: list[dict] = []
     if unmanaged_threshold > 0:
         uplink_names = {
-            sw.ip: {port_name(sw, i) for i in uplink_ports[sw.ip]}
+            sw.ip: {port_name(sw, i) for i in trunk_port_ids[sw.ip]}
             for sw in switches
         }
         candidates = set(hosts_per_port) | {
@@ -1033,6 +1042,8 @@ def build_topology(
         for sw_ip, port in sorted(candidates):
             if port in uplink_names.get(sw_ip, set()):
                 continue  # a trunk, whatever the database remembers
+            if (sw_ip, port) in uplink_ports:
+                continue  # it leaves the network: grouped separately
             port_hosts = hosts_per_port.get((sw_ip, port), [])
             if not port_hosts:
                 # Nothing is confirmed behind this port right now, so
@@ -1056,6 +1067,46 @@ def build_topology(
                 "host_count_known": known,
             })
 
+    hosts_on_port_all: dict[tuple[str, str], list[dict]] = {}
+    for host in hosts:
+        hosts_on_port_all.setdefault(
+            (host["switch"], host["port"]), []
+        ).append(host)
+
+    # 4b. Ports that leave the network. Behind mb0 Slot0/25 sits the
+    #     provider's equipment and, past it, the internet: those devices
+    #     are not ours to place on an L2 map one dot at a time, and the
+    #     switch there is a boundary rather than something someone
+    #     forgot to configure. They are collected under one node.
+    external_networks: list[dict] = []
+    for sw_ip, port in sorted(uplink_ports):
+        if sw_ip not in switch_by_ip:
+            log.warning(
+                "uplink_ports names %s:%s, but %s is not a polled switch",
+                sw_ip, port, sw_ip,
+            )
+            continue
+        members = hosts_on_port_all.get((sw_ip, port), [])
+        external_networks.append({
+            "id": f"external:{sw_ip}:{port}",
+            "switch": sw_ip,
+            "port": port,
+            "count": len(members),
+        })
+    for external in external_networks:
+        for host in hosts_on_port_all.get(
+            (external["switch"], external["port"]), []
+        ):
+            host["via"] = external["id"]
+    if external_networks:
+        log.info(
+            "%d port(s) leave the network: %s", len(external_networks),
+            "; ".join(
+                f"{e['switch']} {e['port']} ({e['count']} device(s))"
+                for e in external_networks
+            ),
+        )
+
     # 5. Bridges nobody polls, named by LLDP.
     #
     #    One bridge behind a port: it IS the box on that cable, so it
@@ -1078,9 +1129,7 @@ def build_topology(
             (bridge["switch"], bridge["port"]), []
         ).append(bridge)
     pseudo_by_port = {(p["switch"], p["port"]): p for p in pseudo_switches}
-    hosts_on_port: dict[tuple[str, str], list[dict]] = {}
-    for host in hosts:
-        hosts_on_port.setdefault((host["switch"], host["port"]), []).append(host)
+    hosts_on_port = hosts_on_port_all
     for key, group in bridges_on_port.items():
         port_hosts = hosts_on_port.get(key, [])
         alone = len(group) == 1 and not group[0]["trunk"]
@@ -1093,7 +1142,7 @@ def build_topology(
                 bridge["host_count_live"] = replaced["host_count_live"]
             if bridge["trunk"]:
                 continue  # a trunk: its devices belong to the switch behind it
-            if alone:
+            if alone and (bridge["switch"], bridge["port"]) not in uplink_ports:
                 for host in port_hosts:
                     host["via"] = bridge["id"]
             bridge.setdefault("host_count", len(port_hosts) if alone else 0)
@@ -1101,6 +1150,9 @@ def build_topology(
             # pseudo-switch, because nothing says which bridge they are
             # behind
             bridge["shares_port"] = not alone
+            bridge["external"] = (
+                bridge["switch"], bridge["port"]
+            ) in uplink_ports
     host_by_location = {
         (h["switch"], h["port"], h["mac"]): h for h in hosts
     }
@@ -1124,6 +1176,14 @@ def build_topology(
         if bridge.get("host_count"):
             # it was counted among the devices behind its own port
             bridge["host_count"] = max(0, bridge["host_count"] - 1)
+    for external in external_networks:
+        # a bridge merged into its own node is not one of the devices
+        # behind the boundary; it IS the boundary
+        external["count"] = sum(
+            1 for h in hosts_on_port_all.get(
+                (external["switch"], external["port"]), []
+            ) if not h.get("merged_into")
+        )
     if merged:
         log.info(
             "%d bridge(s) are also in the MAC table of their own port — "
@@ -1213,6 +1273,7 @@ def build_topology(
             if name:
                 vlan_names.setdefault(vlan_id, name)
 
+    info["external_networks"] = external_networks
     return (
         switch_dicts, links, hosts, pseudo_switches, vlan_names,
         bridges, info,

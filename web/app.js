@@ -61,6 +61,7 @@ const REFRESH_MS = 30000;
 
 const colors = {
   moon: "#e8e4d5",
+  warn: "#d9a86b",
   link: "#7fb4d9",
   text: "#d7dee9",
   dim: "#8593a8",
@@ -527,6 +528,31 @@ function buildGraphData() {
     });
   }
 
+  // one node per port that leaves the network: what is behind the
+  // provider's handover is not ours to draw device by device
+  for (const external of topology.external_networks || []) {
+    nodes.push({
+      id: external.id,
+      label: t("externalNetwork") + " · " + external.count,
+      shape: "hexagon",
+      size: 16,
+      color: {
+        background: "#2b2438",
+        border: colors.warn || "#d9a86b",
+        highlight: { background: "#3a3049", border: colors.moon },
+      },
+      borderWidth: 2,
+      font: nodeFont(external.id),
+    });
+    edges.push({
+      id: "extedge:" + external.id,
+      from: "sw:" + external.switch,
+      to: external.id,
+      color: { color: colors.warn || "#d9a86b", opacity: 0.7 },
+      width: 3,
+    });
+  }
+
   // one node per port whose devices are all offline, so the switches
   // are not surrounded by a cloud of grey dots
   for (const group of topology.offline_groups || []) {
@@ -830,6 +856,28 @@ function showDetails(nodeId) {
       <dt>${t("firstSeen")}</dt><dd>${fmtTime(bridge.first_seen)}</dd>
       <dt>${t("lastSeenLabel")}</dt><dd>${fmtTime(bridge.last_seen)}</dd>
       </dl>`;
+  } else if (nodeId.startsWith("external:")) {
+    const external = (topology.external_networks || []).find(
+      (e) => e.id === nodeId
+    );
+    if (!external) return;
+    // the provider's own switch is drawn as its own node, not counted
+    // among the addresses living behind it
+    const members = topology.hosts.filter(
+      (h) => h.via === nodeId && !h.merged_into
+    );
+    const rows = members
+      .map(
+        (h) => `<li data-mac="${h.mac}"><span>${hostLabel(h)}</span>
+          <span class="sub">${h.ip || ""}</span></li>`
+      )
+      .join("");
+    html = `<h3>${t("externalNetwork")}</h3>
+      <p class="hint">${t("externalHint")}</p><dl>
+      <dt>${t("switchLabel")}</dt><dd>${external.switch}</dd>
+      <dt>${t("portLabel")}</dt><dd>${external.port}</dd>
+      <dt>${t("devicesBehindPort")}</dt><dd>${external.count}</dd>
+      </dl><ul class="offline-list">${rows}</ul>`;
   } else if (nodeId.startsWith("pseudo:")) {
     const ps = (topology.pseudo_switches || []).find((p) => p.id === nodeId);
     if (!ps) return;
@@ -1068,6 +1116,13 @@ function renderPorts(data) {
       nameCell.textContent = name;
       // lldpLocPortDesc: what the operator called this port on the
       // switch itself ("Library", "403 audit")
+      if (p.external) {
+        const chip = document.createElement("span");
+        chip.className = "chip";
+        chip.textContent = t("externalPort");
+        chip.title = t("externalHint");
+        nameCell.append(" ", chip);
+      }
       if (p.label) {
         const label = document.createElement("span");
         label.className = "port-label";

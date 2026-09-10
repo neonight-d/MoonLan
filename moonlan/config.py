@@ -146,6 +146,10 @@ class Config:
     # Bridges that are known and expected behind an access port, by
     # chassis id (MAC) or management IP: no unmanaged_bridge_detected
     known_bridges: list[str] = field(default_factory=list)
+    # Ports that leave the network — a provider handover, an uplink to
+    # someone else's equipment — as "<switch ip>:<port name>". What is
+    # behind them is not ours to map or to alarm about.
+    uplink_ports: list[str] = field(default_factory=list)
     thresholds: Thresholds = field(default_factory=Thresholds)
     notifications: NotificationsConfig = field(default_factory=NotificationsConfig)
     alarm_notify: dict[str, list[str]] = field(
@@ -154,6 +158,20 @@ class Config:
     demo: bool = False
     # filled in by load_config: which settings came from the file
     report: "ConfigReport | None" = None
+
+
+def parse_uplink_ports(entries: list[str]) -> set[tuple[str, str]]:
+    """"10.0.0.10:Slot0/25" -> {("10.0.0.10", "Slot0/25")}.
+
+    Split on the first colon: switch addresses have none and port names
+    ("Slot0/25", "1/25", "24") have none either.
+    """
+    parsed: set[tuple[str, str]] = set()
+    for entry in entries:
+        ip, sep, port = entry.partition(":")
+        if sep and ip.strip() and port.strip():
+            parsed.add((ip.strip(), port.strip()))
+    return parsed
 
 
 def _as_str_list(value) -> list[str]:
@@ -308,6 +326,11 @@ def load_config(path: Path | None = None) -> Config:
     cfg.known_bridges = [
         entry.strip().lower()
         for entry in r.get("known_bridges", d.known_bridges, _as_str_list)
+        if entry.strip()
+    ]
+    cfg.uplink_ports = [
+        entry.strip()
+        for entry in r.get("uplink_ports", d.uplink_ports, _as_str_list)
         if entry.strip()
     ]
 
