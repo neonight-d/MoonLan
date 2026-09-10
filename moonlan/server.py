@@ -353,6 +353,9 @@ async def run_scan() -> None:
             {sw.ip: sw.reachable for sw in collected},
             {sw.ip: sw.sys_name or sw.ip for sw in collected},
         )
+        await alarm_engine.clear_suppressed(
+            _suppressed_bridges(bridges, bridge_rows)
+        )
         await alarm_engine.on_bridges(bridges, set(config.known_bridges))
         await alarm_engine.on_stp(stp_report)
         await alarm_engine.on_corruption(
@@ -520,6 +523,37 @@ def _uplink_ports() -> set[tuple[str, str]]:
     if config.demo:
         return set(demo.UPLINK_PORTS)
     return parse_uplink_ports(config.uplink_ports)
+
+
+def _suppressed_bridges(
+    bridges: list[dict], bridge_rows: dict[str, dict]
+) -> dict[str, str]:
+    """chassis id -> why the configuration says it is not an alarm.
+
+    Covers bridges seen in this scan and bridges only the database
+    remembers: a device behind a port that has since been declared an
+    uplink may not be in LLDP right now, and its alarm would otherwise
+    outlive the setting that answers it.
+    """
+    uplinks = _uplink_ports()
+    known = set(config.known_bridges)
+    located: dict[str, tuple[str, str, str]] = {
+        row["chassis_id"]: (row["switch_ip"], row["port"], row["mgmt_ip"])
+        for row in bridge_rows.values()
+    }
+    located.update({
+        b["chassis_id"]: (b["switch"], b["port"], b.get("mgmt_ip", ""))
+        for b in bridges
+    })
+    suppressed: dict[str, str] = {}
+    for chassis_id, (switch_ip, port, mgmt_ip) in located.items():
+        if (switch_ip, port) in uplinks:
+            suppressed[chassis_id] = (
+                f"{switch_ip} {port} is listed in uplink_ports"
+            )
+        elif chassis_id.lower() in known or (mgmt_ip or "").lower() in known:
+            suppressed[chassis_id] = "listed in known_bridges"
+    return suppressed
 
 
 def _is_known_bridge(bridge: dict) -> bool:
