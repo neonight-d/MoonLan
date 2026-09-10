@@ -1174,7 +1174,11 @@ function renderPorts(data) {
         chip.textContent = t("uplinkHintChip");
         chip.title =
           fmt("uplinkHint", { switch: data.switch, port: p.name }) +
-          "\n\n" + p.uplink_hint;
+          "\n\n" +
+          fmt("uplinkWhy_" + p.uplink_hint.kind, {
+            ip: p.uplink_hint.ip,
+            name: p.uplink_hint.name,
+          });
         nameCell.append(" ", chip);
       }
       if (p.external) {

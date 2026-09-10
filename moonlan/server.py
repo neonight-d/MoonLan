@@ -90,7 +90,7 @@ suspect_by_port: dict[tuple[str, str], list[dict]] = {}
 
 # (switch ip, port) -> why the port looks like a way out of the network
 # and might belong in config.uplink_ports
-uplink_suspects: dict[tuple[str, str], str] = {}
+uplink_suspects: dict[tuple[str, str], dict] = {}
 
 # One SnmpEngine per process: a new engine per cycle leaks sockets and
 # MIB state (OSError 24, MibNotFoundError, growing RSS). Recreate only
@@ -286,7 +286,7 @@ async def run_scan() -> None:
                 "\"%s:%s\" to uplink_ports and what is behind it becomes "
                 "one \"External network\" node instead of a crowd of "
                 "devices, and raises no bridge alarms.",
-                sw_ip, port, why, sw_ip, port,
+                sw_ip, port, why["text"], sw_ip, port,
             )
         stp_report = _stp_report(collected)
         state.update(
@@ -459,11 +459,15 @@ def _merge_bridge_identity(
 
 
 def _uplink_ports() -> set[tuple[str, str]]:
-    """Ports that leave the network, from the config (and the demo)."""
-    ports = parse_uplink_ports(config.uplink_ports)
+    """Ports that leave the network.
+
+    The demo answers with its own and nothing else: a real config.yaml
+    naming a port of the real network would otherwise put an empty
+    "External network" node on the demo map.
+    """
     if config.demo:
-        ports |= demo.UPLINK_PORTS
-    return ports
+        return set(demo.UPLINK_PORTS)
+    return parse_uplink_ports(config.uplink_ports)
 
 
 def _is_known_bridge(bridge: dict) -> bool:
@@ -1298,7 +1302,7 @@ async def api_switch_ports(ip: str) -> dict:
             # a port that leaves the network (config.uplink_ports)
             "external": name in external,
             # …or one that looks like it should be, and is not listed
-            "uplink_hint": uplink_suspects.get((ip, name), ""),
+            "uplink_hint": uplink_suspects.get((ip, name)),
         })
     # active ports first, then by port number
     ports.sort(key=lambda p: (not p["oper_up"], abs(p["if_index"])))

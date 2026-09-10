@@ -119,6 +119,10 @@ const I18N = {
       + "address. Its alarm is raised at info for the same reason.",
     routerAddr: "Router address (routers:)",
     uplinkHintChip: "way out?",
+    uplinkWhy_public_address: "A device behind this port answers at {ip}.",
+    uplinkWhy_foreign_subnet:
+      "{name} is managed at {ip}, in a subnet MoonLan sees nowhere else, "
+      + "and nothing of ours answers behind this port.",
     uplinkHint:
       "This looks like a way out of the network. Add "
       + "\"{switch}:{port}\" to uplink_ports in config.yaml and the "
@@ -372,6 +376,10 @@ const I18N = {
       + "управляющий адрес. По той же причине тревога по нему — info.",
     routerAddr: "Адрес маршрутизатора (routers:)",
     uplinkHintChip: "выход наружу?",
+    uplinkWhy_public_address: "Устройство за этим портом отвечает по {ip}.",
+    uplinkWhy_foreign_subnet:
+      "{name} управляется по {ip} — в подсети, которой MoonLan больше "
+      + "нигде не видит, и ничего нашего за этим портом не отвечает.",
     uplinkHint:
       "Похоже на выход из сети. Добавьте «{switch}:{port}» в "
       + "uplink_ports в config.yaml — и устройства за этим портом "
