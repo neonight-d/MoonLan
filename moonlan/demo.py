@@ -170,6 +170,10 @@ UPLINK_MGMT_IP = "172.16.0.3"
 UPLINK_HOSTS = 4
 UPLINK_PORTS = {("10.0.0.10", f"Gi0/{UPLINK_PORT}")}
 
+# What a `routers:` entry would resolve to through ARP: the address an
+# operator actually reaches the box at, out of the many it announces
+ROUTER_ADDRESSES = {ROUTER_CHASSIS: ROUTER_IPS[0]}
+
 # access-sw-4 stands in for the HPE 1820: its agent fills
 # lldpRemSysCapEnabled for nobody at all. A neighbour there that
 # announces a name and a management address is taken for a bridge on

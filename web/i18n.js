@@ -117,6 +117,7 @@ const I18N = {
       + "so the empty field says nothing; the device was taken for a "
       + "bridge because it announced a system name and a management "
       + "address. Its alarm is raised at info for the same reason.",
+    routerAddr: "Router address (routers:)",
     lldpNeighbour: "LLDP neighbour",
     lldpForwarded: "LLDP forwarded",
     lldpForwardedHint:
@@ -363,6 +364,7 @@ const I18N = {
       + "соседа, поэтому пустое поле ни о чём не говорит; мостом "
       + "устройство сочтено потому, что объявило системное имя и "
       + "управляющий адрес. По той же причине тревога по нему — info.",
+    routerAddr: "Адрес маршрутизатора (routers:)",
     lldpNeighbour: "Сосед по LLDP",
     lldpForwarded: "пересылка LLDP",
     lldpForwardedHint:

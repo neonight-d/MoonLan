@@ -248,6 +248,14 @@ async def run_scan() -> None:
             bridge["last_seen"] = row.get("last_seen", now)
             bridge["known"] = _is_known_bridge(bridge)
         _merge_bridge_identity(bridges, hosts, db_rows)
+        # the address the operator reaches a router at, for the caption
+        router_ips = _router_addresses(arp)
+        for host in hosts:
+            if host["mac"] in router_ips:
+                host["router_ip"] = router_ips[host["mac"]]
+        for bridge in bridges:
+            if bridge["chassis_id"] in router_ips:
+                bridge["router_ip"] = router_ips[bridge["chassis_id"]]
         stp_report = _stp_report(collected)
         state.update(
             switches, links, hosts, pseudo_switches, vlan_names, unlocated,
@@ -353,6 +361,22 @@ def _stp_report(collected: list[SwitchData]) -> dict:
             ],
         })
     return {"verdict": verdict, "switches": switches}
+
+
+def _router_addresses(arp: dict[str, str]) -> dict[str, str]:
+    """MAC -> the address config.routers actually reaches it at.
+
+    A router announces a management address per VLAN interface — the
+    MikroTik behind mb0 Slot0/21 sends 38 — and the first one the walk
+    returns is as likely to be a segment gateway as the address anyone
+    uses. The one in `routers:` is the one the operator types, so that
+    is what goes under the node's name.
+    """
+    routers = set(config.routers)
+    found = {mac: ip for mac, ip in arp.items() if ip in routers}
+    if config.demo:
+        found.update(demo.ROUTER_ADDRESSES)
+    return found
 
 
 def _merge_bridge_identity(
