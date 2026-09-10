@@ -11,6 +11,9 @@
   --link: #7fb4d9;        /* links and interactive elements */
   --ok: #7fc98f;
   --warn: #d9a86b;
+  --link-text: #9fd0f0;   /* links inside panels: the browser default
+                             #0000EE is unreadable on this background */
+  --link-hover: #cfe8fb;
   font-size: 15px;
 }
 
@@ -480,3 +483,37 @@ main { flex: 1; display: flex; min-height: 0; }
 
 /* a scan that raised: the map is the previous one, and it says so */
 #scan-status.failed { color: #d96b6b; cursor: help; }
+
+/* Links inside the panels. Until v0.6.3 there was no rule for `a` at
+   all, so every address in a card was rendered in the browser's
+   default dark blue on a dark panel — the MikroTik card, with 38 of
+   them, came out as one unreadable blue block. `:visited` keeps the
+   same colour: whether someone has opened a device's web interface
+   before says nothing about the device. */
+#details a, #alarms a, #journal a, #ports a, #stp a {
+  color: var(--link-text);
+  text-decoration: none;
+}
+#details a:visited, #alarms a:visited, #journal a:visited,
+#ports a:visited, #stp a:visited { color: var(--link-text); }
+#details a:hover, #alarms a:hover, #journal a:hover,
+#ports a:hover, #stp a:hover {
+  color: var(--link-hover);
+  text-decoration: underline;
+}
+
+/* Management addresses read as a column; a router has dozens */
+.addr-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  font-family: ui-monospace, monospace;
+}
+.addr-list li { padding: 1px 0; }
+.addr-more {
+  margin-top: 3px;
+  padding: 1px 7px;
+  font-size: 0.78rem;
+  color: var(--text-dim);
+}
+.addr-more:hover { color: var(--text); }

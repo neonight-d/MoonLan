@@ -813,14 +813,7 @@ function showDetails(nodeId) {
       : bridge.mgmt_ip
       ? [bridge.mgmt_ip]
       : [];
-    const link = addresses.length
-      ? addresses
-          .map(
-            (a) =>
-              `<a href="http://${a}" target="_blank" rel="noopener">${a}</a>`
-          )
-          .join(", ")
-      : "—";
+    const link = addressList(addresses);
     // one hint, not several: "the devices behind this port hang off
     // this node", "they stay on the unmanaged switch" and "everything
     // behind here is somebody else's" cannot all be true at once
@@ -929,9 +922,7 @@ function showDetails(nodeId) {
       <dt>${t("vlan")}</dt><dd>${vlanLabel(host.vlan)}</dd>
       ${host.lldp ? `<dt>${t("lldpLabel")}</dt><dd>${lldpHostLine(host.lldp)}</dd>` : ""}
       ${(host.lldp && (host.lldp.mgmt_ips || []).length > 1)
-        ? `<dt>${t("mgmtIp")}</dt><dd>${host.lldp.mgmt_ips
-            .map((a) => `<a href="http://${a}" target="_blank" rel="noopener">${a}</a>`)
-            .join(", ")}</dd>`
+        ? `<dt>${t("mgmtIp")}</dt><dd>${addressList(host.lldp.mgmt_ips)}</dd>`
         : ""}
       <dt>${t("lastReply")}</dt><dd>${fmtTime(host.last_ping_ok)}</dd>
       <dt>${t("lastSeenLabel")}</dt><dd>${fmtTime(host.last_seen)}</dd>
@@ -953,6 +944,13 @@ function showDetails(nodeId) {
       openPorts(nodeId.slice("sw:".length))
     );
   }
+  for (const more of els.detailsBody.querySelectorAll(".addr-more")) {
+    more.addEventListener("click", () => {
+      const rest = more.nextElementSibling;
+      if (rest) rest.classList.remove("hidden");
+      more.remove();
+    });
+  }
   const monitorBtn = document.getElementById("monitor-btn");
   if (monitorBtn) {
     monitorBtn.addEventListener("click", () => toggleMonitor(nodeId));
@@ -972,6 +970,41 @@ function fmtAddresses(addresses, limit) {
   return (
     list.slice(0, keep).join(", ") +
     " " + fmt("andMore", { n: list.length - keep })
+  );
+}
+
+/* A management address as a link to the device's web interface.
+   IPv6 needs brackets in a URL, and a hostname that is not an address
+   is left as plain text rather than turned into a broken link. */
+function addressLink(address) {
+  const text = String(address);
+  const host = text.includes(":") ? "[" + text + "]" : text;
+  const linkable = /^[0-9.]+$/.test(text) || text.includes(":");
+  if (!linkable) return `<span>${text}</span>`;
+  return `<a href="http://${host}" target="_blank" rel="noopener">${text}</a>`;
+}
+
+/* Management addresses as a column: the first few as links, the rest
+   behind "and N more". A router announces one per VLAN interface, and
+   38 of them run together into an unreadable wall. */
+function addressList(addresses, limit) {
+  const list = addresses || [];
+  if (!list.length) return "—";
+  const keep = limit || 3;
+  const shown = list
+    .slice(0, keep)
+    .map((a) => `<li>${addressLink(a)}</li>`)
+    .join("");
+  if (list.length <= keep) return `<ul class="addr-list">${shown}</ul>`;
+  const rest = list
+    .slice(keep)
+    .map((a) => `<li>${addressLink(a)}</li>`)
+    .join("");
+  return (
+    `<ul class="addr-list">${shown}</ul>` +
+    `<button type="button" class="addr-more">` +
+    fmt("andMore", { n: list.length - keep }) +
+    `</button><ul class="addr-list addr-rest hidden">${rest}</ul>`
   );
 }
 
