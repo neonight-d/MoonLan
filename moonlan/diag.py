@@ -1137,7 +1137,7 @@ async def run_port_counters(
             print(f"\n… waiting {WATCH_INTERVAL} s")
             await asyncio.sleep(WATCH_INTERVAL)
         samples, oper, columns = await counters.collect_samples(
-            collector, host
+            collector, host, set(names)
         )
         rates = store.update(host, samples, speeds)
         if not measurement:
