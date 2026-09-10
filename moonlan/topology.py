@@ -989,6 +989,7 @@ def build_topology(
     unconfirmed_macs: set[str] | None = None,
     place_trunk_only: bool = True,
     uplink_ports: set[tuple[str, str]] | None = None,
+    remembered_locations: dict[str, tuple[str, str]] | None = None,
 ) -> tuple[
     list[dict], list[dict], list[dict], list[dict], dict[int, str],
     list[dict], dict,
@@ -1011,6 +1012,7 @@ def build_topology(
     known_hosts_per_port = known_hosts_per_port or {}
     sticky_pseudo_ports = sticky_pseudo_ports or set()
     uplink_ports = uplink_ports or set()
+    remembered_locations = remembered_locations or {}
     unconfirmed_macs = unconfirmed_macs or set()
     switches = [sw for sw in collected if sw.reachable]
     fdb = normalized_fdb(switches)
@@ -1074,12 +1076,24 @@ def build_topology(
     # 3a. Devices every switch sees only through a trunk: they hang off
     # equipment nobody polls, and there is no port of ours to bind them
     # to. Dropping them left real, pinging devices in the "not on map"
-    # list; instead they are placed on the trunk with the best claim —
-    # a downlink before an uplink, the deeper switch before the
-    # shallower one — and flagged as approximate.
+    # list, so they are placed somewhere — but the database is asked
+    # first.
+    #
+    # A device that has aged out of its own switch's table while it is
+    # still in the core's table on the trunk toward that switch is not
+    # "behind the core": it is where it has always been, quiet. Before
+    # v0.6.4 the heuristic put it on the core's trunk, wrote that
+    # location into the database and then drew the offline group there
+    # — which is how the devices of one subnet ended up split between
+    # mb2 1/3 and mb0 Slot0/3, with the card claiming they were "shown
+    # where they were last seen".
     approximate: set[str] = set()
+    remembered_at: set[str] = set()
     if place_trunk_only:
         depth = tree_depth(info["root"], links)
+        port_index = {
+            sw.ip: {port_name(sw, i): i for i in sw.ports} for sw in switches
+        }
         claims: dict[str, tuple] = {}
         for sw in switches:
             for mac, if_index in fdb[sw.ip].items():
@@ -1087,17 +1101,36 @@ def build_topology(
                     continue
                 if if_index not in trunk_port_ids[sw.ip]:
                     continue
-                downlink = if_index != uplinks.get(sw.ip)
-                claim = (downlink, depth.get(sw.ip, 0), sw.ip, if_index)
+                # The root has no uplink, so calling every one of its
+                # trunks a "downlink" made it outrank every real switch.
+                # Depth decides first now: the deeper switch is nearer
+                # the truth even when the root's port points down.
+                uplink = uplinks.get(sw.ip)
+                downlink = uplink is not None and if_index != uplink
+                claim = (depth.get(sw.ip, 0), downlink, sw.ip, if_index)
                 if mac not in claims or claim > claims[mac]:
                     claims[mac] = claim
-        for mac, (_downlink, _depth, sw_ip, if_index) in claims.items():
+        for mac, (_depth, _downlink, sw_ip, if_index) in claims.items():
+            place = remembered_locations.get(mac)
+            if place and place[0] in port_index:
+                known_index = port_index[place[0]].get(place[1])
+                if (
+                    known_index is not None
+                    and known_index not in trunk_port_ids[place[0]]
+                ):
+                    # the database remembers a real port of a switch we
+                    # still poll: that is the promise the offline group
+                    # card makes, and it can be kept
+                    best_location[mac] = (0, place[0], known_index)
+                    remembered_at.add(mac)
+                    continue
             best_location[mac] = (0, sw_ip, if_index)
             approximate.add(mac)
-        if approximate:
+        if approximate or remembered_at:
             log.debug(
-                "%d devices are visible only through trunks and were placed "
-                "approximately", len(approximate),
+                "%d device(s) visible only through trunks: %d kept at the "
+                "port the database remembers, %d placed approximately",
+                len(claims), len(remembered_at), len(approximate),
             )
 
     hosts = []
@@ -1114,6 +1147,10 @@ def build_topology(
         }
         if mac in approximate:
             host["approximate"] = True
+        elif mac in remembered_at:
+            # seen only through a trunk, but the database knows the port
+            # it has always been on — that is knowledge, not a guess
+            host["remembered"] = True
         hosts.append(host)
         if mac in unconfirmed_macs:
             host["unconfirmed"] = True
@@ -1386,6 +1423,10 @@ def build_topology(
                 vlan_names.setdefault(vlan_id, name)
 
     info["external_networks"] = external_networks
+    info["trunk_names"] = {
+        sw.ip: sorted(port_name(sw, i) for i in trunk_port_ids[sw.ip])
+        for sw in switches
+    }
     return (
         switch_dicts, links, hosts, pseudo_switches, vlan_names,
         bridges, info,

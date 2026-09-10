@@ -202,6 +202,17 @@ FLAP_PORT = 7
 TRUNK_ONLY_MAC = "74:56:3c:9a:97:9f"
 TRUNK_ONLY_IP = "10.0.99.51"
 
+# The same situation, except that this one HAS been seen on a real port
+# before and the inventory remembers it. It has aged out of its own
+# switch's table while the core still carries it on the trunk — which
+# is what happens to a quiet device — and it must stay on the port it
+# lives on instead of migrating to the core's trunk and taking the
+# offline group with it.
+REMEMBERED_MAC = "74:56:3c:9a:97:a0"
+REMEMBERED_IP = "10.0.99.52"
+REMEMBERED_SWITCH = "10.0.0.23"   # access-sw-3
+REMEMBERED_PORT = "Gi0/11"
+
 
 def _corrupt_copies(scan: int) -> list[str]:
     """The distorted copies this poll's damaged frames produced."""
@@ -357,6 +368,9 @@ def demo_network() -> list[SwitchData]:
     # claim — the core's downlink — and marked approximate
     core.fdb[TRUNK_ONLY_MAC] = core_trunk_to_ray3
     ray3.fdb[TRUNK_ONLY_MAC] = ray3_trunk
+    # …and one the inventory can place properly
+    core.fdb[REMEMBERED_MAC] = core_trunk_to_ray3
+    ray3.fdb[REMEMBERED_MAC] = ray3_trunk
 
     # Four devices behind the unmanaged box on access-sw-1 Gi0/14, with
     # two bridges of their own further down the chain
@@ -688,7 +702,8 @@ def enrich_db(db: Database, hosts: list[dict]) -> None:
     # EDGE_ROUTER_CHASSIS is here on purpose and gets no IP below: its
     # whole point is a device the inventory cannot name
     fixed = (
-        CORRUPT_REAL, CORRUPT_NEIGHBOR, TRUNK_ONLY_MAC, ROUTER_CHASSIS,
+        CORRUPT_REAL, CORRUPT_NEIGHBOR, TRUNK_ONLY_MAC, REMEMBERED_MAC,
+        ROUTER_CHASSIS,
         EDGE_ROUTER_CHASSIS, UPLINK_CHASSIS, *UPLINK_HOST_MACS, *CAMERAS,
     )
     hosts = [h for h in hosts if h["mac"] not in fixed]
@@ -696,6 +711,7 @@ def enrich_db(db: Database, hosts: list[dict]) -> None:
         (CORRUPT_REAL, CORRUPT_IP, "cam-4floor.demo.lan"),
         (CORRUPT_NEIGHBOR, CORRUPT_NEIGHBOR_IP, "cam-4floor-2.demo.lan"),
         (TRUNK_ONLY_MAC, TRUNK_ONLY_IP, "nvr-3floor.demo.lan"),
+        (REMEMBERED_MAC, REMEMBERED_IP, "nvr-2floor.demo.lan"),
         (ROUTER_CHASSIS, ROUTER_IPS[0], "gw.demo.lan"),
         (UPLINK_CHASSIS, UPLINK_MGMT_IP, ""),
         # no *.demo.lan names: these are not ours to name
@@ -782,6 +798,13 @@ UNLOCATED_HOSTS = [
 
 def _seed_offmap_hosts(db: Database, now: float) -> None:
     """Hosts last seen hours ago (grace window) and ARP-only devices."""
+    # The inventory has seen this one on a real access port. From the
+    # next scan on it must be drawn there and not on the core's trunk,
+    # however long it stays quiet.
+    db.upsert_hosts([{
+        "mac": REMEMBERED_MAC, "switch": REMEMBERED_SWITCH,
+        "port": REMEMBERED_PORT, "vlan": 8,
+    }])
     db.upsert_hosts([
         {"mac": mac, "switch": switch, "port": port, "vlan": 8}
         for mac, _ip, _name, switch, port, _hours in STALE_HOSTS

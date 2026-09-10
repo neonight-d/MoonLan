@@ -211,17 +211,37 @@ class Database:
         many they accumulate — the ones that look like damaged copies
         of a real address. An IP still confirms them: ARP answers come
         back only from a device that exists.
+
+        A host marked `approximate` was placed on a trunk by guesswork
+        because nothing better was available. Its sighting is recorded,
+        but it does NOT overwrite a location the database already
+        holds: doing so replaced "mb2 port 1/3", which was true, with
+        "mb0 Slot0/3", which was a guess — and the guess then became
+        what the next scan remembered.
         """
         now = time.time()
         hold = hold or set()
         confirmed: list[str] = []
         with self._lock, self._conn:
             for h in hosts:
-                cur = self._conn.execute(
-                    "UPDATE hosts SET last_seen = ?, switch_ip = ?, port = ?, "
-                    "vlan = ?, seen_count = seen_count + 1 WHERE mac = ?",
-                    (now, h["switch"], h["port"], h.get("vlan", 0), h["mac"]),
-                )
+                if h.get("approximate"):
+                    cur = self._conn.execute(
+                        "UPDATE hosts SET last_seen = ?, "
+                        "seen_count = seen_count + 1, "
+                        "switch_ip = CASE WHEN switch_ip = '' THEN ? "
+                        "ELSE switch_ip END, "
+                        "port = CASE WHEN port = '' THEN ? ELSE port END "
+                        "WHERE mac = ?",
+                        (now, h["switch"], h["port"], h["mac"]),
+                    )
+                else:
+                    cur = self._conn.execute(
+                        "UPDATE hosts SET last_seen = ?, switch_ip = ?, "
+                        "port = ?, vlan = ?, seen_count = seen_count + 1 "
+                        "WHERE mac = ?",
+                        (now, h["switch"], h["port"], h.get("vlan", 0),
+                         h["mac"]),
+                    )
                 if cur.rowcount == 0:
                     self._conn.execute(
                         "INSERT INTO hosts (mac, switch_ip, port, vlan, "

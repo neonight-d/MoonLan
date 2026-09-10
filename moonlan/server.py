@@ -208,6 +208,7 @@ async def run_scan() -> None:
             unconfirmed_macs=unconfirmed,
             place_trunk_only=config.place_trunk_only_hosts,
             uplink_ports=_uplink_ports(),
+            remembered_locations=_remembered_locations(db_rows),
         )
         prev_pseudo_ports = {
             (p["switch"], p["port"]) for p in pseudo_switches
@@ -272,6 +273,14 @@ async def run_scan() -> None:
             unconfirmed,
             {h["mac"]: h["merged_into"] for h in hosts if h.get("merged_into")},
         )
+        # A group that sits on a trunk was never seen there as devices:
+        # its location is inherited guesswork, and the card should not
+        # claim otherwise
+        trunk_names = topo_info.get("trunk_names", {})
+        for group in offline_groups:
+            group["approximate"] = group["port"] in trunk_names.get(
+                group["switch"], []
+            )
         _merge_db_fields(hosts, db_rows)
         _merge_db_fields(unlocated, db_rows)
         # LLDP: remember the neighbours and the bridges nobody polls, so
@@ -589,6 +598,22 @@ async def _release_unconfirmed_ips(db_rows: dict[str, dict]) -> None:
             "Released %d IP addresses of hosts missing from every MAC "
             "table and unconfirmed by ARP", len(released),
         )
+
+
+def _remembered_locations(
+    db_rows: dict[str, dict]
+) -> dict[str, tuple[str, str]]:
+    """MAC -> the (switch, port) the database last placed it at.
+
+    Consulted before a device visible only through a trunk is guessed
+    onto one. What the database remembers is a port a device was
+    actually seen on; a trunk is where its frames happened to pass.
+    """
+    return {
+        mac: (row["switch_ip"], row["port"])
+        for mac, row in db_rows.items()
+        if row["switch_ip"] and row["port"]
+    }
 
 
 def _known_hosts_per_port(
