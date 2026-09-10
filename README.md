@@ -16,7 +16,7 @@ An open-source alternative to LanTopoLog. MIT license.
 
 *Alarm panel: port errors, discards and host outages with one-click access to the switch port table.*
 
-## Features (v0.6.3)
+## Features (v0.6.4)
 
 - SNMP v2c polling of switches: device name, ports, speeds, statuses.
 - MAC address tables (BRIDGE-MIB and Q-BRIDGE-MIB) from every switch,
@@ -125,8 +125,9 @@ An open-source alternative to LanTopoLog. MIT license.
   `thresholds.flap_window_minutes`, and the ports panel marks the port
   with the count and the time of the last transition.
 - Port traffic and error monitoring: a light counters poll (ifHC* octets
-  with a 32-bit fallback, errors, discards) turns deltas into Mbit/s and
-  errors/min per port. The "Ports" panel of a switch shows live rates;
+  with a per-direction 32-bit fallback, errors, discards) turns deltas
+  into Mbit/s and errors/min per port. A counter the switch did not
+  answer for reads "—", never 0.0, and raises no alarm either way. The "Ports" panel of a switch shows live rates;
   map edges show the current trunk load ("2×1 Gbit/s · ↓34 ↑12 Mbit/s",
   summed over LAG members). Counter resets after a switch reboot are
   detected and do not produce rate spikes.
@@ -182,7 +183,8 @@ An open-source alternative to LanTopoLog. MIT license.
 | v0.6.1 ✓| Fixes from the production network: multi-bridge ports, capability-less neighbours, LLDP port matching |
 | v0.6.2 ✓| One node per device, LLDP names on the map, external uplink ports, a usable ports panel |
 | v0.6.3 ✓| Readable links, honest external-network demo, safe development against a live service |
-| v0.6.4  | Loop Detection from the private D-Link/HPE MIBs |
+| v0.6.4 ✓| Honest counters, remembered offline locations, network edge and hint fixes |
+| v0.6.5  | Loop Detection from the private D-Link/HPE MIBs |
 | v0.7    | Export to PDF and Draw.io, MAC address info import |
 | v0.8    | Windows computer inventory (WMI/WinRM) |
 
@@ -477,10 +479,30 @@ router) is what makes the inventory more complete.
 #### Errors vs discards
 
 ```bash
-python -m moonlan.diag --port 10.0.0.21               # noisy ports
+python -m moonlan.diag --port 10.0.0.21               # every active port
 python -m moonlan.diag --port 10.0.0.21 --iface Gi0/1 # one port
 python -m moonlan.diag --port 10.0.0.21 --watch 3     # 3 measurements, 60 s apart
 ```
+
+#### "—" is not zero
+
+A dash in the ports panel means the switch returned nothing for that
+counter. A zero means it answered, and the answer was zero. The two
+look alike and mean opposite things, so they are never conflated:
+an unknown value raises no alarm and clears none, and the column
+header carries a ⚠ naming the OID that went unanswered.
+
+This is not hypothetical. The D-Link DGS-1210 Rev.F1 implements
+`ifHCInOctets` and returns nothing at all for `ifHCOutOctets` — MoonLan
+falls back to the 32-bit `ifOutOctets` for that direction alone, which
+is why each counter column is walked and judged on its own. A walk that
+fails logs one WARNING per OID per cycle with the error text, and
+`python -m moonlan.diag --port <switch>` opens with a per-column report:
+how many rows each returned, or that it returned none and why.
+
+If a switch's own web interface shows errors where SNMP reports zeros,
+that is a hole in its firmware rather than a healthy port — the numbers
+above tell you which of the two you are looking at.
 
 The first measurement prints the raw counters (`ifInErrors`,
 `ifOutErrors`, `ifInDiscards`, `ifOutDiscards`, `ifHCInOctets`,
