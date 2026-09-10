@@ -39,7 +39,12 @@ import time
 from collections import Counter
 
 from . import counters, pinger, stp
-from .config import SECRET_KEYS, load_config, parse_uplink_ports
+from .config import (
+    SECRET_KEYS,
+    SnmpConfig,
+    load_config,
+    parse_uplink_ports,
+)
 from .snmpval import as_octets, is_octets
 from .corruption import find_suspects, sample_mac
 from .counters import CounterStore, Sample
@@ -78,6 +83,22 @@ from .snmp_collector import (
 )
 
 MAX_IF_ROWS = 40
+
+# Retry settings are not passed through every diagnostic function; they
+# come from config.yaml once, in main(), and every collector built here
+# uses them. A CLI run must retry exactly the way the service does, or
+# it diagnoses a different machine than the one that is running.
+_SNMP = {"retries": SnmpConfig.retries,
+         "retries_on_break": SnmpConfig.retries_on_break}
+
+
+def _make_collector(community: str, timeout: int) -> SnmpCollector:
+    return SnmpCollector(
+        community=community,
+        timeout=timeout,
+        retries=_SNMP["retries"],
+        retries_on_break=_SNMP["retries_on_break"],
+    )
 
 
 def _addresses(addresses: list[str], limit: int = 3) -> str:
@@ -125,7 +146,7 @@ async def _own_macs_light(
 async def run_diag(
     ip: str, community: str, timeout: int, config_switches: list[str]
 ) -> None:
-    collector = SnmpCollector(community=community, timeout=timeout)
+    collector = _make_collector(community, timeout)
 
     sys_name = await collector._get(ip, OID_SYS_NAME)
     if sys_name is None:
@@ -278,7 +299,7 @@ async def run_topology_view(community: str, timeout: int, cfg) -> None:
     _section("8. Topology view")
     if not cfg.switches:
         sys.exit("no switches in config.yaml")
-    collector = SnmpCollector(community=community, timeout=timeout)
+    collector = _make_collector(community, timeout)
     print(f"polling {len(cfg.switches)} switches from config.yaml…")
     collected = list(
         await asyncio.gather(*(collector.collect(ip) for ip in cfg.switches))
@@ -535,7 +556,7 @@ async def run_host_inventory(community: str, timeout: int, cfg) -> None:
     _section("9. Host inventory")
     if not cfg.switches:
         sys.exit("no switches in config.yaml")
-    collector = SnmpCollector(community=community, timeout=timeout)
+    collector = _make_collector(community, timeout)
     collected = list(
         await asyncio.gather(*(collector.collect(ip) for ip in cfg.switches))
     )
@@ -767,7 +788,7 @@ async def run_fdb_dump(
     next to the address they would have produced.
     """
     _section(f"12. MAC table: {host}")
-    collector = SnmpCollector(community=community, timeout=timeout)
+    collector = _make_collector(community, timeout)
     port_to_ifindex, names, _pvid = await _port_maps(collector, host)
     if not names:
         sys.exit(f"{host} does not respond to SNMP")
@@ -868,7 +889,7 @@ async def run_host_diag(
     if not mac and not ip:
         sys.exit("give an IP address or a MAC address")
 
-    collector = SnmpCollector(community=community, timeout=timeout)
+    collector = _make_collector(community, timeout)
 
     # Which MACs identify a switch: a port carrying one is a trunk, and
     # a device seen only on trunks is behind equipment nobody polls
@@ -1071,13 +1092,7 @@ def _print_columns(columns: dict[str, counters.ColumnStatus]) -> None:
     print("counter columns:")
     for name in sorted(columns):
         status = columns[name]
-        if status.error:
-            verdict = f"NO ANSWER — {status.error}"
-        elif not status.answered:
-            verdict = "no rows — the agent does not implement this column"
-        else:
-            verdict = f"{status.rows} row(s)"
-        print(f"  {name:<14} {status.oid:<28} {verdict}")
+        print(f"  {name:<14} {status.oid:<28} {status.verdict()}")
 
 
 def _print_raw(
@@ -1111,7 +1126,7 @@ async def run_port_counters(
     nothing in its error columns is exactly the one worth measuring.
     """
     _section(f"10. Port counters: {host}")
-    collector = SnmpCollector(community=community, timeout=timeout)
+    collector = _make_collector(community, timeout)
     names, speeds = await _port_labels(collector, host)
     if not names:
         sys.exit(f"{host} does not respond to SNMP")
@@ -1121,7 +1136,9 @@ async def run_port_counters(
         if measurement:
             print(f"\n… waiting {WATCH_INTERVAL} s")
             await asyncio.sleep(WATCH_INTERVAL)
-        samples, oper, columns = await counters.collect_samples(collector, host)
+        samples, oper, columns = await counters.collect_samples(
+            collector, host
+        )
         rates = store.update(host, samples, speeds)
         if not measurement:
             _print_columns(columns)
@@ -1158,10 +1175,11 @@ async def run_port_counters(
                 f"(in {_rate(r.in_discards_per_min, 0)}, "
                 f"out {_rate(r.out_discards_per_min, 0)})"
             )
-        if any(not st.answered for st in columns.values()):
+        if any(not st.complete for st in columns.values()):
             print(
-                "  ^ n/a means the agent returned nothing for that column, "
-                "which is not the same as zero"
+                "  ^ n/a means the agent returned nothing for that port, "
+                "which is not the same as zero — see the column report "
+                "above for which columns were short"
             )
 
 
@@ -1176,7 +1194,7 @@ async def run_stp_view(community: str, timeout: int, cfg) -> None:
     _section("14. Spanning tree (BRIDGE-MIB dot1dStp*)")
     if not cfg.switches:
         sys.exit("no switches in config.yaml")
-    collector = SnmpCollector(community=community, timeout=timeout)
+    collector = _make_collector(community, timeout)
     collected = list(
         await asyncio.gather(*(collector.collect(ip) for ip in cfg.switches))
     )
@@ -1273,7 +1291,7 @@ async def run_walk(
     of what comes back from these branches is neither.
     """
     _section(f"15. Walk {oid} on {host}")
-    collector = SnmpCollector(community=community, timeout=timeout)
+    collector = _make_collector(community, timeout)
     count = 0
     async for suffix, value in collector._walk(host, oid):
         count += 1
@@ -1377,6 +1395,8 @@ def main() -> None:
     cfg = load_config()
     community = args.community or cfg.snmp.community
     timeout = args.timeout or cfg.snmp.timeout
+    _SNMP["retries"] = cfg.snmp.retries
+    _SNMP["retries_on_break"] = cfg.snmp.retries_on_break
     if args.config:
         run_config_audit(cfg)
     elif args.walk:
