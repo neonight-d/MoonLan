@@ -578,6 +578,21 @@ class AlarmEngine:
                     f"no link transition in {window:g} min",
                 )
 
+    async def clear_suppressed(self, suppressed: dict[str, str]) -> None:
+        """Closes alarms the configuration has just made pointless.
+
+        A change to the config should close what it makes moot. The
+        CE6851 alarm was raised before mb0 Slot0/25 went into
+        uplink_ports and then sat in the active list for a day: the
+        only clear condition was the neighbour disappearing from LLDP,
+        which a provider handover never does. The subject is now
+        suppressed by configuration, so the alarm goes, with the reason
+        in the journal.
+        """
+        for subject, reason in suppressed.items():
+            self._bridges_seen.pop(subject, None)
+            await self._clear("unmanaged_bridge_detected", subject, reason)
+
     async def on_bridges(
         self, bridges: list[dict], known: set[str]
     ) -> None:
