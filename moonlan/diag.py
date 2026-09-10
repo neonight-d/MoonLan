@@ -1003,30 +1003,76 @@ async def _port_labels(
 
 
 def _select_ports(
-    samples: dict[int, Sample], names: dict[int, str], iface: str | None
-) -> list[int]:
-    """One port when --iface is given, otherwise every port with a
-    non-zero error or discard counter, worst first."""
+    samples: dict[int, Sample],
+    names: dict[int, str],
+    iface: str | None,
+    oper: dict[int, bool] | None = None,
+) -> tuple[list[int], list[int]]:
+    """(ports to print, the noisy ones among them).
+
+    With --iface, exactly that port. Without it, every port that is up,
+    busiest first — and separately the ones with a non-zero error or
+    discard counter.
+
+    Until v0.6.4 the noisy ports were ALL this returned, and an empty
+    list ended the command. The one switch whose counters are
+    suspiciously empty was therefore the one switch the command would
+    say nothing about.
+    """
     if iface:
         if iface.isdigit() and int(iface) in samples:
-            return [int(iface)]
+            return [int(iface)], []
         wanted = iface.lower()
-        return [
-            i for i in samples
-            if names.get(i, str(i)).lower() == wanted
+        chosen = [
+            i for i in samples if names.get(i, str(i)).lower() == wanted
         ]
+        return chosen, []
+
+    def total(if_index: int, attrs: tuple[str, ...]) -> int:
+        s = samples[if_index]
+        return sum(getattr(s, a) or 0 for a in attrs)
+
     noisy = [
-        i for i, s in samples.items()
-        if s.in_errors or s.out_errors or s.in_discards or s.out_discards
+        i for i in samples
+        if total(i, ("in_errors", "out_errors", "in_discards", "out_discards"))
     ]
     noisy.sort(
-        key=lambda i: (
-            samples[i].in_errors + samples[i].out_errors
-            + samples[i].in_discards + samples[i].out_discards
+        key=lambda i: total(
+            i, ("in_errors", "out_errors", "in_discards", "out_discards")
         ),
         reverse=True,
     )
-    return noisy
+    oper = oper or {}
+    shown = [i for i in samples if oper.get(i)] or list(samples)
+    shown.sort(key=lambda i: total(i, ("in_octets", "out_octets")), reverse=True)
+    return shown, noisy
+
+
+def _num(value) -> str:
+    """A counter, or "no answer" — which is not the same as zero."""
+    return "n/a" if value is None else str(value)
+
+
+def _rate(value: float | None, digits: int = 2) -> str:
+    return "n/a" if value is None else f"{value:.{digits}f}"
+
+
+def _print_columns(columns: dict[str, counters.ColumnStatus]) -> None:
+    """Which counter columns the agent answered for, and with what.
+
+    This is the line that separates "no errors" from "we never got an
+    answer" — the distinction mb0 turned on.
+    """
+    print("counter columns:")
+    for name in sorted(columns):
+        status = columns[name]
+        if status.error:
+            verdict = f"NO ANSWER — {status.error}"
+        elif not status.answered:
+            verdict = "no rows — the agent does not implement this column"
+        else:
+            verdict = f"{status.rows} row(s)"
+        print(f"  {name:<14} {status.oid:<28} {verdict}")
 
 
 def _print_raw(
@@ -1040,12 +1086,12 @@ def _print_raw(
     status = "up" if oper.get(if_index) else "down"
     print(
         f"  {name:<16} {status:<5} {speeds.get(if_index, 0):>6} Mbit/s  "
-        f"errors in/out {s.in_errors}/{s.out_errors}  "
-        f"discards in/out {s.in_discards}/{s.out_discards}"
+        f"errors in/out {_num(s.in_errors)}/{_num(s.out_errors)}  "
+        f"discards in/out {_num(s.in_discards)}/{_num(s.out_discards)}"
     )
     print(
-        f"  {'':<16} octets in/out {s.in_octets}/{s.out_octets}  "
-        f"unicast packets in/out {s.in_pkts}/{s.out_pkts}"
+        f"  {'':<16} octets in/out {_num(s.in_octets)}/{_num(s.out_octets)}  "
+        f"unicast packets in/out {_num(s.in_pkts)}/{_num(s.out_pkts)}"
     )
 
 
@@ -1053,7 +1099,12 @@ async def run_port_counters(
     host: str, iface: str | None, watch: int, community: str, timeout: int
 ) -> None:
     """Section 10: raw port counters and, with --watch, the deltas and
-    rates the alarm engine computes from them."""
+    rates the alarm engine computes from them.
+
+    Every requested measurement is taken whatever the counters hold:
+    the measurements are the point of the command, and a switch with
+    nothing in its error columns is exactly the one worth measuring.
+    """
     _section(f"10. Port counters: {host}")
     collector = SnmpCollector(community=community, timeout=timeout)
     names, speeds = await _port_labels(collector, host)
@@ -1065,19 +1116,22 @@ async def run_port_counters(
         if measurement:
             print(f"\n… waiting {WATCH_INTERVAL} s")
             await asyncio.sleep(WATCH_INTERVAL)
-        samples, oper = await counters.collect_samples(collector, host)
+        samples, oper, columns = await counters.collect_samples(collector, host)
         rates = store.update(host, samples, speeds)
-        ports = _select_ports(samples, names, iface)
+        if not measurement:
+            _print_columns(columns)
+        ports, noisy = _select_ports(samples, names, iface, oper)
         if not ports:
-            print(
-                f"  {iface}: no such port"
-                if iface
-                else "  no port has a non-zero error or discard counter"
-            )
+            print(f"  {iface}: no such port" if iface else "  no ports answered")
             return
         print(f"\nraw counters ({time.strftime('%H:%M:%S')}):")
         for if_index in ports:
             _print_raw(if_index, samples[if_index], names, speeds, oper)
+        if not iface:
+            print(
+                "ports with a non-zero error or discard counter: "
+                + (", ".join(names.get(i, str(i)) for i in noisy) or "none")
+            )
         if not rates:
             continue  # first measurement is the baseline
         print("rates since the previous measurement:")
@@ -1091,12 +1145,18 @@ async def run_port_counters(
             )
             print(
                 f"  {names.get(if_index, str(if_index)):<16} "
-                f"in {r.in_mbps:.2f} Mbit/s, out {r.out_mbps:.2f} Mbit/s, "
-                f"errors {r.errors_per_min:.1f}/min "
-                f"(in {r.in_errors_per_min:.1f}, out {r.out_errors_per_min:.1f}"
-                f"{share}), discards {r.discards_per_min:.0f}/min "
-                f"(in {r.in_discards_per_min:.0f}, "
-                f"out {r.out_discards_per_min:.0f})"
+                f"in {_rate(r.in_mbps)} Mbit/s, out {_rate(r.out_mbps)} "
+                f"Mbit/s, errors {_rate(r.errors_per_min, 1)}/min "
+                f"(in {_rate(r.in_errors_per_min, 1)}, "
+                f"out {_rate(r.out_errors_per_min, 1)}"
+                f"{share}), discards {_rate(r.discards_per_min, 0)}/min "
+                f"(in {_rate(r.in_discards_per_min, 0)}, "
+                f"out {_rate(r.out_discards_per_min, 0)})"
+            )
+        if any(not st.answered for st in columns.values()):
+            print(
+                "  ^ n/a means the agent returned nothing for that column, "
+                "which is not the same as zero"
             )
 
 

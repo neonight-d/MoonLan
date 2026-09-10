@@ -18,7 +18,10 @@ Rules:
 - port_errors (warning): damaged frames (ifInErrors+ifOutErrors) above
   errors_per_minute AND, where packet counters exist, above
   error_ratio_percent of all frames, for port_alarm_cycles consecutive
-  counter cycles; cleared after the same number of cycles below.
+  counter cycles; cleared after the same number of cycles below. A
+  counter the agent did not answer for is unknown, not zero: it neither
+  raises nor clears anything. The same holds for port_discards and
+  port_util.
 - port_discards (info): ifInDiscards+ifOutDiscards above
   discards_per_minute. Discards are usually normal filtering (VLAN
   rules, storm control, a burst filling a buffer), so they are a
@@ -109,6 +112,23 @@ FLAP_TYPES = {
     "host_down", "port_hosts_down", "port_errors", "port_discards",
     "port_util", "lag_degraded", "stp_topology_change",
 }
+
+
+def _total(a: float | None, b: float | None) -> float | None:
+    """Both halves or nothing — a rule cannot judge half a counter."""
+    if a is None or b is None:
+        return None
+    return a + b
+
+
+def _peak(a: float | None, b: float | None) -> float | None:
+    """The busier direction, out of the ones the agent answered for.
+
+    Utilization is a ceiling test, so one known direction is enough to
+    trip it; two unknowns are not.
+    """
+    known = [v for v in (a, b) if v is not None]
+    return max(known) if known else None
 
 
 def _fmt_window(seconds: float) -> str:
@@ -379,17 +399,21 @@ class AlarmEngine:
         for m in metrics:
             subject = f"{ip}:{m['port']}"
             await self._error_rule(subject, m)
-            discards = m["in_discards_per_min"] + m["out_discards_per_min"]
-            await self._hysteresis(
-                "port_discards", subject,
-                discards > thresholds.discards_per_minute,
-                f"{discards:.0f} discards per minute "
-                f"(in: {m['in_discards_per_min']:.0f}, "
-                f"out: {m['out_discards_per_min']:.0f})",
+            discards = _total(
+                m["in_discards_per_min"], m["out_discards_per_min"]
             )
+            if discards is not None:
+                await self._hysteresis(
+                    "port_discards", subject,
+                    discards > thresholds.discards_per_minute,
+                    f"{discards:.0f} discards per minute "
+                    f"(in: {m['in_discards_per_min']:.0f}, "
+                    f"out: {m['out_discards_per_min']:.0f})",
+                )
             speed = m["speed_mbps"]
-            if speed:
-                util = max(m["in_mbps"], m["out_mbps"]) / speed * 100
+            load = _peak(m["in_mbps"], m["out_mbps"])
+            if speed and load is not None:
+                util = load / speed * 100
                 await self._hysteresis(
                     "port_util", subject,
                     util > self._thresholds.port_utilization_percent,
@@ -407,7 +431,11 @@ class AlarmEngine:
         frames a minute is not in trouble over a handful of errors.
         """
         thresholds = self._thresholds
-        errors = m["in_errors_per_min"] + m["out_errors_per_min"]
+        errors = _total(m["in_errors_per_min"], m["out_errors_per_min"])
+        if errors is None:
+            # The agent did not answer for this column. Neither raising
+            # nor clearing is honest: we do not know.
+            return
         over = errors > thresholds.errors_per_minute
         ratio = m.get("error_ratio")
         share = ""

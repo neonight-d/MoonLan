@@ -62,7 +62,7 @@ import logging
 import random
 import time
 
-from .counters import Sample
+from .counters import ColumnStatus, Sample
 from .db import Database
 from .lldp import (
     LldpNeighbor,
@@ -855,13 +855,22 @@ class DemoCounters:
     (a bounded random walk); one port accumulates damaged frames
     (-> port_errors) and another one accumulates discards without a
     single error (-> port_discards, info, syslog only), so the split
-    between the two alarms is visible side by side. Packet counters
+    between the two alarms is visible side by side.
+
+    One switch answers for the inbound octets and not for the outbound
+    ones, the way a DGS-1210 Rev.F1 does. Its "Out, Mbit/s" column must
+    read "\u2014" and raise nothing — before v0.6.4 it read 0.0 on a
+    trunk carrying traffic in both directions. Packet counters
     are derived from the traffic, which gives the error-ratio rule
     something real to work with. Real Sample objects are produced so
     the whole delta pipeline in CounterStore is exercised, not
     bypassed.
     """
 
+    # The agent that does not implement ifHCOutOctets and answers
+    # nothing on the 32-bit fallback either: an unknown column, not a
+    # zero one
+    NO_OUT_OCTETS_SWITCH = "10.0.0.23"  # access-sw-3
     ERROR_SWITCH = "10.0.0.22"  # access-sw-2
     ERROR_PORT = 3              # Gi0/3: damaged frames
     DISCARD_PORT = 4            # Gi0/4: filtering, no errors at all
@@ -942,13 +951,35 @@ class DemoCounters:
                     elif p.if_index == self.DISCARD_PORT:
                         # a port that filters a lot and breaks nothing
                         tot[4] += 600 * dt / 60
+                silent_out = sw.ip == self.NO_OUT_OCTETS_SWITCH
                 samples[p.if_index] = Sample(
                     ts=now,
-                    in_octets=int(tot[0]), out_octets=int(tot[1]),
+                    in_octets=int(tot[0]),
+                    out_octets=None if silent_out else int(tot[1]),
                     in_errors=int(tot[2]), out_errors=int(tot[3]),
                     in_discards=int(tot[4]), out_discards=int(tot[5]),
-                    in_pkts=int(tot[6]), out_pkts=int(tot[7]),
+                    in_pkts=int(tot[6]),
+                    out_pkts=None if silent_out else int(tot[7]),
                     last_change=p.last_change,
                 )
             out[sw.ip] = samples
         return out
+
+    def columns(self, ip: str) -> dict[str, ColumnStatus]:
+        """What a real poll of this switch would report per column."""
+        report = {
+            name: ColumnStatus(oid=oid, rows=26)
+            for name, oid in (
+                ("in_octets", "1.3.6.1.2.1.31.1.1.1.6"),
+                ("out_octets", "1.3.6.1.2.1.31.1.1.1.10"),
+                ("in_errors", "1.3.6.1.2.1.2.2.1.14"),
+                ("out_errors", "1.3.6.1.2.1.2.2.1.20"),
+                ("in_discards", "1.3.6.1.2.1.2.2.1.13"),
+                ("out_discards", "1.3.6.1.2.1.2.2.1.19"),
+            )
+        }
+        if ip == self.NO_OUT_OCTETS_SWITCH:
+            report["out_octets"] = ColumnStatus(
+                oid="1.3.6.1.2.1.2.2.1.16", rows=0
+            )
+        return report

@@ -275,6 +275,11 @@ class SnmpCollector:
         self._retries = retries
         self._engine = SnmpEngine()
         self._targets: dict[str, UdpTransportTarget] = {}
+        # (host, oid) -> the error the last walk of it ended with. A
+        # walk that fails is otherwise indistinguishable from a column
+        # of zeros, which is how "no answer" reached the ports panel
+        # as a confident 0.0.
+        self._walk_errors: dict[tuple[str, str], str] = {}
 
     async def _target(self, host: str) -> UdpTransportTarget:
         target = self._targets.get(host)
@@ -310,13 +315,33 @@ class SnmpCollector:
             ObjectType(ObjectIdentity(oid)),
             lexicographicMode=False,
         )
+        self._walk_errors.pop((host, oid), None)
         async for error_ind, error_status, _, var_binds in objects:
             if error_ind or error_status:
-                log.debug("%s WALK %s: %s", host, oid, error_ind or error_status)
+                message = str(error_ind or error_status)
+                self._walk_errors[(host, oid)] = message
+                # One line per walk, and at WARNING: at DEBUG this was
+                # invisible, so a switch that had stopped answering
+                # halfway through a counters cycle looked exactly like
+                # a switch with nothing to report.
+                log.warning(
+                    "%s: walk of %s failed (%s) — the values it would "
+                    "have returned are unknown, not zero",
+                    host, oid, message,
+                )
                 return
             for name, value in var_binds:
                 suffix = tuple(name)[len(base):]
                 yield suffix, value
+
+    def last_walk_error(self, host: str, oid: str) -> str:
+        """The error the most recent walk of this OID ended with, if any.
+
+        An empty string with no rows means the agent answered and had
+        nothing — it does not implement the column. An error means we
+        do not know what it holds.
+        """
+        return self._walk_errors.get((host, oid), "")
 
     async def collect(self, host: str) -> SwitchData:
         """Full poll of a single switch."""
