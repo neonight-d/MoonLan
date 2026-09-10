@@ -15,6 +15,7 @@ We collect the minimum needed to build the topology:
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from dataclasses import dataclass, field
 
@@ -60,6 +61,27 @@ IF_TYPE_ETHERNET = 6  # ethernetCsmacd
 # D-Link DES-3526 combo gigabit ports) report types other than 6:
 # 62 = fastEther, 69 = fastEtherFX, 117 = gigabitEthernet.
 PHYSICAL_IF_TYPES = {IF_TYPE_ETHERNET, 62, 69, 117}
+
+# Seconds between giving up on a walk and picking it back up. An agent
+# that stopped answering mid-table is busy, not broken; asking again
+# immediately gets the same silence.
+RESUME_PAUSE = 0.2
+
+
+@dataclass
+class WalkStatus:
+    """How one walk of one OID subtree ended."""
+
+    oid: str
+    rows: int = 0
+    error: str = ""          # what it stopped with, if it stopped
+    truncated: bool = False  # rows arrived and then it stopped answering
+    last_oid: str = ""       # the last OID that did arrive
+    resumes: int = 0         # how many times the walk was picked back up
+
+    @property
+    def complete(self) -> bool:
+        return not self.error and not self.truncated
 
 
 @dataclass
@@ -269,17 +291,24 @@ class SnmpCollector:
     RSS). Transport targets are cached per host for the same reason.
     """
 
-    def __init__(self, community: str, timeout: int = 2, retries: int = 1):
+    def __init__(
+        self,
+        community: str,
+        timeout: int = 2,
+        retries: int = 1,
+        retries_on_break: int = 2,
+    ):
         self._community = CommunityData(community, mpModel=1)  # v2c
         self._timeout = timeout
         self._retries = retries
         self._engine = SnmpEngine()
         self._targets: dict[str, UdpTransportTarget] = {}
-        # (host, oid) -> the error the last walk of it ended with. A
-        # walk that fails is otherwise indistinguishable from a column
-        # of zeros, which is how "no answer" reached the ports panel
-        # as a confident 0.0.
-        self._walk_errors: dict[tuple[str, str], str] = {}
+        # (host, oid) -> how the last walk of it ended. A walk that
+        # fails is otherwise indistinguishable from a column of zeros,
+        # which is how "no answer" reached the ports panel as a
+        # confident 0.0.
+        self._walk_status: dict[tuple[str, str], WalkStatus] = {}
+        self._retries_on_break = retries_on_break
 
     async def _target(self, host: str) -> UdpTransportTarget:
         target = self._targets.get(host)
@@ -304,44 +333,105 @@ class SnmpCollector:
             return None
         return var_binds[0][1]
 
-    async def _walk(self, host: str, oid: str):
-        """WALK of a subtree; yields (OID suffix, value) pairs."""
-        base = tuple(int(x) for x in oid.split("."))
-        objects = walk_cmd(
+    async def _open_walk(self, host: str, start: str):
+        """The pysnmp walk generator, starting just after `start`.
+
+        A seam of its own because `_walk` opens one of these per
+        resume, and because a test needs somewhere to stand.
+        """
+        return walk_cmd(
             self._engine,
             self._community,
             await self._target(host),
             ContextData(),
-            ObjectType(ObjectIdentity(oid)),
-            lexicographicMode=False,
+            ObjectType(ObjectIdentity(start)),
+            # Resuming means starting at a leaf OID, and a walk bounded
+            # to that leaf's own subtree would stop at once. The
+            # subtree boundary is checked in _walk instead.
+            lexicographicMode=True,
         )
-        self._walk_errors.pop((host, oid), None)
-        async for error_ind, error_status, _, var_binds in objects:
-            if error_ind or error_status:
-                message = str(error_ind or error_status)
-                self._walk_errors[(host, oid)] = message
-                # One line per walk, and at WARNING: at DEBUG this was
-                # invisible, so a switch that had stopped answering
-                # halfway through a counters cycle looked exactly like
-                # a switch with nothing to report.
+
+    async def _walk(self, host: str, oid: str):
+        """WALK of a subtree; yields (OID suffix, value) pairs.
+
+        A walk that stops answering halfway is picked back up from the
+        last OID that did arrive, up to `retries_on_break` times. This
+        is not the same as the SNMP retry count: a retry re-sends one
+        request, while this re-opens the walk after the agent has
+        already given up mid-table.
+
+        It matters because the loss is not random. The agent answers
+        the first rows and runs out of breath, so the ports that
+        disappear are the ones at the end of ifTable — on mb1 that was
+        1/25…1/28, the gigabit uplinks, in three polls running. Raising
+        the timeout cured mb0 and mb2 and did not cure mb1: a switch
+        with 36 interfaces needs the table read in more than one bite.
+
+        Resuming forces lexicographicMode=True — a walk restarted at a
+        leaf OID would otherwise decide it had left its own subtree
+        immediately — so the subtree boundary is checked here instead.
+        """
+        base = tuple(int(x) for x in oid.split("."))
+        status = WalkStatus(oid=oid)
+        self._walk_status[(host, oid)] = status
+        start = oid
+        last_oid: tuple[int, ...] | None = None
+
+        while True:
+            broke = ""
+            objects = await self._open_walk(host, start)
+            left_subtree = False
+            async for error_ind, error_status, _, var_binds in objects:
+                if error_ind or error_status:
+                    broke = str(error_ind or error_status)
+                    break
+                for name, value in var_binds:
+                    full = tuple(name)
+                    if full[:len(base)] != base:
+                        left_subtree = True  # the table is finished
+                        break
+                    last_oid = full
+                    status.rows += 1
+                    yield full[len(base):], value
+                if left_subtree:
+                    break
+            await objects.aclose()
+            if left_subtree or not broke:
+                return  # read to the end
+            status.error = broke
+            if status.resumes >= self._retries_on_break or last_oid is None:
+                status.truncated = status.rows > 0
+                status.last_oid = (
+                    ".".join(str(part) for part in last_oid) if last_oid else ""
+                )
                 log.warning(
-                    "%s: walk of %s failed (%s) — the values it would "
-                    "have returned are unknown, not zero",
-                    host, oid, message,
+                    "%s: walk of %s stopped after %d row(s) (%s)%s — what "
+                    "it would have returned past that point is unknown, "
+                    "not zero",
+                    host, oid, status.rows, broke,
+                    f", last OID {status.last_oid}" if status.last_oid else "",
                 )
                 return
-            for name, value in var_binds:
-                suffix = tuple(name)[len(base):]
-                yield suffix, value
+            status.resumes += 1
+            # an agent that has run out of breath needs a moment before
+            # it can answer again
+            await asyncio.sleep(RESUME_PAUSE)
+            start = ".".join(str(part) for part in last_oid)
+
+    def last_walk_status(self, host: str, oid: str) -> "WalkStatus":
+        """How the most recent walk of this OID ended.
+
+        Three outcomes the caller has to tell apart: read to the end,
+        stopped partway (rows arrived, the tail did not), and no answer
+        at all. Before v0.6.5 the last two were the same thing, so a
+        column that returned 24 of 28 ports was reported as "NO ANSWER"
+        — hiding the one fact worth having.
+        """
+        return self._walk_status.get((host, oid)) or WalkStatus(oid=oid)
 
     def last_walk_error(self, host: str, oid: str) -> str:
-        """The error the most recent walk of this OID ended with, if any.
-
-        An empty string with no rows means the agent answered and had
-        nothing — it does not implement the column. An error means we
-        do not know what it holds.
-        """
-        return self._walk_errors.get((host, oid), "")
+        """The error the most recent walk of this OID ended with, if any."""
+        return self.last_walk_status(host, oid).error
 
     async def collect(self, host: str) -> SwitchData:
         """Full poll of a single switch."""

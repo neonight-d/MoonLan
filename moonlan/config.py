@@ -22,6 +22,10 @@ class SnmpConfig:
     community: str = "public"
     timeout: int = 2
     retries: int = 1
+    # How many times a walk that stops answering mid-table is picked
+    # back up from the last OID that did arrive. Not the same as
+    # `retries`, which re-sends a single request.
+    retries_on_break: int = 2
 
 
 @dataclass
@@ -300,6 +304,9 @@ def load_config(path: Path | None = None) -> Config:
         community=r.get("snmp.community", d.snmp.community, str),
         timeout=r.get("snmp.timeout", d.snmp.timeout, int),
         retries=r.get("snmp.retries", d.snmp.retries, int),
+        retries_on_break=r.get(
+            "snmp.retries_on_break", d.snmp.retries_on_break, int
+        ),
     )
 
     cfg.switches = r.get("switches", d.switches, _as_str_list)

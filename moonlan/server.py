@@ -123,6 +123,7 @@ def get_collector() -> SnmpCollector:
             community=config.snmp.community,
             timeout=config.snmp.timeout,
             retries=config.snmp.retries,
+            retries_on_break=config.snmp.retries_on_break,
         )
     return _collector
 
@@ -146,8 +147,12 @@ async def _counters_locked(collector: SnmpCollector, ip: str):
             "cycle rather than queueing behind it", ip,
         )
         return {}, {}, {}
+    sw = switch_data.get(ip)
+    # the interface table from the last scan: without it a truncated
+    # column has no way of knowing which ports it failed to reach
+    expected = {p.if_index for p in sw.ports.values()} if sw else None
     async with lock:
-        return await counters.collect_samples(collector, ip)
+        return await counters.collect_samples(collector, ip, expected)
 
 
 async def run_scan() -> None:
