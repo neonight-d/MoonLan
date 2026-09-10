@@ -25,6 +25,8 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass, field
 
+from .snmpval import as_octets
+
 log = logging.getLogger(__name__)
 
 OID_SYS_UPTIME = "1.3.6.1.2.1.1.3.0"
@@ -148,13 +150,6 @@ def format_bridge_id(raw: bytes) -> str:
     return f"{priority}/{mac}"
 
 
-def _as_bytes(value) -> bytes:
-    try:
-        return bytes(value)
-    except (TypeError, ValueError):
-        return b""
-
-
 def judge(data: StpData) -> StpData:
     """Fills in `operating` and `reason` — the whole point of the module."""
     if not data.supported:
@@ -228,7 +223,7 @@ async def collect_stp(collector, host: str, port_to_ifindex: dict[int, int]):
                 pass
     root = await collector._get(host, OID_STP_DESIGNATED_ROOT)
     if root is not None:
-        data.designated_root = format_bridge_id(_as_bytes(root))
+        data.designated_root = format_bridge_id(as_octets(root))
     version = await collector._get(host, OID_STP_VERSION)
     if version is not None:
         try:
@@ -253,11 +248,11 @@ async def collect_stp(collector, host: str, port_to_ifindex: dict[int, int]):
     async for suffix, value in collector._walk(host, OID_STP_PORT_PATH_COST):
         port(suffix[0]).path_cost = int(value)
     async for suffix, value in collector._walk(host, OID_STP_PORT_DESIGNATED_ROOT):
-        port(suffix[0]).designated_root = format_bridge_id(_as_bytes(value))
+        port(suffix[0]).designated_root = format_bridge_id(as_octets(value))
     async for suffix, value in collector._walk(host, OID_STP_PORT_DESIGNATED_COST):
         port(suffix[0]).designated_cost = int(value)
     async for suffix, value in collector._walk(host, OID_STP_PORT_DESIGNATED_BRIDGE):
-        port(suffix[0]).designated_bridge = format_bridge_id(_as_bytes(value))
+        port(suffix[0]).designated_bridge = format_bridge_id(as_octets(value))
     # RSTP extension: present only on agents that implement it
     async for suffix, value in collector._walk(host, OID_STP_EXT_ADMIN_EDGE):
         port(suffix[0]).admin_edge = int(value) == 1

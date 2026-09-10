@@ -27,6 +27,8 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass, field
 
+from .snmpval import as_octets
+
 log = logging.getLogger(__name__)
 
 # Local port table: what our own ports are called in LLDP terms
@@ -122,13 +124,6 @@ def _printable(raw: bytes) -> str:
     except UnicodeDecodeError:
         return ""
     return text if all(c == "\t" or c >= " " for c in text) else ""
-
-
-def _as_bytes(value) -> bytes:
-    try:
-        return bytes(value)
-    except (TypeError, ValueError):
-        return str(value).encode("utf-8", "replace")
 
 
 def normalize_id(subtype: int, raw: bytes, mac_subtype: int) -> str:
@@ -272,10 +267,10 @@ async def collect_lldp(
         loc_subtype[suffix[0]] = int(value)
     async for suffix, value in collector._walk(host, OID_LLDP_LOC_PORT_ID):
         loc_id[suffix[0]] = normalize_id(
-            loc_subtype.get(suffix[0], 0), _as_bytes(value), PORT_SUBTYPE_MAC
+            loc_subtype.get(suffix[0], 0), as_octets(value), PORT_SUBTYPE_MAC
         )
     async for suffix, value in collector._walk(host, OID_LLDP_LOC_PORT_DESC):
-        loc_desc[suffix[0]] = _printable(_as_bytes(value))
+        loc_desc[suffix[0]] = _printable(as_octets(value))
     if not usable_local_ids(loc_id, loc_subtype):
         log.info(
             "%s: lldpLocPortId is the same on all %d local ports — it "
@@ -304,19 +299,19 @@ async def collect_lldp(
     async for suffix, value in collector._walk(host, OID_LLDP_REM_CHASSIS_SUBTYPE):
         row(suffix)["chassis_subtype"] = int(value)
     async for suffix, value in collector._walk(host, OID_LLDP_REM_CHASSIS_ID):
-        row(suffix)["chassis_raw"] = _as_bytes(value)
+        row(suffix)["chassis_raw"] = as_octets(value)
     async for suffix, value in collector._walk(host, OID_LLDP_REM_PORT_SUBTYPE):
         row(suffix)["port_subtype"] = int(value)
     async for suffix, value in collector._walk(host, OID_LLDP_REM_PORT_ID):
-        row(suffix)["port_raw"] = _as_bytes(value)
+        row(suffix)["port_raw"] = as_octets(value)
     async for suffix, value in collector._walk(host, OID_LLDP_REM_PORT_DESC):
-        row(suffix)["port_desc"] = _printable(_as_bytes(value))
+        row(suffix)["port_desc"] = _printable(as_octets(value))
     async for suffix, value in collector._walk(host, OID_LLDP_REM_SYS_NAME):
-        row(suffix)["sys_name"] = _printable(_as_bytes(value))
+        row(suffix)["sys_name"] = _printable(as_octets(value))
     async for suffix, value in collector._walk(host, OID_LLDP_REM_SYS_DESC):
-        row(suffix)["sys_desc"] = _printable(_as_bytes(value))
+        row(suffix)["sys_desc"] = _printable(as_octets(value))
     async for suffix, value in collector._walk(host, OID_LLDP_REM_SYS_CAP_ENABLED):
-        raw = _as_bytes(value)
+        raw = as_octets(value)
         row(suffix)["cap_raw"] = raw
     # The management address lives in the index of its own table
     async for suffix, _value in collector._walk(
