@@ -549,7 +549,9 @@ function buildGraphData() {
     });
     edges.push({
       id: "extedge:" + external.id,
-      from: "sw:" + external.switch,
+      // the provider's switch is on the cable and everything else is
+      // behind IT: mb0 -> CE6851 -> external network
+      from: external.via || "sw:" + external.switch,
       to: external.id,
       color: { color: colors.warn || "#d9a86b", opacity: 0.7 },
       width: 3,
@@ -889,6 +891,9 @@ function showDetails(nodeId) {
       <p class="hint">${t("externalHint")}</p><dl>
       <dt>${t("switchLabel")}</dt><dd>${external.switch}</dd>
       <dt>${t("portLabel")}</dt><dd>${external.port}</dd>
+      ${external.via_name
+        ? `<dt>${t("behindBridge")}</dt><dd>${external.via_name}</dd>`
+        : ""}
       <dt>${t("devicesBehindPort")}</dt><dd>${external.count}</dd>
       </dl><ul class="offline-list">${rows}</ul>`;
   } else if (nodeId.startsWith("pseudo:")) {

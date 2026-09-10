@@ -142,6 +142,7 @@ const I18N = {
       + "port shown is a trunk — nothing was ever seen there as a "
       + "device, so this location is inherited guesswork rather than a "
       + "record of where they were last seen.",
+    behindBridge: "Behind",
     lldpNeighbour: "LLDP neighbour",
     lldpForwarded: "LLDP forwarded",
     lldpForwardedHint:
@@ -413,6 +414,7 @@ const I18N = {
       + "показанный порт — магистральный: устройствами их там никогда не "
       + "видели, так что это унаследованная догадка, а не запись о том, "
       + "где их видели в последний раз.",
+    behindBridge: "За устройством",
     lldpNeighbour: "Сосед по LLDP",
     lldpForwarded: "пересылка LLDP",
     lldpForwardedHint:
