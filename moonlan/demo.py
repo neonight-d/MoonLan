@@ -888,7 +888,14 @@ class DemoCounters:
     One switch answers for the inbound octets and not for the outbound
     ones, the way a DGS-1210 Rev.F1 does. Its "Out, Mbit/s" column must
     read "\u2014" and raise nothing — before v0.6.4 it read 0.0 on a
-    trunk carrying traffic in both directions. Packet counters
+    trunk carrying traffic in both directions.
+
+    Another stops answering partway through the inbound octets and is
+    picked back up from where it stopped, which is what happens on a
+    switch with many interfaces: every value is there, and the column
+    report says the walk had to be resumed to get them. A third
+    reaches the end of its retry budget still short of four ports and
+    fills them in one GET at a time. Packet counters
     are derived from the traffic, which gives the error-ratio rule
     something real to work with. Real Sample objects are produced so
     the whole delta pipeline in CounterStore is exercised, not
@@ -899,6 +906,10 @@ class DemoCounters:
     # nothing on the 32-bit fallback either: an unknown column, not a
     # zero one
     NO_OUT_OCTETS_SWITCH = "10.0.0.23"  # access-sw-3
+    # its walk of ifHCInOctets gives out mid-table and is resumed
+    RESUMED_WALK_SWITCH = "10.0.0.21"   # access-sw-1
+    # and this one is still four ports short afterwards
+    GAP_FILLED_SWITCH = "10.0.0.22"     # access-sw-2
     ERROR_SWITCH = "10.0.0.22"  # access-sw-2
     ERROR_PORT = 3              # Gi0/3: damaged frames
     DISCARD_PORT = 4            # Gi0/4: filtering, no errors at all
@@ -1009,5 +1020,18 @@ class DemoCounters:
         if ip == self.NO_OUT_OCTETS_SWITCH:
             report["out_octets"] = ColumnStatus(
                 oid="1.3.6.1.2.1.2.2.1.16", rows=0
+            )
+        if ip == self.RESUMED_WALK_SWITCH:
+            # broke at row 18 and was picked back up: nothing is
+            # missing, but the report says what it took
+            report["in_octets"] = ColumnStatus(
+                oid="1.3.6.1.2.1.31.1.1.1.6", rows=26, resumes=1
+            )
+        if ip == self.GAP_FILLED_SWITCH:
+            report["in_octets"] = ColumnStatus(
+                oid="1.3.6.1.2.1.31.1.1.1.6", rows=22, resumes=2,
+                truncated=True, last_oid="1.3.6.1.2.1.31.1.1.1.6.22",
+                error="No SNMP response received before timeout",
+                gaps_filled=4, filled_by="1.3.6.1.2.1.2.2.1.10",
             )
         return report

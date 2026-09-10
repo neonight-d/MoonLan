@@ -143,6 +143,11 @@ const I18N = {
       + "device, so this location is inherited guesswork rather than a "
       + "record of where they were last seen.",
     behindBridge: "Behind",
+    colPartial:
+      "The switch answered for this counter ({oids}) and then stopped "
+      + "partway through the table; {filled} port(s) were read one at a "
+      + "time from the 32-bit counter instead. Any port still showing "
+      + "\u2014 is unknown, not zero.",
     lldpNeighbour: "LLDP neighbour",
     lldpForwarded: "LLDP forwarded",
     lldpForwardedHint:
@@ -415,6 +420,11 @@ const I18N = {
       + "видели, так что это унаследованная догадка, а не запись о том, "
       + "где их видели в последний раз.",
     behindBridge: "За устройством",
+    colPartial:
+      "Коммутатор отвечал по этому счётчику ({oids}) и замолчал на "
+      + "середине таблицы; {filled} порт(ов) дочитано поштучно из "
+      + "32-битного счётчика. Там, где всё ещё стоит \u2014, значение "
+      + "неизвестно, а не равно нулю.",
     lldpNeighbour: "Сосед по LLDP",
     lldpForwarded: "пересылка LLDP",
     lldpForwardedHint:

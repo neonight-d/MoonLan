@@ -1491,14 +1491,19 @@ def _column_report(ip: str) -> dict:
     columns = counter_columns.get(ip) or {}
     report: dict[str, dict] = {}
     for name, sources in COLUMN_GROUPS.items():
-        silent = [
-            columns[src] for src in sources
-            if src in columns and not columns[src].answered
-        ]
+        present = [columns[src] for src in sources if src in columns]
+        silent = [st for st in present if not st.answered]
+        partial = [st for st in present if st.truncated]
         report[name] = {
             "answered": not silent,
-            "oids": [st.oid for st in silent],
-            "error": next((st.error for st in silent if st.error), ""),
+            # answered, but not for every port: the ports at the end of
+            # the table are the ones that go missing
+            "partial": bool(partial),
+            "oids": [st.oid for st in silent + partial],
+            "error": next(
+                (st.error for st in silent + partial if st.error), ""
+            ),
+            "filled": sum(st.gaps_filled for st in present),
         }
     return report
 
