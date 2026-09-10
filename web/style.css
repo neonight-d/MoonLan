@@ -436,6 +436,12 @@ main { flex: 1; display: flex; min-height: 0; }
   color: var(--text-dim);
   font-style: italic;
   font-family: system-ui, sans-serif;
+  display: inline-block;
+  max-width: 12ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  vertical-align: bottom;
+  cursor: help;
 }
 
 /* a scan that raised: the map is the previous one, and it says so */
