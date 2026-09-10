@@ -504,9 +504,12 @@ function buildGraphData() {
         ? colors.ok
         : colors.dim
       : colors.link;
+    // the address under the name is the one the operator uses, not
+    // whichever of the announced ones came back first
+    const bridgeAddress = bridge.router_ip || bridge.ip || bridge.mgmt_ip;
     nodes.push({
       id: bridge.id,
-      label: bridge.name + (bridge.mgmt_ip ? "\n" + bridge.mgmt_ip : ""),
+      label: bridge.name + (bridgeAddress ? "\n" + bridgeAddress : ""),
       shape: "box",
       color: {
         background: "#1b2436",
@@ -589,9 +592,14 @@ function buildGraphData() {
     // a router is infrastructure, not a workstation: same status
     // colour, but a shape that is picked out at a glance
     const isRouter = deviceKind(host) === "router";
+    // a router named by LLDP has no address of ours; the one in
+    // `routers:` is how anybody reaches it, so it goes under the name
+    const caption = hostLabel(host);
+    const second =
+      host.router_ip && host.router_ip !== caption ? "\n" + host.router_ip : "";
     nodes.push({
       id: "host:" + host.mac,
-      label: hostLabel(host),
+      label: caption + second,
       shape: isRouter ? "diamond" : "dot",
       size: isRouter ? 14 : 9,
       opacity: host.stale ? 0.4 : 1,
@@ -920,6 +928,9 @@ function showDetails(nodeId) {
         host.approximate ? ` <span class="chip">${t("approximate")}</span>` : ""
       }</dd>
       <dt>${t("vlan")}</dt><dd>${vlanLabel(host.vlan)}</dd>
+      ${host.router_ip
+        ? `<dt>${t("routerAddr")}</dt><dd>${addressLink(host.router_ip)}</dd>`
+        : ""}
       ${host.lldp ? `<dt>${t("lldpLabel")}</dt><dd>${lldpHostLine(host.lldp)}</dd>` : ""}
       ${(host.lldp && (host.lldp.mgmt_ips || []).length > 1)
         ? `<dt>${t("mgmtIp")}</dt><dd>${addressList(host.lldp.mgmt_ips)}</dd>`
