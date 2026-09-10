@@ -384,6 +384,49 @@ async def collect_lldp(
     return neighbors, port_labels
 
 
+def _label_stem(label: str) -> str:
+    """The label with every run of digits removed."""
+    stem = []
+    for char in label:
+        if not char.isdigit():
+            stem.append(char)
+    return "".join(stem).strip().lower()
+
+
+def useful_port_labels(
+    labels: dict[int, str],
+    names: dict[int, str],
+    descrs: dict[int, str],
+) -> tuple[dict[int, str], int]:
+    """Keeps the lldpLocPortDesc values that are actually labels.
+
+    On the HPE 1820 this column holds what an operator typed into the
+    switch — "Library", "403 audit" — which is worth showing. On D-Link
+    it holds ifDescr, so every port carries
+    "D-Link DGS-1210-26 Rev.F1/6.10.007 Port 7": no information, and
+    wide enough to push the ports table off the panel.
+
+    Two things disqualify a label: it repeats the port's own ifName or
+    ifDescr, or it is the same on every port once the port numbers are
+    taken out of it — a firmware template rather than a name.
+    """
+    kept: dict[int, str] = {}
+    for if_index, label in labels.items():
+        text = (label or "").strip()
+        if not text:
+            continue
+        same_as_port = text.lower() in {
+            (names.get(if_index) or "").strip().lower(),
+            (descrs.get(if_index) or "").strip().lower(),
+        }
+        if not same_as_port:
+            kept[if_index] = text
+    stems = {_label_stem(label) for label in kept.values()}
+    if len(kept) >= 3 and len(stems) == 1 and next(iter(stems)):
+        return {}, len(labels)
+    return kept, len(labels) - len(kept)
+
+
 def merge_rows(neighbors: list[LldpNeighbor]) -> list[LldpNeighbor]:
     """One entry per device per port, however many rows it sent.
 

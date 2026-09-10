@@ -349,8 +349,10 @@ class SnmpCollector:
 
         # Interfaces. Port name comes from ifName; ifDescr is only a
         # fallback: D-Link puts the whole model and firmware into ifDescr.
+        if_descr: dict[int, str] = {}
         async for suffix, value in self._walk(host, OID_IF_DESCR):
             if_index = suffix[0]
+            if_descr[if_index] = str(value)
             data.ports[if_index] = PortInfo(if_index=if_index, name=str(value))
         async for suffix, value in self._walk(host, OID_IF_NAME):
             port = data.ports.get(suffix[0])
@@ -485,6 +487,20 @@ class SnmpCollector:
             set(data.ports),
             data.fdb,
         )
+        # lldpLocPortDesc is an administrative port name on some agents
+        # and a copy of ifDescr on others; only the former is worth
+        # showing, and the latter is wide enough to break the layout
+        data.port_labels, dropped = lldp_mod.useful_port_labels(
+            data.port_labels,
+            {i: p.name for i, p in data.ports.items()},
+            if_descr,
+        )
+        if dropped:
+            log.debug(
+                "%s: %d LLDP port label(s) dropped — they repeat ifName / "
+                "ifDescr or are one firmware template with the port "
+                "number substituted", host, dropped,
+            )
         data.lldp_forwarded, data.lldp_crowded = lldp_mod.analyse_ports(
             data.lldp_neighbors,
             lambda if_index: aggregate_port(data, if_index),

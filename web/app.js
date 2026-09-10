@@ -1072,7 +1072,7 @@ function renderPorts(data) {
         const label = document.createElement("span");
         label.className = "port-label";
         label.textContent = p.label;
-        label.title = t("portLabelName");
+        label.title = t("portLabelName") + "\n" + p.label;
         nameCell.append(" ", label);
       }
       // addresses this port's damaged frames invented, with the real

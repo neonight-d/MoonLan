@@ -64,7 +64,12 @@ import time
 
 from .counters import Sample
 from .db import Database
-from .lldp import LldpNeighbor, analyse_ports, merge_rows
+from .lldp import (
+    LldpNeighbor,
+    analyse_ports,
+    merge_rows,
+    useful_port_labels,
+)
 from .stp import StpData, StpPort
 from .snmp_collector import (
     PortInfo,
@@ -488,7 +493,20 @@ def _add_lldp(core, ray1, ray2, ray3, ray4, core_port_to_ray) -> None:
             for mac in CAMERAS
         ),
     ]
+    # lldpLocPortDesc, the two ways it comes back on real hardware: an
+    # operator's own port names on one switch, and one firmware
+    # template with the port number substituted on another. Only the
+    # first kind survives useful_port_labels.
+    core.port_labels = {
+        i: f"{core.sys_descr} Port {i}" for i in core.ports if i > 0
+    }
+    ray2.port_labels = {5: "Library", 13: "403 audit", 17: "209 audit"}
     for sw in (core, ray1, ray2, ray3, ray4):
+        sw.port_labels, _dropped = useful_port_labels(
+            sw.port_labels,
+            {i: p.name for i, p in sw.ports.items()},
+            {i: p.name for i, p in sw.ports.items()},
+        )
         # a real collect_lldp does this before anyone sees the rows
         sw.lldp_neighbors = merge_rows(sw.lldp_neighbors)
         sw.lldp_forwarded, sw.lldp_crowded = analyse_ports(
