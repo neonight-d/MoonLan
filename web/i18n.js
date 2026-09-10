@@ -118,6 +118,12 @@ const I18N = {
       + "bridge because it announced a system name and a management "
       + "address. Its alarm is raised at info for the same reason.",
     routerAddr: "Router address (routers:)",
+    uplinkHintChip: "way out?",
+    uplinkHint:
+      "This looks like a way out of the network. Add "
+      + "\"{switch}:{port}\" to uplink_ports in config.yaml and the "
+      + "devices behind it will be collected under one \"External "
+      + "network\" node, with no bridge alarms raised there.",
     lldpNeighbour: "LLDP neighbour",
     lldpForwarded: "LLDP forwarded",
     lldpForwardedHint:
@@ -365,6 +371,12 @@ const I18N = {
       + "устройство сочтено потому, что объявило системное имя и "
       + "управляющий адрес. По той же причине тревога по нему — info.",
     routerAddr: "Адрес маршрутизатора (routers:)",
+    uplinkHintChip: "выход наружу?",
+    uplinkHint:
+      "Похоже на выход из сети. Добавьте «{switch}:{port}» в "
+      + "uplink_ports в config.yaml — и устройства за этим портом "
+      + "соберутся в узел «Внешняя сеть», а тревоги о мостах там "
+      + "подниматься не будут.",
     lldpNeighbour: "Сосед по LLDP",
     lldpForwarded: "пересылка LLDP",
     lldpForwardedHint:

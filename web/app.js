@@ -1168,6 +1168,15 @@ function renderPorts(data) {
       nameCell.textContent = name;
       // lldpLocPortDesc: what the operator called this port on the
       // switch itself ("Library", "403 audit")
+      if (p.uplink_hint) {
+        const chip = document.createElement("span");
+        chip.className = "chip warn";
+        chip.textContent = t("uplinkHintChip");
+        chip.title =
+          fmt("uplinkHint", { switch: data.switch, port: p.name }) +
+          "\n\n" + p.uplink_hint;
+        nameCell.append(" ", chip);
+      }
       if (p.external) {
         const chip = document.createElement("span");
         chip.className = "chip";

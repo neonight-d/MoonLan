@@ -414,6 +414,92 @@ def device_kind(capabilities: set[str], cap_known: bool) -> str:
     return "other"
 
 
+# RFC 1918 plus the addresses that are never a device of ours
+_PRIVATE_PREFIXES = ("10.", "192.168.", "127.", "169.254.")
+
+
+def is_private_ipv4(ip: str) -> bool:
+    """True for an address that belongs inside a network, not outside."""
+    if not ip or ":" in ip:
+        return True  # IPv6: not judged here
+    if ip.startswith(_PRIVATE_PREFIXES):
+        return True
+    parts = ip.split(".")
+    if len(parts) != 4:
+        return True
+    try:
+        first, second = int(parts[0]), int(parts[1])
+    except ValueError:
+        return True
+    return first == 172 and 16 <= second <= 31
+
+
+def _subnet24(ip: str) -> str:
+    parts = ip.split(".")
+    return ".".join(parts[:3]) if len(parts) == 4 else ""
+
+
+def suspect_uplink_ports(
+    switches: list[SwitchData],
+    host_ips: list[tuple[str, str, str]],
+    configured: set[tuple[str, str]],
+) -> dict[tuple[str, str], str]:
+    """Ports that look like a way out of the network, and why.
+
+    `uplink_ports` works, but the only way to learn it exists is to
+    read config.example.yaml — and meanwhile the branch to the provider
+    sits on the map unmarked, with a public address behind it. Two
+    signs, either of which is enough for a hint (never an alarm):
+
+    - a device behind the port holds a public address;
+    - an LLDP neighbour there is managed from a subnet MoonLan sees
+      nowhere else, which is what a provider handover looks like from
+      the inside.
+
+    host_ips is (switch ip, port, address) for everything the map
+    knows, which is also where the set of "subnets we can see" comes
+    from.
+    """
+    known_subnets = {
+        _subnet24(ip) for _sw, _port, ip in host_ips if ip
+    } | {_subnet24(sw.ip) for sw in switches}
+    known_subnets.discard("")
+
+    # A port with devices of ours behind it leads inward, whatever the
+    # box on the cable is managed at: a MikroTik reachable at 10.3.5.6
+    # with four of our own hosts behind it is a remote segment, not a
+    # way out. Only the address of the neighbour itself is left to
+    # judge by when nothing of ours answers there.
+    leads_inward: set[tuple[str, str]] = set()
+    for sw_ip, port, ip in host_ips:
+        if ip and is_private_ipv4(ip) and _subnet24(ip) in known_subnets:
+            leads_inward.add((sw_ip, port))
+
+    suspects: dict[tuple[str, str], str] = {}
+    for sw_ip, port, ip in host_ips:
+        if (sw_ip, port) in configured or (sw_ip, port) in suspects:
+            continue
+        if ip and not is_private_ipv4(ip):
+            suspects[(sw_ip, port)] = f"a device behind it answers at {ip}"
+    for sw in switches:
+        for neighbor in sw.lldp_neighbors:
+            if neighbor.local_ifindex is None:
+                continue
+            key = (sw.ip, port_name(sw, neighbor.local_ifindex))
+            if key in configured or key in suspects or key in leads_inward:
+                continue
+            for address in neighbor.mgmt_ips:
+                if _subnet24(address) and _subnet24(address) not in known_subnets:
+                    suspects[key] = (
+                        f"{neighbor.sys_name or neighbor.chassis_id} is "
+                        f"managed at {address}, in a subnet MoonLan sees "
+                        f"nowhere else, and nothing of ours answers behind "
+                        f"this port"
+                    )
+                    break
+    return suspects
+
+
 def detect_bridges(
     switches: list[SwitchData],
     own_macs: set[str],
