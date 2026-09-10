@@ -873,10 +873,12 @@ function showDetails(nodeId) {
     const members = topology.hosts.filter(
       (h) => h.via === nodeId && !h.merged_into
     );
+    // addresses first: past the handover the address is all there is,
+    // and the name column would just repeat it
     const rows = members
       .map(
-        (h) => `<li data-mac="${h.mac}"><span>${hostLabel(h)}</span>
-          <span class="sub">${h.ip || ""}</span></li>`
+        (h) => `<li data-mac="${h.mac}"><span>${h.ip || hostLabel(h)}</span>
+          <span class="sub">${h.ip ? h.mac : ""}</span></li>`
       )
       .join("");
     html = `<h3>${t("externalNetwork")}</h3>

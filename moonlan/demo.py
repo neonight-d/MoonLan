@@ -167,7 +167,13 @@ UPLINK_PORT = 26
 UPLINK_CHASSIS = "10:c1:72:bd:44:e1"
 UPLINK_NAME = "CE6851-48S6Q-HI"
 UPLINK_MGMT_IP = "172.16.0.3"
+# Addresses past the handover, from the documentation range of
+# RFC 5737. The point of the "External network" node is that what is
+# behind it is somebody else's, and until v0.6.3 the demo filled it
+# with pc-NN.demo.lan on 10.0.99.x — demonstrating the opposite.
 UPLINK_HOSTS = 4
+UPLINK_HOST_MACS = [f"00:1b:21:e0:00:{n:02x}" for n in range(1, UPLINK_HOSTS + 1)]
+UPLINK_HOST_IPS = [f"203.0.113.{10 + n}" for n in range(UPLINK_HOSTS)]
 UPLINK_PORTS = {("10.0.0.10", f"Gi0/{UPLINK_PORT}")}
 
 # What a `routers:` entry would resolve to through ARP: the address an
@@ -369,8 +375,8 @@ def demo_network() -> list[SwitchData]:
     # The provider handover: their switch plus a handful of addresses
     # that live past it
     connect_host(core, UPLINK_PORT, 1, UPLINK_CHASSIS)
-    for _ in range(UPLINK_HOSTS):
-        connect_host(core, UPLINK_PORT, 1)
+    for mac in UPLINK_HOST_MACS:
+        connect_host(core, UPLINK_PORT, 1, mac)
 
     _add_lldp(core, ray1, ray2, ray3, ray4, core_port_to_ray)
     _add_stp(core, ray1, ray2, ray3, ray4)
@@ -683,7 +689,7 @@ def enrich_db(db: Database, hosts: list[dict]) -> None:
     # whole point is a device the inventory cannot name
     fixed = (
         CORRUPT_REAL, CORRUPT_NEIGHBOR, TRUNK_ONLY_MAC, ROUTER_CHASSIS,
-        EDGE_ROUTER_CHASSIS, UPLINK_CHASSIS, *CAMERAS,
+        EDGE_ROUTER_CHASSIS, UPLINK_CHASSIS, *UPLINK_HOST_MACS, *CAMERAS,
     )
     hosts = [h for h in hosts if h["mac"] not in fixed]
     for mac, ip, name in (
@@ -692,6 +698,8 @@ def enrich_db(db: Database, hosts: list[dict]) -> None:
         (TRUNK_ONLY_MAC, TRUNK_ONLY_IP, "nvr-3floor.demo.lan"),
         (ROUTER_CHASSIS, ROUTER_IPS[0], "gw.demo.lan"),
         (UPLINK_CHASSIS, UPLINK_MGMT_IP, ""),
+        # no *.demo.lan names: these are not ours to name
+        *zip(UPLINK_HOST_MACS, UPLINK_HOST_IPS, [""] * UPLINK_HOSTS),
         *(
             (mac, f"10.0.98.{n}", f"cam-hall-{n:02d}.demo.lan")
             for n, mac in enumerate(CAMERAS, start=1)
