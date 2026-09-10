@@ -40,6 +40,7 @@ from collections import Counter
 
 from . import counters, pinger, stp
 from .config import SECRET_KEYS, load_config, parse_uplink_ports
+from .snmpval import as_octets, is_octets
 from .corruption import find_suspects, sample_mac
 from .counters import CounterStore, Sample
 from .topology import (
@@ -113,9 +114,9 @@ async def _own_macs_light(
     macs: set[str] = set()
     bridge = await collector._get(ip, OID_BRIDGE_ADDRESS)
     if bridge is not None:
-        macs.add(_fmt_mac(bytes(bridge)))
+        macs.add(_fmt_mac(as_octets(bridge)))
     async for _suffix, value in collector._walk(ip, OID_IF_PHYS_ADDRESS):
-        raw = bytes(value)
+        raw = as_octets(value)
         if len(raw) == 6 and any(raw):
             macs.add(_fmt_mac(raw))
     return str(sys_name), macs
@@ -139,7 +140,7 @@ async def run_diag(
     sys_descr = await collector._get(ip, OID_SYS_DESCR)
     print(f"sysDescr:   {sys_descr if sys_descr is not None else '—'}")
     bridge = await collector._get(ip, OID_BRIDGE_ADDRESS)
-    bridge_mac = _fmt_mac(bytes(bridge)) if bridge is not None else ""
+    bridge_mac = _fmt_mac(as_octets(bridge)) if bridge is not None else ""
     print(f"bridge MAC: {bridge_mac or '—'}")
 
     # 2. Interfaces
@@ -192,7 +193,7 @@ async def run_diag(
     if bridge_mac:
         own_macs.add(bridge_mac)
     async for _suffix, value in collector._walk(ip, OID_IF_PHYS_ADDRESS):
-        raw = bytes(value)
+        raw = as_octets(value)
         if len(raw) == 6 and any(raw):
             own_macs.add(_fmt_mac(raw))
     print(f"total: {len(own_macs)} (the management-IP MAC from ARP is not included)")
@@ -1216,16 +1217,16 @@ async def run_walk(
             return
         full = oid + ("." + ".".join(str(part) for part in suffix) if suffix else "")
         kind = type(value).__name__
-        try:
-            raw = bytes(value)
-        except (TypeError, ValueError):
-            raw = b""
         text = str(value)
         print(f"  {full}  ({kind}) = {text}")
-        if raw and raw != text.encode("utf-8", "replace"):
-            print(f"      hex: {raw.hex(' ')}")
-        elif raw and not text.isprintable():
-            print(f"      hex: {raw.hex(' ')}")
+        # Hex only for something that really is a string of octets. A
+        # number has no hex form worth printing, and asking for one used
+        # to allocate a buffer as long as the number itself.
+        if is_octets(value):
+            raw = as_octets(value)
+            if raw and (raw != text.encode("utf-8", "replace")
+                        or not text.isprintable()):
+                print(f"      hex: {raw.hex(' ')}")
     if count == 0:
         print("  the subtree is empty, or the agent does not implement it")
     else:

@@ -20,6 +20,7 @@ from dataclasses import dataclass, field
 
 from . import lldp as lldp_mod
 from . import stp as stp_mod
+from .snmpval import as_octets
 
 from pysnmp.hlapi.v3arch.asyncio import (
     CommunityData,
@@ -333,7 +334,7 @@ class SnmpCollector:
 
         bridge_mac = await self._get(host, OID_BRIDGE_ADDRESS)
         if bridge_mac is not None:
-            data.bridge_mac = _fmt_mac(bytes(bridge_mac))
+            data.bridge_mac = _fmt_mac(as_octets(bridge_mac))
             data.own_macs.add(data.bridge_mac)
 
         # Interface MACs: real frames leave the switch with these source
@@ -341,7 +342,7 @@ class SnmpCollector:
         # some agents put in lldpLocPortId, so they are kept per port.
         phys_addr: dict[int, str] = {}
         async for suffix, value in self._walk(host, OID_IF_PHYS_ADDRESS):
-            raw = bytes(value)
+            raw = as_octets(value)
             if len(raw) == 6 and any(raw):
                 mac = _fmt_mac(raw)
                 data.own_macs.add(mac)
@@ -546,7 +547,7 @@ class SnmpCollector:
         """
         arp: dict[str, str] = {}
         async for suffix, value in self._walk(host, OID_ARP_PHYS):
-            raw = bytes(value)
+            raw = as_octets(value)
             if len(raw) != 6:
                 continue
             ip = ".".join(str(octet) for octet in suffix[-4:])

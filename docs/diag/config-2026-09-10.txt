@@ -1,0 +1,78 @@
+
+=== 11. Effective configuration ===
+config.yaml: /home/neonight/MoonLan/config.yaml
+
+setting                                    value                        source
+listen.host                                0.0.0.0                      config.yaml
+listen.port                                8081                         config.yaml
+snmp.community                             ***                          config.yaml
+snmp.timeout                               2                            config.yaml
+snmp.retries                               1                            config.yaml
+switches                                   [10.0.0.10, 10.0.0.21, 10.0.0.22, 10.0.0.44, 10.0.0.17] config.yaml
+routers                                    [10.0.0.1]                   config.yaml
+scan_interval_minutes                      10                           config.yaml
+ping_interval_seconds                      60                           config.yaml
+counters_interval_seconds                  60                           config.yaml
+db_path                                    moonlan.db                   config.yaml
+unmanaged_threshold                        3                            config.yaml
+monitored_by_default                       False                        config.yaml
+host_grace_hours                           72.0                         config.yaml
+host_retention_days                        30.0                         config.yaml
+offline_group_threshold                    2                            config.yaml
+ip_confirm_hours                           6.0                          config.yaml
+new_host_confirm_scans                     2                            config.yaml
+filter_suspect_macs                        True                         config.yaml
+place_trunk_only_hosts                     True                         config.yaml
+known_bridges                              []                           config.yaml
+uplink_ports                               [10.0.0.10:Slot0/25]         config.yaml
+thresholds.errors_per_minute               5.0                          config.yaml
+thresholds.error_ratio_percent             0.01                         config.yaml
+thresholds.discards_per_minute             500.0                        config.yaml
+thresholds.port_utilization_percent        95.0                         config.yaml
+thresholds.port_alarm_cycles               3                            config.yaml
+thresholds.mass_down_hosts                 3                            config.yaml
+thresholds.corruption_hamming_bits         8                            config.yaml
+thresholds.corruption_macs_threshold       5                            config.yaml
+thresholds.stp_changes_per_cycle           3                            config.yaml
+thresholds.flaps_per_window                4                            config.yaml
+thresholds.flap_window_minutes             10.0                         config.yaml
+notifications.cooldown_seconds             300                          config.yaml
+notifications.flap_count                   3                            config.yaml
+notifications.flap_window_seconds          7200                         config.yaml
+notifications.flap_quiet_seconds           3600                         config.yaml
+notifications.email.enabled                False                        config.yaml
+notifications.email.smtp_host              smtp.example.com             config.yaml
+notifications.email.smtp_port              587                          config.yaml
+notifications.email.starttls               True                         config.yaml
+notifications.email.username                                            config.yaml
+notifications.email.password                                            config.yaml
+notifications.email.mail_from              moonlan@example.com          config.yaml
+notifications.email.mail_to                [admin@example.com]          config.yaml
+notifications.telegram.enabled             True                         config.yaml
+notifications.telegram.bot_token           ***                          config.yaml
+notifications.telegram.chat_ids            [318343438]                  config.yaml
+notifications.syslog.enabled               False                        config.yaml
+notifications.syslog.host                  127.0.0.1                    config.yaml
+notifications.syslog.port                  514                          config.yaml
+alarm_notify.host_down                     [email, telegram, syslog]    config.yaml
+alarm_notify.switch_down                   [email, telegram, syslog]    config.yaml
+alarm_notify.port_errors                   [syslog]                     config.yaml
+alarm_notify.port_discards                 [syslog]                     config.yaml
+alarm_notify.port_util                     [telegram, syslog]           config.yaml
+alarm_notify.new_mac                       [syslog]                     config.yaml
+alarm_notify.port_hosts_down               [email, telegram, syslog]    config.yaml
+alarm_notify.lag_degraded                  [telegram, syslog]           config.yaml
+alarm_notify.port_frame_corruption         [telegram, syslog]           config.yaml
+alarm_notify.unmanaged_bridge_detected     [telegram, syslog]           config.yaml
+alarm_notify.stp_root_changed              [telegram, syslog]           config.yaml
+alarm_notify.stp_topology_change           [telegram, syslog]           config.yaml
+alarm_notify.stp_fragmented                [telegram, syslog]           config.yaml
+alarm_notify.port_flapping                 [telegram, syslog]           config.yaml
+
+from config.yaml: 65, defaults: 0
+
+keys in config.yaml MoonLan does not know (ignored):
+  none
+
+keys missing from config.yaml (defaults apply):
+  none
