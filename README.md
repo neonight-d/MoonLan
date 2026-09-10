@@ -16,7 +16,7 @@ An open-source alternative to LanTopoLog. MIT license.
 
 *Alarm panel: port errors, discards and host outages with one-click access to the switch port table.*
 
-## Features (v0.6.4)
+## Features (v0.6.5)
 
 - SNMP v2c polling of switches: device name, ports, speeds, statuses.
 - MAC address tables (BRIDGE-MIB and Q-BRIDGE-MIB) from every switch,
@@ -127,7 +127,9 @@ An open-source alternative to LanTopoLog. MIT license.
 - Port traffic and error monitoring: a light counters poll (ifHC* octets
   with a per-direction 32-bit fallback, errors, discards) turns deltas
   into Mbit/s and errors/min per port. A counter the switch did not
-  answer for reads "—", never 0.0, and raises no alarm either way. The "Ports" panel of a switch shows live rates;
+  answer for reads "—", never 0.0, and raises no alarm either way. A
+  walk that stops partway through a table is resumed from where it
+  stopped, and the ports it still missed are fetched one at a time. The "Ports" panel of a switch shows live rates;
   map edges show the current trunk load ("2×1 Gbit/s · ↓34 ↑12 Mbit/s",
   summed over LAG members). Counter resets after a switch reboot are
   detected and do not produce rate spikes.
@@ -184,7 +186,8 @@ An open-source alternative to LanTopoLog. MIT license.
 | v0.6.2 ✓| One node per device, LLDP names on the map, external uplink ports, a usable ports panel |
 | v0.6.3 ✓| Readable links, honest external-network demo, safe development against a live service |
 | v0.6.4 ✓| Honest counters, remembered offline locations, network edge and hint fixes |
-| v0.6.5  | Loop Detection from the private D-Link/HPE MIBs |
+| v0.6.5 ✓| Resuming a truncated walk, honest partial answers, per-port counter fallback |
+| v0.6.6  | Loop Detection from the private D-Link/HPE MIBs |
 | v0.7    | Export to PDF and Draw.io, MAC address info import |
 | v0.8    | Windows computer inventory (WMI/WinRM) |
 
@@ -214,8 +217,10 @@ listen:
 
 snmp:
   community: public        # SNMP v2c community (read-only)
-  timeout: 2
-  retries: 1
+  timeout: 5               # seconds to wait for a reply
+  retries: 2               # re-sends of a single request
+  retries_on_break: 2      # times a walk that stops mid-table is
+                           # picked back up from where it stopped
 
 switches:                  # IP addresses of managed switches
   - 192.168.1.2
@@ -502,7 +507,33 @@ how many rows each returned, or that it returned none and why.
 
 If a switch's own web interface shows errors where SNMP reports zeros,
 that is a hole in its firmware rather than a healthy port — the numbers
-above tell you which of the two you are looking at.
+above tell you which of the two you are looking at. The same goes for
+the packet counters: a column that answers for every port with zero
+while the octet counters are in the terabytes is implemented and never
+written to, and MoonLan reads the 32-bit counters instead so the error
+ratio has a frame count to work with.
+
+**Before concluding that a counter is missing, raise the timeout.** A
+timeout set too low does not show up later as a timeout — it shows up
+as a switch that returns nothing, which is indistinguishable from one
+that does not implement the OID. `snmp.timeout: 2` with one retry gave
+empty and truncated tables on this network, and produced exactly that
+wrong conclusion about a DGS-1210 that answers `ifHCOutOctets`
+perfectly well at five seconds. The defaults are 5 and 2 for that
+reason.
+
+A switch with many interfaces may also stop answering partway through
+a table — the ports that vanish are the ones at the end of it. Such a
+walk is picked back up from the last OID that did arrive
+(`snmp.retries_on_break`), and any ports still missing afterwards are
+fetched one at a time from the 32-bit counter. A column that ended
+short says so rather than reporting silence:
+
+```
+in_octets  1.3.6.1.2.1.31.1.1.1.6  24 row(s), then stopped answering
+                                   at 1.3.6.1.2.1.31.1.1.1.6.24 (…),
+                                   4 port(s) filled in from 1.3.6.1.2.1.2.2.1.10
+```
 
 The first measurement prints the raw counters (`ifInErrors`,
 `ifOutErrors`, `ifInDiscards`, `ifOutDiscards`, `ifHCInOctets`,

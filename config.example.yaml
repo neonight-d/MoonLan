@@ -11,9 +11,26 @@ listen:
 snmp:
   community: public # SNMP v2c community (read-only)
                     # SNMP v2c community (только чтение)
-  timeout: 2        # seconds to wait for a reply
+  # A timeout set too low does not show up later as a timeout — it
+  # shows up as a switch that returns nothing, which is indistinguish-
+  # able from one that does not implement the OID. Raise these before
+  # concluding that a counter is missing.
+  # Заниженный таймаут дальше по цепочке выглядит не как таймаут, а как
+  # коммутатор, который ничего не отдаёт, — и это неотличимо от «OID не
+  # реализован». Прежде чем решить, что счётчика нет, поднимите их.
+  timeout: 5        # seconds to wait for a reply
                     # секунд на ответ
-  retries: 1
+  retries: 2        # re-sends of a single request
+                    # повторов одного запроса
+  # A walk that stops answering mid-table is picked back up from the
+  # last OID that did arrive, this many times. Not the same as
+  # `retries`: a switch with many interfaces may need its table read in
+  # more than one bite.
+  # Walk, оборвавшийся на середине таблицы, продолжается с последнего
+  # полученного OID столько раз. Это не `retries`: коммутатору с
+  # большим числом интерфейсов таблицу приходится читать в несколько
+  # приёмов.
+  retries_on_break: 2
 
 # IP addresses of managed switches
 # IP-адреса управляемых коммутаторов

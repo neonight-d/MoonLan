@@ -20,8 +20,15 @@ CONFIG_PATH_ENV = "MOONLAN_CONFIG"
 @dataclass
 class SnmpConfig:
     community: str = "public"
-    timeout: int = 2
-    retries: int = 1
+    # A mean timeout does not look like a timeout further down the
+    # line: it looks like a switch that does not implement the OID.
+    # Two seconds and one retry produced empty and truncated tables on
+    # the network this service was written for, and a wrong diagnosis
+    # ("the DGS-1210 does not answer ifHCOutOctets") came straight out
+    # of them — the switch answers it fine, given five seconds. A
+    # generous timeout costs a healthy agent nothing at all.
+    timeout: int = 5
+    retries: int = 2
     # How many times a walk that stops answering mid-table is picked
     # back up from the last OID that did arrive. Not the same as
     # `retries`, which re-sends a single request.
