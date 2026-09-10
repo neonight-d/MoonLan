@@ -90,6 +90,7 @@ const I18N = {
       + "link is drawn from this port.",
     portLabelName: "Port name configured on the switch (LLDP)",
     andMore: "and {n} more",
+    sameDevice: "Same device as",
     lldpNeighbour: "LLDP neighbour",
     lldpForwarded: "LLDP forwarded",
     lldpForwardedHint:
@@ -309,6 +310,7 @@ const I18N = {
       + "поэтому связь по этому порту не строится.",
     portLabelName: "Подпись порта, заданная на коммутаторе (LLDP)",
     andMore: "и ещё {n}",
+    sameDevice: "Тот же аппарат, что",
     lldpNeighbour: "Сосед по LLDP",
     lldpForwarded: "пересылка LLDP",
     lldpForwardedHint:

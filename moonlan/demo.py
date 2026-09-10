@@ -319,6 +319,11 @@ def demo_network() -> list[SwitchData]:
     # Ten cameras behind an unmanaged switch, each of them talking LLDP
     for mac in CAMERAS:
         connect_host(ray3, CAMERA_PORT, 8, mac)
+    # The router forwards frames, so its chassis MAC is in the core's
+    # table on the very port LLDP found it on. It is one device and
+    # must be one node — v0.6.1 drew it twice, once named and once as
+    # a bare MAC beside itself.
+    connect_host(core, ROUTER_PORT, 1, ROUTER_CHASSIS)
 
     _add_lldp(core, ray1, ray2, ray3, ray4, core_port_to_ray)
     _add_stp(core, ray1, ray2, ray3, ray4)
@@ -592,12 +597,16 @@ def enrich_db(db: Database, hosts: list[dict]) -> None:
     # an IP, answers ping and stays on the map — only the copies of its
     # address do not. Its address is set aside from the positional
     # assignment below so it never drifts.
-    fixed = (CORRUPT_REAL, CORRUPT_NEIGHBOR, TRUNK_ONLY_MAC, *CAMERAS)
+    fixed = (
+        CORRUPT_REAL, CORRUPT_NEIGHBOR, TRUNK_ONLY_MAC, ROUTER_CHASSIS,
+        *CAMERAS,
+    )
     hosts = [h for h in hosts if h["mac"] not in fixed]
     for mac, ip, name in (
         (CORRUPT_REAL, CORRUPT_IP, "cam-4floor.demo.lan"),
         (CORRUPT_NEIGHBOR, CORRUPT_NEIGHBOR_IP, "cam-4floor-2.demo.lan"),
         (TRUNK_ONLY_MAC, TRUNK_ONLY_IP, "nvr-3floor.demo.lan"),
+        (ROUTER_CHASSIS, ROUTER_IPS[0], "gw.demo.lan"),
         *(
             (mac, f"10.0.98.{n}", f"cam-hall-{n:02d}.demo.lan")
             for n, mac in enumerate(CAMERAS, start=1)

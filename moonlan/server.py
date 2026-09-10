@@ -216,6 +216,7 @@ async def run_scan() -> None:
         hosts, offline_groups, unlocated = _assemble_hosts(
             hosts, db_rows, pseudo_switches, {sw["ip"] for sw in switches},
             unconfirmed,
+            {h["mac"]: h["merged_into"] for h in hosts if h.get("merged_into")},
         )
         _merge_db_fields(hosts, db_rows)
         _merge_db_fields(unlocated, db_rows)
@@ -245,6 +246,7 @@ async def run_scan() -> None:
             bridge["first_seen"] = row.get("first_seen", now)
             bridge["last_seen"] = row.get("last_seen", now)
             bridge["known"] = _is_known_bridge(bridge)
+        _merge_bridge_identity(bridges, hosts, db_rows)
         stp_report = _stp_report(collected)
         state.update(
             switches, links, hosts, pseudo_switches, vlan_names, unlocated,
@@ -351,6 +353,53 @@ def _stp_report(collected: list[SwitchData]) -> dict:
     return {"verdict": verdict, "switches": switches}
 
 
+def _merge_bridge_identity(
+    bridges: list[dict], hosts: list[dict], db_rows: dict[str, dict]
+) -> None:
+    """Gives a bridge node the identity of the device it IS.
+
+    Two ways the same box shows up twice. Its chassis MAC is in the FDB
+    of the port LLDP found it on — the topology builder already marked
+    that host as merged, and here the bridge picks up its IP, its DNS
+    name and its ping state, so the node answers "is it up?" like any
+    other. And its management address may sit in the inventory under a
+    different MAC (a router announces one per VLAN interface): a host
+    holding such an address on the bridge's own port is the same
+    device, so its node goes too and the card says which addresses
+    came from where.
+    """
+    ip_owner = {
+        row["ip"]: mac for mac, row in db_rows.items() if row["ip"]
+    }
+    for bridge in bridges:
+        row = db_rows.get(bridge["chassis_id"], {})
+        bridge["ip"] = row.get("ip", "") or bridge.get("mgmt_ip", "")
+        bridge["name"] = bridge.get("name") or row.get("name", "")
+        bridge["dns_name"] = row.get("name", "")
+        bridge["ping_up"] = bool(row.get("ping_up", 0))
+        bridge["last_ping_ok"] = row.get("last_ping_ok", 0)
+        if row.get("first_seen"):
+            bridge["first_seen"] = min(
+                bridge.get("first_seen", row["first_seen"]), row["first_seen"]
+            )
+        # the same box under another MAC, on this very port
+        also: list[str] = []
+        for address in bridge.get("mgmt_ips", []):
+            mac = ip_owner.get(address)
+            if not mac or mac == bridge["chassis_id"]:
+                continue
+            twin = db_rows.get(mac, {})
+            if (twin.get("switch_ip"), twin.get("port")) != (
+                bridge["switch"], bridge["port"]
+            ):
+                continue  # same address, but not behind this cable
+            also.append(address)
+            for host in hosts:
+                if host["mac"] == mac:
+                    host["merged_into"] = bridge["id"]
+        bridge["also_ips"] = also
+
+
 def _is_known_bridge(bridge: dict) -> bool:
     """Listed in config.known_bridges by chassis id or management IP."""
     known = set(config.known_bridges)
@@ -455,6 +504,7 @@ def _assemble_hosts(
     pseudo_switches: list[dict],
     switch_ips: set[str],
     unconfirmed: set[str] | None = None,
+    merged: dict[str, str] | None = None,
 ) -> tuple[list[dict], list[dict], list[dict]]:
     """Splits the known inventory into map hosts, offline groups and
     off-map devices.
@@ -475,6 +525,7 @@ def _assemble_hosts(
     for h in fresh:
         h["stale"] = False
     now = time.time()
+    merged = merged or {}
     grace = config.host_grace_hours * 3600
     known = {h["mac"] for h in fresh} | _switch_macs() | (unconfirmed or set())
     pseudo_by_port = {(p["switch"], p["port"]): p["id"] for p in pseudo_switches}
@@ -491,6 +542,10 @@ def _assemble_hosts(
             "name": "",
             "stale": True,
         }
+        # a device drawn as its bridge node keeps that identity while
+        # it is quiet, instead of reappearing as a bare MAC beside it
+        if mac in merged:
+            host["merged_into"] = merged[mac]
         located = row["switch_ip"] in switch_ips
         if located and grace > 0 and now - row["last_seen"] < grace:
             via = pseudo_by_port.get((row["switch_ip"], row["port"]))
@@ -523,6 +578,8 @@ def _group_offline(on_map: list[dict], db_rows: dict[str, dict]) -> list[dict]:
         return []
     by_port: dict[tuple[str, str], list[dict]] = {}
     for host in on_map:
+        if host.get("merged_into"):
+            continue  # it is drawn as its bridge, not as a dot
         if host["stale"] and not host.get("via"):
             by_port.setdefault((host["switch"], host["port"]), []).append(host)
     groups: list[dict] = []
@@ -1059,6 +1116,17 @@ async def api_topology() -> JSONResponse:
     unlocated = [dict(h) for h in topo.get("unlocated", [])]
     _merge_db_fields(unlocated, db_hosts)
     topo["unlocated"] = unlocated
+    # a bridge node answers "is it up?" like any other device
+    bridges = []
+    for bridge in topo.get("bridges", []):
+        bridge = dict(bridge)
+        row = db_hosts.get(bridge["chassis_id"], {})
+        if row:
+            bridge["ip"] = row.get("ip", "") or bridge.get("mgmt_ip", "")
+            bridge["ping_up"] = bool(row.get("ping_up", 0))
+            bridge["last_ping_ok"] = row.get("last_ping_ok", 0)
+        bridges.append(bridge)
+    topo["bridges"] = bridges
     topo["switches"] = [
         {
             **sw,
