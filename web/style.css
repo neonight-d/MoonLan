@@ -311,23 +311,36 @@ main { flex: 1; display: flex; min-height: 0; }
 
 /* ---------- ports panel ---------- */
 
+/* Only the table scrolls. The whole panel used to, so scrolling
+   sideways to reach the error columns took the title, the close button
+   and the port names with it: numbers with nothing to attach them to. */
 #ports {
   position: absolute;
   top: 14px; right: 14px;
-  width: 560px;
+  width: min(820px, calc(100vw - 28px));
   max-width: calc(100% - 28px);
   max-height: calc(100% - 28px);
-  overflow: auto;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
   background: var(--bg-panel);
   border: 1px solid var(--line);
   border-radius: 8px;
   padding: 14px;
   box-shadow: 0 6px 24px rgba(0, 0, 0, 0.5);
 }
-#ports h3 { margin: 0 0 8px; font-size: 1rem; color: var(--moon); }
+.panel-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+  flex: 0 0 auto;
+  margin-bottom: 8px;
+}
+#ports h3 { margin: 0; font-size: 1rem; color: var(--moon); }
+#ports-scroll { overflow: auto; flex: 1 1 auto; }
 #ports-close {
-  position: absolute; top: 6px; right: 8px;
-  border: none; font-size: 1.1rem; padding: 2px 6px;
+  border: none; font-size: 1.1rem; padding: 2px 6px; line-height: 1;
 }
 .ports-table { width: 100%; border-collapse: collapse; font-size: 0.82rem; }
 .ports-table th {
@@ -345,6 +358,25 @@ main { flex: 1; display: flex; min-height: 0; }
 }
 .ports-table th.num, .ports-table td.num { text-align: right; }
 .ports-table .dot { display: inline-block; }
+/* The header and the port name stay put while the numbers scroll
+   past them, so every row can still be attributed to a port. */
+.ports-table thead th {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  background: var(--bg-panel);
+}
+.ports-table th:first-child,
+.ports-table td:first-child {
+  position: sticky;
+  left: 0;
+  z-index: 1;
+  background: var(--bg-panel);
+}
+.ports-table thead th:first-child { z-index: 3; }
+/* numbers keep their width; the port name gives way first */
+.ports-table th.num, .ports-table td.num { width: 8ch; }
+.ports-table td:first-child { max-width: 22rem; }
 .ports-table th[data-sort] { cursor: pointer; user-select: none; }
 .ports-table th[data-sort]:hover { color: var(--text); }
 .ports-table th.sorted-asc::after { content: " ▲"; font-size: 0.7rem; }
@@ -352,8 +384,10 @@ main { flex: 1; display: flex; min-height: 0; }
 /* damaged frames are a fault; discards are usually just filtering */
 .ports-table td.over-error { color: #d96b6b; font-weight: 600; }
 .ports-table td.over-discard { color: var(--warn); }
-.ports-table tr.highlight td { background: rgba(232, 228, 213, 0.1); }
-.ports-table tr.port-down td { color: var(--text-dim); opacity: 0.65; }
+.ports-table tr.highlight td { background: #1f2a3d; }
+/* dimmed by colour, not by opacity: the port-name cell is sticky, and
+   a translucent one lets the scrolled-away columns show through it */
+.ports-table tr.port-down td { color: #63708a; }
 
 /* devices of an offline group, listed in its card */
 .offline-list {

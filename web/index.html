@@ -56,8 +56,11 @@
         <ul id="journal-list"></ul>
       </div>
       <div id="ports" class="hidden">
-        <button id="ports-close">×</button>
-        <h3 id="ports-title"></h3>
+        <div class="panel-head">
+          <h3 id="ports-title"></h3>
+          <button id="ports-close">×</button>
+        </div>
+        <div id="ports-scroll">
         <table class="ports-table">
           <thead>
             <tr>
@@ -72,6 +75,7 @@
           </thead>
           <tbody id="ports-body"></tbody>
         </table>
+        </div>
       </div>
       <div id="alarms" class="hidden">
         <button id="alarms-close">×</button>
