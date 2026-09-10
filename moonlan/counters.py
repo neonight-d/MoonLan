@@ -172,7 +172,7 @@ async def collect_samples(
     """One counters poll: (ifIndex -> Sample, ifIndex -> oper up, columns).
 
     Each column is walked on its own and its answer recorded, because
-    on real hardware they disagree — and they disagree in two
+    on real hardware they disagree — and they disagree in three
     different ways, each with its own remedy:
 
     - the column returns nothing at all: fall back to the 32-bit
@@ -182,6 +182,12 @@ async def collect_samples(
       ports are still missing afterwards are fetched one GET at a time
       from the 32-bit column. On mb1 the ports lost this way were the
       gigabit uplinks at the end of ifTable, three polls running;
+    - the column answers for every port and every value is zero while
+      the octets are in the terabytes: the firmware implements the
+      column and does not fill it. That one applies to packet counters
+      only — for errors and discards a column of zeros is a legitimate
+      answer, and on mb0 it is the true one.
+
     `expected` is the ifIndexes the interface table knows about; without
     it the per-port gap filling has nothing to compare against.
     """
@@ -269,7 +275,14 @@ async def collect_samples(
         ("out_pkts", OID_HC_OUT_PKTS, OID_OUT_PKTS),
     ):
         status = await walk_into(column, hc_oid, column)
-        if not status.rows:
+        if not status.rows or _column_unfilled(samples, column):
+            if status.rows:
+                log.info(
+                    "%s: %s answered for %d port(s) and every value is zero "
+                    "while the octet counters are not — the firmware "
+                    "implements the column without filling it; reading the "
+                    "32-bit %s instead", host, hc_oid, status.rows, oid32,
+                )
             await walk_into(column, oid32, column)
         elif status.truncated:
             await fill_gaps(status, oid32, column, None)
@@ -295,6 +308,26 @@ async def collect_samples(
             "; ".join(f"{c}: {columns[c].verdict()}" for c in sorted(partial)),
         )
     return samples, oper, columns
+
+
+def _column_unfilled(samples: dict[int, Sample], column: str) -> bool:
+    """A packet column answered for every port, and every answer is zero.
+
+    On mb0 ifHCInUcastPkts returns 26 rows of zero next to octet
+    counters in the terabytes. The column exists and is never written
+    to, which is not the same as a quiet switch — and it cost the error
+    ratio, which needs a frame count to be a ratio of anything.
+
+    Only ever asked about packets. For errors and discards a column of
+    zeros is the answer an operator wants to be able to trust.
+    """
+    seen_octets = False
+    for s in samples.values():
+        if getattr(s, column):
+            return False
+        if s.in_octets or s.out_octets:
+            seen_octets = True
+    return seen_octets
 
 
 def _octet_delta(prev: int | None, cur: int | None, hc: bool) -> int | None:
