@@ -94,6 +94,9 @@ class ColumnStatus:
     error: str = ""
     truncated: bool = False   # rows arrived and then it stopped
     last_oid: str = ""        # the last OID that did arrive
+    filled_by: str = ""       # a 32-bit column read to fill the gaps
+    gaps_filled: int = 0      # ports rescued by per-port GETs
+    covered: set[int] = field(default_factory=set)  # ifIndexes answered for
 
     @property
     def answered(self) -> bool:
@@ -113,6 +116,11 @@ class ColumnStatus:
         if self.truncated:
             where = f" at {self.last_oid}" if self.last_oid else ""
             parts.append(f"then stopped answering{where} ({self.error})")
+        if self.gaps_filled:
+            parts.append(
+                f"{self.gaps_filled} port(s) filled in from "
+                f"{self.filled_by}"
+            )
         return ", ".join(parts)
 
 
@@ -155,15 +163,27 @@ class PortRates:
         return self._total(self.in_discards_per_min, self.out_discards_per_min)
 
 
+MAX_GAP_GETS = 64  # per column; a storm of GETs is worse than a gap
+
+
 async def collect_samples(
-    collector: SnmpCollector, host: str
+    collector: SnmpCollector, host: str, expected: set[int] | None = None
 ) -> tuple[dict[int, Sample], dict[int, bool], dict[str, ColumnStatus]]:
     """One counters poll: (ifIndex -> Sample, ifIndex -> oper up, columns).
 
     Each column is walked on its own and its answer recorded, because
-    on real hardware they disagree: a column may return nothing at all,
-    or return some rows and then stop. The second case used to be
-    reported as the first, which hid the one fact worth having.
+    on real hardware they disagree — and they disagree in two
+    different ways, each with its own remedy:
+
+    - the column returns nothing at all: fall back to the 32-bit
+      counter for that direction alone;
+    - the column returns some rows and then the agent stops answering:
+      the walk resumes itself (see SnmpCollector._walk), and whatever
+      ports are still missing afterwards are fetched one GET at a time
+      from the 32-bit column. On mb1 the ports lost this way were the
+      gigabit uplinks at the end of ifTable, three polls running;
+    `expected` is the ifIndexes the interface table knows about; without
+    it the per-port gap filling has nothing to compare against.
     """
     ts = time.time()
     samples: dict[int, Sample] = {}
@@ -184,8 +204,40 @@ async def collect_samples(
             oid=oid, rows=len(covered), error=walk.error,
             truncated=walk.truncated, last_oid=walk.last_oid,
         )
+        status.covered = covered
         columns[column] = status
         return status
+
+    async def fill_gaps(
+        status: ColumnStatus, oid32: str, attr: str, hc_flag: str | None
+    ) -> None:
+        """Reads the ports a truncated walk never reached, one by one.
+
+        A resumed walk usually finishes; when it does not, the ports it
+        missed are known by name, and asking for them individually is
+        cheaper and more certain than walking the table again.
+        """
+        missing = sorted((expected or set()) - status.covered)
+        if not missing:
+            return
+        for if_index in missing[:MAX_GAP_GETS]:
+            value = await collector._get(host, f"{oid32}.{if_index}")
+            if value is None:
+                continue
+            try:
+                setattr(sample(if_index), attr, int(value))
+            except (TypeError, ValueError):
+                continue
+            if hc_flag:  # packet counters have no wraparound flag
+                setattr(samples[if_index], hc_flag, False)
+            status.gaps_filled += 1
+        if status.gaps_filled:
+            status.filled_by = oid32
+            log.info(
+                "%s: %s stopped after %d row(s); %d port(s) read from the "
+                "32-bit %s instead",
+                host, status.oid, status.rows, status.gaps_filled, oid32,
+            )
 
     # Octets, each direction falling back on its own
     for column, hc_oid, oid32, attr, hc_flag in (
@@ -198,6 +250,8 @@ async def collect_samples(
             if status.rows:
                 for s in samples.values():
                     setattr(s, hc_flag, False)
+        elif status.truncated:
+            await fill_gaps(status, oid32, attr, hc_flag)
 
     for column, oid in (
         ("in_errors", OID_IN_ERRORS),
@@ -217,6 +271,8 @@ async def collect_samples(
         status = await walk_into(column, hc_oid, column)
         if not status.rows:
             await walk_into(column, oid32, column)
+        elif status.truncated:
+            await fill_gaps(status, oid32, column, None)
 
     async for suffix, value in collector._walk(host, OID_IF_OPER_STATUS):
         oper[suffix[0]] = int(value) == 1
