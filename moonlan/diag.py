@@ -39,11 +39,12 @@ import time
 from collections import Counter
 
 from . import counters, pinger, stp
-from .config import SECRET_KEYS, load_config
+from .config import SECRET_KEYS, load_config, parse_uplink_ports
 from .corruption import find_suspects, sample_mac
 from .counters import CounterStore, Sample
 from .topology import (
     detect_bridges,
+    suspect_uplink_ports,
     infer_tree,
     lldp_link_candidates,
     merge_lldp_links,
@@ -282,13 +283,13 @@ async def run_topology_view(community: str, timeout: int, cfg) -> None:
         await asyncio.gather(*(collector.collect(ip) for ip in cfg.switches))
     )
     # Like the server: add the management-IP MAC from the routers' ARP
+    arp_by_mac: dict[str, str] = {}
     if cfg.routers:
-        merged: dict[str, str] = {}
         for table in await asyncio.gather(
             *(collector.collect_arp(ip) for ip in cfg.routers)
         ):
-            merged.update(table)
-        ip_to_mac = {ip: mac for mac, ip in merged.items()}
+            arp_by_mac.update(table)
+        ip_to_mac = {ip: mac for mac, ip in arp_by_mac.items()}
         for sw in collected:
             mac = ip_to_mac.get(sw.ip)
             if mac:
@@ -435,6 +436,25 @@ async def run_topology_view(community: str, timeout: int, cfg) -> None:
         switches, switch_macs,
         trunk_ports(switches, switches_on_port, uplinks, lldp_pairs),
     )
+    # A way out of the network that nobody has told MoonLan about: the
+    # branch to the provider looks like any other access port until it
+    # is listed in uplink_ports.
+    print("\nports that look like a way out of the network:")
+    host_ips: list[tuple[str, str, str]] = []
+    for sw in switches:
+        for mac, if_index in fdb[sw.ip].items():
+            address = arp_by_mac.get(mac, "")
+            if address:
+                host_ips.append((sw.ip, port_name(sw.ip, if_index), address))
+    suspects = suspect_uplink_ports(
+        switches, host_ips, parse_uplink_ports(cfg.uplink_ports)
+    )
+    if not suspects:
+        print("  none")
+    for (sw_ip, port), why in sorted(suspects.items()):
+        print(f"  {label(sw_ip)} {port}: {why}")
+        print(f'    add "{sw_ip}:{port}" to uplink_ports in config.yaml')
+
     print("\nbridges (LLDP capability 'bridge'):")
     if not bridges:
         print("  none")

@@ -27,7 +27,13 @@ from .snmp_collector import (
     is_random_mac,
     is_valid_mac,
 )
-from .topology import FdbStability, TopologyState, build_topology, port_name
+from .topology import (
+    FdbStability,
+    TopologyState,
+    build_topology,
+    port_name,
+    suspect_uplink_ports,
+)
 
 log = logging.getLogger("moonlan")
 
@@ -81,6 +87,10 @@ prev_pseudo_ports: set[tuple[str, str]] = set()
 # (switch ip, port) -> the distorted MACs of the latest scan, for the
 # ports panel and the diagnostics
 suspect_by_port: dict[tuple[str, str], list[dict]] = {}
+
+# (switch ip, port) -> why the port looks like a way out of the network
+# and might belong in config.uplink_ports
+uplink_suspects: dict[tuple[str, str], str] = {}
 
 # One SnmpEngine per process: a new engine per cycle leaks sockets and
 # MIB state (OSError 24, MibNotFoundError, growing RSS). Recreate only
@@ -256,6 +266,28 @@ async def run_scan() -> None:
         for bridge in bridges:
             if bridge["chassis_id"] in router_ips:
                 bridge["router_ip"] = router_ips[bridge["chassis_id"]]
+        # Ports that look like a way out but are not configured as one.
+        # Addresses are only known once the DB has been merged in, so
+        # this happens here rather than inside build_topology.
+        uplink_suspects.clear()
+        uplink_suspects.update(
+            suspect_uplink_ports(
+                [sw for sw in collected if sw.reachable],
+                [
+                    (h["switch"], h["port"], h.get("ip", ""))
+                    for h in hosts if h.get("switch") and h.get("port")
+                ],
+                _uplink_ports(),
+            )
+        )
+        for (sw_ip, port), why in sorted(uplink_suspects.items()):
+            log.info(
+                "%s port %s looks like a way out of the network (%s). Add "
+                "\"%s:%s\" to uplink_ports and what is behind it becomes "
+                "one \"External network\" node instead of a crowd of "
+                "devices, and raises no bridge alarms.",
+                sw_ip, port, why, sw_ip, port,
+            )
         stp_report = _stp_report(collected)
         state.update(
             switches, links, hosts, pseudo_switches, vlan_names, unlocated,
@@ -1250,6 +1282,8 @@ async def api_switch_ports(ip: str) -> dict:
             "label": sw.port_labels.get(p.if_index, ""),
             # a port that leaves the network (config.uplink_ports)
             "external": name in external,
+            # …or one that looks like it should be, and is not listed
+            "uplink_hint": uplink_suspects.get((ip, name), ""),
         })
     # active ports first, then by port number
     ports.sort(key=lambda p: (not p["oper_up"], abs(p["if_index"])))
