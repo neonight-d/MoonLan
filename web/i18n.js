@@ -91,6 +91,18 @@ const I18N = {
     portLabelName: "Port name configured on the switch (LLDP)",
     andMore: "and {n} more",
     sameDevice: "Same device as",
+    kind_router: "router",
+    kind_access_point: "access point",
+    kind_phone: "phone",
+    kind_bridge: "bridge",
+    kind_repeater: "repeater",
+    kind_station: "end station",
+    kind_other: "device",
+    kind_unknown: "unidentified LLDP device",
+    nameFromLldpHint:
+      "The caption comes from LLDP: the device named itself, but no ARP "
+      + "table gave it an address and reverse DNS has no record of it. "
+      + "Routers are deliberately kept out of the host inventory.",
     lldpNeighbour: "LLDP neighbour",
     lldpForwarded: "LLDP forwarded",
     lldpForwardedHint:
@@ -311,6 +323,18 @@ const I18N = {
     portLabelName: "Подпись порта, заданная на коммутаторе (LLDP)",
     andMore: "и ещё {n}",
     sameDevice: "Тот же аппарат, что",
+    kind_router: "маршрутизатор",
+    kind_access_point: "точка доступа",
+    kind_phone: "телефон",
+    kind_bridge: "мост",
+    kind_repeater: "повторитель",
+    kind_station: "оконечное устройство",
+    kind_other: "устройство",
+    kind_unknown: "неопознанное устройство LLDP",
+    nameFromLldpHint:
+      "Подпись взята из LLDP: устройство назвало себя само, но адреса "
+      + "ему не дала ни одна ARP-таблица, и обратный DNS о нём не знает. "
+      + "Маршрутизаторы сознательно не входят в инвентарь хостов.",
     lldpNeighbour: "Сосед по LLDP",
     lldpForwarded: "пересылка LLDP",
     lldpForwardedHint:
