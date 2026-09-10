@@ -96,6 +96,7 @@ class ColumnStatus:
     last_oid: str = ""        # the last OID that did arrive
     filled_by: str = ""       # a 32-bit column read to fill the gaps
     gaps_filled: int = 0      # ports rescued by per-port GETs
+    resumes: int = 0          # times the walk was picked back up
     covered: set[int] = field(default_factory=set)  # ifIndexes answered for
 
     @property
@@ -113,6 +114,10 @@ class ColumnStatus:
                 return f"NO ANSWER — {self.error}"
             return "no rows — the agent does not implement this column"
         parts = [f"{self.rows} row(s)"]
+        if self.resumes:
+            parts.append(
+                f"resumed {self.resumes} time(s) after a break"
+            )
         if self.truncated:
             where = f" at {self.last_oid}" if self.last_oid else ""
             parts.append(f"then stopped answering{where} ({self.error})")
@@ -209,6 +214,7 @@ async def collect_samples(
         status = ColumnStatus(
             oid=oid, rows=len(covered), error=walk.error,
             truncated=walk.truncated, last_oid=walk.last_oid,
+            resumes=walk.resumes,
         )
         status.covered = covered
         columns[column] = status

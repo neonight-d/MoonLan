@@ -518,6 +518,9 @@ main { flex: 1; display: flex; min-height: 0; }
 }
 .addr-more:hover { color: var(--text); }
 
-/* a counter column the agent never answered for */
+/* a counter column the agent never answered for, and one it answered
+   only in part — different problems, different marks */
 .ports-table th.no-answer { color: var(--warn); cursor: help; }
 .ports-table th.no-answer::before { content: "\26A0 "; }
+.ports-table th.partial { color: var(--warn); cursor: help; }
+.ports-table th.partial::before { content: "\2248 "; }

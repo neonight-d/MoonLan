@@ -1,0 +1,162 @@
+
+=== 10. Port counters: 10.0.0.10 ===
+counter columns:
+  in_discards    1.3.6.1.2.1.2.2.1.13         26 row(s)
+  in_errors      1.3.6.1.2.1.2.2.1.14         26 row(s)
+  in_octets      1.3.6.1.2.1.31.1.1.1.6       26 row(s)
+  in_pkts        1.3.6.1.2.1.31.1.1.1.7       26 row(s)
+  out_discards   1.3.6.1.2.1.2.2.1.19         26 row(s)
+  out_errors     1.3.6.1.2.1.2.2.1.20         26 row(s)
+  out_octets     1.3.6.1.2.1.31.1.1.1.10      26 row(s)
+  out_pkts       1.3.6.1.2.1.31.1.1.1.11      26 row(s)
+
+raw counters (16:02:09):
+  Slot0/21         up      1000 Mbit/s  errors in/out 0/0  discards in/out 0/0
+                   octets in/out 9137720039106/9122646101934  unicast packets in/out 0/0
+  Slot0/25         up      1000 Mbit/s  errors in/out 0/0  discards in/out 0/0
+                   octets in/out 4685641119816/2435314771954  unicast packets in/out 0/0
+  Slot0/23         up      1000 Mbit/s  errors in/out 0/0  discards in/out 0/0
+                   octets in/out 3140141298986/1098143147798  unicast packets in/out 0/0
+  Slot0/10         up      1000 Mbit/s  errors in/out 0/0  discards in/out 0/0
+                   octets in/out 301932880965/1408658471389  unicast packets in/out 0/0
+  Slot0/26         up      1000 Mbit/s  errors in/out 0/0  discards in/out 0/0
+                   octets in/out 124056535388/1240444918222  unicast packets in/out 0/0
+  Slot0/3          up      1000 Mbit/s  errors in/out 0/0  discards in/out 0/0
+                   octets in/out 114530416076/869808683518  unicast packets in/out 0/0
+  Slot0/12         up      1000 Mbit/s  errors in/out 0/0  discards in/out 0/0
+                   octets in/out 452752978509/313846501830  unicast packets in/out 0/0
+  Slot0/1          up      1000 Mbit/s  errors in/out 0/0  discards in/out 0/0
+                   octets in/out 97748261691/571062907317  unicast packets in/out 0/0
+  Slot0/2          up      1000 Mbit/s  errors in/out 0/0  discards in/out 0/0
+                   octets in/out 53010114202/560918467154  unicast packets in/out 0/0
+  Slot0/7          up      1000 Mbit/s  errors in/out 0/0  discards in/out 0/0
+                   octets in/out 75704872587/394824101337  unicast packets in/out 0/0
+  Slot0/5          up       100 Mbit/s  errors in/out 0/0  discards in/out 0/0
+                   octets in/out 26341409098/293357696574  unicast packets in/out 0/0
+  Slot0/13         up      1000 Mbit/s  errors in/out 0/0  discards in/out 0/0
+                   octets in/out 16060895520/8284309363  unicast packets in/out 0/0
+  Slot0/18         up      1000 Mbit/s  errors in/out 0/0  discards in/out 0/0
+                   octets in/out 41564555/15764563791  unicast packets in/out 0/0
+  Slot0/17         up       100 Mbit/s  errors in/out 0/0  discards in/out 0/0
+                   octets in/out 104909132/15580780572  unicast packets in/out 0/0
+  Slot0/16         up      1000 Mbit/s  errors in/out 0/0  discards in/out 0/0
+                   octets in/out 40738096/15329939566  unicast packets in/out 0/0
+  Slot0/9          up       100 Mbit/s  errors in/out 0/0  discards in/out 0/0
+                   octets in/out 9381290/465982604  unicast packets in/out 0/0
+  Slot0/11         up      1000 Mbit/s  errors in/out 0/0  discards in/out 0/0
+                   octets in/out 18653172/64116316  unicast packets in/out 0/0
+ports with a non-zero error or discard counter: none
+
+… waiting 60 s
+
+raw counters (16:03:11):
+  Slot0/21         up      1000 Mbit/s  errors in/out 0/0  discards in/out 0/0
+                   octets in/out 9138157622539/9123078331461  unicast packets in/out 0/0
+  Slot0/25         up      1000 Mbit/s  errors in/out 0/0  discards in/out 0/0
+                   octets in/out 4685899064246/2435379798747  unicast packets in/out 0/0
+  Slot0/23         up      1000 Mbit/s  errors in/out 0/0  discards in/out 0/0
+                   octets in/out 3140289903154/1098148620622  unicast packets in/out 0/0
+  Slot0/10         up      1000 Mbit/s  errors in/out 0/0  discards in/out 0/0
+                   octets in/out 301938830982/1408775896506  unicast packets in/out 0/0
+  Slot0/26         up      1000 Mbit/s  errors in/out 0/0  discards in/out 0/0
+                   octets in/out 124059870119/1240500473853  unicast packets in/out 0/0
+  Slot0/3          up      1000 Mbit/s  errors in/out 0/0  discards in/out 0/0
+                   octets in/out 114533625657/869865776699  unicast packets in/out 0/0
+  Slot0/12         up      1000 Mbit/s  errors in/out 0/0  discards in/out 0/0
+                   octets in/out 452754127428/313847247236  unicast packets in/out 0/0
+  Slot0/1          up      1000 Mbit/s  errors in/out 0/0  discards in/out 0/0
+                   octets in/out 97751125306/571128163206  unicast packets in/out 0/0
+  Slot0/2          up      1000 Mbit/s  errors in/out 0/0  discards in/out 0/0
+                   octets in/out 53012855061/560954745047  unicast packets in/out 0/0
+  Slot0/7          up      1000 Mbit/s  errors in/out 0/0  discards in/out 0/0
+                   octets in/out 75709204550/394856576572  unicast packets in/out 0/0
+  Slot0/5          up       100 Mbit/s  errors in/out 0/0  discards in/out 0/0
+                   octets in/out 26341661141/293362034132  unicast packets in/out 0/0
+  Slot0/13         up      1000 Mbit/s  errors in/out 0/0  discards in/out 0/0
+                   octets in/out 16061520087/8284434876  unicast packets in/out 0/0
+  Slot0/18         up      1000 Mbit/s  errors in/out 0/0  discards in/out 0/0
+                   octets in/out 41565063/15765171347  unicast packets in/out 0/0
+  Slot0/17         up       100 Mbit/s  errors in/out 0/0  discards in/out 0/0
+                   octets in/out 104909298/15581383730  unicast packets in/out 0/0
+  Slot0/16         up      1000 Mbit/s  errors in/out 0/0  discards in/out 0/0
+                   octets in/out 40739397/15330539996  unicast packets in/out 0/0
+  Slot0/9          up       100 Mbit/s  errors in/out 0/0  discards in/out 0/0
+                   octets in/out 9381290/465988466  unicast packets in/out 0/0
+  Slot0/11         up      1000 Mbit/s  errors in/out 0/0  discards in/out 0/0
+                   octets in/out 18653402/64117814  unicast packets in/out 0/0
+ports with a non-zero error or discard counter: none
+rates since the previous measurement:
+  Slot0/21         in 56.23 Mbit/s, out 55.54 Mbit/s, errors 0.0/min (in 0.0, out 0.0), discards 0/min (in 0, out 0)
+  Slot0/25         in 33.15 Mbit/s, out 8.36 Mbit/s, errors 0.0/min (in 0.0, out 0.0), discards 0/min (in 0, out 0)
+  Slot0/23         in 19.10 Mbit/s, out 0.70 Mbit/s, errors 0.0/min (in 0.0, out 0.0), discards 0/min (in 0, out 0)
+  Slot0/10         in 0.76 Mbit/s, out 15.09 Mbit/s, errors 0.0/min (in 0.0, out 0.0), discards 0/min (in 0, out 0)
+  Slot0/26         in 0.43 Mbit/s, out 7.14 Mbit/s, errors 0.0/min (in 0.0, out 0.0), discards 0/min (in 0, out 0)
+  Slot0/3          in 0.41 Mbit/s, out 7.34 Mbit/s, errors 0.0/min (in 0.0, out 0.0), discards 0/min (in 0, out 0)
+  Slot0/12         in 0.15 Mbit/s, out 0.10 Mbit/s, errors 0.0/min (in 0.0, out 0.0), discards 0/min (in 0, out 0)
+  Slot0/1          in 0.37 Mbit/s, out 8.39 Mbit/s, errors 0.0/min (in 0.0, out 0.0), discards 0/min (in 0, out 0)
+  Slot0/2          in 0.35 Mbit/s, out 4.66 Mbit/s, errors 0.0/min (in 0.0, out 0.0), discards 0/min (in 0, out 0)
+  Slot0/7          in 0.56 Mbit/s, out 4.17 Mbit/s, errors 0.0/min (in 0.0, out 0.0), discards 0/min (in 0, out 0)
+  Slot0/5          in 0.03 Mbit/s, out 0.56 Mbit/s, errors 0.0/min (in 0.0, out 0.0), discards 0/min (in 0, out 0)
+  Slot0/13         in 0.08 Mbit/s, out 0.02 Mbit/s, errors 0.0/min (in 0.0, out 0.0), discards 0/min (in 0, out 0)
+  Slot0/18         in 0.00 Mbit/s, out 0.08 Mbit/s, errors 0.0/min (in 0.0, out 0.0), discards 0/min (in 0, out 0)
+  Slot0/17         in 0.00 Mbit/s, out 0.08 Mbit/s, errors 0.0/min (in 0.0, out 0.0), discards 0/min (in 0, out 0)
+  Slot0/16         in 0.00 Mbit/s, out 0.08 Mbit/s, errors 0.0/min (in 0.0, out 0.0), discards 0/min (in 0, out 0)
+  Slot0/9          in 0.00 Mbit/s, out 0.00 Mbit/s, errors 0.0/min (in 0.0, out 0.0), discards 0/min (in 0, out 0)
+  Slot0/11         in 0.00 Mbit/s, out 0.00 Mbit/s, errors 0.0/min (in 0.0, out 0.0), discards 0/min (in 0, out 0)
+
+… waiting 60 s
+
+raw counters (16:04:14):
+  Slot0/21         up      1000 Mbit/s  errors in/out 0/0  discards in/out 0/0
+                   octets in/out 9138647830078/9123566794305  unicast packets in/out 0/0
+  Slot0/25         up      1000 Mbit/s  errors in/out 0/0  discards in/out 0/0
+                   octets in/out 4686210283581/2435447579983  unicast packets in/out 0/0
+  Slot0/23         up      1000 Mbit/s  errors in/out 0/0  discards in/out 0/0
+                   octets in/out 3140433160742/1098154333665  unicast packets in/out 0/0
+  Slot0/10         up      1000 Mbit/s  errors in/out 0/0  discards in/out 0/0
+                   octets in/out 301947814599/1408969515579  unicast packets in/out 0/0
+  Slot0/26         up      1000 Mbit/s  errors in/out 0/0  discards in/out 0/0
+                   octets in/out 124064670543/1240641029812  unicast packets in/out 0/0
+  Slot0/3          up      1000 Mbit/s  errors in/out 0/0  discards in/out 0/0
+                   octets in/out 114538081218/869880017006  unicast packets in/out 0/0
+  Slot0/12         up      1000 Mbit/s  errors in/out 0/0  discards in/out 0/0
+                   octets in/out 452755634094/313848226202  unicast packets in/out 0/0
+  Slot0/1          up      1000 Mbit/s  errors in/out 0/0  discards in/out 0/0
+                   octets in/out 97753820086/571153009862  unicast packets in/out 0/0
+  Slot0/2          up      1000 Mbit/s  errors in/out 0/0  discards in/out 0/0
+                   octets in/out 53014843575/560987872858  unicast packets in/out 0/0
+  Slot0/7          up      1000 Mbit/s  errors in/out 0/0  discards in/out 0/0
+                   octets in/out 75711187032/394866105147  unicast packets in/out 0/0
+  Slot0/5          up       100 Mbit/s  errors in/out 0/0  discards in/out 0/0
+                   octets in/out 26341843752/293364097410  unicast packets in/out 0/0
+  Slot0/13         up      1000 Mbit/s  errors in/out 0/0  discards in/out 0/0
+                   octets in/out 16064429681/8285261034  unicast packets in/out 0/0
+  Slot0/18         up      1000 Mbit/s  errors in/out 0/0  discards in/out 0/0
+                   octets in/out 41566181/15765785249  unicast packets in/out 0/0
+  Slot0/17         up       100 Mbit/s  errors in/out 0/0  discards in/out 0/0
+                   octets in/out 104909903/15581991415  unicast packets in/out 0/0
+  Slot0/16         up      1000 Mbit/s  errors in/out 0/0  discards in/out 0/0
+                   octets in/out 40740865/15331146702  unicast packets in/out 0/0
+  Slot0/9          up       100 Mbit/s  errors in/out 0/0  discards in/out 0/0
+                   octets in/out 9381290/465995020  unicast packets in/out 0/0
+  Slot0/11         up      1000 Mbit/s  errors in/out 0/0  discards in/out 0/0
+                   octets in/out 18653862/64119504  unicast packets in/out 0/0
+ports with a non-zero error or discard counter: none
+rates since the previous measurement:
+  Slot0/21         in 62.92 Mbit/s, out 62.69 Mbit/s, errors 0.0/min (in 0.0, out 0.0), discards 0/min (in 0, out 0)
+  Slot0/25         in 39.94 Mbit/s, out 8.70 Mbit/s, errors 0.0/min (in 0.0, out 0.0), discards 0/min (in 0, out 0)
+  Slot0/23         in 18.39 Mbit/s, out 0.73 Mbit/s, errors 0.0/min (in 0.0, out 0.0), discards 0/min (in 0, out 0)
+  Slot0/10         in 1.15 Mbit/s, out 24.85 Mbit/s, errors 0.0/min (in 0.0, out 0.0), discards 0/min (in 0, out 0)
+  Slot0/26         in 0.62 Mbit/s, out 18.04 Mbit/s, errors 0.0/min (in 0.0, out 0.0), discards 0/min (in 0, out 0)
+  Slot0/3          in 0.57 Mbit/s, out 1.83 Mbit/s, errors 0.0/min (in 0.0, out 0.0), discards 0/min (in 0, out 0)
+  Slot0/12         in 0.19 Mbit/s, out 0.13 Mbit/s, errors 0.0/min (in 0.0, out 0.0), discards 0/min (in 0, out 0)
+  Slot0/1          in 0.35 Mbit/s, out 3.19 Mbit/s, errors 0.0/min (in 0.0, out 0.0), discards 0/min (in 0, out 0)
+  Slot0/2          in 0.26 Mbit/s, out 4.25 Mbit/s, errors 0.0/min (in 0.0, out 0.0), discards 0/min (in 0, out 0)
+  Slot0/7          in 0.25 Mbit/s, out 1.22 Mbit/s, errors 0.0/min (in 0.0, out 0.0), discards 0/min (in 0, out 0)
+  Slot0/5          in 0.02 Mbit/s, out 0.26 Mbit/s, errors 0.0/min (in 0.0, out 0.0), discards 0/min (in 0, out 0)
+  Slot0/13         in 0.37 Mbit/s, out 0.11 Mbit/s, errors 0.0/min (in 0.0, out 0.0), discards 0/min (in 0, out 0)
+  Slot0/18         in 0.00 Mbit/s, out 0.08 Mbit/s, errors 0.0/min (in 0.0, out 0.0), discards 0/min (in 0, out 0)
+  Slot0/17         in 0.00 Mbit/s, out 0.08 Mbit/s, errors 0.0/min (in 0.0, out 0.0), discards 0/min (in 0, out 0)
+  Slot0/16         in 0.00 Mbit/s, out 0.08 Mbit/s, errors 0.0/min (in 0.0, out 0.0), discards 0/min (in 0, out 0)
+  Slot0/9          in 0.00 Mbit/s, out 0.00 Mbit/s, errors 0.0/min (in 0.0, out 0.0), discards 0/min (in 0, out 0)
+  Slot0/11         in 0.00 Mbit/s, out 0.00 Mbit/s, errors 0.0/min (in 0.0, out 0.0), discards 0/min (in 0, out 0)

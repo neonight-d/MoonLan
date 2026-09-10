@@ -1156,19 +1156,29 @@ function markSilentColumns(columns) {
   for (const th of document.querySelectorAll("#ports th[data-sort]")) {
     const info = (columns || {})[th.dataset.sort];
     const silent = info && !info.answered;
+    // answered, but not for every port — the ports at the end of the
+    // table are the ones that go missing
+    const partial = info && info.answered && info.partial;
     th.classList.toggle("no-answer", !!silent);
+    th.classList.toggle("partial", !!partial);
     const base =
       th.dataset.sort === "err"
         ? t("errTooltip")
         : th.dataset.sort === "disc"
         ? t("discTooltip")
         : "";
-    if (!silent) {
+    if (!silent && !partial) {
       th.title = base;
       continue;
     }
+    const head = silent
+      ? fmt("colNoAnswer", { oids: (info.oids || []).join(", ") })
+      : fmt("colPartial", {
+          oids: (info.oids || []).join(", "),
+          filled: info.filled || 0,
+        });
     th.title =
-      fmt("colNoAnswer", { oids: (info.oids || []).join(", ") }) +
+      head +
       (info.error ? "\n" + info.error : "") +
       (base ? "\n\n" + base : "");
   }

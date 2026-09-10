@@ -1,0 +1,229 @@
+10.0.0.21: walk of 1.3.6.1.2.1.31.1.1.1.6 failed (No SNMP response received before timeout) — the values it would have returned are unknown, not zero
+10.0.0.21: walk of 1.3.6.1.2.1.31.1.1.1.6 failed (No SNMP response received before timeout) — the values it would have returned are unknown, not zero
+
+=== 10. Port counters: 10.0.0.21 ===
+counter columns:
+  in_discards    1.3.6.1.2.1.2.2.1.13         36 row(s)
+  in_errors      1.3.6.1.2.1.2.2.1.14         36 row(s)
+  in_octets      1.3.6.1.2.1.31.1.1.1.6       NO ANSWER — No SNMP response received before timeout
+  in_pkts        1.3.6.1.2.1.31.1.1.1.7       36 row(s)
+  out_discards   1.3.6.1.2.1.2.2.1.19         36 row(s)
+  out_errors     1.3.6.1.2.1.2.2.1.20         36 row(s)
+  out_octets     1.3.6.1.2.1.31.1.1.1.10      36 row(s)
+  out_pkts       1.3.6.1.2.1.31.1.1.1.11      36 row(s)
+
+raw counters (16:31:07):
+  1/2              up       100 Mbit/s  errors in/out 0/0  discards in/out 0/1245821
+                   octets in/out 94272085168/3803620889699  unicast packets in/out 1397342565/2804785733
+  1/23             up       100 Mbit/s  errors in/out 0/0  discards in/out 0/0
+                   octets in/out 3410823994472/100232864545  unicast packets in/out 2534806947/1328770614
+  1/27             up      1000 Mbit/s  errors in/out 0/0  discards in/out 0/0
+                   octets in/out n/a/504240758931  unicast packets in/out 327460701/642072928
+  1/28             up      1000 Mbit/s  errors in/out 0/0  discards in/out 0/0
+                   octets in/out n/a/225068504947  unicast packets in/out 135222644/181012759
+  1/21             up       100 Mbit/s  errors in/out 0/0  discards in/out 0/0
+                   octets in/out 188319265920/16772459821  unicast packets in/out 131583678/26164379
+  1/22             up       100 Mbit/s  errors in/out 0/0  discards in/out 0/0
+                   octets in/out 155657887298/16452779279  unicast packets in/out 107808295/21167152
+  1/4              up       100 Mbit/s  errors in/out 0/0  discards in/out 0/2821249
+                   octets in/out 9389251776/100180260551  unicast packets in/out 45646847/78760800
+  1/25             up      1000 Mbit/s  errors in/out 0/0  discards in/out 0/0
+                   octets in/out n/a/97778388994  unicast packets in/out 578694320/246198495
+  1/8              up       100 Mbit/s  errors in/out 0/0  discards in/out 0/417078
+                   octets in/out 6177592124/56591697845  unicast packets in/out 19243214/44232827
+  1/24             up       100 Mbit/s  errors in/out 0/0  discards in/out 0/2290439
+                   octets in/out 6947298216/52229576256  unicast packets in/out 32177869/46363482
+  1/1              up       100 Mbit/s  errors in/out 0/0  discards in/out 0/2730996
+                   octets in/out 4577350589/52551027137  unicast packets in/out 28205098/41906003
+  1/26             up      1000 Mbit/s  errors in/out 0/0  discards in/out 0/0
+                   octets in/out n/a/53071374611  unicast packets in/out 579283492/422645492
+  1/3              up       100 Mbit/s  errors in/out 0/0  discards in/out 0/911480
+                   octets in/out 2066892258/24061658512  unicast packets in/out 12964018/20537346
+  1/15             up       100 Mbit/s  errors in/out 0/0  discards in/out 0/1259563
+                   octets in/out 2657868122/19296498494  unicast packets in/out 10410713/14572883
+  1/17             up       100 Mbit/s  errors in/out 0/0  discards in/out 0/211004
+                   octets in/out 1887191482/9471288204  unicast packets in/out 6321053/9075437
+  System           up         0 Mbit/s  errors in/out 0/0  discards in/out 0/14
+                   octets in/out n/a/1536688049  unicast packets in/out 0/0
+  1/16             up       100 Mbit/s  errors in/out 0/0  discards in/out 0/50556
+                   octets in/out 152635703/1132510608  unicast packets in/out 734234/1031334
+  1/10             up       100 Mbit/s  errors in/out 0/0  discards in/out 0/1029
+                   octets in/out 2669706/24113658  unicast packets in/out 18171/23247
+  802.1Q Encapsulation Tag 0001 up         0 Mbit/s  errors in/out 0/0  discards in/out 0/0
+                   octets in/out n/a/0  unicast packets in/out 0/0
+  802.1Q Encapsulation Tag 0089 up         0 Mbit/s  errors in/out 0/0  discards in/out 0/0
+                   octets in/out n/a/0  unicast packets in/out 0/0
+  802.1Q Encapsulation Tag 0100 up         0 Mbit/s  errors in/out 0/0  discards in/out 0/0
+                   octets in/out n/a/0  unicast packets in/out 0/0
+  802.1Q Encapsulation Tag 0118 up         0 Mbit/s  errors in/out 0/0  discards in/out 0/0
+                   octets in/out n/a/0  unicast packets in/out 0/0
+  802.1Q Encapsulation Tag 0119 up         0 Mbit/s  errors in/out 0/0  discards in/out 0/0
+                   octets in/out n/a/0  unicast packets in/out 0/0
+  802.1Q Encapsulation Tag 0500 up         0 Mbit/s  errors in/out 0/0  discards in/out 0/0
+                   octets in/out n/a/0  unicast packets in/out 0/0
+  802.1Q Encapsulation Tag 0600 up         0 Mbit/s  errors in/out 0/0  discards in/out 0/0
+                   octets in/out n/a/0  unicast packets in/out 0/0
+ports with a non-zero error or discard counter: 1/4, 1/1, 1/24, 1/15, 1/2, 1/3, 1/8, 1/18, 1/19, 1/17, 1/16, 1/10, System
+
+… waiting 60 s
+
+raw counters (16:32:21):
+  1/2              up       100 Mbit/s  errors in/out 0/0  discards in/out 0/1245821
+                   octets in/out 94273696824/3803681335669  unicast packets in/out 1397366740/2804831290
+  1/23             up       100 Mbit/s  errors in/out 0/0  discards in/out 0/0
+                   octets in/out 3410882998252/100235080722  unicast packets in/out 2534854938/1328794723
+  1/27             up      1000 Mbit/s  errors in/out 0/0  discards in/out 0/0
+                   octets in/out n/a/504253356297  unicast packets in/out 327463808/642082664
+  1/28             up      1000 Mbit/s  errors in/out 0/0  discards in/out 0/0
+                   octets in/out n/a/225068878871  unicast packets in/out 135223212/181013442
+  1/21             up       100 Mbit/s  errors in/out 0/0  discards in/out 0/0
+                   octets in/out 188319268838/16773128906  unicast packets in/out 131583680/26164386
+  1/22             up       100 Mbit/s  errors in/out 0/0  discards in/out 0/0
+                   octets in/out 155657890216/16453448620  unicast packets in/out 107808297/21167159
+  1/4              up       100 Mbit/s  errors in/out 0/0  discards in/out 0/2821249
+                   octets in/out 9389255216/100180297707  unicast packets in/out 45646865/78760820
+  1/25             up      1000 Mbit/s  errors in/out 0/0  discards in/out 0/0
+                   octets in/out n/a/97779406849  unicast packets in/out 578707175/246205951
+  1/8              up       100 Mbit/s  errors in/out 0/0  discards in/out 0/417078
+                   octets in/out 6177617192/56591756749  unicast packets in/out 19243321/44232950
+  1/24             up       100 Mbit/s  errors in/out 0/0  discards in/out 0/2290439
+                   octets in/out 6947330631/52229701315  unicast packets in/out 32178189/46363811
+  1/1              up       100 Mbit/s  errors in/out 0/0  discards in/out 0/2731818
+                   octets in/out 4577808486/52564878882  unicast packets in/out 28211275/41915707
+  1/26             up      1000 Mbit/s  errors in/out 0/0  discards in/out 0/0
+                   octets in/out n/a/53071963122  unicast packets in/out 579293371/422649644
+  1/3              up       100 Mbit/s  errors in/out 0/0  discards in/out 0/911480
+                   octets in/out 2066977590/24061897172  unicast packets in/out 12964370/20537701
+  1/15             up       100 Mbit/s  errors in/out 0/0  discards in/out 0/1259563
+                   octets in/out 2657871471/19296555172  unicast packets in/out 10410750/14572914
+  1/17             up       100 Mbit/s  errors in/out 0/0  discards in/out 0/211004
+                   octets in/out 1887196918/9471303595  unicast packets in/out 6321077/9075458
+  System           up         0 Mbit/s  errors in/out 0/0  discards in/out 0/14
+                   octets in/out n/a/1536754769  unicast packets in/out 0/0
+  1/16             up       100 Mbit/s  errors in/out 0/0  discards in/out 0/50556
+                   octets in/out 152645695/1132567601  unicast packets in/out 734295/1031402
+  1/10             up       100 Mbit/s  errors in/out 0/0  discards in/out 0/1029
+                   octets in/out 2672089/24128785  unicast packets in/out 18218/2329410.0.0.21: walk of 1.3.6.1.2.1.31.1.1.1.6 failed (No SNMP response received before timeout) — the values it would have returned are unknown, not zero
+
+  802.1Q Encapsulation Tag 0001 up         0 Mbit/s  errors in/out 0/0  discards in/out 0/0
+                   octets in/out n/a/0  unicast packets in/out 0/0
+  802.1Q Encapsulation Tag 0089 up         0 Mbit/s  errors in/out 0/0  discards in/out 0/0
+                   octets in/out n/a/0  unicast packets in/out 0/0
+  802.1Q Encapsulation Tag 0100 up         0 Mbit/s  errors in/out 0/0  discards in/out 0/0
+                   octets in/out n/a/0  unicast packets in/out 0/0
+  802.1Q Encapsulation Tag 0118 up         0 Mbit/s  errors in/out 0/0  discards in/out 0/0
+                   octets in/out n/a/0  unicast packets in/out 0/0
+  802.1Q Encapsulation Tag 0119 up         0 Mbit/s  errors in/out 0/0  discards in/out 0/0
+                   octets in/out n/a/0  unicast packets in/out 0/0
+  802.1Q Encapsulation Tag 0500 up         0 Mbit/s  errors in/out 0/0  discards in/out 0/0
+                   octets in/out n/a/0  unicast packets in/out 0/0
+  802.1Q Encapsulation Tag 0600 up         0 Mbit/s  errors in/out 0/0  discards in/out 0/0
+                   octets in/out n/a/0  unicast packets in/out 0/0
+ports with a non-zero error or discard counter: 1/4, 1/1, 1/24, 1/15, 1/2, 1/3, 1/8, 1/18, 1/19, 1/17, 1/16, 1/10, System
+rates since the previous measurement:
+  1/2              in 0.17 Mbit/s, out 6.55 Mbit/s, errors 0.0/min (in 0.0, out 0.0, 0.0000% of frames), discards 0/min (in 0, out 0)
+  1/23             in 6.39 Mbit/s, out 0.24 Mbit/s, errors 0.0/min (in 0.0, out 0.0, 0.0000% of frames), discards 0/min (in 0, out 0)
+  1/27             in n/a Mbit/s, out 1.36 Mbit/s, errors 0.0/min (in 0.0, out 0.0, 0.0000% of frames), discards 0/min (in 0, out 0)
+  1/28             in n/a Mbit/s, out 0.04 Mbit/s, errors 0.0/min (in 0.0, out 0.0, 0.0000% of frames), discards 0/min (in 0, out 0)
+  1/21             in 0.00 Mbit/s, out 0.07 Mbit/s, errors 0.0/min (in 0.0, out 0.0, 0.0000% of frames), discards 0/min (in 0, out 0)
+  1/22             in 0.00 Mbit/s, out 0.07 Mbit/s, errors 0.0/min (in 0.0, out 0.0, 0.0000% of frames), discards 0/min (in 0, out 0)
+  1/4              in 0.00 Mbit/s, out 0.00 Mbit/s, errors 0.0/min (in 0.0, out 0.0, 0.0000% of frames), discards 0/min (in 0, out 0)
+  1/25             in n/a Mbit/s, out 0.11 Mbit/s, errors 0.0/min (in 0.0, out 0.0, 0.0000% of frames), discards 0/min (in 0, out 0)
+  1/8              in 0.00 Mbit/s, out 0.01 Mbit/s, errors 0.0/min (in 0.0, out 0.0, 0.0000% of frames), discards 0/min (in 0, out 0)
+  1/24             in 0.00 Mbit/s, out 0.01 Mbit/s, errors 0.0/min (in 0.0, out 0.0, 0.0000% of frames), discards 0/min (in 0, out 0)
+  1/1              in 0.05 Mbit/s, out 1.50 Mbit/s, errors 0.0/min (in 0.0, out 0.0, 0.0000% of frames), discards 668/min (in 0, out 668)
+  1/26             in n/a Mbit/s, out 0.06 Mbit/s, errors 0.0/min (in 0.0, out 0.0, 0.0000% of frames), discards 0/min (in 0, out 0)
+  1/3              in 0.01 Mbit/s, out 0.03 Mbit/s, errors 0.0/min (in 0.0, out 0.0, 0.0000% of frames), discards 0/min (in 0, out 0)
+  1/15             in 0.00 Mbit/s, out 0.01 Mbit/s, errors 0.0/min (in 0.0, out 0.0, 0.0000% of frames), discards 0/min (in 0, out 0)
+  1/17             in 0.00 Mbit/s, out 0.00 Mbit/s, errors 0.0/min (in 0.0, out 0.0, 0.0000% of frames), discards 0/min (in 0, out 0)
+  System           in n/a Mbit/s, out 0.01 Mbit/s, errors 0.0/min (in 0.0, out 0.0), discards 0/min (in 0, out 0)
+  1/16             in 0.00 Mbit/s, out 0.01 Mbit/s, errors 0.0/min (in 0.0, out 0.0, 0.0000% of frames), discards 0/min (in 0, out 0)
+  1/10             in 0.00 Mbit/s, out 0.00 Mbit/s, errors 0.0/min (in 0.0, out 0.0, 0.0000% of frames), discards 0/min (in 0, out 0)
+  802.1Q Encapsulation Tag 0001 in n/a Mbit/s, out 0.00 Mbit/s, errors 0.0/min (in 0.0, out 0.0), discards 0/min (in 0, out 0)
+  802.1Q Encapsulation Tag 0089 in n/a Mbit/s, out 0.00 Mbit/s, errors 0.0/min (in 0.0, out 0.0), discards 0/min (in 0, out 0)
+  802.1Q Encapsulation Tag 0100 in n/a Mbit/s, out 0.00 Mbit/s, errors 0.0/min (in 0.0, out 0.0), discards 0/min (in 0, out 0)
+  802.1Q Encapsulation Tag 0118 in n/a Mbit/s, out 0.00 Mbit/s, errors 0.0/min (in 0.0, out 0.0), discards 0/min (in 0, out 0)
+  802.1Q Encapsulation Tag 0119 in n/a Mbit/s, out 0.00 Mbit/s, errors 0.0/min (in 0.0, out 0.0), discards 0/min (in 0, out 0)
+  802.1Q Encapsulation Tag 0500 in n/a Mbit/s, out 0.00 Mbit/s, errors 0.0/min (in 0.0, out 0.0), discards 0/min (in 0, out 0)
+  802.1Q Encapsulation Tag 0600 in n/a Mbit/s, out 0.00 Mbit/s, errors 0.0/min (in 0.0, out 0.0), discards 0/min (in 0, out 0)
+
+… waiting 60 s
+
+raw counters (16:33:35):
+  1/2              up       100 Mbit/s  errors in/out 0/0  discards in/out 0/1246443
+                   octets in/out 94275681566/3803752120115  unicast packets in/out 1397396470/2804884544
+  1/23             up       100 Mbit/s  errors in/out 0/0  discards in/out 0/0
+                   octets in/out 3410940146546/100237234950  unicast packets in/out 2534896203/1328817743
+  1/27             up      1000 Mbit/s  errors in/out 0/0  discards in/out 0/0
+                   octets in/out n/a/504266294765  unicast packets in/out 327467851/642092694
+  1/28             up      1000 Mbit/s  errors in/out 0/0  discards in/out 0/0
+                   octets in/out n/a/225069268476  unicast packets in/out 135223902/181014277
+  1/21             up       100 Mbit/s  errors in/out 0/0  discards in/out 0/0
+                   octets in/out 188319272012/16773805232  unicast packets in/out 131583681/26164391
+  1/22             up       100 Mbit/s  errors in/out 0/0  discards in/out 0/0
+                   octets in/out 155657893390/16454124826  unicast packets in/out 107808298/21167164
+  1/4              up       100 Mbit/s  errors in/out 0/0  discards in/out 0/2821249
+                   octets in/out 9389259022/100180335967  unicast packets in/out 45646882/78760838
+  1/25             up      1000 Mbit/s  errors in/out 0/0  discards in/out 0/0
+                   octets in/out n/a/97780222444  unicast packets in/out 578710078/246213677
+  1/8              up       100 Mbit/s  errors in/out 0/0  discards in/out 0/417078
+                   octets in/out 6177638181/56591822479  unicast packets in/out 19243438/44233082
+  1/24             up       100 Mbit/s  errors in/out 0/0  discards in/out 0/2290439
+                   octets in/out 6947424223/52229841651  unicast packets in/out 32178517/46364151
+  1/1              up       100 Mbit/s  errors in/out 0/0  discards in/out 0/2731818
+                   octets in/out 4577852189/52564935432  unicast packets in/out 28211394/41915840
+  1/26             up      1000 Mbit/s  errors in/out 0/0  discards in/out 0/0
+                   octets in/out n/a/53072713558  unicast packets in/out 579313209/422654831
+  1/3              up       100 Mbit/s  errors in/out 0/0  discards in/out 0/911480
+                   octets in/out 2067018489/24061986886  unicast packets in/out 12964528/20537872
+  1/15             up       100 Mbit/s  errors in/out 0/0  discards in/out 0/1259563
+                   octets in/out 2657874387/19296609228  unicast packets in/out 10410789/14572949
+  1/17             up       100 Mbit/s  errors in/out 0/0  discards in/out 0/211004
+                   octets in/out 1887202242/9471316632  unicast packets in/out 6321091/9075469
+  System           up         0 Mbit/s  errors in/out 0/0  discards in/out 0/14
+                   octets in/out n/a/1536822914  unicast packets in/out 0/0
+  1/16             up       100 Mbit/s  errors in/out 0/0  discards in/out 0/50556
+                   octets in/out 152652516/1132614551  unicast packets in/out 734334/1031456
+  1/10             up       100 Mbit/s  errors in/out 0/0  discards in/out 0/1029
+                   octets in/out 2675809/24141453  unicast packets in/out 18234/23310
+  802.1Q Encapsulation Tag 0001 up         0 Mbit/s  errors in/out 0/0  discards in/out 0/0
+                   octets in/out n/a/0  unicast packets in/out 0/0
+  802.1Q Encapsulation Tag 0089 up         0 Mbit/s  errors in/out 0/0  discards in/out 0/0
+                   octets in/out n/a/0  unicast packets in/out 0/0
+  802.1Q Encapsulation Tag 0100 up         0 Mbit/s  errors in/out 0/0  discards in/out 0/0
+                   octets in/out n/a/0  unicast packets in/out 0/0
+  802.1Q Encapsulation Tag 0118 up         0 Mbit/s  errors in/out 0/0  discards in/out 0/0
+                   octets in/out n/a/0  unicast packets in/out 0/0
+  802.1Q Encapsulation Tag 0119 up         0 Mbit/s  errors in/out 0/0  discards in/out 0/0
+                   octets in/out n/a/0  unicast packets in/out 0/0
+  802.1Q Encapsulation Tag 0500 up         0 Mbit/s  errors in/out 0/0  discards in/out 0/0
+                   octets in/out n/a/0  unicast packets in/out 0/0
+  802.1Q Encapsulation Tag 0600 up         0 Mbit/s  errors in/out 0/0  discards in/out 0/0
+                   octets in/out n/a/0  unicast packets in/out 0/0
+ports with a non-zero error or discard counter: 1/4, 1/1, 1/24, 1/15, 1/2, 1/3, 1/8, 1/18, 1/19, 1/17, 1/16, 1/10, System
+rates since the previous measurement:
+  1/2              in 0.21 Mbit/s, out 7.65 Mbit/s, errors 0.0/min (in 0.0, out 0.0, 0.0000% of frames), discards 504/min (in 0, out 504)
+  1/23             in 6.18 Mbit/s, out 0.23 Mbit/s, errors 0.0/min (in 0.0, out 0.0, 0.0000% of frames), discards 0/min (in 0, out 0)
+  1/27             in n/a Mbit/s, out 1.40 Mbit/s, errors 0.0/min (in 0.0, out 0.0, 0.0000% of frames), discards 0/min (in 0, out 0)
+  1/28             in n/a Mbit/s, out 0.04 Mbit/s, errors 0.0/min (in 0.0, out 0.0, 0.0000% of frames), discards 0/min (in 0, out 0)
+  1/21             in 0.00 Mbit/s, out 0.07 Mbit/s, errors 0.0/min (in 0.0, out 0.0, 0.0000% of frames), discards 0/min (in 0, out 0)
+  1/22             in 0.00 Mbit/s, out 0.07 Mbit/s, errors 0.0/min (in 0.0, out 0.0, 0.0000% of frames), discards 0/min (in 0, out 0)
+  1/4              in 0.00 Mbit/s, out 0.00 Mbit/s, errors 0.0/min (in 0.0, out 0.0, 0.0000% of frames), discards 0/min (in 0, out 0)
+  1/25             in n/a Mbit/s, out 0.09 Mbit/s, errors 0.0/min (in 0.0, out 0.0, 0.0000% of frames), discards 0/min (in 0, out 0)
+  1/8              in 0.00 Mbit/s, out 0.01 Mbit/s, errors 0.0/min (in 0.0, out 0.0, 0.0000% of frames), discards 0/min (in 0, out 0)
+  1/24             in 0.01 Mbit/s, out 0.02 Mbit/s, errors 0.0/min (in 0.0, out 0.0, 0.0000% of frames), discards 0/min (in 0, out 0)
+  1/1              in 0.00 Mbit/s, out 0.01 Mbit/s, errors 0.0/min (in 0.0, out 0.0, 0.0000% of frames), discards 0/min (in 0, out 0)
+  1/26             in n/a Mbit/s, out 0.08 Mbit/s, errors 0.0/min (in 0.0, out 0.0, 0.0000% of frames), discards 0/min (in 0, out 0)
+  1/3              in 0.00 Mbit/s, out 0.01 Mbit/s, errors 0.0/min (in 0.0, out 0.0, 0.0000% of frames), discards 0/min (in 0, out 0)
+  1/15             in 0.00 Mbit/s, out 0.01 Mbit/s, errors 0.0/min (in 0.0, out 0.0, 0.0000% of frames), discards 0/min (in 0, out 0)
+  1/17             in 0.00 Mbit/s, out 0.00 Mbit/s, errors 0.0/min (in 0.0, out 0.0, 0.0000% of frames), discards 0/min (in 0, out 0)
+  System           in n/a Mbit/s, out 0.01 Mbit/s, errors 0.0/min (in 0.0, out 0.0), discards 0/min (in 0, out 0)
+  1/16             in 0.00 Mbit/s, out 0.01 Mbit/s, errors 0.0/min (in 0.0, out 0.0, 0.0000% of frames), discards 0/min (in 0, out 0)
+  1/10             in 0.00 Mbit/s, out 0.00 Mbit/s, errors 0.0/min (in 0.0, out 0.0, 0.0000% of frames), discards 0/min (in 0, out 0)
+  802.1Q Encapsulation Tag 0001 in n/a Mbit/s, out 0.00 Mbit/s, errors 0.0/min (in 0.0, out 0.0), discards 0/min (in 0, out 0)
+  802.1Q Encapsulation Tag 0089 in n/a Mbit/s, out 0.00 Mbit/s, errors 0.0/min (in 0.0, out 0.0), discards 0/min (in 0, out 0)
+  802.1Q Encapsulation Tag 0100 in n/a Mbit/s, out 0.00 Mbit/s, errors 0.0/min (in 0.0, out 0.0), discards 0/min (in 0, out 0)
+  802.1Q Encapsulation Tag 0118 in n/a Mbit/s, out 0.00 Mbit/s, errors 0.0/min (in 0.0, out 0.0), discards 0/min (in 0, out 0)
+  802.1Q Encapsulation Tag 0119 in n/a Mbit/s, out 0.00 Mbit/s, errors 0.0/min (in 0.0, out 0.0), discards 0/min (in 0, out 0)
+  802.1Q Encapsulation Tag 0500 in n/a Mbit/s, out 0.00 Mbit/s, errors 0.0/min (in 0.0, out 0.0), discards 0/min (in 0, out 0)
+  802.1Q Encapsulation Tag 0600 in n/a Mbit/s, out 0.00 Mbit/s, errors 0.0/min (in 0.0, out 0.0), discards 0/min (in 0, out 0)
