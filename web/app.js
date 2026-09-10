@@ -346,7 +346,7 @@ function renderSidebar() {
           .filter(Boolean)
           .join(" · "),
         statusClass(h),
-        () => focusNode("host:" + h.mac),
+        () => focusNode(h.merged_into || "host:" + h.mac),
         // VLAN is intentionally excluded from search
         [hostLabel(h), h.ip, h.mac].filter(Boolean).join(" "),
         h.stale ? "stale" : ""
@@ -474,7 +474,13 @@ function buildGraphData() {
   // switches LLDP found behind our ports that nobody polls: a named
   // node replaces the anonymous "switch without SNMP" on that port
   for (const bridge of topology.bridges || []) {
-    const border = bridge.unidentified ? colors.dim : colors.link;
+    // an unreachable bridge is worth seeing at a glance, the same way
+    // an unreachable host is
+    const border = bridge.ip
+      ? bridge.ping_up
+        ? colors.ok
+        : colors.dim
+      : colors.link;
     nodes.push({
       id: bridge.id,
       label: bridge.name + (bridge.mgmt_ip ? "\n" + bridge.mgmt_ip : ""),
@@ -527,6 +533,9 @@ function buildGraphData() {
   }
 
   for (const host of topology.hosts) {
+    // this device IS one of the bridge nodes above — drawing it again
+    // as a bare MAC beside itself is what v0.6.1 did
+    if (host.merged_into) continue;
     const c = statusColor(host);
     // stale = drawn from the grace window, not from a fresh MAC table
     nodes.push({
@@ -768,7 +777,16 @@ function showDetails(nodeId) {
       <dl>
       <dt>${t("descr")}</dt><dd>${bridge.sys_desc || "—"}</dd>
       <dt>${t("chassisId")}</dt><dd>${bridge.chassis_id}</dd>
+      ${bridge.dns_name ? `<dt>${t("name")}</dt><dd>${bridge.dns_name}</dd>` : ""}
       <dt>${t("mgmtIp")}</dt><dd>${link}</dd>
+      ${bridge.ip && !(bridge.mgmt_ips || []).includes(bridge.ip)
+        ? `<dt>${t("ipAddr")}</dt><dd>${bridge.ip}</dd>` : ""}
+      ${bridge.ip
+        ? `<dt>${t("lastReply")}</dt><dd>${fmtTime(bridge.last_ping_ok)}</dd>`
+        : ""}
+      ${(bridge.also_ips || []).length
+        ? `<dt>${t("sameDevice")}</dt><dd>${bridge.also_ips.join(", ")}</dd>`
+        : ""}
       <dt>${t("switchLabel")}</dt><dd>${bridge.switch}</dd>
       <dt>${t("portLabel")}</dt><dd>${bridge.port}</dd>
       <dt>${t("remotePort")}</dt><dd>${bridge.remote_port || "—"}</dd>

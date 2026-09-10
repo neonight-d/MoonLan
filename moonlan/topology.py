@@ -1058,13 +1058,39 @@ def build_topology(
             # pseudo-switch, because nothing says which bridge they are
             # behind
             bridge["shares_port"] = not alone
+    host_by_location = {
+        (h["switch"], h["port"], h["mac"]): h for h in hosts
+    }
+    # One device, one node. A bridge that also sources frames — the
+    # provider's CE6851 behind mb0 Slot0/25 does — is in the MAC table
+    # of the very port LLDP found it on, so it was drawn twice: once as
+    # a named bridge and once as a bare MAC beside it. The host record
+    # stays (it is what keeps last_seen and the ping going); what goes
+    # is its separate node, and its identity moves onto the bridge.
+    merged = 0
+    for bridge in bridges:
+        twin = host_by_location.get(
+            (bridge["switch"], bridge["port"], bridge["chassis_id"])
+        )
+        if twin is None:
+            continue
+        twin["merged_into"] = bridge["id"]
+        bridge["mac"] = bridge["chassis_id"]
+        bridge["vlan"] = twin.get("vlan", 0)
+        merged += 1
+        if bridge.get("host_count"):
+            # it was counted among the devices behind its own port
+            bridge["host_count"] = max(0, bridge["host_count"] - 1)
+    if merged:
+        log.info(
+            "%d bridge(s) are also in the MAC table of their own port — "
+            "drawn as one node each, not two", merged,
+        )
+
     # A device that sent no capabilities TLV is not a bridge, but it is
     # not nothing either: where its chassis id is the MAC of a host we
     # already draw on that very port, the LLDP data belongs on that
     # host's card. The rest are visible in the port card only.
-    host_by_location = {
-        (h["switch"], h["port"], h["mac"]): h for h in hosts
-    }
     attached = 0
     for device in unidentified:
         host = host_by_location.get(
