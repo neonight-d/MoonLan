@@ -443,6 +443,8 @@ def suspect_uplink_ports(
     switches: list[SwitchData],
     host_ips: list[tuple[str, str, str]],
     configured: set[tuple[str, str]],
+    infrastructure: set[str] | None = None,
+    infrastructure_macs: set[str] | None = None,
 ) -> dict[tuple[str, str], dict]:
     """Ports that look like a way out of the network, and why.
 
@@ -458,12 +460,15 @@ def suspect_uplink_ports(
 
     host_ips is (switch ip, port, address) for everything the map
     knows, which is also where the set of "subnets we can see" comes
-    from.
+    from. `infrastructure` is config.switches plus config.routers, and
+    `infrastructure_macs` the MACs ARP ties to those addresses.
 
     A reason is returned as {kind, ip, name, text}: the parts so the UI
     can say it in the operator's language, and the English sentence for
     the log and for `diag`.
     """
+    infrastructure = infrastructure or set()
+    infrastructure_macs = infrastructure_macs or set()
     known_subnets = {
         _subnet24(ip) for _sw, _port, ip in host_ips if ip
     } | {_subnet24(sw.ip) for sw in switches}
@@ -478,6 +483,22 @@ def suspect_uplink_ports(
     for sw_ip, port, ip in host_ips:
         if ip and is_private_ipv4(ip) and _subnet24(ip) in known_subnets:
             leads_inward.add((sw_ip, port))
+    # A port with our own kit behind it leads inward whatever addresses
+    # that kit announces. Routers are deliberately kept out of the host
+    # inventory, so mb0 Slot0/21 — the port to the main router — had no
+    # host to speak for it and was flagged as a way OUT of the network,
+    # which is the exact opposite of what it is.
+    for sw in switches:
+        for neighbor in sw.lldp_neighbors:
+            if neighbor.local_ifindex is None:
+                continue
+            if (
+                neighbor.chassis_id in infrastructure_macs
+                or set(neighbor.mgmt_ips) & infrastructure
+            ):
+                leads_inward.add(
+                    (sw.ip, port_name(sw, neighbor.local_ifindex))
+                )
 
     suspects: dict[tuple[str, str], dict] = {}
     for sw_ip, port, ip in host_ips:
@@ -497,20 +518,30 @@ def suspect_uplink_ports(
             key = (sw.ip, port_name(sw, neighbor.local_ifindex))
             if key in configured or key in suspects or key in leads_inward:
                 continue
-            for address in neighbor.mgmt_ips:
-                if _subnet24(address) and _subnet24(address) not in known_subnets:
-                    name = neighbor.sys_name or neighbor.chassis_id
-                    suspects[key] = {
-                        "kind": "foreign_subnet",
-                        "ip": address,
-                        "name": name,
-                        "text": (
-                            f"{name} is managed at {address}, in a subnet "
-                            f"MoonLan sees nowhere else, and nothing of "
-                            f"ours answers behind this port"
-                        ),
-                    }
-                    break
+            # A handover announces one address or two; our own router
+            # announces one per VLAN, and some of those VLANs have no
+            # device on the map. One foreign-looking address out of
+            # dozens says nothing — a majority of them does.
+            addresses = [a for a in neighbor.mgmt_ips if _subnet24(a)]
+            foreign = [
+                a for a in addresses if _subnet24(a) not in known_subnets
+            ]
+            if addresses and len(foreign) * 2 > len(addresses):
+                name = neighbor.sys_name or neighbor.chassis_id
+                where = (
+                    foreign[0] if len(foreign) == 1
+                    else f"{foreign[0]} and {len(foreign) - 1} more"
+                )
+                suspects[key] = {
+                    "kind": "foreign_subnet",
+                    "ip": where,
+                    "name": name,
+                    "text": (
+                        f"{name} is managed at {where}, in subnets "
+                        f"MoonLan sees nowhere else, and nothing of "
+                        f"ours answers behind this port"
+                    ),
+                }
     return suspects
 
 

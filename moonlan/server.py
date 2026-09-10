@@ -330,6 +330,10 @@ async def run_scan() -> None:
                     for h in hosts if h.get("switch") and h.get("port")
                 ],
                 _uplink_ports(),
+                infrastructure=_infrastructure(),
+                infrastructure_macs=set(router_ips) | {
+                    mac for mac, ip in arp.items() if ip in _infrastructure()
+                },
             )
         )
         for (sw_ip, port), why in sorted(uplink_suspects.items()):
@@ -448,6 +452,17 @@ def _stp_report(collected: list[SwitchData]) -> dict:
             ],
         })
     return {"verdict": verdict, "switches": switches}
+
+
+def _infrastructure() -> set[str]:
+    """Addresses of kit that is ours: the switches and the routers.
+
+    In demo mode these come from the demo network, not from the
+    config.yaml that happens to be in the working directory.
+    """
+    if config.demo:
+        return set(switch_data) | set(demo.ROUTERS)
+    return set(config.switches) | set(config.routers)
 
 
 def _router_addresses(arp: dict[str, str]) -> dict[str, str]:
