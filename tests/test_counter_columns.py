@@ -1,11 +1,16 @@
 """Counter columns: what came back, what did not, and what fills the gap.
 
-Two behaviours the ports panel depends on:
+Three behaviours the ports panel depends on:
 
 - a column that answers in part is reported as such, not as silence;
 - the ports a truncated walk never reached are fetched one GET at a
   time from the 32-bit column, marked as 32-bit so wraparound is
-  handled.
+  handled;
+- a packet column that answers for every port with zero while the
+  octet counters are in the terabytes is firmware that implements the
+  column without filling it, and the 32-bit column is read instead.
+  That rule is for packets only: on mb0 a column of zeros for errors
+  is the honest answer.
 
 Run with:  python -m unittest discover -s tests
 """
@@ -21,6 +26,8 @@ HC_IN = "1.3.6.1.2.1.31.1.1.1.6"
 HC_OUT = "1.3.6.1.2.1.31.1.1.1.10"
 IN32 = "1.3.6.1.2.1.2.2.1.10"
 OUT32 = "1.3.6.1.2.1.2.2.1.16"
+HC_IN_PKTS = "1.3.6.1.2.1.31.1.1.1.7"
+IN32_PKTS = "1.3.6.1.2.1.2.2.1.11"
 
 
 class FakeCollector:
@@ -107,6 +114,35 @@ class GapFillTest(unittest.TestCase):
             collect_samples(collector, "10.0.0.21", set(range(1, 29)))
         )
         self.assertEqual(collector.gets, [])
+
+
+class UnfilledPacketColumnTest(unittest.TestCase):
+    """mb0 answers ifHCInUcastPkts for 26 ports, every value zero."""
+
+    def _poll(self, packets, octets=None):
+        # the real numbers from mb0 Slot0/21: terabytes of octets next
+        # to a packet counter that never moved
+        busy = {1: 9_137_720_039_106}
+        collector = FakeCollector(tables={
+            HC_IN: busy if octets is None else octets,
+            HC_OUT: busy if octets is None else octets,
+            HC_IN_PKTS: packets,
+            IN32_PKTS: {1: 4242},
+        })
+        samples, _oper, _columns = asyncio.run(
+            collect_samples(collector, "10.0.0.10", {1})
+        )
+        return samples[1]
+
+    def test_zero_packets_beside_terabytes_are_read_again(self):
+        self.assertEqual(self._poll({1: 0}).in_pkts, 4242)
+
+    def test_a_quiet_switch_is_left_alone(self):
+        """No octets either: the zeros are the truth, not a gap."""
+        self.assertEqual(self._poll({1: 0}, octets={1: 0}).in_pkts, 0)
+
+    def test_a_filled_column_is_left_alone(self):
+        self.assertEqual(self._poll({1: 99}).in_pkts, 99)
 
 
 if __name__ == "__main__":
