@@ -1333,6 +1333,20 @@ def build_topology(
                 (external["switch"], external["port"]), []
             ) if not h.get("merged_into")
         )
+        # …and if it is on the map, the outside world hangs off IT, not
+        # off our switch. Two nodes side by side on one port read as
+        # two separate things on one cable; the truth is a chain.
+        gateway = next(
+            (
+                b for b in bridges
+                if (b["switch"], b["port"])
+                == (external["switch"], external["port"])
+            ),
+            None,
+        )
+        if gateway is not None:
+            external["via"] = gateway["id"]
+            external["via_name"] = gateway["name"]
     if merged:
         log.info(
             "%d bridge(s) are also in the MAC table of their own port — "
