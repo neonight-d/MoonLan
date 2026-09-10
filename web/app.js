@@ -821,12 +821,18 @@ function showDetails(nodeId) {
           )
           .join(", ")
       : "—";
-    // one hint, not two: "the devices behind this port hang off this
-    // node" and "they stay on the unmanaged switch" cannot both be true
+    // one hint, not several: "the devices behind this port hang off
+    // this node", "they stay on the unmanaged switch" and "everything
+    // behind here is somebody else's" cannot all be true at once
+    const bridgeHint = bridge.external
+      ? t("externalHint")
+      : bridge.cap_assumed
+      ? t("bridgeAssumedHint")
+      : bridge.shares_port
+      ? t("bridgeSharesPortHint")
+      : t("bridgeHint");
     html = `<h3>${bridge.name}</h3>
-      <p class="hint">${
-        bridge.shares_port ? t("bridgeSharesPortHint") : t("bridgeHint")
-      }</p>
+      <p class="hint">${bridgeHint}</p>
       ${bridge.lldp_crowded && !bridge.shares_port
         ? `<p class="hint">${t("lldpCrowdedHint")}</p>` : ""}
       ${bridge.lldp_forwarded ? `<p class="hint">${t("lldpForwardedHint")}</p>` : ""}
@@ -850,7 +856,7 @@ function showDetails(nodeId) {
         bridge.cap_known ? `${t("kind_" + (bridge.kind || "other"))} (${caps})`
         : t("capsUnknown")
       }</dd>
-      ${bridge.shares_port
+      ${bridge.shares_port || bridge.external
         ? ""
         : `<dt>${t("devicesBehindPort")}</dt><dd>${bridge.host_count ?? 0}</dd>`}
       <dt>${t("firstSeen")}</dt><dd>${fmtTime(bridge.first_seen)}</dd>

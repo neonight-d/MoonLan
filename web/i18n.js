@@ -111,6 +111,12 @@ const I18N = {
       + "behind it is collected under one node instead of being drawn "
       + "device by device, and switches there raise no alarms: they are "
       + "the boundary, not something anyone forgot to configure.",
+    bridgeAssumedHint:
+      "Probably a bridge — an inference, not the device's own claim. "
+      + "This switch reports LLDP capabilities for no neighbour at all, "
+      + "so the empty field says nothing; the device was taken for a "
+      + "bridge because it announced a system name and a management "
+      + "address. Its alarm is raised at info for the same reason.",
     lldpNeighbour: "LLDP neighbour",
     lldpForwarded: "LLDP forwarded",
     lldpForwardedHint:
@@ -351,6 +357,12 @@ const I18N = {
       + "один узел вместо россыпи устройств, и коммутаторы там не "
       + "поднимают тревог: это граница сети, а не то, что кто-то забыл "
       + "настроить.",
+    bridgeAssumedHint:
+      "Предположительно мост — это вывод, а не заявление самого "
+      + "устройства. Коммутатор не сообщает LLDP-возможности ни одного "
+      + "соседа, поэтому пустое поле ни о чём не говорит; мостом "
+      + "устройство сочтено потому, что объявило системное имя и "
+      + "управляющий адрес. По той же причине тревога по нему — info.",
     lldpNeighbour: "Сосед по LLDP",
     lldpForwarded: "пересылка LLDP",
     lldpForwardedHint:

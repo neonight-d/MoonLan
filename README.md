@@ -16,7 +16,7 @@ An open-source alternative to LanTopoLog. MIT license.
 
 *Alarm panel: port errors, discards and host outages with one-click access to the switch port table.*
 
-## Features (v0.6.1)
+## Features (v0.6.2)
 
 - SNMP v2c polling of switches: device name, ports, speeds, statuses.
 - MAC address tables (BRIDGE-MIB and Q-BRIDGE-MIB) from every switch,
@@ -98,7 +98,13 @@ An open-source alternative to LanTopoLog. MIT license.
   capabilities is not treated as a bridge at all. A new
   `unmanaged_bridge_detected` alarm fires when one turns up behind a
   port that is not a trunk; `known_bridges` suppresses it for the ones
-  that belong there.
+  that belong there, and `uplink_ports` marks the ports that leave the
+  network — a provider handover — so what is behind them is collected
+  under one "External network" node and raises nothing.
+- One device, one node: a bridge whose MAC is also in the MAC table of
+  its own port (they usually are) is drawn once, with its IP, its name
+  and its ping state, instead of once as a named bridge and once as a
+  bare MAC beside itself.
 - Honest spanning-tree status: a switch with STP disabled still answers
   every `dot1dStp*` object — priority 0, cost 0, itself as the root —
   and MoonLan refuses to draw a root out of that. The "STP" panel gives
@@ -170,7 +176,8 @@ An open-source alternative to LanTopoLog. MIT license.
 | v0.5 ✓  | Alerts and notifications: email, Telegram, Syslog; traffic thresholds; port error counters (ifInErrors etc.) |
 | v0.6 ✓  | LLDP neighbours and link verification, unmanaged bridge detection, honest STP status, port flapping |
 | v0.6.1 ✓| Fixes from the production network: multi-bridge ports, capability-less neighbours, LLDP port matching |
-| v0.6.2  | Loop Detection from the private D-Link/HPE MIBs |
+| v0.6.2 ✓| One node per device, LLDP names on the map, external uplink ports, a usable ports panel |
+| v0.6.3  | Loop Detection from the private D-Link/HPE MIBs |
 | v0.7    | Export to PDF and Draw.io, MAC address info import |
 | v0.8    | Windows computer inventory (WMI/WinRM) |
 
@@ -234,6 +241,10 @@ place_trunk_only_hosts: true # a MAC seen only on trunks is drawn there,
 known_bridges: []            # bridges that are supposed to be behind an
                              # access port (chassis id or management IP):
                              # found and named, but never alarmed on
+uplink_ports: []             # ports that leave the network, as
+                             # "<switch ip>:<port name>": what is behind
+                             # them is one "External network" node and
+                             # raises no bridge alarms
 
 thresholds:
   errors_per_minute: 5           # port_errors: damaged frames only
@@ -548,6 +559,14 @@ v0.6 reads it:
 
 Several cautions are built in, all of them learned the hard way:
 
+**Only a device that says "bridge" is one.** A neighbour that
+announces `router`, `wlanAccessPoint` or `telephone` has identified
+itself perfectly well; it is named as what it says it is, in its card
+and in the ports panel, and it gets no bridge node — it is already on
+the map as a host, and now with its own name on it. Devices with the
+router capability are drawn as diamonds so infrastructure stands out
+from a cloud of workstation dots.
+
 **A missing capability proves nothing — and buys nothing.** LLDP's
 System Name, Description and Capabilities are optional TLVs, and some
 devices ship with them disabled (D-Link DES-3526 does). A neighbour
@@ -562,7 +581,17 @@ The exception is about the switch, not the neighbour: an agent that
 fills `lldpRemSysCapEnabled` for nobody at all (the HPE 1820) says
 nothing about any particular neighbour by leaving it empty. There a
 device announcing both a system name and a management address is taken
-as a bridge and marked as such in its card.
+as a bridge and marked as such in its card — and its alarm is raised
+at severity **info**, because that is an inference rather than the
+device's own claim.
+
+**Port labels, where they are labels.** `lldpLocPortDesc` holds what an
+operator typed into the switch on some agents ("Library", "403 audit")
+and a copy of `ifDescr` on others. A value that repeats the port's own
+ifName or ifDescr, or that is one firmware template with the port
+number substituted, is dropped; what survives is shown in italics next
+to the port with a tooltip saying it was set on the switch. Those
+labels are somebody else's data and may be years out of date.
 
 **LLDP frame forwarding.** Some switches can be told to re-transmit
 foreign LLDP frames (`LLDP Forward Message` on D-Link DES-1210), and
