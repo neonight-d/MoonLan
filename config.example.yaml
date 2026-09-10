@@ -119,6 +119,21 @@ known_bridges: []
 #  - 18:fd:74:fd:b5:cf
 #  - 10.3.5.6
 
+# Ports that leave the network: a provider handover, an uplink to
+# someone else's equipment. Written as "<switch ip>:<port name>", the
+# port name exactly as the ports panel shows it. Devices behind such a
+# port are collected under one "External network" node instead of being
+# drawn one by one, and a switch found there raises no bridge alarm —
+# it is the boundary of your network, not something left unconfigured.
+# Порты, ведущие наружу: стык с провайдером, аплинк к чужому
+# оборудованию. Записываются как «<IP коммутатора>:<имя порта>», имя
+# порта — ровно как в панели портов. Устройства за таким портом
+# собираются в один узел «Внешняя сеть» вместо россыпи, а найденный там
+# коммутатор не поднимает тревогу о мосте: это граница вашей сети, а не
+# чья-то забытая настройка.
+uplink_ports: []
+#  - 10.0.0.10:Slot0/25
+
 # Alarm thresholds / Пороги тревог
 thresholds:
   # Errors are damaged frames (cable, duplex, transceiver) — rare and

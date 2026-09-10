@@ -18,7 +18,7 @@ from pydantic import BaseModel
 
 from . import __version__, corruption, counters, demo, pinger, stp
 from .alarms import AlarmEngine
-from .config import Config, load_config
+from .config import Config, load_config, parse_uplink_ports
 from .db import Database
 from .notify import Notifier
 from .snmp_collector import (
@@ -154,6 +154,7 @@ async def run_scan() -> None:
             sticky_pseudo_ports=prev_pseudo_ports,
             unconfirmed_macs=unconfirmed,
             place_trunk_only=config.place_trunk_only_hosts,
+            uplink_ports=_uplink_ports(),
         )
         prev_pseudo_ports = {
             (p["switch"], p["port"]) for p in pseudo_switches
@@ -251,6 +252,7 @@ async def run_scan() -> None:
         state.update(
             switches, links, hosts, pseudo_switches, vlan_names, unlocated,
             offline_groups, bridges, stp_report,
+            topo_info.get("external_networks", []),
         )
         if config.demo:
             await run_ping()  # set the switches' ping state right away
@@ -398,6 +400,14 @@ def _merge_bridge_identity(
                 if host["mac"] == mac:
                     host["merged_into"] = bridge["id"]
         bridge["also_ips"] = also
+
+
+def _uplink_ports() -> set[tuple[str, str]]:
+    """Ports that leave the network, from the config (and the demo)."""
+    ports = parse_uplink_ports(config.uplink_ports)
+    if config.demo:
+        ports |= demo.UPLINK_PORTS
+    return ports
 
 
 def _is_known_bridge(bridge: dict) -> bool:
@@ -1173,6 +1183,7 @@ async def api_switch_ports(ip: str) -> dict:
         port: info for (sw_ip, port), info in flap_by_port.items()
         if sw_ip == ip
     }
+    external = {port for sw_ip, port in _uplink_ports() if sw_ip == ip}
     lldp_by_port: dict[int, list[dict]] = {}
     for neighbor in sw.lldp_neighbors:
         if neighbor.local_ifindex is None:
@@ -1213,6 +1224,8 @@ async def api_switch_ports(ip: str) -> dict:
             "lldp_crowded": p.if_index in sw.lldp_crowded,
             # the administrative name an operator typed into the switch
             "label": sw.port_labels.get(p.if_index, ""),
+            # a port that leaves the network (config.uplink_ports)
+            "external": name in external,
         })
     # active ports first, then by port number
     ports.sort(key=lambda p: (not p["oper_up"], abs(p["if_index"])))
@@ -1284,7 +1297,13 @@ def _alarm_meta(
             )
     if meta["switch_ip"]:
         meta["switch_name"] = sw_names.get(meta["switch_ip"], meta["switch_ip"])
-        if row["type"] not in ("host_down", "new_mac"):
+        # For a port or a switch alarm the switch IS the subject. For a
+        # bridge it is only where the bridge was found, and overwriting
+        # the display with it labelled every bridge alarm with the name
+        # of the switch it hangs off.
+        if row["type"] not in (
+            "host_down", "new_mac", "unmanaged_bridge_detected",
+        ):
             meta["display"] = meta["switch_name"]
     return meta
 
