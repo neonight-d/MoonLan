@@ -431,7 +431,7 @@ async def run_topology_view(community: str, timeout: int, cfg) -> None:
             )
 
     switch_macs = {mac for sw in switches for mac in sw.own_macs}
-    bridges, unidentified = detect_bridges(
+    bridges, other_devices, unidentified = detect_bridges(
         switches, switch_macs,
         trunk_ports(switches, switches_on_port, uplinks, lldp_pairs),
     )
@@ -447,8 +447,19 @@ async def run_topology_view(community: str, timeout: int, cfg) -> None:
             + ("  [capability assumed: this agent reports none for anyone]"
                if bridge.get("cap_assumed") else "")
         )
-    # These are NOT bridges. The heading used to claim they were, and on
-    # the real network it covered a hundred and thirty IP cameras.
+    # These are NOT bridges, and they are not anonymous either: they
+    # said what they are. Only the section below is unidentified.
+    print("\nother identified LLDP devices (routers, phones, stations):")
+    if not other_devices:
+        print("  none")
+    for device in other_devices:
+        print(
+            f"  {device['name']} ({device['chassis_id']}) — {device['kind']}"
+            + (f", {_addresses(device['mgmt_ips'])}"
+               if device["mgmt_ips"] else "")
+            + f" behind {label(device['switch'])} {device['port']}"
+        )
+
     print("\nunidentified LLDP devices (no capabilities TLV):")
     if not unidentified:
         print("  none")

@@ -166,9 +166,31 @@ function toggleFreeze() {
 
 /* ---------- helpers ---------- */
 
-/* Host caption: name, else IP, else MAC */
+/* Host caption: DNS name, else IP, else what LLDP called the device,
+   else the MAC. The main router has no IP of ours (routers are kept out
+   of the ARP inventory) and no reverse DNS, so before v0.6.2 it was a
+   pale dot labelled 00:0e:04:b7:79:ab — while LLDP had been calling it
+   "MikroTik" the whole time. */
 function hostLabel(h) {
-  return h.name || h.ip || h.mac;
+  return h.name || h.ip || lldpLabel(h) || h.mac;
+}
+
+/* The name LLDP gave a device, or its first management address */
+function lldpLabel(h) {
+  const lldp = h.lldp;
+  if (!lldp) return "";
+  return lldp.sys_name || (lldp.mgmt_ips || [])[0] || "";
+}
+
+/* True when the caption on screen came from LLDP rather than from DNS
+   or ARP — the card says so, so nobody hunts for a DHCP lease */
+function labelFromLldp(h) {
+  return !h.name && !h.ip && !!lldpLabel(h);
+}
+
+/* "router" / "phone" / … as the device announced itself */
+function deviceKind(h) {
+  return (h.lldp && h.lldp.kind) || "";
 }
 
 /* "11 (ipmi)" — VLAN ID plus name when known */
@@ -538,13 +560,21 @@ function buildGraphData() {
     if (host.merged_into) continue;
     const c = statusColor(host);
     // stale = drawn from the grace window, not from a fresh MAC table
+    // a router is infrastructure, not a workstation: same status
+    // colour, but a shape that is picked out at a glance
+    const isRouter = deviceKind(host) === "router";
     nodes.push({
       id: "host:" + host.mac,
       label: hostLabel(host),
-      shape: "dot",
-      size: 9,
+      shape: isRouter ? "diamond" : "dot",
+      size: isRouter ? 14 : 9,
       opacity: host.stale ? 0.4 : 1,
-      color: { background: c, border: c },
+      color: {
+        background: c,
+        border: isRouter ? colors.moon : c,
+        highlight: { background: c, border: colors.moon },
+      },
+      borderWidth: isRouter ? 2 : 1,
       font: nodeFont("host:" + host.mac),
     });
     edges.push({
@@ -790,7 +820,10 @@ function showDetails(nodeId) {
       <dt>${t("switchLabel")}</dt><dd>${bridge.switch}</dd>
       <dt>${t("portLabel")}</dt><dd>${bridge.port}</dd>
       <dt>${t("remotePort")}</dt><dd>${bridge.remote_port || "—"}</dd>
-      <dt>${t("capabilities")}</dt><dd>${caps || t("capsUnknown")}</dd>
+      <dt>${t("capabilities")}</dt><dd>${
+        bridge.cap_known ? `${t("kind_" + (bridge.kind || "other"))} (${caps})`
+        : t("capsUnknown")
+      }</dd>
       ${bridge.shares_port
         ? ""
         : `<dt>${t("devicesBehindPort")}</dt><dd>${bridge.host_count ?? 0}</dd>`}
@@ -823,6 +856,7 @@ function showDetails(nodeId) {
     // host: the device most likely changed its MAC
     const aliveByIp = host.stale && !offMap && host.ping_up && host.ip_confirmed;
     html = `<h3>${hostLabel(host)}</h3>
+      ${labelFromLldp(host) ? `<p class="hint">${t("nameFromLldpHint")}</p>` : ""}
       ${host.approximate ? `<p class="hint">${t("approximateHint")}</p>` : ""}
       ${aliveByIp ? `<p class="hint">${t("staleButAliveHint")}</p>` : ""}
       ${hint ? `<p class="hint">${hint}</p>` : ""}<dl>
@@ -840,6 +874,11 @@ function showDetails(nodeId) {
       }</dd>
       <dt>${t("vlan")}</dt><dd>${vlanLabel(host.vlan)}</dd>
       ${host.lldp ? `<dt>${t("lldpLabel")}</dt><dd>${lldpHostLine(host.lldp)}</dd>` : ""}
+      ${(host.lldp && (host.lldp.mgmt_ips || []).length > 1)
+        ? `<dt>${t("mgmtIp")}</dt><dd>${host.lldp.mgmt_ips
+            .map((a) => `<a href="http://${a}" target="_blank" rel="noopener">${a}</a>`)
+            .join(", ")}</dd>`
+        : ""}
       <dt>${t("lastReply")}</dt><dd>${fmtTime(host.last_ping_ok)}</dd>
       <dt>${t("lastSeenLabel")}</dt><dd>${fmtTime(host.last_seen)}</dd>
       ${offMap ? `<dt>${t("lastArpLabel")}</dt><dd>${fmtTime(host.last_arp)}</dd>` : ""}
@@ -886,10 +925,12 @@ function fmtAddresses(addresses, limit) {
    the switch heard it on this very port, so the data belongs here
    rather than on a node of its own */
 function lldpHostLine(lldp) {
+  const kind = lldp.cap_known ? t("kind_" + (lldp.kind || "other")) : "";
   const parts = [
     lldp.sys_name,
+    kind,
     lldp.port_id ? t("portLabel") + " " + lldp.port_id : "",
-    fmtAddresses(lldp.mgmt_ips),
+    (lldp.mgmt_ips || []).length === 1 ? lldp.mgmt_ips[0] : "",
     lldp.sys_desc,
   ].filter(Boolean);
   return parts.length ? parts.join(" · ") : t("lldpUnidentified");

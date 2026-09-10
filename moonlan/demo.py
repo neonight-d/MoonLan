@@ -144,6 +144,15 @@ ROUTER_PORT = 21
 ROUTER_CHASSIS = "00:0e:04:b7:79:ab"
 ROUTER_IPS = ["10.0.0.1", "10.0.1.1"] + [f"10.3.{n}.1" for n in range(1, 9)]
 
+# An edge router behind core-sw Gi0/22: it announces `router` and a
+# name over LLDP, but no ARP table of ours gives it an address and
+# reverse DNS has never heard of it. Before v0.6.2 that made it a pale
+# dot labelled with its MAC, while LLDP had been calling it by name
+# the whole time.
+EDGE_ROUTER_PORT = 22
+EDGE_ROUTER_CHASSIS = "00:0e:04:aa:bb:cc"
+EDGE_ROUTER_IPS = ["10.9.0.1", "10.9.1.1"]
+
 # A port whose link goes up and down on every counters cycle ->
 # port_flapping. Modelled on 2b0 port 21, which managed four cycles in
 # thirty seconds.
@@ -324,6 +333,8 @@ def demo_network() -> list[SwitchData]:
     # must be one node — v0.6.1 drew it twice, once named and once as
     # a bare MAC beside itself.
     connect_host(core, ROUTER_PORT, 1, ROUTER_CHASSIS)
+    # …and an edge router that gets no address from us at all
+    connect_host(core, EDGE_ROUTER_PORT, 1, EDGE_ROUTER_CHASSIS)
 
     _add_lldp(core, ray1, ray2, ray3, ray4, core_port_to_ray)
     _add_stp(core, ray1, ray2, ray3, ray4)
@@ -398,6 +409,13 @@ def _add_lldp(core, ray1, ray2, ray3, ray4, core_port_to_ray) -> None:
                 caps={"bridge", "router"}, mgmt_ips=[address],
             )
             for n, address in enumerate(ROUTER_IPS)
+        ),
+        # `router` and nothing else: not a bridge, so no node of its
+        # own — but the host it already is gets its name from here
+        _neighbor(
+            EDGE_ROUTER_PORT, EDGE_ROUTER_CHASSIS, "ether1",
+            sys_name="MikroTik-edge", sys_desc="RouterOS CCR1009 7.11",
+            caps={"router"}, mgmt_ips=EDGE_ROUTER_IPS,
         ),
         _neighbor(
             core_port_to_ray[ray2.ip], ray2.bridge_mac, "Gi0/24",
@@ -512,6 +530,7 @@ def _add_stp(core, ray1, ray2, ray3, ray4) -> None:
     root_id = f"4096/{core.bridge_mac}"
     uptime = 4_000_000  # ~11 hours in TimeTicks
     core.ports[ROUTER_PORT].oper_up = True
+    core.ports[EDGE_ROUTER_PORT].oper_up = True
     core.stp = judge(StpData(
         supported=True, protocol_spec=3, priority=4096,
         time_since_change=120_000, top_changes=7,
@@ -597,9 +616,11 @@ def enrich_db(db: Database, hosts: list[dict]) -> None:
     # an IP, answers ping and stays on the map — only the copies of its
     # address do not. Its address is set aside from the positional
     # assignment below so it never drifts.
+    # EDGE_ROUTER_CHASSIS is here on purpose and gets no IP below: its
+    # whole point is a device the inventory cannot name
     fixed = (
         CORRUPT_REAL, CORRUPT_NEIGHBOR, TRUNK_ONLY_MAC, ROUTER_CHASSIS,
-        *CAMERAS,
+        EDGE_ROUTER_CHASSIS, *CAMERAS,
     )
     hosts = [h for h in hosts if h["mac"] not in fixed]
     for mac, ip, name in (

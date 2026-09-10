@@ -382,12 +382,45 @@ def lldp_link_candidates(
     return resolved
 
 
+# LLDP capability -> what to call the device, most specific first. The
+# order matters: a MikroTik announces bridge, router and sometimes
+# wlanAccessPoint at once, and "router" is what an operator calls it.
+DEVICE_KINDS = (
+    ("router", "router"),
+    ("wlanAccessPoint", "access_point"),
+    ("telephone", "phone"),
+    ("bridge", "bridge"),
+    ("repeater", "repeater"),
+    ("stationOnly", "station"),
+)
+
+
+def device_kind(capabilities: set[str], cap_known: bool) -> str:
+    """What the neighbour says it is: "router", "phone", … or "unknown".
+
+    "unknown" means it sent no capabilities TLV, not that MoonLan
+    failed to work something out.
+    """
+    if not cap_known:
+        return "unknown"
+    for capability, kind in DEVICE_KINDS:
+        if capability in capabilities:
+            return kind
+    return "other"
+
+
 def detect_bridges(
     switches: list[SwitchData],
     own_macs: set[str],
     trunks: dict[str, dict[int, str]],
-) -> tuple[list[dict], list[dict]]:
-    """LLDP neighbours split into (bridges, unidentified devices).
+) -> tuple[list[dict], list[dict], list[dict]]:
+    """LLDP neighbours split by what they say about themselves.
+
+    Three lists, not two: (bridges, other identified devices,
+    unidentified). A MikroTik that announces `router` has identified
+    itself perfectly well — calling it "an unidentified LLDP device",
+    as v0.6.1 did, threw away the only description of it anyone had.
+    Unidentified means one thing: no capabilities TLV at all.
 
     A bridge is a neighbour that SAYS it is one: `lldpRemSysCapEnabled`
     with the bridge bit, and a chassis id belonging to no polled switch
@@ -420,6 +453,7 @@ def detect_bridges(
     """
     best: dict[str, tuple] = {}
     found: dict[str, dict] = {}
+    others: list[dict] = []
     unidentified: list[dict] = []
     for sw in switches:
         # does this agent fill the capabilities column at all?
@@ -444,6 +478,8 @@ def detect_bridges(
                 "remote_port": neighbor.port_id or neighbor.port_desc,
                 "port_matched_by": neighbor.port_matched_by,
                 "capabilities": sorted(neighbor.cap_enabled),
+                "cap_known": neighbor.cap_known,
+                "kind": device_kind(neighbor.cap_enabled, neighbor.cap_known),
                 "lldp_forwarded": forwarded,
                 "trunk": is_trunk,
             }
@@ -458,8 +494,11 @@ def detect_bridges(
                 )
                 assumed = claims_bridge
             if not claims_bridge:
-                entry["unidentified"] = True
-                unidentified.append(entry)
+                entry["unidentified"] = not neighbor.cap_known
+                if neighbor.cap_known:
+                    others.append(entry)
+                else:
+                    unidentified.append(entry)
                 continue
             entry["unidentified"] = False
             entry["cap_assumed"] = assumed
@@ -469,7 +508,9 @@ def detect_bridges(
                 continue
             best[neighbor.chassis_id] = claim
             found[neighbor.chassis_id] = entry
-    return [found[chassis] for chassis in sorted(found)], unidentified
+    return (
+        [found[chassis] for chassis in sorted(found)], others, unidentified
+    )
 
 
 def normalized_fdb(switches: list[SwitchData]) -> dict[str, dict[str, int]]:
@@ -1028,7 +1069,9 @@ def build_topology(
     #    port. Replacing it with one of them would claim the other
     #    bridges' devices belong to whichever bridge happened to sort
     #    first.
-    bridges, unidentified = detect_bridges(switches, switch_macs, trunks)
+    bridges, other_devices, unidentified = detect_bridges(
+        switches, switch_macs, trunks
+    )
     bridges_on_port: dict[tuple[str, str], list[dict]] = {}
     for bridge in bridges:
         bridges_on_port.setdefault(
@@ -1087,12 +1130,14 @@ def build_topology(
             "drawn as one node each, not two", merged,
         )
 
-    # A device that sent no capabilities TLV is not a bridge, but it is
-    # not nothing either: where its chassis id is the MAC of a host we
-    # already draw on that very port, the LLDP data belongs on that
-    # host's card. The rest are visible in the port card only.
+    # A neighbour that is not a bridge gets no node of its own — it is
+    # already on the map as a host. What it does get is its name: the
+    # main router used to be drawn as a pale dot labelled
+    # 00:0e:04:b7:79:ab while LLDP knew it as "MikroTik" with 38
+    # addresses. The data goes onto the host it belongs to, and the UI
+    # falls back to it when neither DNS nor ARP has anything.
     attached = 0
-    for device in unidentified:
+    for device in other_devices + unidentified:
         host = host_by_location.get(
             (device["switch"], device["port"], device["chassis_id"])
         )
@@ -1104,6 +1149,9 @@ def build_topology(
             "sys_desc": device["sys_desc"],
             "port_id": device["remote_port"],
             "mgmt_ips": device["mgmt_ips"],
+            "capabilities": device["capabilities"],
+            "cap_known": device["cap_known"],
+            "kind": device["kind"],
         }
         attached += 1
     if bridges:
@@ -1116,13 +1164,15 @@ def build_topology(
                 for b in bridges
             ),
         )
-    if unidentified:
+    if other_devices or unidentified:
         log.info(
-            "LLDP: %d neighbour(s) sent no capabilities TLV — shown as "
-            "unidentified devices, %d of them matched to a host we "
-            "already draw", len(unidentified), attached,
+            "LLDP: %d neighbour(s) are not bridges (%d of them sent no "
+            "capabilities TLV); %d matched a host we already draw and "
+            "gave it a name", len(other_devices) + len(unidentified),
+            len(unidentified), attached,
         )
     info["bridges"] = bridges
+    info["other_devices"] = other_devices
     info["unidentified"] = unidentified
 
     # 6. Spanning tree on the map: a port STP holds in discarding
