@@ -180,6 +180,11 @@ UPLINK_PORTS = {("10.0.0.10", f"Gi0/{UPLINK_PORT}")}
 # operator actually reaches the box at, out of the many it announces
 ROUTER_ADDRESSES = {ROUTER_CHASSIS: ROUTER_IPS[0]}
 
+# What a `routers:` section would hold for this network. The port to
+# this device must never be read as a way OUT of the network — it is
+# the middle of it.
+ROUTERS = [ROUTER_IPS[0]]
+
 # access-sw-4 stands in for the HPE 1820: its agent fills
 # lldpRemSysCapEnabled for nobody at all. A neighbour there that
 # announces a name and a management address is taken for a bridge on

@@ -447,8 +447,13 @@ async def run_topology_view(community: str, timeout: int, cfg) -> None:
             address = arp_by_mac.get(mac, "")
             if address:
                 host_ips.append((sw.ip, port_name(sw.ip, if_index), address))
+    infrastructure = set(cfg.switches) | set(cfg.routers)
     suspects = suspect_uplink_ports(
-        switches, host_ips, parse_uplink_ports(cfg.uplink_ports)
+        switches, host_ips, parse_uplink_ports(cfg.uplink_ports),
+        infrastructure=infrastructure,
+        infrastructure_macs={
+            mac for mac, ip in arp_by_mac.items() if ip in infrastructure
+        },
     )
     if not suspects:
         print("  none")
