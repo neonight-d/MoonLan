@@ -16,7 +16,7 @@ from __future__ import annotations
 import logging
 import time
 from collections import deque
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from .snmp_collector import (
     OID_IF_LAST_CHANGE,
@@ -81,20 +81,39 @@ class Sample:
 
 @dataclass
 class ColumnStatus:
-    """Whether a counter column answered at all, and with what.
+    """Whether a counter column answered, how far, and with what.
 
-    "no answer" and "all zeros" look identical in a rate table and mean
-    opposite things, so the distinction is carried out of the poll
-    rather than reconstructed later.
+    "no answer", "answered as far as row 24" and "all zeros" look
+    identical in a rate table and mean three different things, so the
+    distinction is carried out of the poll rather than reconstructed
+    later.
     """
 
     oid: str
     rows: int = 0
     error: str = ""
+    truncated: bool = False   # rows arrived and then it stopped
+    last_oid: str = ""        # the last OID that did arrive
 
     @property
     def answered(self) -> bool:
         return self.rows > 0
+
+    @property
+    def complete(self) -> bool:
+        return self.rows > 0 and not self.truncated
+
+    def verdict(self) -> str:
+        """One line for a human: what came back, and what did not."""
+        if not self.rows:
+            if self.error:
+                return f"NO ANSWER — {self.error}"
+            return "no rows — the agent does not implement this column"
+        parts = [f"{self.rows} row(s)"]
+        if self.truncated:
+            where = f" at {self.last_oid}" if self.last_oid else ""
+            parts.append(f"then stopped answering{where} ({self.error})")
+        return ", ".join(parts)
 
 
 @dataclass
@@ -142,16 +161,9 @@ async def collect_samples(
     """One counters poll: (ifIndex -> Sample, ifIndex -> oper up, columns).
 
     Each column is walked on its own and its answer recorded, because
-    on real hardware they disagree. The DGS-1210 Rev.F1 answers
-    ifHCInOctets and returns nothing at all for ifHCOutOctets, while
-    the 32-bit ifOutOctets works fine. Until v0.6.4 the fallback to
-    32-bit counters was decided once, by whether the FIRST column
-    answered, so a switch like that lost its outbound traffic
-    permanently: the fallback branch only ran when nothing came back
-    for the inbound column either.
-
-    A column that answers nothing leaves its fields None. That is
-    reported as "—" rather than as zero, and raises no alarm.
+    on real hardware they disagree: a column may return nothing at all,
+    or return some rows and then stop. The second case used to be
+    reported as the first, which hid the one fact worth having.
     """
     ts = time.time()
     samples: dict[int, Sample] = {}
@@ -161,26 +173,31 @@ async def collect_samples(
     def sample(if_index: int) -> Sample:
         return samples.setdefault(if_index, Sample(ts=ts))
 
-    async def walk_into(column: str, oid: str, attr: str) -> int:
-        """Fills one counter column; returns how many rows answered."""
-        status = ColumnStatus(oid=oid)
-        columns[column] = status
+    async def walk_into(column: str, oid: str, attr: str) -> ColumnStatus:
+        """Fills one counter column and records how far it got."""
+        covered: set[int] = set()
         async for suffix, value in collector._walk(host, oid):
             setattr(sample(suffix[0]), attr, int(value))
-            status.rows += 1
-        status.error = collector.last_walk_error(host, oid)
-        return status.rows
+            covered.add(suffix[0])
+        walk = collector.last_walk_status(host, oid)
+        status = ColumnStatus(
+            oid=oid, rows=len(covered), error=walk.error,
+            truncated=walk.truncated, last_oid=walk.last_oid,
+        )
+        columns[column] = status
+        return status
 
     # Octets, each direction falling back on its own
     for column, hc_oid, oid32, attr, hc_flag in (
         ("in_octets", OID_HC_IN_OCTETS, OID_IN_OCTETS, "in_octets", "hc_in"),
         ("out_octets", OID_HC_OUT_OCTETS, OID_OUT_OCTETS, "out_octets", "hc_out"),
     ):
-        if await walk_into(column, hc_oid, attr):
-            continue
-        if await walk_into(column, oid32, attr):
-            for s in samples.values():
-                setattr(s, hc_flag, False)
+        status = await walk_into(column, hc_oid, attr)
+        if not status.rows:
+            status = await walk_into(column, oid32, attr)
+            if status.rows:
+                for s in samples.values():
+                    setattr(s, hc_flag, False)
 
     for column, oid in (
         ("in_errors", OID_IN_ERRORS),
@@ -197,7 +214,8 @@ async def collect_samples(
         ("in_pkts", OID_HC_IN_PKTS, OID_IN_PKTS),
         ("out_pkts", OID_HC_OUT_PKTS, OID_OUT_PKTS),
     ):
-        if not await walk_into(column, hc_oid, column):
+        status = await walk_into(column, hc_oid, column)
+        if not status.rows:
             await walk_into(column, oid32, column)
 
     async for suffix, value in collector._walk(host, OID_IF_OPER_STATUS):
@@ -206,12 +224,19 @@ async def collect_samples(
         sample(suffix[0]).last_change = int(value)
 
     silent = [c for c, st in columns.items() if not st.answered]
+    partial = [c for c, st in columns.items() if st.truncated]
     if silent:
         log.info(
             "%s: no answer on %d counter column(s): %s — they are reported "
             "as unknown, not as zero",
             host, len(silent),
             ", ".join(f"{c} ({columns[c].oid})" for c in sorted(silent)),
+        )
+    if partial:
+        log.warning(
+            "%s: %d counter column(s) answered only in part: %s",
+            host, len(partial),
+            "; ".join(f"{c}: {columns[c].verdict()}" for c in sorted(partial)),
         )
     return samples, oper, columns
 
