@@ -620,6 +620,8 @@ function buildGraphData() {
       // approximate = seen only through a trunk: the device is real,
       // the port it hangs on is a guess
       dashes: host.stale ? [3, 3] : host.approximate ? [2, 4] : false,
+      // remembered ≠ approximate: the port is known, the sighting is
+      // second-hand, so the edge stays solid
     });
   }
 
@@ -806,7 +808,9 @@ function showDetails(nodeId) {
       )
       .join("");
     html = `<h3>${fmt("offlineGroupTitle", { n: group.count })}</h3>
-      <p class="hint">${t("offlineGroupHint")}</p><dl>
+      <p class="hint">${
+        group.approximate ? t("offlineGroupGuessHint") : t("offlineGroupHint")
+      }</p><dl>
       <dt>${t("switchLabel")}</dt><dd>${group.switch}</dd>
       <dt>${t("portLabel")}</dt><dd>${group.port}</dd>
       <dt>${t("lastSeenLabel")}</dt><dd>${fmtTime(group.last_seen_max)}</dd>
@@ -915,6 +919,7 @@ function showDetails(nodeId) {
     html = `<h3>${hostLabel(host)}</h3>
       ${labelFromLldp(host) ? `<p class="hint">${t("nameFromLldpHint")}</p>` : ""}
       ${host.approximate ? `<p class="hint">${t("approximateHint")}</p>` : ""}
+      ${host.remembered ? `<p class="hint">${t("rememberedHint")}</p>` : ""}
       ${aliveByIp ? `<p class="hint">${t("staleButAliveHint")}</p>` : ""}
       ${hint ? `<p class="hint">${hint}</p>` : ""}<dl>
       <dt>${t("name")}</dt><dd>${host.name || "—"}</dd>
@@ -928,6 +933,8 @@ function showDetails(nodeId) {
       <dt>${t("switchLabel")}</dt><dd>${host.switch || "—"}</dd>
       <dt>${t("portLabel")}</dt><dd>${host.port || "—"}${
         host.approximate ? ` <span class="chip">${t("approximate")}</span>` : ""
+      }${
+        host.remembered ? ` <span class="chip">${t("remembered")}</span>` : ""
       }</dd>
       <dt>${t("vlan")}</dt><dd>${vlanLabel(host.vlan)}</dd>
       ${host.router_ip

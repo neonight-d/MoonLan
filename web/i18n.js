@@ -132,6 +132,16 @@ const I18N = {
       "The switch did not answer for this counter ({oids}), so the "
       + "column shows \u2014 rather than 0. Unknown is not zero: no alarm "
       + "is raised or cleared on it either.",
+    remembered: "from the inventory",
+    rememberedHint:
+      "The MAC is visible only on trunk ports right now, but the "
+      + "inventory knows the port this device sits on, so it is drawn "
+      + "there rather than guessed onto a trunk.",
+    offlineGroupGuessHint:
+      "These devices are missing from the current switch tables and the "
+      + "port shown is a trunk — nothing was ever seen there as a "
+      + "device, so this location is inherited guesswork rather than a "
+      + "record of where they were last seen.",
     lldpNeighbour: "LLDP neighbour",
     lldpForwarded: "LLDP forwarded",
     lldpForwardedHint:
@@ -393,6 +403,16 @@ const I18N = {
       "Коммутатор не ответил по этому счётчику ({oids}), поэтому в "
       + "колонке \u2014, а не 0. Неизвестно — это не ноль: тревоги по "
       + "такому значению не поднимаются и не снимаются.",
+    remembered: "по инвентарю",
+    rememberedHint:
+      "Сейчас MAC виден только на магистральных портах, но в инвентаре "
+      + "известен порт, на котором это устройство стоит, — поэтому оно "
+      + "показано там, а не угадано на магистрали.",
+    offlineGroupGuessHint:
+      "Устройства не найдены в текущих таблицах коммутаторов, а "
+      + "показанный порт — магистральный: устройствами их там никогда не "
+      + "видели, так что это унаследованная догадка, а не запись о том, "
+      + "где их видели в последний раз.",
     lldpNeighbour: "Сосед по LLDP",
     lldpForwarded: "пересылка LLDP",
     lldpForwardedHint:
