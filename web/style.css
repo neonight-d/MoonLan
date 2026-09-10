@@ -517,3 +517,7 @@ main { flex: 1; display: flex; min-height: 0; }
   color: var(--text-dim);
 }
 .addr-more:hover { color: var(--text); }
+
+/* a counter column the agent never answered for */
+.ports-table th.no-answer { color: var(--warn); cursor: help; }
+.ports-table th.no-answer::before { content: "\26A0 "; }

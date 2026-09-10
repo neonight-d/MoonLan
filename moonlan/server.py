@@ -64,6 +64,10 @@ flap_tracker = counters.FlapTracker(
 # (switch ip, port name) -> the flap count shown in the ports panel
 flap_by_port: dict[tuple[str, str], counters.PortFlaps] = {}
 ZERO_FLAPS = counters.PortFlaps(count=0, last=0.0)
+
+# switch ip -> which counter columns answered in the latest poll, so the
+# ports panel can say "unknown" where it used to say 0.0
+counter_columns: dict[str, dict[str, counters.ColumnStatus]] = {}
 notifier = Notifier(config, demo=config.demo)
 alarm_engine = AlarmEngine(
     db, notifier, config.thresholds, config.notifications
@@ -98,6 +102,20 @@ uplink_suspects: dict[tuple[str, str], dict] = {}
 _collector: SnmpCollector | None = None
 
 
+# One poll per switch at a time. A DGS-1210 answers one request at a
+# time, and the scan and the counters loop can otherwise land on the
+# same agent together. Different switches stay parallel — this is a
+# lock per IP, not a global one.
+_host_locks: dict[str, asyncio.Lock] = {}
+
+
+def host_lock(ip: str) -> asyncio.Lock:
+    lock = _host_locks.get(ip)
+    if lock is None:
+        lock = _host_locks[ip] = asyncio.Lock()
+    return lock
+
+
 def get_collector() -> SnmpCollector:
     global _collector
     if _collector is None:
@@ -107,6 +125,29 @@ def get_collector() -> SnmpCollector:
             retries=config.snmp.retries,
         )
     return _collector
+
+
+async def _collect_locked(collector: SnmpCollector, ip: str) -> SwitchData:
+    """A full poll, holding this switch's lock for its duration."""
+    async with host_lock(ip):
+        return await collector.collect(ip)
+
+
+async def _counters_locked(collector: SnmpCollector, ip: str):
+    """A counters poll, but only if the switch is free right now.
+
+    Waiting would pile cycles up behind a slow scan; a skipped cycle
+    costs one point of history and says so.
+    """
+    lock = host_lock(ip)
+    if lock.locked():
+        log.info(
+            "%s is busy with the topology scan — skipping this counters "
+            "cycle rather than queueing behind it", ip,
+        )
+        return {}, {}, {}
+    async with lock:
+        return await counters.collect_samples(collector, ip)
 
 
 async def run_scan() -> None:
@@ -122,7 +163,9 @@ async def run_scan() -> None:
         else:
             collector = get_collector()
             collected = list(
-                await asyncio.gather(*(collector.collect(ip) for ip in config.switches))
+                await asyncio.gather(
+                    *(_collect_locked(collector, ip) for ip in config.switches)
+                )
             )
             if config.routers:
                 arp = await collect_arp(collector)
@@ -830,6 +873,20 @@ def _lag_label(sw: SwitchData, members: list[int]) -> str:
     return "lag[" + "+".join(names) + "]"
 
 
+def _sum_known(values) -> float | None:
+    """Sum of an aggregate's members, or None if any of them is unknown.
+
+    A LAG total built from three members out of four is not a total,
+    and the utilization rule would read it as headroom.
+    """
+    total = 0.0
+    for value in values:
+        if value is None:
+            return None
+        total += value
+    return total
+
+
 def _port_metrics(
     sw: SwitchData, rates: dict[int, counters.PortRates]
 ) -> list[dict]:
@@ -865,8 +922,8 @@ def _port_metrics(
         metrics.append({
             "port": _lag_label(sw, members),
             "speed_mbps": sum(p.speed_mbps for p in member_ports if p.oper_up),
-            "in_mbps": sum(r.in_mbps for r in member_rates),
-            "out_mbps": sum(r.out_mbps for r in member_rates),
+            "in_mbps": _sum_known(r.in_mbps for r in member_rates),
+            "out_mbps": _sum_known(r.out_mbps for r in member_rates),
             # member errors are already alarmed individually
             "in_errors_per_min": 0.0,
             "out_errors_per_min": 0.0,
@@ -887,14 +944,22 @@ async def run_counters() -> None:
     if config.demo:
         # the demo flips port states directly in switch_data
         samples_by_ip = demo_counters.sample(list(switch_data.values()))
+        counter_columns.clear()
+        counter_columns.update(
+            {ip: demo_counters.columns(ip) for ip in samples_by_ip}
+        )
     else:
         collector = get_collector()
         ips = list(config.switches)
         collected = await asyncio.gather(
-            *(counters.collect_samples(collector, ip) for ip in ips)
+            *(_counters_locked(collector, ip) for ip in ips)
         )
-        samples_by_ip = {ip: samples for ip, (samples, _) in zip(ips, collected)}
-        oper_by_ip = {ip: oper for ip, (_, oper) in zip(ips, collected)}
+        samples_by_ip = {ip: s for ip, (s, _, _) in zip(ips, collected)}
+        oper_by_ip = {ip: o for ip, (_, o, _) in zip(ips, collected)}
+        counter_columns.clear()
+        counter_columns.update(
+            {ip: cols for ip, (_, _, cols) in zip(ips, collected)}
+        )
     for ip, samples in samples_by_ip.items():
         if not samples:
             continue
@@ -1066,11 +1131,13 @@ def _link_load(link: dict) -> dict | None:
         ]
         if not found:
             continue
-        in_mbps = sum(r.in_mbps for r in found)
-        out_mbps = sum(r.out_mbps for r in found)
+        in_mbps = _sum_known(r.in_mbps for r in found)
+        out_mbps = _sum_known(r.out_mbps for r in found)
+        if in_mbps is None and out_mbps is None:
+            continue  # this side knows nothing; try the other one
         if flip:  # B's in is A's out and vice versa
             in_mbps, out_mbps = out_mbps, in_mbps
-        return {"in_mbps": round(in_mbps, 1), "out_mbps": round(out_mbps, 1)}
+        return {"in_mbps": _round(in_mbps), "out_mbps": _round(out_mbps)}
     return None
 
 
@@ -1278,10 +1345,10 @@ async def api_switch_ports(ip: str) -> dict:
             "speed_mbps": p.speed_mbps,
             "pvid": sw.port_pvid.get(p.if_index, 0),
             "lag": member_of.get(p.if_index, ""),
-            "in_mbps": round(r.in_mbps, 1) if r else None,
-            "out_mbps": round(r.out_mbps, 1) if r else None,
-            "errors_per_min": round(r.errors_per_min, 1) if r else None,
-            "discards_per_min": round(r.discards_per_min, 1) if r else None,
+            "in_mbps": _round(r.in_mbps if r else None),
+            "out_mbps": _round(r.out_mbps if r else None),
+            "errors_per_min": _round(r.errors_per_min if r else None),
+            "discards_per_min": _round(r.discards_per_min if r else None),
             "hosts": host_counts.get(name, 0),
             "monitored_hosts": monitored_counts.get(name, 0),
             # MACs that look like damaged copies of a real one here
@@ -1310,12 +1377,51 @@ async def api_switch_ports(ip: str) -> dict:
         "switch": ip,
         "name": sw.sys_name or ip,
         "ports": ports,
+        # which counter columns the agent answered for, so a column of
+        # dashes can say why it is a column of dashes
+        "columns": _column_report(ip),
         # so the panel can colour the values it shows
         "thresholds": {
             "errors_per_minute": config.thresholds.errors_per_minute,
             "discards_per_minute": config.thresholds.discards_per_minute,
         },
     }
+
+
+def _round(value: float | None) -> float | None:
+    """None survives rounding: it means "the agent did not answer"."""
+    return None if value is None else round(value, 1)
+
+
+# Which counter columns feed which table column
+COLUMN_GROUPS = {
+    "in": ("in_octets",),
+    "out": ("out_octets",),
+    "err": ("in_errors", "out_errors"),
+    "disc": ("in_discards", "out_discards"),
+}
+
+
+def _column_report(ip: str) -> dict:
+    """Per table column: did the agent answer, and for which OIDs not.
+
+    "no answer" and "all zeros" produce the same empty column and mean
+    opposite things — mb0 reported honest zeros for errors while its
+    outbound octets were simply never returned.
+    """
+    columns = counter_columns.get(ip) or {}
+    report: dict[str, dict] = {}
+    for name, sources in COLUMN_GROUPS.items():
+        silent = [
+            columns[src] for src in sources
+            if src in columns and not columns[src].answered
+        ]
+        report[name] = {
+            "answered": not silent,
+            "oids": [st.oid for st in silent],
+            "error": next((st.error for st in silent if st.error), ""),
+        }
+    return report
 
 
 def _lldp_dict(neighbor) -> dict:

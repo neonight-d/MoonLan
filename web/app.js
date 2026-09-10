@@ -1138,10 +1138,35 @@ function setPortsSort(key) {
   if (lastPorts) renderPorts(lastPorts);
 }
 
+/* A column the agent never answered for is a column of dashes that
+   means "unknown", not "zero". The header says which, and why. */
+function markSilentColumns(columns) {
+  for (const th of document.querySelectorAll("#ports th[data-sort]")) {
+    const info = (columns || {})[th.dataset.sort];
+    const silent = info && !info.answered;
+    th.classList.toggle("no-answer", !!silent);
+    const base =
+      th.dataset.sort === "err"
+        ? t("errTooltip")
+        : th.dataset.sort === "disc"
+        ? t("discTooltip")
+        : "";
+    if (!silent) {
+      th.title = base;
+      continue;
+    }
+    th.title =
+      fmt("colNoAnswer", { oids: (info.oids || []).join(", ") }) +
+      (info.error ? "\n" + info.error : "") +
+      (base ? "\n\n" + base : "");
+  }
+}
+
 function renderPorts(data) {
   els.portsTitle.textContent = fmt("portsTitle", {
     name: data.name || data.switch,
   });
+  markSilentColumns(data.columns);
   const limits = data.thresholds || {};
   let highlighted = null;
   // physical ports only; the server puts active ones first

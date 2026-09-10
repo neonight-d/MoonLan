@@ -128,6 +128,10 @@ const I18N = {
       + "\"{switch}:{port}\" to uplink_ports in config.yaml and the "
       + "devices behind it will be collected under one \"External "
       + "network\" node, with no bridge alarms raised there.",
+    colNoAnswer:
+      "The switch did not answer for this counter ({oids}), so the "
+      + "column shows \u2014 rather than 0. Unknown is not zero: no alarm "
+      + "is raised or cleared on it either.",
     lldpNeighbour: "LLDP neighbour",
     lldpForwarded: "LLDP forwarded",
     lldpForwardedHint:
@@ -385,6 +389,10 @@ const I18N = {
       + "uplink_ports в config.yaml — и устройства за этим портом "
       + "соберутся в узел «Внешняя сеть», а тревоги о мостах там "
       + "подниматься не будут.",
+    colNoAnswer:
+      "Коммутатор не ответил по этому счётчику ({oids}), поэтому в "
+      + "колонке \u2014, а не 0. Неизвестно — это не ноль: тревоги по "
+      + "такому значению не поднимаются и не снимаются.",
     lldpNeighbour: "Сосед по LLDP",
     lldpForwarded: "пересылка LLDP",
     lldpForwardedHint:
