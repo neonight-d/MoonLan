@@ -28,6 +28,9 @@ def _ensure_port_free(host: str, port: int) -> None:
 
 
 def main() -> None:
+    # MOONLAN_CONFIG points at an alternative config.yaml, so a second
+    # instance can be started in the project directory without taking
+    # the running service's database and port with it
     cfg = load_config()
     _ensure_port_free(cfg.listen_host, cfg.listen_port)
     uvicorn.run(

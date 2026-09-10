@@ -82,11 +82,39 @@ CREATE TABLE IF NOT EXISTS alarms (
 
 
 class Database:
+    """SQLite with room for a second process.
+
+    The service runs out of the project directory and development
+    happens in the same one, so a `diag` run, a test or a demo start
+    regularly opens the same file. With the default rollback journal a
+    reader blocks the writer and a five-second wait fails outright, so
+    an experiment on the side would hand the running service
+    `database is locked`. WAL lets readers and the writer coexist, and
+    a ten-second busy timeout turns a genuine collision into a pause
+    rather than an error.
+    """
+
     def __init__(self, path: Path | str = DEFAULT_DB_PATH):
-        self._conn = sqlite3.connect(str(path), check_same_thread=False)
+        self.path = str(path)
+        self._conn = sqlite3.connect(
+            self.path, check_same_thread=False, timeout=10
+        )
         self._conn.row_factory = sqlite3.Row
         self._lock = threading.Lock()
         with self._lock, self._conn:
+            if self.path != ":memory:":
+                # WAL is a property of the file and survives; setting it
+                # on an in-memory database is meaningless
+                mode = self._conn.execute(
+                    "PRAGMA journal_mode=WAL"
+                ).fetchone()[0]
+                if mode.lower() != "wal":
+                    log.warning(
+                        "Could not switch %s to WAL (journal_mode=%s): a "
+                        "second process opening this database may block "
+                        "the service", self.path, mode,
+                    )
+            self._conn.execute("PRAGMA busy_timeout=5000")
             self._conn.executescript(_SCHEMA)
             self._migrate()
 

@@ -1073,10 +1073,25 @@ def _link_load(link: dict) -> dict | None:
 def _log_config() -> None:
     """One line on how much of the configuration is actually yours —
     a config.yaml left over from an older version silently overrides
-    settings whose defaults have changed since."""
+    settings whose defaults have changed since.
+
+    Both paths are absolute on purpose. With MOONLAN_CONFIG in play
+    there can be two instances running out of the same directory, and
+    the log was the one place that could not say which file and which
+    database each of them had opened.
+    """
     report = config.report
     if report is None:
         return
+    log.info(
+        "Config file: %s%s", report.path,
+        "" if report.exists else "  (not found — every setting is a default)",
+    )
+    log.info(
+        "Database:    %s%s", Path(db.path).resolve() if db.path != ":memory:"
+        else "in memory (demo mode)",
+        "" if not config.demo else "  — the real inventory is not touched",
+    )
     summary = (
         f"Config: {len(report.overrides)} from {report.path}, "
         f"{len(report.defaults)} defaults"

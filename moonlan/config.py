@@ -9,6 +9,12 @@ from pathlib import Path
 import yaml
 
 DEFAULT_CONFIG_PATH = Path("config.yaml")
+# Point a second instance at its own file: the service runs out of the
+# project directory, so anything started there for a quick check would
+# otherwise load the production config — and with it the production
+# db_path and port, which is how a demo run writes demo hosts into the
+# real inventory.
+CONFIG_PATH_ENV = "MOONLAN_CONFIG"
 
 
 @dataclass
@@ -261,14 +267,24 @@ class _Reader:
         ]
 
 
+def config_path(path: Path | None = None) -> Path:
+    """Which config.yaml to read: the argument, then MOONLAN_CONFIG,
+    then config.yaml in the working directory."""
+    if path is not None:
+        return path
+    from_env = os.environ.get(CONFIG_PATH_ENV)
+    return Path(from_env) if from_env else DEFAULT_CONFIG_PATH
+
+
 def load_config(path: Path | None = None) -> Config:
     """Reads config.yaml; missing fields get default values.
 
     The MOONLAN_DEMO=1 environment variable enables demo mode
-    regardless of the configuration.
+    regardless of the configuration, and MOONLAN_CONFIG points at an
+    alternative file.
     """
     cfg = Config()
-    path = path or DEFAULT_CONFIG_PATH
+    path = config_path(path)
     raw: dict = {}
     exists = path.exists()
     if exists:
@@ -438,7 +454,8 @@ def load_config(path: Path | None = None) -> Config:
         )
 
     cfg.report = ConfigReport(
-        path=str(path), exists=exists, values=r.values,
+        path=str(path.resolve() if exists else path), exists=exists,
+        values=r.values,
         unknown=r.unknown_keys(),
     )
 

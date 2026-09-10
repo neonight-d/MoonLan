@@ -223,6 +223,9 @@ config.yaml
 moonlan.db
 .claude/
 *.db
+# WAL sidecars: SQLite runs in WAL mode since v0.6.3
+*.db-wal
+*.db-shm
 *.db.bak
 *.pid
 *.log
