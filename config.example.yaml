@@ -151,6 +151,61 @@ known_bridges: []
 uplink_ports: []
 #  - 10.0.0.10:Slot0/25
 
+# Loop Detection (Loopback Detection, LBD) read from the vendors' own
+# private MIBs — there is no standard one. Each profile says which
+# sysObjectID a model answers with, where its branch starts, the
+# suffixes of the four scalars and the three columns, and which raw
+# status value means "no loop".
+#
+# Built-in profiles:
+#   dlink-1210     DGS-1210-26 Rev.F1 (1.3.6.1.4.1.171.11.153.1000.17)
+#                  DES-1210-28/ME     (1.3.6.1.4.1.171.10.75.15.2.17)
+#   dlink-des3526  DES-3526           (1.3.6.1.4.1.171.11.64.1.2.12)
+#
+# A model with no profile is reported as saying nothing — no alarms and
+# no "there are no loops" either. To add one: walk the vendor branch
+# with `python -m moonlan.diag --walk <ip> 1.3.6.1.4.1.<enterprise>`,
+# and `python -m moonlan.diag --loop` prints the sysObjectID of every
+# switch still without a profile. A profile whose name repeats a
+# built-in one replaces it.
+#
+# Loop Detection (Loopback Detection, LBD) читается из приватных MIB
+# производителей — стандартной для неё нет. Профиль описывает, каким
+# sysObjectID отвечает модель, где начинается её ветка, суффиксы
+# четырёх скаляров и трёх колонок и какое сырое значение означает
+# «петли нет».
+#
+# Встроенные профили — в списке выше. Коммутатор без профиля честно
+# показывается как «модель не сообщает по SNMP»: ни тревог, ни
+# утверждения «петель нет». Чтобы добавить свой, обойдите ветку
+# `python -m moonlan.diag --walk <ip> 1.3.6.1.4.1.<enterprise>`;
+# `python -m moonlan.diag --loop` печатает sysObjectID всех
+# коммутаторов, оставшихся без профиля. Профиль с именем встроенного
+# заменяет его.
+loop_detection:
+  enabled: true
+  profiles: []
+#    - name: edgecore-es3528m
+#      roots:
+#        # sysObjectID prefix: branch root
+#        # префикс sysObjectID: корень ветки
+#        1.3.6.1.4.1.259.6.10.94: 1.3.6.1.4.1.259.10.1.24.1.99
+#      scalars:
+#        enabled: "1.0"        # 1 = on / включён
+#        mode: "2.0"
+#        interval: "3.0"       # seconds / секунд
+#        recover_time: "4.0"   # seconds / секунд
+#      columns:
+#        index: "5.1.1"        # port number / номер порта
+#        lbd_enabled: "5.1.2"  # 1 = on, 2 = off / 1 = вкл., 2 = выкл.
+#        status: "5.1.3"
+#      status_type: integer    # integer | string
+#      # Raw value(s) that mean "no loop". Everything else is read as a
+#      # loop and its raw value goes into the alarm text.
+#      # Сырое значение (значения) «петли нет». Всё остальное считается
+#      # петлёй, и сырое значение попадает в текст тревоги.
+#      normal: ["1"]
+
 # Alarm thresholds / Пороги тревог
 thresholds:
   # Errors are damaged frames (cable, duplex, transceiver) — rare and
@@ -255,3 +310,13 @@ alarm_notify:
   stp_topology_change: [telegram, syslog]
   stp_fragmented: [telegram, syslog]
   port_flapping: [telegram, syslog]
+  # A loop takes a whole segment down, and with STP off Loop Detection
+  # is the only thing standing between this network and a broadcast
+  # storm — so it is routed like a mass outage, not like port errors.
+  # Петля кладёт целый сегмент, а при выключенном STP Loop Detection —
+  # единственная защита сети от широковещательного шторма, поэтому
+  # маршрутизация как у массового отключения, а не как у ошибок порта.
+  loop_detected: [email, telegram, syslog]
+  # …and a switch that quietly stopped watching is worth a log line
+  # …а коммутатор, тихо переставший следить, стоит строки в журнале
+  loop_detection_disabled: [syslog]

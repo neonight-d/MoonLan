@@ -57,6 +57,17 @@ Rules:
   thresholds.flaps_per_window times inside
   thresholds.flap_window_minutes; cleared by a window without a single
   transition.
+- loop_detected (critical): the switch's own Loop Detection reports a
+  loop on a port (see moonlan/loopdetect.py). Only the "no loop" value
+  is known for these agents, so anything else raises the alarm and the
+  raw value goes into its text. Cleared when the status comes back to
+  normal — the switch releases the port itself after its recovery
+  time. A port with LBD switched off, and a port whose status did not
+  arrive, raise nothing in either direction.
+- loop_detection_disabled (info): a switch that answers the loop
+  detection branch reports it switched off globally. With no spanning
+  tree running, LBD is the only thing between this network and a
+  broadcast storm, so its absence is worth a line in syslog.
 """
 
 from __future__ import annotations
@@ -88,6 +99,8 @@ SEVERITIES = {
     "stp_topology_change": "warning",
     "stp_fragmented": "warning",
     "port_flapping": "warning",
+    "loop_detected": "critical",
+    "loop_detection_disabled": "info",
 }
 
 HOST_DOWN_AFTER = 3    # consecutive failed pings
@@ -104,6 +117,9 @@ JANITOR_TYPES = {
     "lag_degraded", "port_errors", "port_discards", "port_util",
     "port_hosts_down", "port_frame_corruption", "port_flapping",
 }
+# loop_detected is deliberately NOT in that set: a port that stops
+# answering has not stopped looping, and clearing the alarm because the
+# data went away would be the one lie this feature must not tell.
 JANITOR_CYCLES = 5
 JANITOR_NOTE = "auto-cleared: subject no longer present"
 
@@ -136,6 +152,20 @@ def _fmt_window(seconds: float) -> str:
     if seconds % 3600 == 0:
         return f"{seconds // 3600}h"
     return f"{seconds // 60}m"
+
+
+def _fmt_held(seconds: float) -> str:
+    """How long something lasted, for a CLEARED message.
+
+    _fmt_window rounds to whole minutes and hours, which is right for a
+    configured window and wrong for a loop that lasted forty seconds.
+    """
+    seconds = max(0, int(seconds))
+    if seconds < 60:
+        return f"{seconds} s"
+    if seconds < 3600:
+        return f"{seconds // 60} m {seconds % 60} s"
+    return f"{seconds // 3600} h {(seconds % 3600) // 60} m"
 
 
 def display_subject(subject: str) -> str | None:
@@ -189,6 +219,9 @@ class AlarmEngine:
         self._stp_root: dict[str, str] = {}
         self._stp_changes: dict[str, int] = {}
         self._stp_fragmented_cycles: int = 0
+        # loop detection: subject -> when the loop was first seen, so
+        # the CLEARED pair can say how long it held
+        self._loop_since: dict[str, float] = {}
 
     async def load(self) -> None:
         """Restores the active set from the DB after a restart.
@@ -735,6 +768,73 @@ class AlarmEngine:
                 "one tree" if verdict.get("verdict") == "single"
                 else "no switch is running a spanning tree",
             )
+
+    async def on_loop_detection(
+        self, ip: str, name: str, data, port_names: dict[int, str]
+    ) -> None:
+        """One switch's loop-detection state, once per counters cycle.
+
+        Two things are decided here, and the second one is the reason
+        the feature exists at all:
+
+        - a switch that answers the branch and reports LBD switched off
+          globally raises loop_detection_disabled (info, syslog). With
+          spanning tree off, this is the only loop protection running;
+        - a port whose status is not the known-normal value raises
+          loop_detected, with the raw value in the message. The value a
+          real loop produces has never been observed on this hardware
+          and will not be produced on purpose, so "normal is known,
+          everything else is a loop" is the only rule that cannot let
+          the first real one pass in silence.
+
+        A port with LBD switched off and a port whose status never
+        arrived say nothing in either direction: the first is not being
+        watched, the second is unknown, and neither is evidence that
+        there is no loop.
+        """
+        if data is None or not data.supported:
+            return  # the model does not report it; see loopdetect.py
+        now = time.time()
+        if data.enabled is False:
+            await self._raise(
+                "loop_detection_disabled", ip,
+                f"{name}: Loop Detection is switched off globally, and "
+                f"this network runs no spanning tree — nothing is "
+                f"watching for loops on this switch",
+            )
+        else:
+            await self._clear(
+                "loop_detection_disabled", ip,
+                "Loop Detection is switched on again",
+            )
+        for if_index, state in sorted(data.ports.items()):
+            port = port_names.get(if_index) or str(if_index)
+            subject = f"{ip}:{port}"
+            if state.lbd_enabled is False or not state.known:
+                continue
+            if state.looped:
+                since = self._loop_since.setdefault(subject, now)
+                recovery = (
+                    f", the switch releases it {data.recover_time} s after "
+                    f"the loop is gone" if data.recover_time else ""
+                )
+                await self._raise(
+                    "loop_detected", subject,
+                    f"{name}, port {port}: Loop Detection reports a loop "
+                    f"(raw status {state.status_raw}) since "
+                    f"{time.strftime('%H:%M:%S', time.localtime(since))}. "
+                    f"The port is blocked by the switch{recovery}",
+                )
+            elif (("loop_detected", subject)) in self._active:
+                since = self._loop_since.pop(subject, None)
+                held = f" after {_fmt_held(now - since)}" if since else ""
+                await self._clear(
+                    "loop_detected", subject,
+                    f"the loop is gone{held}; the port reports "
+                    f"{state.status_raw} again",
+                )
+            else:
+                self._loop_since.pop(subject, None)
 
     async def on_new_macs(self, new_macs: list[str], details: dict[str, str]) -> None:
         for mac in new_macs:
