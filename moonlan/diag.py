@@ -8,6 +8,7 @@ Usage:  python -m moonlan.diag <ip> [--community public] [--timeout 2]
         python -m moonlan.diag --host <ip|mac>
         python -m moonlan.diag --fdb <ip> [--iface 1/3]
         python -m moonlan.diag --stp
+        python -m moonlan.diag --loop
         python -m moonlan.diag --walk <ip> <oid> [--limit 500]
 
 Community and timeout default to the values from config.yaml. The tool
@@ -24,9 +25,12 @@ one device (database, FDB, ARP, ping) and --fdb dumps a switch's raw
 MAC table with the verdict on every row. --stp prints the raw
 dot1dStp* values of every switch next to the verdict they produce, so
 "STP is not running here" can be checked rather than believed.
---walk dumps any OID subtree, which is how a private MIB (D-Link
-1.3.6.1.4.1.171, HPE 1.3.6.1.4.1.11) gets explored before it becomes
-a feature.
+--loop prints the loop-detection state of every switch: the matched
+profile, the raw scalars and the raw per-port values, plus the
+sysObjectID of every switch no profile covers — which is exactly what
+adding a new model needs. --walk dumps any OID subtree, which is how a
+private MIB (D-Link 1.3.6.1.4.1.171, HPE 1.3.6.1.4.1.11) gets explored
+before it becomes a feature.
 """
 
 from __future__ import annotations
@@ -38,7 +42,7 @@ import sys
 import time
 from collections import Counter
 
-from . import counters, pinger, stp
+from . import counters, loopdetect, pinger, stp
 from .config import (
     SECRET_KEYS,
     SnmpConfig,
@@ -74,6 +78,7 @@ from .snmp_collector import (
     OID_Q_FDB_PORT,
     OID_SYS_DESCR,
     OID_SYS_NAME,
+    OID_SYS_OBJECT_ID,
     SnmpCollector,
     SwitchData,
     _fmt_mac,
@@ -160,6 +165,11 @@ async def run_diag(
     print(f"sysName:    {sys_name}")
     sys_descr = await collector._get(ip, OID_SYS_DESCR)
     print(f"sysDescr:   {sys_descr if sys_descr is not None else '—'}")
+    # the vendor's model identifier — it is what the loop-detection
+    # profiles are keyed by, so --loop needs it and so does anyone
+    # adding a new model
+    sys_object_id = await collector._get(ip, OID_SYS_OBJECT_ID)
+    print(f"sysObjectID: {sys_object_id if sys_object_id is not None else '—'}")
     bridge = await collector._get(ip, OID_BRIDGE_ADDRESS)
     bridge_mac = _fmt_mac(as_octets(bridge)) if bridge is not None else ""
     print(f"bridge MAC: {bridge_mac or '—'}")
@@ -1276,6 +1286,122 @@ async def run_stp_view(community: str, timeout: int, cfg) -> None:
             print(f"  {root}: {', '.join(ips)}")
 
 
+async def run_loop_view(community: str, timeout: int, cfg) -> None:
+    """Section 16: loop detection as the vendors' MIBs report it.
+
+    Printed raw on purpose. Only the "no loop" value of these agents
+    has ever been observed, so the rule downstream is "normal is known,
+    everything else is a loop" — and a rule like that is only as
+    trustworthy as the values it is applied to. Every number here can
+    be compared against the switch's own web interface.
+
+    The last section is the useful one for a network with new
+    hardware in it: the switches no profile covers, with the
+    sysObjectID to key a new profile by.
+    """
+    _section("16. Loop detection (vendor private MIBs)")
+    if not cfg.switches:
+        sys.exit("no switches in config.yaml")
+    extra, problems = loopdetect.parse_profiles(cfg.loop_detection.profiles)
+    for problem in problems:
+        print(f"config.yaml loop_detection.profiles: {problem}")
+    profiles = loopdetect.merge_profiles(loopdetect.BUILTIN_PROFILES, extra)
+    print("profiles: " + ", ".join(p.name for p in profiles))
+    if not cfg.loop_detection.enabled:
+        print("loop_detection.enabled is false — the service does not poll this")
+    print()
+
+    collector = _make_collector(community, timeout)
+    collected = list(
+        await asyncio.gather(*(collector.collect(ip) for ip in cfg.switches))
+    )
+    unprofiled: list[SwitchData] = []
+    looping: list[tuple[SwitchData, object]] = []
+    for sw in collected:
+        name = f"{sw.sys_name} ({sw.ip})" if sw.sys_name else sw.ip
+        print(f"--- {name} ---")
+        if not sw.reachable:
+            print("  does not respond to SNMP — excluded\n")
+            continue
+        print(f"  sysObjectID                 {sw.sys_object_id or '—'}")
+        data = await loopdetect.collect_loop_detection(
+            collector, sw.ip, sw.ports, profiles,
+            sys_object_id=sw.sys_object_id,
+        )
+        if not data.supported:
+            print("  no profile answers: this model does not report loop")
+            print("  detection over SNMP, so nothing is claimed about it —")
+            print("  neither that there is a loop nor that there is not\n")
+            unprofiled.append(sw)
+            continue
+        print(f"  profile                     {data.profile} "
+              f"(matched by {data.matched_by})")
+        print(f"  branch root                 {data.root}")
+        print(f"  global state                "
+              f"{'enabled' if data.enabled else 'DISABLED'}")
+        print(f"  mode                        {_num(data.mode)}")
+        print(f"  detection interval          {_num(data.interval)} s")
+        print(f"  recovery time               {_num(data.recover_time)} s")
+        print(f"  table rows                  {data.rows}")
+        if data.unmapped:
+            print(f"  rows with no interface      "
+                  f"{', '.join(str(i) for i in data.unmapped)} — not used")
+        if data.index_mismatch:
+            print("  WARNING: the vendor table and the interface table "
+                  "disagree on the port count")
+        if data.truncated:
+            print(f"  WARNING: the status column stopped answering "
+                  f"({data.error})")
+        if data.ports:
+            print("  ports:")
+            for if_index in sorted(data.ports):
+                state = data.ports[if_index]
+                port = sw.ports.get(if_index)
+                verdict = (
+                    "LOOP" if state.looped
+                    else "unknown" if state.looped is None else "ok"
+                )
+                if state.lbd_enabled is False:
+                    verdict = "not watched"
+                print(
+                    f"    {(port.name if port else str(if_index)):<12} "
+                    f"index {state.port:>4}  "
+                    f"LBD {'on ' if state.lbd_enabled else 'off'}  "
+                    f"status {state.status_raw or '—':<8} {verdict}"
+                )
+        if data.looped_ports():
+            looping.append((sw, data))
+        print()
+
+    if looping:
+        print("VERDICT: a loop is reported right now")
+        for sw, data in looping:
+            for state in data.looped_ports():
+                port = sw.ports.get(state.if_index)
+                print(
+                    f"  {sw.sys_name or sw.ip} "
+                    f"{port.name if port else state.if_index}: raw status "
+                    f"{state.status_raw}"
+                )
+    else:
+        print("VERDICT: no switch with a profile reports a loop")
+    if unprofiled:
+        print(
+            "\nSwitches with no loop-detection profile — each line is "
+            "what a\nnew profile in config.yaml needs to be keyed by:"
+        )
+        for sw in unprofiled:
+            print(
+                f"  {sw.ip:<15} {sw.sys_name or '—':<28} "
+                f"sysObjectID {sw.sys_object_id or 'not answered'}"
+            )
+        print(
+            "\nWalk the branch under that enterprise number to find the\n"
+            "objects, e.g.  python -m moonlan.diag --walk "
+            f"{unprofiled[0].ip} 1.3.6.1.4.1.<enterprise>"
+        )
+
+
 WALK_DEFAULT_LIMIT = 500
 
 
@@ -1355,6 +1481,12 @@ def main() -> None:
              "the spanning tree is operating at all",
     )
     parser.add_argument(
+        "--loop", action="store_true",
+        help="poll all switches from config.yaml and print loop "
+             "detection as their private MIBs report it, plus the "
+             "sysObjectID of every switch no profile covers",
+    )
+    parser.add_argument(
         "--walk", nargs=2, metavar=("SWITCH_IP", "OID"),
         help="walk any OID subtree and print raw OIDs, types and values "
              "(strings as text and as hex) — for exploring private MIBs",
@@ -1385,12 +1517,12 @@ def main() -> None:
     args = parser.parse_args()
     modes = (
         args.topology or args.hosts or args.port or args.config
-        or args.host or args.fdb or args.stp or args.walk
+        or args.host or args.fdb or args.stp or args.walk or args.loop
     )
     if not modes and not args.ip:
         parser.error(
             "an ip is required unless --topology, --hosts, --host, --fdb, "
-            "--stp, --walk, --port or --config is given"
+            "--stp, --loop, --walk, --port or --config is given"
         )
     cfg = load_config()
     community = args.community or cfg.snmp.community
@@ -1405,6 +1537,8 @@ def main() -> None:
         )
     elif args.stp:
         asyncio.run(run_stp_view(community, timeout, cfg))
+    elif args.loop:
+        asyncio.run(run_loop_view(community, timeout, cfg))
     elif args.host:
         asyncio.run(run_host_diag(args.host, community, timeout, cfg))
     elif args.fdb:
