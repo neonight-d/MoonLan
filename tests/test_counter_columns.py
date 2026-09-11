@@ -105,6 +105,41 @@ class GapFillTest(unittest.TestCase):
         self.assertEqual(samples[1].in_octets, 1000)
         self.assertTrue(samples[1].hc_in)
 
+    def test_a_synthetic_port_is_never_asked_for(self):
+        """A negative ifIndex is one of ours; SNMP has no such thing.
+
+        The FDB of a D-Link LAG trunk lives on a bridge-port with no
+        interface behind it, and that port is kept as ifIndex
+        -bridge_port. It reached `expected`, `fill_gaps` asked for
+        "1.3.6.1.2.1.2.2.1.10.-25", and pyasn1 refused the OID while
+        the request was still being assembled — which took down the
+        counters cycle for every switch in the network, every 105
+        seconds, for as long as the service ran.
+        """
+        collector = FakeCollector(
+            tables={
+                HC_IN: {i: i * 1000 for i in range(1, 25)},
+                HC_OUT: {i: i * 2000 for i in range(1, 27)},
+                IN32: {i: i * 7 for i in range(1, 27)},
+            },
+            truncated={HC_IN: 24},
+        )
+        # a real port set: 26 interfaces plus two synthetic aggregates
+        expected = set(range(1, 27)) | {-25, -1}
+        samples, _oper, columns = asyncio.run(
+            collect_samples(collector, "10.0.0.21", expected)
+        )
+        self.assertTrue(
+            all("-" not in oid.rsplit(".", 1)[1] for oid in collector.gets),
+            collector.gets,
+        )
+        self.assertEqual(collector.gets, [f"{IN32}.25", f"{IN32}.26"])
+        self.assertEqual(columns["in_octets"].gaps_filled, 2)
+        self.assertNotIn(-25, samples)
+        # and the real ports still have their rates
+        self.assertEqual(samples[1].in_octets, 1000)
+        self.assertEqual(samples[26].in_octets, 26 * 7)
+
     def test_complete_column_asks_for_nothing(self):
         collector = FakeCollector(
             tables={HC_IN: {i: i for i in range(1, 29)},

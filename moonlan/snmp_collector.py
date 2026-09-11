@@ -320,14 +320,27 @@ class SnmpCollector:
         return target
 
     async def _get(self, host: str, oid: str):
-        """GET of a single value; None on error."""
-        error_ind, error_status, _, var_binds = await get_cmd(
-            self._engine,
-            self._community,
-            await self._target(host),
-            ContextData(),
-            ObjectType(ObjectIdentity(oid)),
-        )
+        """GET of a single value; None on any failure.
+
+        Including a failure to BUILD the request. pyasn1 rejects a
+        malformed OID while the request is being assembled, before
+        anything is sent, so `error_ind` never gets the chance to
+        report it — the exception simply leaves through the caller. A
+        single bad OID once took the whole counters cycle down with it,
+        for every switch in the network. Whatever the reason, one
+        unreadable value is a thing to log, not a thing to stop for.
+        """
+        try:
+            error_ind, error_status, _, var_binds = await get_cmd(
+                self._engine,
+                self._community,
+                await self._target(host),
+                ContextData(),
+                ObjectType(ObjectIdentity(oid)),
+            )
+        except Exception as exc:  # pyasn1 included: a bad OID is data
+            log.warning("%s: GET of %s failed (%s)", host, oid, exc)
+            return None
         if error_ind or error_status:
             log.debug("%s GET %s: %s", host, oid, error_ind or error_status)
             return None
@@ -379,23 +392,40 @@ class SnmpCollector:
 
         while True:
             broke = ""
-            objects = await self._open_walk(host, start)
+            try:
+                objects = await self._open_walk(host, start)
+            except Exception as exc:
+                # the request could not even be built — a malformed OID
+                # is a diagnosis, not a reason to stop collecting
+                status.error = str(exc)
+                log.warning(
+                    "%s: walk of %s could not be started (%s)",
+                    host, start, exc,
+                )
+                return
             left_subtree = False
-            async for error_ind, error_status, _, var_binds in objects:
-                if error_ind or error_status:
-                    broke = str(error_ind or error_status)
-                    break
-                for name, value in var_binds:
-                    full = tuple(name)
-                    if full[:len(base)] != base:
-                        left_subtree = True  # the table is finished
+            try:
+                async for error_ind, error_status, _, var_binds in objects:
+                    if error_ind or error_status:
+                        broke = str(error_ind or error_status)
                         break
-                    last_oid = full
-                    status.rows += 1
-                    yield full[len(base):], value
-                if left_subtree:
-                    break
-            await objects.aclose()
+                    for name, value in var_binds:
+                        full = tuple(name)
+                        if full[:len(base)] != base:
+                            left_subtree = True  # the table is finished
+                            break
+                        last_oid = full
+                        status.rows += 1
+                        yield full[len(base):], value
+                    if left_subtree:
+                        break
+            except GeneratorExit:
+                raise  # the consumer stopped reading; not our business
+            except Exception as exc:
+                broke = str(exc)
+                log.warning("%s: walk of %s raised (%s)", host, oid, exc)
+            finally:
+                await objects.aclose()
             if left_subtree or not broke:
                 return  # read to the end
             status.error = broke
