@@ -577,7 +577,9 @@ function buildGraphData() {
     });
     edges.push({
       id: "offedge:" + group.id,
-      from: "sw:" + group.switch,
+      // the live devices of this port hang off the bridge or the
+      // unmanaged switch on its cable; the quiet ones belong there too
+      from: group.via || "sw:" + group.switch,
       to: group.id,
       dashes: [3, 3],
       color: { color: colors.dim, opacity: 0.4 },
@@ -815,6 +817,9 @@ function showDetails(nodeId) {
       }</p><dl>
       <dt>${t("switchLabel")}</dt><dd>${group.switch}</dd>
       <dt>${t("portLabel")}</dt><dd>${group.port}</dd>
+      ${group.via_name
+        ? `<dt>${t("behindBridge")}</dt><dd>${group.via_name}</dd>`
+        : ""}
       <dt>${t("lastSeenLabel")}</dt><dd>${fmtTime(group.last_seen_max)}</dd>
       </dl><ul class="offline-list">${rows}</ul>`;
   } else if (nodeId.startsWith("bridge:")) {
