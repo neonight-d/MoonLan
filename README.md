@@ -16,7 +16,7 @@ An open-source alternative to LanTopoLog. MIT license.
 
 *Alarm panel: port errors, discards and host outages with one-click access to the switch port table.*
 
-## Features (v0.6.6)
+## Features (v0.6.7)
 
 - SNMP v2c polling of switches: device name, ports, speeds, statuses.
 - MAC address tables (BRIDGE-MIB and Q-BRIDGE-MIB) from every switch,
@@ -118,6 +118,15 @@ An open-source alternative to LanTopoLog. MIT license.
   outlined. Alarms `stp_root_changed`, `stp_topology_change` and
   `stp_fragmented` fire only for switches whose tree actually operates.
   See "STP status" below.
+- Loop detection from the vendors' private MIBs: profiles keyed by
+  `sysObjectID` (built in for the D-Link DGS-1210-26 Rev.F1,
+  DES-1210-28/ME and DES-3526; more can be added in
+  `loop_detection.profiles`), polled on the counters cycle rather than
+  on the ten-minute scan. `loop_detected` is critical and carries the
+  raw status value the agent returned; `loop_detection_disabled` notes
+  a switch that stopped watching. A model that reports nothing is shown
+  as reporting nothing — never as "no loops". See "Loop Detection"
+  below.
 - Port flapping: `ifLastChange` is read alongside `ifOperStatus`, so a
   link that bounces several times between two counter polls is counted
   rather than missed. `port_flapping` fires at
@@ -190,7 +199,7 @@ An open-source alternative to LanTopoLog. MIT license.
 | v0.6.4 ✓| Honest counters, remembered offline locations, network edge and hint fixes |
 | v0.6.5 ✓| Resuming a truncated walk, honest partial answers, per-port counter fallback |
 | v0.6.6 ✓| One bad OID no longer stops the counters; offline groups behind their bridge |
-| v0.6.7  | Loop Detection from the private D-Link/HPE MIBs |
+| v0.6.7 ✓| Loop Detection from the vendors' private MIBs, honest unsupported state |
 | v0.7    | Export to PDF and Draw.io, MAC address info import |
 | v0.8    | Windows computer inventory (WMI/WinRM) |
 
@@ -385,8 +394,12 @@ behind an access port with its `unmanaged_bridge_detected` alarm, a
 port carrying forwarded LLDP frames, a neighbour with its optional
 TLVs switched off, a spanning tree with a root and a blocking port
 next to a switch whose STP is off but still reports itself as root,
-and a port that flaps on every cycle. Instead of sending anything,
-notifications are logged as `NOTIFY (demo): …`.
+and a port that flaps on every cycle. Loop detection is in it too: on
+the second counters cycle the box behind access-sw-1 Gi0/14 gets both
+ends of a patch cord — a `loop_detected` alarm, a red edge and a red
+switch outline — while one switch reports loop detection switched off
+globally and another is a model no profile covers. Instead of sending
+anything, notifications are logged as `NOTIFY (demo): …`.
 
 #### A second instance beside a running service
 
@@ -752,6 +765,98 @@ says so through the LLDP bridge nodes instead.
 raised for operating switches only. A switch that stops operating drops
 its remembered root, so coming back does not read as a root change.
 
+### Loop Detection
+
+```bash
+python -m moonlan.diag --loop     # raw values, matched profile, verdict
+```
+
+There is no standard MIB for loopback detection. Every vendor keeps it
+in its own branch under `1.3.6.1.4.1.<enterprise>`, with its own
+structure and its own enumerations, so MoonLan reads it through
+*profiles*: a profile says which `sysObjectID` a model answers with,
+where its branch starts, the suffixes of the four scalars and the three
+per-port columns, and which raw status value means "no loop".
+
+Built in:
+
+| Profile | Models | Branch |
+|---------|--------|--------|
+| `dlink-1210` | DGS-1210-26 Rev.F1 | `1.3.6.1.4.1.171.11.153.1000.17` |
+| `dlink-1210` | DES-1210-28/ME | `1.3.6.1.4.1.171.10.75.15.2.17` |
+| `dlink-des3526` | DES-3526 | `1.3.6.1.4.1.171.11.64.1.2.12` |
+
+The two 1210 models share one profile: different roots, identical
+structure below them.
+
+**HPE OfficeConnect 1820 reports nothing.** A full walk of
+`1.3.6.1.4.1.11` on one returns versions, serial numbers and PoE — no
+detection interval, no per-port loop state. Loop Protection runs on the
+device and is simply not exposed over SNMP. That is a property of the
+model, not a polling failure, and MoonLan says so: its card reads
+"the model does not report it over SNMP", the Loop column is dashes,
+and no alarm is raised. What it never says is "no loops" — an answer
+nobody gave is not an answer.
+
+#### The rule: normal is known, everything else is a loop
+
+Only the "no loop" value has ever been observed on this hardware: `1`
+on the 1210 family, the string `None` on the DES-3526. What these
+agents report *during* a real loop was never seen, and nobody is going
+to short two ports of a working network to find out. So the rule is
+inverted from the obvious one: a status that is not the known-normal
+value raises `loop_detected`, and the raw value goes into the alarm
+text. The first real loop then documents itself instead of passing in
+silence.
+
+A port whose status did not arrive is **unknown**, not normal: the Loop
+column shows "no data" and nothing is raised for it in either
+direction. A port with LBD switched off on the switch shows a dash.
+
+#### Alarms
+
+- `loop_detected` (**critical**, subject `<switch ip>:<port>`): the
+  switch reports a loop. The message carries the switch name, the port,
+  the raw status value, when it started and the configured recovery
+  time. Cleared when the status returns to normal — the switch releases
+  the port itself — with how long the loop held.
+- `loop_detection_disabled` (**info**, syslog by default): a switch that
+  answers the branch reports loop detection switched off globally. With
+  no spanning tree running, this is the only loop protection there is,
+  and its silent disappearance is worth a line.
+
+On the map a port with a loop gets a red edge labelled LOOP and its
+switch is outlined in red, the way an unreachable switch is.
+
+#### Adding a model
+
+`diag --loop` ends with the switches no profile covers and the
+`sysObjectID` of each — that is the key a new profile needs:
+
+```
+Switches with no loop-detection profile — each line is what a
+new profile in config.yaml needs to be keyed by:
+  10.3.6.5        ES3528M                      sysObjectID 1.3.6.1.4.1.259.6.10.94
+```
+
+Walk the vendor's branch to find the objects:
+
+```bash
+python -m moonlan.diag --walk 10.3.6.5 1.3.6.1.4.1.259 --limit 800
+```
+
+then describe what you found in `loop_detection.profiles` in
+`config.yaml` — the commented example there is the full shape. A
+profile whose name repeats a built-in one replaces it, so a firmware
+that moved its branch can be corrected without touching the code.
+
+Profiles are matched by `sysObjectID` first. A switch whose
+`sysObjectID` matches nothing is still probed against every known
+branch with a single GET each: a vendor branch is not something another
+vendor also implements, so an answer identifies the model. `diag --loop`
+prints which of the two ways matched, and a firmware revision with a new
+`sysObjectID` therefore does not silently stop being watched.
+
 ### Walking an arbitrary MIB
 
 ```bash
@@ -761,10 +866,10 @@ python -m moonlan.diag --walk 10.0.0.10 1.3.6.1.4.1.171 --limit 200
 Dumps any OID subtree: raw OID, SNMP type, the value as text and, where
 it is not text, as hex. It exists for exploring private MIBs before
 writing anything against them — D-Link lives under `1.3.6.1.4.1.171`
-and HPE under `1.3.6.1.4.1.11`, and that is where the Loopback
-Detection state sits that the next version turns into a `loop_detected`
-alarm. The default 500-row ceiling keeps a stray subtree from being
-downloaded whole.
+and HPE under `1.3.6.1.4.1.11` — and it is how the loop-detection
+profiles above were found. It is also the first step in adding a new
+one: see "Loop Detection". The default 500-row ceiling keeps a stray
+subtree from being downloaded whole.
 
 ## How it works
 
@@ -822,6 +927,7 @@ MoonLan/
 │   ├── corruption.py       # damaged copies of a real MAC on one port
 │   ├── lldp.py             # LLDP neighbours, capabilities, forwarding guard
 │   ├── stp.py              # BRIDGE-MIB dot1dStp* and the "is it running" verdict
+│   ├── loopdetect.py       # loop detection profiles for the vendors' private MIBs
 │   ├── alarms.py           # stateful alarm engine
 │   ├── notify.py           # email/Telegram/Syslog notifications
 │   ├── db.py               # SQLite: hosts, event journal, alarms
@@ -837,8 +943,8 @@ MoonLan/
 
 | Method | Path              | Description |
 |--------|-------------------|-------------|
-| GET    | `/api/topology`   | Current topology: nodes, links (ports, LACP, current load), hosts (IP, name, ping, VLAN, `stale`), `unlocated` (known devices on no port), `pseudo_switches`, `bridges` (switches found by LLDP that nobody polls), `vlan_names` |
-| GET    | `/api/switch/{ip}/ports` | Port table of a switch: status, speed, PVID, LAG, In/Out Mbit/s, errors and discards per minute, known devices, LLDP neighbours, link flaps |
+| GET    | `/api/topology`   | Current topology: nodes, links (ports, LACP, current load), hosts (IP, name, ping, VLAN, `stale`), `unlocated` (known devices on no port), `pseudo_switches`, `bridges` (switches found by LLDP that nobody polls), `vlan_names`; every switch carries its `loop` state |
+| GET    | `/api/switch/{ip}/ports` | Port table of a switch: status, speed, PVID, LAG, In/Out Mbit/s, errors and discards per minute, known devices, LLDP neighbours, link flaps, per-port loop state and the switch's `loop_detection` summary |
 | GET    | `/api/stp`        | Spanning tree per switch plus the verdict for the network |
 | GET    | `/api/alarms?active=1\|0&limit=50` | Active or recently cleared alarms |
 | PATCH  | `/api/host/{mac}` | Set the host's monitoring flag: `{"monitored": true\|false}` |
