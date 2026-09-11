@@ -421,17 +421,49 @@ function buildGraphData() {
   const nodes = [];
   const edges = [];
 
+  // Ports the switches' own Loop Detection reports a loop on, as
+  // "<switch ip>|<port name>". Polled on the counters cycle, so this
+  // is fresher than the rest of the map.
+  const loopedPorts = new Set();
   for (const sw of topology.switches) {
-    // a switch_down alarm paints the node border red; the root bridge
-    // of a working spanning tree gets a thicker outline
-    const border = switchHasAlarm(sw.ip)
+    for (const port of (sw.loop && sw.loop.looped_ports) || []) {
+      loopedPorts.add(sw.ip + "|" + port);
+    }
+  }
+  const isLooped = (ip, port) =>
+    !!ip && !!port && loopedPorts.has(ip + "|" + port);
+
+  /* Paints the edge that leaves a looping port. Only the segment that
+     starts at the switch is marked: what hangs further down the chain
+     is behind the loop, not in it. */
+  const markLoop = (edge, ip, port) => {
+    if (!isLooped(ip, port)) return edge;
+    if (edge.from !== "sw:" + ip && edge.to !== "sw:" + ip) return edge;
+    edge.color = { color: colors.alarm, opacity: 1 };
+    edge.width = Math.max(edge.width || 1, 3);
+    edge.dashes = false;
+    edge.label = (edge.label ? edge.label + " · " : "") + t("loopMark");
+    edge.font = { color: colors.alarm, size: 11, strokeWidth: 0 };
+    return edge;
+  };
+
+  for (const sw of topology.switches) {
+    // a switch_down alarm paints the node border red; so does a loop,
+    // which is the one thing on this map that is taking a segment down
+    // right now. The root bridge of a working tree gets a thicker
+    // outline instead.
+    const looping = !!(sw.loop && sw.loop.status === "loop");
+    const border = switchHasAlarm(sw.ip) || looping
       ? colors.alarm
       : sw.stp_root
       ? colors.ok
       : colors.moon;
     nodes.push({
       id: "sw:" + sw.ip,
-      label: sw.name + "\n" + sw.ip + (sw.stp_root ? "\n" + t("stpRootMark") : ""),
+      label:
+        sw.name + "\n" + sw.ip +
+        (sw.stp_root ? "\n" + t("stpRootMark") : "") +
+        (looping ? "\n" + t("loopMark") : ""),
       shape: "box",
       color: {
         background: colors.panel,
@@ -439,7 +471,7 @@ function buildGraphData() {
         highlight: { background: "#1c2739", border: border },
       },
       font: nodeFont("sw:" + sw.ip),
-      borderWidth: switchHasAlarm(sw.ip) || sw.stp_root ? 3 : 2,
+      borderWidth: switchHasAlarm(sw.ip) || sw.stp_root || looping ? 3 : 2,
       margin: 10,
     });
   }
@@ -466,6 +498,8 @@ function buildGraphData() {
       edge.dashes = [6, 4];
       edge.label = (edge.label ? edge.label + " · " : "") + t("stpBlocking");
     }
+    markLoop(edge, link.a, link.a_port);
+    markLoop(edge, link.b, link.b_port);
     edges.push(edge);
   }
 
@@ -484,14 +518,14 @@ function buildGraphData() {
       borderWidth: 2,
       font: nodeFont(ps.id),
     });
-    edges.push({
+    edges.push(markLoop({
       id: "psedge:" + ps.id,
       from: "sw:" + ps.switch,
       to: ps.id,
       dashes: [4, 4],
       color: { color: colors.dim, opacity: 0.7 },
       width: 2,
-    });
+    }, ps.switch, ps.port));
   }
 
   // switches LLDP found behind our ports that nobody polls: a named
@@ -521,14 +555,14 @@ function buildGraphData() {
       margin: 8,
       font: { color: colors.dim, size: 12 },
     });
-    edges.push({
+    edges.push(markLoop({
       id: "bredge:" + bridge.id,
       from: "sw:" + bridge.switch,
       to: bridge.id,
       dashes: [5, 3],
       color: { color: colors.link, opacity: 0.6 },
       width: 2,
-    });
+    }, bridge.switch, bridge.port));
   }
 
   // one node per port that leaves the network: what is behind the
@@ -547,7 +581,7 @@ function buildGraphData() {
       borderWidth: 2,
       font: nodeFont(external.id),
     });
-    edges.push({
+    edges.push(markLoop({
       id: "extedge:" + external.id,
       // the provider's switch is on the cable and everything else is
       // behind IT: mb0 -> CE6851 -> external network
@@ -555,7 +589,7 @@ function buildGraphData() {
       to: external.id,
       color: { color: colors.warn || "#d9a86b", opacity: 0.7 },
       width: 3,
-    });
+    }, external.switch, external.port));
   }
 
   // one node per port whose devices are all offline, so the switches
@@ -575,7 +609,7 @@ function buildGraphData() {
       borderWidth: 2,
       font: nodeFont(group.id),
     });
-    edges.push({
+    edges.push(markLoop({
       id: "offedge:" + group.id,
       // the live devices of this port hang off the bridge or the
       // unmanaged switch on its cable; the quiet ones belong there too
@@ -584,7 +618,7 @@ function buildGraphData() {
       dashes: [3, 3],
       color: { color: colors.dim, opacity: 0.4 },
       width: 1,
-    });
+    }, group.switch, group.port));
   }
 
   for (const host of topology.hosts) {
@@ -615,7 +649,7 @@ function buildGraphData() {
       borderWidth: isRouter ? 2 : 1,
       font: nodeFont("host:" + host.mac),
     });
-    edges.push({
+    edges.push(markLoop({
       id: "hostedge:" + host.mac,
       from: host.via || "sw:" + host.switch,
       to: "host:" + host.mac,
@@ -626,7 +660,7 @@ function buildGraphData() {
       dashes: host.stale ? [3, 3] : host.approximate ? [2, 4] : false,
       // remembered ≠ approximate: the port is known, the sighting is
       // second-hand, so the edge stays solid
-    });
+    }, host.switch, host.port));
   }
 
   return { nodes, edges };
@@ -789,16 +823,62 @@ function findHost(nodeId) {
   return list.find((h) => h.mac === mac);
 }
 
+/* The "Loop Detection" row of a switch card: what the switch says,
+   or that it says nothing. "No loops" is a claim; a model that keeps
+   no loop state in any readable MIB does not get to make it. */
+function loopCardLine(loop) {
+  if (!loop || loop.supported === false) {
+    return t("loopCardUnsupported");
+  }
+  if (loop.status === "loop") {
+    return fmt("loopCardLoop", {
+      ports: (loop.looped_ports || []).join(", "),
+    });
+  }
+  if (loop.enabled === false) return t("loopCardOff");
+  const base = fmt("loopCardOn", {
+    interval: loop.interval == null ? "—" : loop.interval,
+    recover: loop.recover_time == null ? "—" : loop.recover_time,
+  });
+  const detail =
+    loop.status === "partial" ? ", " + t("loopCardPartial") : "";
+  return base + detail;
+}
+
+/* The sysObjectID and which profile it matched: the model identity
+   behind the row, and the first thing needed to add a new profile. */
+function loopCardTitle(loop) {
+  if (!loop || !loop.sys_object_id) return "";
+  const head = "sysObjectID " + loop.sys_object_id;
+  if (!loop.supported) return head;
+  return (
+    head + "\n" +
+    fmt("loopProfileHint", {
+      profile: loop.profile,
+      how: loop.matched_by,
+    })
+  );
+}
+
 function showDetails(nodeId) {
   let html = "";
   if (nodeId.startsWith("sw:")) {
     const sw = topology.switches.find((s) => "sw:" + s.ip === nodeId);
     if (!sw) return;
-    html = `<h3>${sw.name}</h3><dl>
+    const loop = sw.loop || {};
+    html = `<h3>${sw.name}</h3>
+      ${loop.supported === false
+        ? `<p class="hint">${fmt("loopUnsupportedHint", {
+            oid: loop.sys_object_id || "—",
+          })}</p>`
+        : ""}<dl>
       <dt>${t("ipAddr")}</dt><dd>${sw.ip}</dd>
       <dt>${t("bridgeMac")}</dt><dd>${sw.mac || "—"}</dd>
       <dt>${t("portsUpTotal")}</dt><dd>${sw.ports_up} / ${sw.ports_total}</dd>
       <dt>${t("lastReply")}</dt><dd>${fmtTime(sw.last_ping_ok)}</dd>
+      <dt>${t("loopDetection")}</dt><dd${
+        loop.status === "loop" ? ' class="loop-alarm"' : ""
+      } title="${loopCardTitle(loop)}">${loopCardLine(loop)}</dd>
       <dt>${t("descr")}</dt><dd>${sw.descr || "—"}</dd></dl>
       <button id="ports-btn" class="panel-btn">${t("portsBtn")}</button>`;
   } else if (nodeId.startsWith("offline:")) {
@@ -1133,6 +1213,9 @@ function sortPorts(ports) {
     out: (p) => p.out_mbps,
     err: (p) => p.errors_per_min,
     disc: (p) => p.discards_per_min,
+    // a loop first, then the ports nothing is known about, then the
+    // quiet ones — the order someone sorting by this column wants
+    loop: (p) => LOOP_RANK[(p.loop || {}).state] ?? -1,
   }[portsSort.key];
   const compare = value
     ? (a, b) => (value(a) ?? -1) - (value(b) ?? -1)
@@ -1187,6 +1270,41 @@ function markSilentColumns(columns) {
       (info.error ? "\n" + info.error : "") +
       (base ? "\n\n" + base : "");
   }
+}
+
+/* Sort order of the loop column: a loop first, then unknown, then
+   the ports that are fine, then the ones nobody is watching */
+const LOOP_RANK = { loop: 3, unknown: 2, ok: 1, off: 0 };
+
+/* One "Loop" cell. Four states, and the difference between the last
+   two is the whole point: "no loop" is an answer, "no data" is not. */
+function loopCell(tr, loop, report) {
+  const cell = document.createElement("td");
+  const state = loop ? loop.state : "";
+  if (!loop) {
+    // the model reports nothing at all — see the switch card
+    cell.textContent = "—";
+    cell.className = "loop-none";
+    cell.title = fmt("loopUnsupportedHint", {
+      oid: (report && report.sys_object_id) || "—",
+    });
+  } else if (state === "loop") {
+    cell.textContent = t("loopYes");
+    cell.className = "loop-alarm";
+    cell.title = fmt("loopRawHint", { raw: loop.raw || "—" });
+  } else if (state === "ok") {
+    cell.textContent = t("loopOk");
+    cell.className = "loop-ok";
+  } else if (state === "off") {
+    cell.textContent = t("loopOff");
+    cell.className = "loop-none";
+    cell.title = t("loopOffHint");
+  } else {
+    cell.textContent = t("loopNoData");
+    cell.className = "loop-unknown";
+    cell.title = t("loopNoDataHint");
+  }
+  tr.append(cell);
 }
 
 function renderPorts(data) {
@@ -1316,6 +1434,7 @@ function renderPorts(data) {
         p.discards_per_min > (limits.discards_per_minute ?? Infinity);
       td(fmtRate(p.errors_per_min), "num" + (overErr ? " over-error" : ""));
       td(fmtRate(p.discards_per_min), "num" + (overDisc ? " over-discard" : ""));
+      loopCell(tr, p.loop, data.loop_detection);
       return tr;
     });
   els.portsBody.replaceChildren(...rows);

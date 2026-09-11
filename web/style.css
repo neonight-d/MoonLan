@@ -387,6 +387,17 @@ main { flex: 1; display: flex; min-height: 0; }
 /* damaged frames are a fault; discards are usually just filtering */
 .ports-table td.over-error { color: #d96b6b; font-weight: 600; }
 .ports-table td.over-discard { color: var(--warn); }
+/* Loop Detection. "no data" is deliberately not grey-on-grey like an
+   em dash: unknown has to look different from "nothing to watch here". */
+.ports-table td.loop-alarm {
+  color: #d96b6b;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+}
+.ports-table td.loop-ok { color: var(--text-dim); }
+.ports-table td.loop-none { color: var(--text-dim); cursor: help; }
+.ports-table td.loop-unknown { color: var(--warn); cursor: help; }
+#details-body dd.loop-alarm { color: #d96b6b; font-weight: 600; }
 .ports-table tr.highlight td { background: #1f2a3d; }
 /* dimmed by colour, not by opacity: the port-name cell is sticky, and
    a translucent one lets the scrolled-away columns show through it */
