@@ -62,6 +62,19 @@ class Thresholds:
 
 
 @dataclass
+class LoopDetectionConfig:
+    """Loop Detection read from the vendors' private MIBs.
+
+    `profiles` adds model families or replaces a built-in one by name;
+    the shape of an entry is documented in config.example.yaml and
+    parsed by loopdetect.parse_profiles.
+    """
+
+    enabled: bool = True
+    profiles: list = field(default_factory=list)
+
+
+@dataclass
 class EmailConfig:
     enabled: bool = False
     smtp_host: str = ""
@@ -122,6 +135,11 @@ DEFAULT_ALARM_NOTIFY: dict[str, list[str]] = {
     "stp_topology_change": ["telegram", "syslog"],
     "stp_fragmented": ["telegram", "syslog"],
     "port_flapping": ["telegram", "syslog"],
+    # A loop takes a segment down; with STP off it is the only thing
+    # standing between the network and a broadcast storm
+    "loop_detected": ["email", "telegram", "syslog"],
+    # …and its silent disappearance is worth a line in the log
+    "loop_detection_disabled": ["syslog"],
 }
 
 
@@ -167,6 +185,11 @@ class Config:
     # someone else's equipment — as "<switch ip>:<port name>". What is
     # behind them is not ours to map or to alarm about.
     uplink_ports: list[str] = field(default_factory=list)
+    # Loop detection: which models to read it from, and whether to
+    # read it at all
+    loop_detection: LoopDetectionConfig = field(
+        default_factory=LoopDetectionConfig
+    )
     thresholds: Thresholds = field(default_factory=Thresholds)
     notifications: NotificationsConfig = field(default_factory=NotificationsConfig)
     alarm_notify: dict[str, list[str]] = field(
@@ -363,6 +386,13 @@ def load_config(path: Path | None = None) -> Config:
         for entry in r.get("uplink_ports", d.uplink_ports, _as_str_list)
         if entry.strip()
     ]
+
+    cfg.loop_detection = LoopDetectionConfig(
+        enabled=r.get(
+            "loop_detection.enabled", d.loop_detection.enabled, bool
+        ),
+        profiles=r.get("loop_detection.profiles", [], list),
+    )
 
     t = d.thresholds
     cfg.thresholds = Thresholds(
