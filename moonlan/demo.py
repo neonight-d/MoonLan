@@ -37,6 +37,15 @@ v0.6 scenarios:
 - one port that changes link state on every counters cycle ->
   port_flapping.
 
+v0.6.7 scenarios:
+- loop detection from the vendor's private MIB: the box behind
+  access-sw-1 Gi0/14 gets both ends of a patch cord on the second
+  counters cycle -> loop_detected (critical) and a red edge on the map;
+- access-sw-3 answers the branch and reports loop detection switched
+  off globally -> loop_detection_disabled (info, syslog);
+- access-sw-4 is a model no profile covers: its card says the model
+  does not report it, and no port of it claims to be loop-free.
+
 v0.5.8 scenarios:
 - a port whose cable starts failing on the second scan: the switch
   learns five distorted copies of the address of the device behind it
@@ -69,6 +78,13 @@ from .lldp import (
     analyse_ports,
     merge_rows,
     useful_port_labels,
+)
+from .loopdetect import (
+    BUILTIN_PROFILES,
+    LoopDetectionData,
+    LoopPortState,
+    judge_port,
+    map_ports,
 )
 from .stp import StpData, StpPort
 from .snmp_collector import (
@@ -218,6 +234,29 @@ REMEMBERED_IP = "10.0.99.52"
 REMEMBERED_SWITCH = "10.0.0.23"   # access-sw-3
 REMEMBERED_PORT = "Gi0/11"
 
+# v0.6.7 — Loop Detection from the vendors' private MIBs. The demo
+# network answers the D-Link 1210 branch on three switches, and the
+# fourth is deliberately a model nobody has written a profile for: the
+# panel must say "the model does not report it" instead of "no loops".
+LOOP_SYS_OBJECT_ID = "1.3.6.1.4.1.171.10.75.15.2"
+# a model with no profile — the HPE 1820 of this demo network
+NO_PROFILE_SYS_OBJECT_ID = "1.3.6.1.4.1.11.2.3.7.11.180"
+NO_PROFILE_SWITCH = "10.0.0.24"   # access-sw-4
+# Loop Detection switched off globally on a switch that does report it
+LBD_OFF_SWITCH = "10.0.0.23"      # access-sw-3
+# A real loop: the unmanaged box on access-sw-1 Gi0/14 got both ends of
+# a patch cord. The loop appears on the second counters cycle and stays.
+LOOP_SWITCH = "10.0.0.21"         # access-sw-1
+LOOP_PORT = CHAIN_PORT            # Gi0/14
+LOOP_STATUS_RAW = "2"             # not the known-normal 1 — so: a loop
+# Ports the operator took out of Loop Detection (uplinks and the LAG)
+LBD_EXCLUDED = {
+    "10.0.0.10": {1, 2, 3, 4, 5, 21, 22, 25, 26},
+    "10.0.0.21": {25, 26},
+    "10.0.0.22": {24},
+    "10.0.0.23": {23, 24},
+}
+
 
 def _corrupt_copies(scan: int) -> list[str]:
     """The distorted copies this poll's damaged frames produced."""
@@ -247,6 +286,10 @@ def _switch(ip: str, name: str, mac_octet: int) -> SwitchData:
     for i in range(1, 27):
         sw.ports[i] = PortInfo(if_index=i, name=f"Gi0/{i}", oper_up=False, speed_mbps=1000)
     sw.vlan_names = dict(VLAN_NAMES)
+    sw.sys_object_id = (
+        NO_PROFILE_SYS_OBJECT_ID if ip == NO_PROFILE_SWITCH
+        else LOOP_SYS_OBJECT_ID
+    )
     return sw
 
 
@@ -1003,6 +1046,60 @@ class DemoCounters:
                 )
             out[sw.ip] = samples
         return out
+
+    def loop_detection(self, sw: SwitchData) -> LoopDetectionData:
+        """What the vendor's loop-detection branch would return here.
+
+        Three cases, because all three exist on the real network:
+        a switch that reports loop detection and is fine, a switch that
+        reports it switched off globally, and a model that answers
+        nothing at all and must therefore claim nothing.
+
+        The rows go through the real parser (`judge_port`, `map_ports`),
+        so the demo exercises the rule "the normal value is known,
+        everything else is a loop" rather than a copy of it.
+        """
+        profile = BUILTIN_PROFILES[0]  # dlink-1210
+        data = LoopDetectionData(sys_object_id=sw.sys_object_id)
+        if sw.ip == NO_PROFILE_SWITCH:
+            return data  # supported stays False: an honest "no data"
+        data.supported = True
+        data.profile = profile.name
+        data.matched_by = "sysObjectID"
+        data.root = profile.roots[LOOP_SYS_OBJECT_ID]
+        data.enabled = sw.ip != LBD_OFF_SWITCH
+        data.mode = 1        # port-based
+        data.interval = 5
+        data.recover_time = 300
+        excluded = LBD_EXCLUDED.get(sw.ip, set())
+        looped = (
+            sw.ip == LOOP_SWITCH and self._cycle >= 2
+        )
+        rows: dict[int, LoopPortState] = {}
+        for p in sorted(sw.ports.values(), key=lambda p: p.if_index):
+            if not p.is_physical or p.if_index <= 0:
+                continue
+            status = (
+                LOOP_STATUS_RAW
+                if looped and p.if_index == LOOP_PORT else "1"
+            )
+            rows[p.if_index] = judge_port(
+                LoopPortState(
+                    port=p.if_index,
+                    lbd_enabled=p.if_index not in excluded,
+                    status_raw=status,
+                ),
+                profile.normal,
+            )
+        data.rows = len(rows)
+        physical = {
+            p.if_index for p in sw.ports.values()
+            if p.is_physical and p.if_index > 0
+        }
+        data.ports, data.unmapped, data.index_mismatch = map_ports(
+            rows, physical
+        )
+        return data
 
     def columns(self, ip: str) -> dict[str, ColumnStatus]:
         """What a real poll of this switch would report per column."""
