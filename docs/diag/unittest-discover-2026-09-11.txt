@@ -1,0 +1,8 @@
+..10.0.0.21: 1 counter column(s) answered only in part: in_octets: 24 row(s), then stopped answering at 1.3.6.1.2.1.31.1.1.1.6.24 (No SNMP response received before timeout), 4 port(s) filled in from 1.3.6.1.2.1.2.2.1.10
+............10.0.0.21: walk of 1.3.6.1.2.1.31.1.1.1.6 stopped after 0 row(s) (No SNMP response received before timeout) — what it would have returned past that point is unknown, not zero
+.10.0.0.21: walk of 1.3.6.1.2.1.31.1.1.1.6 stopped after 10 row(s) (No SNMP response received before timeout), last OID 1.3.6.1.2.1.31.1.1.1.6.10 — what it would have returned past that point is unknown, not zero
+.
+----------------------------------------------------------------------
+Ran 16 tests in 0.004s
+
+OK

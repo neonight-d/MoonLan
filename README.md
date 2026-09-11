@@ -16,7 +16,7 @@ An open-source alternative to LanTopoLog. MIT license.
 
 *Alarm panel: port errors, discards and host outages with one-click access to the switch port table.*
 
-## Features (v0.6.5)
+## Features (v0.6.6)
 
 - SNMP v2c polling of switches: device name, ports, speeds, statuses.
 - MAC address tables (BRIDGE-MIB and Q-BRIDGE-MIB) from every switch,
@@ -129,7 +129,9 @@ An open-source alternative to LanTopoLog. MIT license.
   into Mbit/s and errors/min per port. A counter the switch did not
   answer for reads "—", never 0.0, and raises no alarm either way. A
   walk that stops partway through a table is resumed from where it
-  stopped, and the ports it still missed are fetched one at a time. The "Ports" panel of a switch shows live rates;
+  stopped, and the ports it still missed are fetched one at a time. A
+  switch whose poll fails costs only its own data: the others are
+  collected and shown regardless. The "Ports" panel of a switch shows live rates;
   map edges show the current trunk load ("2×1 Gbit/s · ↓34 ↑12 Mbit/s",
   summed over LAG members). Counter resets after a switch reboot are
   detected and do not produce rate spikes.
@@ -187,7 +189,8 @@ An open-source alternative to LanTopoLog. MIT license.
 | v0.6.3 ✓| Readable links, honest external-network demo, safe development against a live service |
 | v0.6.4 ✓| Honest counters, remembered offline locations, network edge and hint fixes |
 | v0.6.5 ✓| Resuming a truncated walk, honest partial answers, per-port counter fallback |
-| v0.6.6  | Loop Detection from the private D-Link/HPE MIBs |
+| v0.6.6 ✓| One bad OID no longer stops the counters; offline groups behind their bridge |
+| v0.6.7  | Loop Detection from the private D-Link/HPE MIBs |
 | v0.7    | Export to PDF and Draw.io, MAC address info import |
 | v0.8    | Windows computer inventory (WMI/WinRM) |
 
