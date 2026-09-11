@@ -148,9 +148,14 @@ async def _counters_locked(collector: SnmpCollector, ip: str):
         )
         return {}, {}, {}
     sw = switch_data.get(ip)
-    # the interface table from the last scan: without it a truncated
-    # column has no way of knowing which ports it failed to reach
-    expected = {p.if_index for p in sw.ports.values()} if sw else None
+    # The interface table from the last scan: without it a truncated
+    # column has no way of knowing which ports it failed to reach.
+    # Real interfaces only — a negative ifIndex is one of our own
+    # synthetic aggregates, which SNMP has never heard of.
+    expected = (
+        {p.if_index for p in sw.ports.values() if p.if_index > 0}
+        if sw else None
+    )
     async with lock:
         return await counters.collect_samples(collector, ip, expected)
 
@@ -167,11 +172,23 @@ async def run_scan() -> None:
             collected = demo.demo_network()
         else:
             collector = get_collector()
-            collected = list(
-                await asyncio.gather(
-                    *(_collect_locked(collector, ip) for ip in config.switches)
-                )
+            results = await asyncio.gather(
+                *(_collect_locked(collector, ip) for ip in config.switches),
+                return_exceptions=True,
             )
+            collected = []
+            for ip, result in zip(config.switches, results):
+                if isinstance(result, BaseException):
+                    # unreachable is already handled inside collect();
+                    # this is a poll that raised, and the rest of the
+                    # network should still get a map
+                    log.error(
+                        "Poll of %s raised — it is left out of this scan",
+                        ip, exc_info=result,
+                    )
+                    collected.append(SwitchData(ip=ip))
+                    continue
+                collected.append(result)
             if config.routers:
                 arp = await collect_arp(collector)
             # The MAC of the switch's management IP is also its MAC:
@@ -1030,15 +1047,26 @@ async def run_counters() -> None:
     else:
         collector = get_collector()
         ips = list(config.switches)
+        # One switch failing must not cost the others their counters:
+        # a single malformed OID on mb1 emptied every column on all
+        # five for as long as the service ran.
         collected = await asyncio.gather(
-            *(_counters_locked(collector, ip) for ip in ips)
+            *(_counters_locked(collector, ip) for ip in ips),
+            return_exceptions=True,
         )
-        samples_by_ip = {ip: s for ip, (s, _, _) in zip(ips, collected)}
-        oper_by_ip = {ip: o for ip, (_, o, _) in zip(ips, collected)}
+        polls: dict[str, tuple] = {}
+        for ip, result in zip(ips, collected):
+            if isinstance(result, BaseException):
+                log.error(
+                    "Counter poll of %s failed — the other switches are "
+                    "unaffected", ip, exc_info=result,
+                )
+                continue
+            polls[ip] = result
+        samples_by_ip = {ip: p[0] for ip, p in polls.items()}
+        oper_by_ip = {ip: p[1] for ip, p in polls.items()}
         counter_columns.clear()
-        counter_columns.update(
-            {ip: cols for ip, (_, _, cols) in zip(ips, collected)}
-        )
+        counter_columns.update({ip: p[2] for ip, p in polls.items()})
     for ip, samples in samples_by_ip.items():
         if not samples:
             continue

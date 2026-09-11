@@ -229,7 +229,15 @@ async def collect_samples(
         missed are known by name, and asking for them individually is
         cheaper and more certain than walking the table again.
         """
-        missing = sorted((expected or set()) - status.covered)
+        # A synthetic aggregate carries a negative ifIndex (the FDB of a
+        # D-Link trunk lives on a bridge-port that has no interface), and
+        # there is no such thing to GET. Asking for one built the OID
+        # "…2.2.1.10.-25", which pyasn1 refuses while assembling the
+        # request — taking the whole cycle down for every switch. The
+        # caller filters these out; this is the second lock on the door.
+        missing = sorted(
+            i for i in (expected or set()) - status.covered if i > 0
+        )
         if not missing:
             return
         for if_index in missing[:MAX_GAP_GETS]:
