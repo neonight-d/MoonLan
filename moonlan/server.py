@@ -294,6 +294,7 @@ async def run_scan() -> None:
             hosts, db_rows, pseudo_switches, {sw["ip"] for sw in switches},
             unconfirmed,
             {h["mac"]: h["merged_into"] for h in hosts if h.get("merged_into")},
+            _nodes_on_port(bridges, pseudo_switches),
         )
         # A group that sits on a trunk was never seen there as devices:
         # its location is inherited guesswork, and the card should not
@@ -671,6 +672,29 @@ async def _release_unconfirmed_ips(db_rows: dict[str, dict]) -> None:
         )
 
 
+def _nodes_on_port(
+    bridges: list[dict], pseudo_switches: list[dict]
+) -> dict[tuple[str, str], dict]:
+    """(switch, port) -> the node standing on that cable, if any.
+
+    A pseudo-switch wins over a bridge where both are present: that is
+    the case of several bridges behind one unmanaged box, and the live
+    devices stay on the box, so the quiet ones must too.
+    """
+    nodes: dict[tuple[str, str], dict] = {}
+    for bridge in bridges:
+        if bridge.get("trunk") or bridge.get("shares_port"):
+            continue
+        nodes[(bridge["switch"], bridge["port"])] = {
+            "id": bridge["id"], "name": bridge["name"],
+        }
+    for pseudo in pseudo_switches:
+        nodes[(pseudo["switch"], pseudo["port"])] = {
+            "id": pseudo["id"], "name": "",
+        }
+    return nodes
+
+
 def _remembered_locations(
     db_rows: dict[str, dict]
 ) -> dict[str, tuple[str, str]]:
@@ -714,6 +738,7 @@ def _assemble_hosts(
     switch_ips: set[str],
     unconfirmed: set[str] | None = None,
     merged: dict[str, str] | None = None,
+    nodes_on_port: dict[tuple[str, str], dict] | None = None,
 ) -> tuple[list[dict], list[dict], list[dict]]:
     """Splits the known inventory into map hosts, offline groups and
     off-map devices.
@@ -771,20 +796,36 @@ def _assemble_hosts(
             -max(db_rows[h["mac"]]["last_arp"], db_rows[h["mac"]]["last_seen"]),
         )
     )
-    return on_map, _group_offline(on_map, db_rows), unlocated
+    return (
+        on_map, _group_offline(on_map, db_rows, nodes_on_port), unlocated
+    )
 
 
-def _group_offline(on_map: list[dict], db_rows: dict[str, dict]) -> list[dict]:
+def _group_offline(
+    on_map: list[dict],
+    db_rows: dict[str, dict],
+    nodes_on_port: dict[tuple[str, str], dict] | None = None,
+) -> list[dict]:
     """Collects the stale hosts of one port under a single group node.
 
     A port whose devices are all offline gets a "temporary location"
     node — the devices are shown where they were last seen, and one
     node says so instead of a dozen grey dots. Ports that already have
     a pseudo-switch keep it: their hosts hang off that node.
+
+    `nodes_on_port` is what build_topology put on each port — a named
+    bridge, or an anonymous pseudo-switch. The group hangs off that
+    node rather than off the switch. Behind mb1 1/27 there were three
+    neighbours of the switch at once: RouterOS-Sport with 22 live
+    devices, a "switch without SNMP", and an "Offline · 19" of
+    10.3.5.x addresses standing beside them — one segment drawn as
+    three places, with the quiet half apparently somewhere else
+    entirely.
     """
     threshold = config.offline_group_threshold
     if threshold <= 0:
         return []
+    nodes_on_port = nodes_on_port or {}
     by_port: dict[tuple[str, str], list[dict]] = {}
     for host in on_map:
         if host.get("merged_into"):
@@ -798,11 +839,16 @@ def _group_offline(on_map: list[dict], db_rows: dict[str, dict]) -> list[dict]:
         group_id = f"offline:{sw_ip}:{port}"
         for host in members:
             host["via"] = group_id
+        parent = nodes_on_port.get((sw_ip, port))
         groups.append({
             "id": group_id,
             "switch": sw_ip,
             "port": port,
             "count": len(members),
+            # the live devices of this port hang off this node too, and
+            # the quiet ones belong in the same place
+            "via": parent["id"] if parent else "",
+            "via_name": parent["name"] if parent else "",
             "last_seen_max": max(
                 db_rows[m["mac"]]["last_seen"] for m in members
             ),
