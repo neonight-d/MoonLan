@@ -11,6 +11,9 @@ We collect the minimum needed to build the topology:
 - port PVIDs and VLAN names                (Q-BRIDGE-MIB)
 - LLDP neighbours                          (LLDP-MIB, see lldp.py)
 - spanning tree state                      (BRIDGE-MIB, see stp.py)
+- sysObjectID                              (SNMPv2-MIB; picks the
+                                            loop-detection profile,
+                                            see loopdetect.py)
 """
 
 from __future__ import annotations
@@ -39,6 +42,9 @@ log = logging.getLogger(__name__)
 # Numeric OIDs so we do not depend on MIB file loading
 OID_SYS_NAME = "1.3.6.1.2.1.1.5.0"
 OID_SYS_DESCR = "1.3.6.1.2.1.1.1.0"
+# sysObjectID: the vendor's model identifier, and the key the
+# loop-detection profiles are chosen by
+OID_SYS_OBJECT_ID = "1.3.6.1.2.1.1.2.0"
 OID_IF_DESCR = "1.3.6.1.2.1.2.2.1.2"          # ifDescr.<ifIndex>
 OID_IF_TYPE = "1.3.6.1.2.1.2.2.1.3"           # ifType.<ifIndex>
 OID_IF_PHYS_ADDRESS = "1.3.6.1.2.1.2.2.1.6"   # ifPhysAddress.<ifIndex>
@@ -128,6 +134,14 @@ class SwitchData:
     # Spanning tree as the switch reports it, verdict included
     stp: object | None = None
     sys_uptime: int = 0  # sysUpTime in TimeTicks, for the STP verdict
+    # sysObjectID: the vendor's own model identifier. It picks the
+    # loop-detection profile (see loopdetect.py) and is worth showing
+    # in the switch card regardless.
+    sys_object_id: str = ""
+    # Loop detection from the vendor's private MIB, refreshed by the
+    # counters loop rather than by the scan: a loop is an incident,
+    # and ten minutes is too long to hear about one.
+    loop_detection: object | None = None
 
 
 def _fmt_mac(raw: bytes) -> str:
@@ -476,6 +490,10 @@ class SnmpCollector:
         data.sys_name = str(sys_name)
         sys_descr = await self._get(host, OID_SYS_DESCR)
         data.sys_descr = str(sys_descr) if sys_descr is not None else ""
+        sys_object_id = await self._get(host, OID_SYS_OBJECT_ID)
+        data.sys_object_id = (
+            str(sys_object_id) if sys_object_id is not None else ""
+        )
 
         bridge_mac = await self._get(host, OID_BRIDGE_ADDRESS)
         if bridge_mac is not None:
