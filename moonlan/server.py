@@ -16,7 +16,9 @@ from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from . import __version__, corruption, counters, demo, pinger, stp
+from . import (
+    __version__, corruption, counters, demo, loopdetect, pinger, stp,
+)
 from .alarms import AlarmEngine
 from .config import Config, load_config, parse_uplink_ports
 from .db import Database
@@ -96,6 +98,28 @@ suspect_by_port: dict[tuple[str, str], list[dict]] = {}
 # and might belong in config.uplink_ports
 uplink_suspects: dict[tuple[str, str], dict] = {}
 
+# Loop-detection profiles: the built-in ones plus whatever
+# config.yaml adds or overrides by name (see loopdetect.py)
+_loop_profiles: list | None = None
+
+
+def loop_profiles() -> list:
+    global _loop_profiles
+    if _loop_profiles is None:
+        extra, problems = loopdetect.parse_profiles(
+            config.loop_detection.profiles
+        )
+        for problem in problems:
+            log.warning("config.yaml loop_detection.profiles: %s", problem)
+        _loop_profiles = loopdetect.merge_profiles(
+            loopdetect.BUILTIN_PROFILES, extra
+        )
+        log.info(
+            "Loop detection profiles: %s",
+            ", ".join(p.name for p in _loop_profiles),
+        )
+    return _loop_profiles
+
 # One SnmpEngine per process: a new engine per cycle leaks sockets and
 # MIB state (OSError 24, MibNotFoundError, growing RSS). Recreate only
 # if the SNMP config ever changes at runtime — it currently cannot.
@@ -146,7 +170,7 @@ async def _counters_locked(collector: SnmpCollector, ip: str):
             "%s is busy with the topology scan — skipping this counters "
             "cycle rather than queueing behind it", ip,
         )
-        return {}, {}, {}
+        return {}, {}, {}, None
     sw = switch_data.get(ip)
     # The interface table from the last scan: without it a truncated
     # column has no way of knowing which ports it failed to reach.
@@ -157,7 +181,19 @@ async def _counters_locked(collector: SnmpCollector, ip: str):
         if sw else None
     )
     async with lock:
-        return await counters.collect_samples(collector, ip, expected)
+        samples, oper, columns = await counters.collect_samples(
+            collector, ip, expected
+        )
+        # Loop detection rides this cycle rather than the ten-minute
+        # scan: a loop is an incident, and one walk of a small vendor
+        # branch is what it costs to hear about it within a minute.
+        loop = None
+        if config.loop_detection.enabled and sw is not None:
+            loop = await loopdetect.collect_loop_detection(
+                collector, ip, sw.ports, loop_profiles(),
+                sys_object_id=sw.sys_object_id,
+            )
+        return samples, oper, columns, loop
 
 
 async def run_scan() -> None:
@@ -1083,6 +1119,7 @@ async def run_counters() -> None:
     if not switch_data:
         return  # port lists are unknown until the first scan
     oper_by_ip: dict[str, dict[int, bool]] = {}
+    loop_by_ip: dict[str, object] = {}
     if config.demo:
         # the demo flips port states directly in switch_data
         samples_by_ip = demo_counters.sample(list(switch_data.values()))
@@ -1090,6 +1127,10 @@ async def run_counters() -> None:
         counter_columns.update(
             {ip: demo_counters.columns(ip) for ip in samples_by_ip}
         )
+        loop_by_ip = {
+            ip: demo_counters.loop_detection(switch_data[ip])
+            for ip in samples_by_ip if ip in switch_data
+        }
     else:
         collector = get_collector()
         ips = list(config.switches)
@@ -1113,6 +1154,9 @@ async def run_counters() -> None:
         oper_by_ip = {ip: p[1] for ip, p in polls.items()}
         counter_columns.clear()
         counter_columns.update({ip: p[2] for ip, p in polls.items()})
+        loop_by_ip = {
+            ip: p[3] for ip, p in polls.items() if p[3] is not None
+        }
     for ip, samples in samples_by_ip.items():
         if not samples:
             continue
@@ -1136,7 +1180,41 @@ async def run_counters() -> None:
         if sw is not None:
             await alarm_engine.on_counters(ip, _port_metrics(sw, rates))
             await _check_flaps(sw, oper, samples)
+    for ip, loop in loop_by_ip.items():
+        sw = switch_data.get(ip)
+        if sw is None or loop is None:
+            continue
+        sw.loop_detection = loop
+        _log_loop_state(sw, loop)
+        await alarm_engine.on_loop_detection(
+            ip, sw.sys_name or ip, loop,
+            {i: p.name or str(i) for i, p in sw.ports.items()},
+        )
     await alarm_engine.janitor(_observed_subjects())
+
+
+# What each switch's loop detection last said, so the same line is not
+# repeated every minute for a network where nothing is happening
+_loop_logged: dict[str, str] = {}
+
+
+def _log_loop_state(sw: SwitchData, loop) -> None:
+    """One line per switch, and only when the answer changes."""
+    line = loopdetect.describe(loop)
+    if _loop_logged.get(sw.ip) == line:
+        return
+    _loop_logged[sw.ip] = line
+    level = logging.WARNING if loop.looped_ports() else logging.INFO
+    log.log(level, "%s loop detection: %s", sw.sys_name or sw.ip, line)
+    if loop.index_mismatch:
+        log.warning(
+            "%s: the loop-detection table has %d row(s) and the interface "
+            "table %d physical port(s)%s — the rows that do not match a "
+            "port are not used",
+            sw.ip, loop.rows,
+            sum(1 for p in sw.ports.values() if p.is_physical and p.if_index > 0),
+            f"; unmatched: {loop.unmapped}" if loop.unmapped else "",
+        )
 
 
 async def _check_flaps(
@@ -1437,6 +1515,10 @@ async def api_topology() -> JSONResponse:
             **sw,
             "ping_up": switch_ping.get(sw["ip"], {}).get("ping_up", False),
             "last_ping_ok": switch_ping.get(sw["ip"], {}).get("last_ping_ok", 0),
+            # loop detection is polled at the counters cadence, not by
+            # the scan the rest of this map comes from, so it is
+            # attached per request rather than baked into the topology
+            "loop": _loop_report(switch_data.get(sw["ip"])),
         }
         for sw in topo["switches"]
     ]
@@ -1519,6 +1601,8 @@ async def api_switch_ports(ip: str) -> dict:
             "lldp_crowded": p.if_index in sw.lldp_crowded,
             # the administrative name an operator typed into the switch
             "label": sw.port_labels.get(p.if_index, ""),
+            # what the switch's own Loop Detection says about this port
+            "loop": _loop_port(sw, p.if_index),
             # a port that leaves the network (config.uplink_ports)
             "external": name in external,
             # …or one that looks like it should be, and is not listed
@@ -1533,6 +1617,9 @@ async def api_switch_ports(ip: str) -> dict:
         # which counter columns the agent answered for, so a column of
         # dashes can say why it is a column of dashes
         "columns": _column_report(ip),
+        # …and the same honesty about loop detection: which profile
+        # answered, or that the model does not report it at all
+        "loop_detection": _loop_report(sw),
         # so the panel can colour the values it shows
         "thresholds": {
             "errors_per_minute": config.thresholds.errors_per_minute,
@@ -1544,6 +1631,69 @@ async def api_switch_ports(ip: str) -> dict:
 def _round(value: float | None) -> float | None:
     """None survives rounding: it means "the agent did not answer"."""
     return None if value is None else round(value, 1)
+
+
+def _loop_report(sw: SwitchData | None) -> dict:
+    """Loop detection of one switch as the UI sees it.
+
+    A switch whose model says nothing over SNMP is reported as saying
+    nothing. "No loops" is a claim, and this service does not make
+    claims it cannot back — the same rule the STP verdict follows.
+    """
+    loop = sw.loop_detection if sw is not None else None
+    if loop is None or not loop.supported:
+        return {
+            "supported": False,
+            "status": "unsupported",
+            "sys_object_id": (
+                loop.sys_object_id if loop is not None
+                else (sw.sys_object_id if sw is not None else "")
+            ),
+            "polled": loop is not None,
+        }
+    return {
+        "supported": True,
+        "polled": True,
+        "status": loop.status,
+        "profile": loop.profile,
+        "matched_by": loop.matched_by,
+        "sys_object_id": loop.sys_object_id,
+        "root": loop.root,
+        "enabled": loop.enabled,
+        "mode": loop.mode,
+        "interval": loop.interval,
+        "recover_time": loop.recover_time,
+        "watched": sum(1 for p in loop.ports.values() if p.lbd_enabled),
+        "ports_total": len(loop.ports),
+        "looped_ports": [
+            port_name(sw, p.if_index) for p in loop.looped_ports()
+            if p.if_index is not None
+        ],
+        "index_mismatch": loop.index_mismatch,
+        "truncated": loop.truncated,
+    }
+
+
+# Per port, what loop detection has to say about it:
+# "off"     — LBD is not switched on for this port
+# "ok"      — the agent reports the known-normal value
+# "loop"    — anything else, which is the whole point of the rule
+# "unknown" — no status arrived, which is not the same as "ok"
+def _loop_port(sw: SwitchData, if_index: int) -> dict | None:
+    loop = sw.loop_detection
+    if loop is None or not loop.supported:
+        return None
+    state = loop.port(if_index)
+    if state is None:
+        return {"state": "unknown", "raw": ""}
+    if state.lbd_enabled is False:
+        return {"state": "off", "raw": state.status_raw}
+    if state.looped is None:
+        return {"state": "unknown", "raw": ""}
+    return {
+        "state": "loop" if state.looped else "ok",
+        "raw": state.status_raw,
+    }
 
 
 # Which counter columns feed which table column
@@ -1612,7 +1762,8 @@ def _alarm_meta(
         meta["switch_ip"] = host.get("switch_ip", "")
         meta["port"] = host.get("port", "")
     elif row["type"] in ("switch_down", "stp_root_changed",
-                         "stp_topology_change"):
+                         "stp_topology_change",
+                         "loop_detection_disabled"):
         meta["switch_ip"] = subject
     elif row["type"] == "unmanaged_bridge_detected":
         # the subject is a chassis id, which is a MAC — splitting it on
