@@ -186,6 +186,38 @@ const I18N = {
     al_stp_topology_change: "STP topology changes",
     al_stp_fragmented: "STP fragmented",
     al_port_flapping: "Port flapping",
+    al_loop_detected: "Loop detected",
+    al_loop_detection_disabled: "Loop detection off",
+    colLoop: "Loop",
+    loopOk: "none",
+    loopYes: "LOOP",
+    loopNoData: "no data",
+    loopOff: "\u2014",
+    loopRawHint:
+      "Loop Detection reports {raw} for this port. Only the value that "
+      + "means \u201cno loop\u201d is known for this model, so anything "
+      + "else is read as a loop \u2014 the raw value is in the alarm so "
+      + "the first real one documents itself.",
+    loopOffHint:
+      "Loop Detection is switched off for this port on the switch "
+      + "itself, so nothing here is being watched.",
+    loopNoDataHint:
+      "No status arrived for this port. That is unknown, not "
+      + "\u201cno loop\u201d.",
+    loopMark: "LOOP",
+    loopDetection: "Loop Detection",
+    loopCardOn: "on, interval {interval} s, recovery {recover} s",
+    loopCardOff: "switched off on the switch",
+    loopCardLoop: "LOOP on {ports}",
+    loopCardUnsupported: "the model does not report it over SNMP",
+    loopCardPartial: "answered only in part \u2014 some ports are unknown",
+    loopUnsupportedHint:
+      "This switch model keeps no loop-detection state in any MIB "
+      + "MoonLan can read, so nothing is claimed about it in either "
+      + "direction. Its sysObjectID is {oid} \u2014 see \u201cLoop "
+      + "Detection\u201d in the README for how to walk the private "
+      + "branch and add a profile to config.yaml.",
+    loopProfileHint: "profile {profile}, matched by {how}",
     portFlapping: "flapping",
     portFlappingHint:
       "The port has changed link state {n} time(s) inside the window; "
@@ -463,6 +495,39 @@ const I18N = {
     al_stp_topology_change: "Изменения топологии STP",
     al_stp_fragmented: "Фрагментация STP",
     al_port_flapping: "Флаппинг порта",
+    al_loop_detected: "Петля на порту",
+    al_loop_detection_disabled: "Loop Detection выключен",
+    colLoop: "Петля",
+    loopOk: "норма",
+    loopYes: "ПЕТЛЯ",
+    loopNoData: "нет данных",
+    loopOff: "\u2014",
+    loopRawHint:
+      "Loop Detection сообщает по этому порту значение {raw}. Для этой "
+      + "модели достоверно известно только значение «петли нет», "
+      + "поэтому всё остальное считается петлёй \u2014 сырое значение "
+      + "попадает в тревогу, и первая же настоящая петля покажет, чем "
+      + "она отличается.",
+    loopOffHint:
+      "Loop Detection на этом порту выключен на самом коммутаторе: "
+      + "здесь ничего не отслеживается.",
+    loopNoDataHint:
+      "Состояние по этому порту не пришло. Это «неизвестно», а не "
+      + "«петли нет».",
+    loopMark: "ПЕТЛЯ",
+    loopDetection: "Loop Detection",
+    loopCardOn: "включён, интервал {interval} с, восстановление {recover} с",
+    loopCardOff: "выключен на коммутаторе",
+    loopCardLoop: "ПЕТЛЯ на {ports}",
+    loopCardUnsupported: "модель не сообщает по SNMP",
+    loopCardPartial: "ответ неполный \u2014 часть портов неизвестна",
+    loopUnsupportedHint:
+      "Эта модель не отдаёт состояние Loop Detection ни в одной MIB, "
+      + "которую MoonLan умеет читать, поэтому о ней не утверждается ни "
+      + "«петля есть», ни «петли нет». Её sysObjectID \u2014 {oid}; как "
+      + "обойти приватную ветку и добавить профиль в config.yaml, "
+      + "написано в README, раздел «Loop Detection».",
+    loopProfileHint: "профиль {profile}, опознан по {how}",
     portFlapping: "флаппинг",
     portFlappingHint:
       "Порт менял состояние линка {n} раз(а) за окно; последний переход "
