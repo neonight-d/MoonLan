@@ -223,7 +223,17 @@ def _as_str_list(value) -> list[str]:
 
 
 _MISSING = object()
-SECRET_KEYS = ("password", "bot_token", "community")
+# Keys `diag --config` prints as *** rather than as themselves. Not
+# only the credentials: chat_ids is a Telegram account and mail_to is
+# a person, and both went into a published report in the clear. The
+# test here is "would this identify someone", not "is this a
+# password". Addresses are a separate matter — the operator needs to
+# see their own switch list in an audit of their own config, so
+# `--anonymize` rewrites those instead of hiding them.
+SECRET_KEYS = (
+    "password", "bot_token", "community", "chat_ids", "mail_to",
+    "username", "mail_from",
+)
 
 
 @dataclass

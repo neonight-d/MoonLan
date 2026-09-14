@@ -230,3 +230,7 @@ moonlan.db
 *.pid
 *.log
 docs/tz/
+# Diagnostic dumps are a map of one deployment's network — addresses,
+# MAC tables, host names, port labels. docs/diag_example/ holds
+# anonymised samples instead; `diag --anonymize` is how to make one.
+docs/diag/

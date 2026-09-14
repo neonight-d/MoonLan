@@ -1,0 +1,77 @@
+# Sample output of `python -m moonlan.diag --hosts`.
+#
+# Generated from a live network with --anonymize, never edited by
+# hand: addresses come from RFC 5737, MACs from RFC 7042, and the
+# names are the ones the flag assigns. The same device carries the
+# same replacement in every file here, so these read as one network.
+#
+# Attach something like this to an issue — with --anonymize.
+
+
+=== 9. Host inventory ===
+MAC addresses in the FDB (switch MACs excluded):
+  switch-3 (198.51.100.2): 242
+  switch-5 (198.51.100.3): 73
+  switch-4 (198.51.100.4): 31
+  switch-2 (198.51.100.5): 25
+  switch-1 (198.51.100.6): 35
+  198.51.100.7 (198.51.100.7): 15
+  unique across all switches: 246
+
+ARP sources:
+  198.51.100.8: 419 entries
+  unique MACs from all sources: 413
+
+FDB vs ARP:
+  on a switch port and in ARP (located, IP known): 164
+  on a switch port only (no IP known): 82
+  in ARP only (not on any polled port): 249
+
+Known IP addresses by subnet:
+  198.51.100.17/24: 51 devices, 18 on switch ports
+  198.51.100.18/24: 30 devices, 16 on switch ports
+  198.51.100.19/24: 30 devices, 8 on switch ports
+  198.51.100.20/24: 25 devices, 17 on switch ports
+  198.51.100.21/24: 22 devices, 11 on switch ports
+  198.51.100.22/24: 22 devices, 14 on switch ports
+  198.51.100.23/24: 16 devices, 7 on switch ports
+  198.51.100.24/24: 14 devices, 3 on switch ports
+  198.51.100.25/24: 14 devices, 2 on switch ports
+  198.51.100.26/24: 13 devices, 7 on switch ports
+  198.51.100.27/24: 13 devices, 0 on switch ports   <- no device of this subnet is on any port
+  198.51.100.28/24: 13 devices, 1 on switch ports
+  198.51.100.29/24: 13 devices, 0 on switch ports   <- no device of this subnet is on any port
+  198.51.100.30/24: 13 devices, 0 on switch ports   <- no device of this subnet is on any port
+  198.51.100.31/24: 12 devices, 0 on switch ports   <- no device of this subnet is on any port
+  198.51.100.32/24: 9 devices, 8 on switch ports
+  198.51.100.33/24: 9 devices, 4 on switch ports
+  198.51.100.34/24: 9 devices, 0 on switch ports   <- no device of this subnet is on any port
+  198.51.100.35/24: 9 devices, 0 on switch ports   <- no device of this subnet is on any port
+  198.51.100.36/24: 8 devices, 7 on switch ports
+  198.51.100.37/24: 8 devices, 7 on switch ports
+  198.51.100.38/24: 8 devices, 8 on switch ports
+  198.51.100.39/24: 8 devices, 8 on switch ports
+  198.51.100.40/24: 7 devices, 1 on switch ports
+  198.51.100.41/24: 6 devices, 3 on switch ports
+  198.51.100.42/24: 6 devices, 0 on switch ports   <- no device of this subnet is on any port
+  198.51.100.43/24: 5 devices, 1 on switch ports
+  198.51.100.44/24: 3 devices, 2 on switch ports
+  198.51.100.45/24: 3 devices, 2 on switch ports
+  198.51.100.46/24: 2 devices, 1 on switch ports
+  198.51.100.47/24: 2 devices, 1 on switch ports
+  198.51.100.48/24: 2 devices, 2 on switch ports
+  198.51.100.49/24: 2 devices, 2 on switch ports
+  198.51.100.50/24: 1 devices, 1 on switch ports
+  198.51.100.51/24: 1 devices, 0 on switch ports   <- no device of this subnet is on any port
+  198.51.100.52/24: 1 devices, 0 on switch ports   <- no device of this subnet is on any port
+  198.51.100.53/24: 1 devices, 0 on switch ports   <- no device of this subnet is on any port
+  198.51.100.54/24: 1 devices, 1 on switch ports
+  198.51.100.55/24: 1 devices, 1 on switch ports
+
+Database (/var/lib/moonlan/moonlan.db):
+  hosts: 771
+  not in any current FDB: 525 (still within the 72 h grace window: 342)
+  never located (no switch port): 51
+  unconfirmed (fewer than 2 sightings, no IP): 216
+  without an IP: 358
+  without a name: 762

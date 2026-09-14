@@ -1,0 +1,147 @@
+# Sample output of `python -m moonlan.diag --topology`.
+#
+# Generated from a live network with --anonymize, never edited by
+# hand: addresses come from RFC 5737, MACs from RFC 7042, and the
+# names are the ones the flag assigns. The same device carries the
+# same replacement in every file here, so these read as one network.
+#
+# Attach something like this to an issue — with --anonymize.
+
+
+=== 8. Topology view ===
+polling 6 switches from config.yaml…
+root: switch-3 (198.51.100.2), sees 5 of 5 switches
+branches by root port:
+  bridge-port 1: switch-5 (198.51.100.3), 198.51.100.7
+  Slot0/3: switch-4 (198.51.100.4)
+  Slot0/7: switch-2 (198.51.100.5)
+  Slot0/26: switch-1 (198.51.100.6)
+uplinks:
+  switch-1 (198.51.100.6): 24
+  switch-5 (198.51.100.3): bridge-port 25
+  switch-4 (198.51.100.4): 1/25
+  switch-2 (198.51.100.5): 1/25
+  198.51.100.7: ?
+trunk ports (excluded from host binding):
+  switch-3 (198.51.100.2): bridge-port 1 (sees 198.51.100.3, 198.51.100.7), Slot0/3 (sees 198.51.100.4), Slot0/7 (sees 198.51.100.5), Slot0/26 (sees 198.51.100.6)
+  switch-1 (198.51.100.6): 24 (sees 198.51.100.2)
+  switch-5 (198.51.100.3): bridge-port 25 (sees 198.51.100.6), 1/28 (sees 198.51.100.7)
+  switch-4 (198.51.100.4): 1/25 (sees 198.51.100.6)
+  switch-2 (198.51.100.5): 1/25 (sees 198.51.100.2, 198.51.100.6)
+  198.51.100.7: Port25 (sees 198.51.100.3)
+LAG groups:
+  switch-3 (198.51.100.2): LAG on bridge-port 1: members 1, 2 (2×1000 Mbit/s)
+  switch-5 (198.51.100.3): LAG on bridge-port 25: members 25, 26 (2×1000 Mbit/s)
+links:
+  switch-3 (198.51.100.2) [bridge-port 1] — switch-5 (198.51.100.3) [bridge-port 25]  source: both  (LAG trunk)  (LACP ×2)
+  switch-5 (198.51.100.3) [1/28] — 198.51.100.7 [Port25]  source: fdb
+  switch-3 (198.51.100.2) [Slot0/3] — switch-4 (198.51.100.4) [1/25]  source: both
+  switch-3 (198.51.100.2) [Slot0/7] — switch-2 (198.51.100.5) [1/25]  source: both
+  switch-3 (198.51.100.2) [Slot0/26] — switch-1 (198.51.100.6) [24]  source: both
+
+LLDP neighbours:
+  switch-3 (198.51.100.2) [Slot0/23 via loc_id] -> 00:00:5e:00:53:06 (00:00:5e:00:53:06) port 00:00:5e:00:53:06, no capabilities TLV
+  switch-3 (198.51.100.2) [Slot0/1 via loc_id] -> 00:00:5e:00:53:07 (00:00:5e:00:53:07) port 25, no capabilities TLV
+  switch-3 (198.51.100.2) [Slot0/2 via loc_id] -> 00:00:5e:00:53:07 (00:00:5e:00:53:07) port 26, no capabilities TLV
+  switch-3 (198.51.100.2) [Slot0/3 via loc_id] -> 00:00:5e:00:53:08 (00:00:5e:00:53:08) port 25, no capabilities TLV
+  switch-3 (198.51.100.2) [Slot0/5 via loc_id] -> 00:00:5e:00:53:09 (00:00:5e:00:53:09) port 00:00:5e:00:53:0a, no capabilities TLV  <- several devices on this port, no link inferred
+  switch-3 (198.51.100.2) [Slot0/21 via loc_id] -> host-09 (00:00:5e:00:53:0b) port ether2, 198.51.100.8, 198.51.100.10, 198.51.100.11 and 39 more, router, 37 table rows merged
+  switch-3 (198.51.100.2) [Slot0/25 via loc_id] -> host-10 (00:00:5e:00:53:0c) port 10GE1/0/22, 198.51.100.12, bridge, router
+  switch-3 (198.51.100.2) [Slot0/26 via loc_id] -> switch-1 (00:00:5e:00:53:04) port 00:00:5e:00:53:0d, 198.51.100.6, bridge
+  switch-3 (198.51.100.2) [Slot0/10 via loc_id] -> 00:00:5e:00:53:0e (00:00:5e:00:53:0e) port 00:00:5e:00:53:0e, no capabilities TLV  <- several devices on this port, no link inferred
+  switch-3 (198.51.100.2) [Slot0/7 via loc_id] -> 00:00:5e:00:53:0f (00:00:5e:00:53:0f) port 1/25, 198.51.100.5, no capabilities TLV
+  switch-3 (198.51.100.2) [Slot0/5 via loc_id] -> 00:00:5e:00:53:10 (00:00:5e:00:53:10) port 00:00:5e:00:53:10, no capabilities TLV  <- several devices on this port, no link inferred
+  switch-3 (198.51.100.2) [Slot0/10 via loc_id] -> 00:00:5e:00:53:11 (00:00:5e:00:53:11) port 00:00:5e:00:53:11, no capabilities TLV  <- several devices on this port, no link inferred
+  switch-3 (198.51.100.2) [Slot0/5 via loc_id] -> 00:00:5e:00:53:12 (00:00:5e:00:53:12) port 00:00:5e:00:53:12, no capabilities TLV  <- several devices on this port, no link inferred
+  switch-3 (198.51.100.2) [Slot0/5 via loc_id] -> 00:00:5e:00:53:13 (00:00:5e:00:53:13) port 00:00:5e:00:53:13, no capabilities TLV  <- several devices on this port, no link inferred
+  switch-5 (198.51.100.3) [1/27 via loc_id] -> host-07 (00:00:5e:00:53:01) port bridge/ether1, 198.51.100.13, bridge, router  <- several devices on this port, no link inferred
+  switch-5 (198.51.100.3) [1/25 via loc_id] -> 00:00:5e:00:53:14 (00:00:5e:00:53:14) port 1, no capabilities TLV
+  switch-5 (198.51.100.3) [1/26 via loc_id] -> 00:00:5e:00:53:14 (00:00:5e:00:53:14) port 2, no capabilities TLV
+  switch-5 (198.51.100.3) [1/2 via loc_id] -> 00:00:5e:00:53:15 (00:00:5e:00:53:15) port 00:00:5e:00:53:15, no capabilities TLV
+  switch-5 (198.51.100.3) [1/28 via loc_id] -> host-08 (00:00:5e:00:53:00) port bridge/ether1, 198.51.100.14, bridge, router, wlanAccessPoint  <- several devices on this port, no link inferred
+  switch-5 (198.51.100.3) [1/1 via loc_id] -> 00:00:5e:00:53:16 (00:00:5e:00:53:16) port 00:00:5e:00:53:16, no capabilities TLV  <- several devices on this port, no link inferred
+  switch-5 (198.51.100.3) [1/1 via loc_id] -> 00:00:5e:00:53:17 (00:00:5e:00:53:17) port 00:00:5e:00:53:17, no capabilities TLV  <- several devices on this port, no link inferred
+  switch-5 (198.51.100.3) [1/1 via loc_id] -> 00:00:5e:00:53:18 (00:00:5e:00:53:18) port 00:00:5e:00:53:18, no capabilities TLV  <- several devices on this port, no link inferred
+  switch-5 (198.51.100.3) [1/1 via loc_id] -> 00:00:5e:00:53:19 (00:00:5e:00:53:19) port 00:00:5e:00:53:19, no capabilities TLV  <- several devices on this port, no link inferred
+  switch-5 (198.51.100.3) [1/15 via loc_id] -> 00:00:5e:00:53:1a (00:00:5e:00:53:1a) port 00:00:5e:00:53:1a, no capabilities TLV  <- several devices on this port, no link inferred
+  switch-5 (198.51.100.3) [1/27 via loc_id] -> 00:00:5e:00:53:1b (00:00:5e:00:53:1b) port 00:00:5e:00:53:1b, no capabilities TLV  <- several devices on this port, no link inferred
+  switch-5 (198.51.100.3) [1/24 via loc_id] -> 00:00:5e:00:53:1c (00:00:5e:00:53:1c) port 00:00:5e:00:53:1c, no capabilities TLV
+  switch-5 (198.51.100.3) [1/27 via loc_id] -> 00:00:5e:00:53:1d (00:00:5e:00:53:1d) port 00:00:5e:00:53:1d, no capabilities TLV  <- several devices on this port, no link inferred
+  switch-5 (198.51.100.3) [1/15 via loc_id] -> 00:00:5e:00:53:1e (00:00:5e:00:53:1e) port 00:00:5e:00:53:1e, no capabilities TLV  <- several devices on this port, no link inferred
+  switch-5 (198.51.100.3) [1/27 via loc_id] -> 00:00:5e:00:53:1f (00:00:5e:00:53:1f) port 00:00:5e:00:53:1f, no capabilities TLV  <- several devices on this port, no link inferred
+  switch-5 (198.51.100.3) [1/27 via loc_id] -> 00:00:5e:00:53:20 (00:00:5e:00:53:20) port 00:00:5e:00:53:20, no capabilities TLV  <- several devices on this port, no link inferred
+  switch-5 (198.51.100.3) [1/28 via loc_id] -> 00:00:5e:00:53:21 (00:00:5e:00:53:21) port 00:00:5e:00:53:21, no capabilities TLV  <- several devices on this port, no link inferred
+  switch-5 (198.51.100.3) [1/28 via loc_id] -> 00:00:5e:00:53:05 (00:00:5e:00:53:05) port 00:00:5e:00:53:22, bridge  <- several devices on this port, no link inferred
+  switch-4 (198.51.100.4) [1/25 via loc_id] -> 00:00:5e:00:53:14 (00:00:5e:00:53:14) port 3, no capabilities TLV
+  switch-4 (198.51.100.4) [1/10 via loc_id] -> 00:00:5e:00:53:23 (00:00:5e:00:53:23) port 00:00:5e:00:53:23, no capabilities TLV
+  switch-4 (198.51.100.4) [1/22 via loc_id] -> 00:00:5e:00:53:24 (00:00:5e:00:53:24) port 00:00:5e:00:53:24, no capabilities TLV
+  switch-4 (198.51.100.4) [1/16 via loc_id] -> 00:00:5e:00:53:25 (00:00:5e:00:53:25) port 00:00:5e:00:53:25, no capabilities TLV  <- several devices on this port, no link inferred
+  switch-4 (198.51.100.4) [1/7 via loc_id] -> 00:00:5e:00:53:26 (00:00:5e:00:53:26) port 00:00:5e:00:53:26, no capabilities TLV
+  switch-4 (198.51.100.4) [1/16 via loc_id] -> 00:00:5e:00:53:27 (00:00:5e:00:53:27) port 00:00:5e:00:53:27, no capabilities TLV  <- several devices on this port, no link inferred
+  switch-4 (198.51.100.4) [1/11 via loc_id] -> 00:00:5e:00:53:28 (00:00:5e:00:53:28) port 00:00:5e:00:53:28, no capabilities TLV
+  switch-4 (198.51.100.4) [1/19 via loc_id] -> 00:00:5e:00:53:29 (00:00:5e:00:53:29) port 00:00:5e:00:53:29, no capabilities TLV
+  switch-4 (198.51.100.4) [1/2 via loc_id] -> 00:00:5e:00:53:2a (00:00:5e:00:53:2a) port 00:00:5e:00:53:2a, no capabilities TLV
+  switch-4 (198.51.100.4) [1/9 via loc_id] -> 00:00:5e:00:53:2b (00:00:5e:00:53:2b) port 00:00:5e:00:53:2b, no capabilities TLV
+  switch-2 (198.51.100.5) [1/2 via loc_id] -> 00:00:5e:00:53:2c (00:00:5e:00:53:2c) port 00:00:5e:00:53:2c, no capabilities TLV
+  switch-2 (198.51.100.5) [1/25 via loc_id] -> 00:00:5e:00:53:14 (00:00:5e:00:53:14) port 7, no capabilities TLV
+  switch-1 (198.51.100.6) [20 via fdb] -> host-06 (00:00:5e:00:53:2d) port bridge/ether1, 198.51.100.15, no capabilities TLV
+  switch-1 (198.51.100.6) [24 via num] -> 00:00:5e:00:53:14 (00:00:5e:00:53:14) port 26, no capabilities TLV
+  switch-1 (198.51.100.6) [5 via fdb] -> 00:00:5e:00:53:2e (00:00:5e:00:53:2e) port 00:00:5e:00:53:2e, no capabilities TLV
+  switch-1 (198.51.100.6) [12 via fdb] -> 00:00:5e:00:53:2f (00:00:5e:00:53:2f) port 00:00:5e:00:53:2f, no capabilities TLV
+  switch-1 (198.51.100.6) [13 via fdb] -> 00:00:5e:00:53:30 (00:00:5e:00:53:30) port 00:00:5e:00:53:30, no capabilities TLV
+  198.51.100.7 [Port25 via loc_id] -> 00:00:5e:00:53:07 (00:00:5e:00:53:07) port 28, no capabilities TLV  <- several devices on this port, no link inferred
+  198.51.100.7 [Port25 via loc_id] -> host-08 (00:00:5e:00:53:00) port bridge/ether2, 198.51.100.14, bridge, router, wlanAccessPoint  <- several devices on this port, no link inferred
+  198.51.100.7 [Port25 via loc_id] -> 00:00:5e:00:53:21 (00:00:5e:00:53:21) port 00:00:5e:00:53:21, no capabilities TLV  <- several devices on this port, no link inferred
+
+LLDP vs FDB mismatches:
+  none — every LLDP-confirmed link matches the inference
+
+ports that look like a way out of the network:
+  switch-1 (198.51.100.6) 24: a device behind it answers at 198.51.100.16
+    add "198.51.100.6:24" to uplink_ports in config.yaml
+
+bridges (LLDP capability 'bridge'):
+  host-10 (00:00:5e:00:53:0c) 198.51.100.12 behind switch-3 (198.51.100.2) Slot0/25
+  host-08 (00:00:5e:00:53:00) 198.51.100.14 behind switch-5 (198.51.100.3) 1/28  [trunk port]
+  host-07 (00:00:5e:00:53:01) 198.51.100.13 behind switch-5 (198.51.100.3) 1/27
+
+other identified LLDP devices (routers, phones, stations):
+  host-09 (00:00:5e:00:53:0b) — router, 198.51.100.8, 198.51.100.10, 198.51.100.11 and 39 more behind switch-3 (198.51.100.2) Slot0/21
+  host-06 (00:00:5e:00:53:2d) — other, 198.51.100.15 behind switch-1 (198.51.100.6) 20
+
+unidentified LLDP devices (no capabilities TLV):
+  00:00:5e:00:53:06 (00:00:5e:00:53:06) behind switch-3 (198.51.100.2) Slot0/23
+  00:00:5e:00:53:09 (00:00:5e:00:53:09) behind switch-3 (198.51.100.2) Slot0/5
+  00:00:5e:00:53:0e (00:00:5e:00:53:0e) behind switch-3 (198.51.100.2) Slot0/10
+  00:00:5e:00:53:10 (00:00:5e:00:53:10) behind switch-3 (198.51.100.2) Slot0/5
+  00:00:5e:00:53:11 (00:00:5e:00:53:11) behind switch-3 (198.51.100.2) Slot0/10
+  00:00:5e:00:53:12 (00:00:5e:00:53:12) behind switch-3 (198.51.100.2) Slot0/5
+  00:00:5e:00:53:13 (00:00:5e:00:53:13) behind switch-3 (198.51.100.2) Slot0/5
+  00:00:5e:00:53:15 (00:00:5e:00:53:15) behind switch-5 (198.51.100.3) 1/2
+  00:00:5e:00:53:16 (00:00:5e:00:53:16) behind switch-5 (198.51.100.3) 1/1
+  00:00:5e:00:53:17 (00:00:5e:00:53:17) behind switch-5 (198.51.100.3) 1/1
+  00:00:5e:00:53:18 (00:00:5e:00:53:18) behind switch-5 (198.51.100.3) 1/1
+  00:00:5e:00:53:19 (00:00:5e:00:53:19) behind switch-5 (198.51.100.3) 1/1
+  00:00:5e:00:53:1a (00:00:5e:00:53:1a) behind switch-5 (198.51.100.3) 1/15
+  00:00:5e:00:53:1b (00:00:5e:00:53:1b) behind switch-5 (198.51.100.3) 1/27
+  00:00:5e:00:53:1c (00:00:5e:00:53:1c) behind switch-5 (198.51.100.3) 1/24
+  00:00:5e:00:53:1d (00:00:5e:00:53:1d) behind switch-5 (198.51.100.3) 1/27
+  00:00:5e:00:53:1e (00:00:5e:00:53:1e) behind switch-5 (198.51.100.3) 1/15
+  00:00:5e:00:53:1f (00:00:5e:00:53:1f) behind switch-5 (198.51.100.3) 1/27
+  00:00:5e:00:53:20 (00:00:5e:00:53:20) behind switch-5 (198.51.100.3) 1/27
+  00:00:5e:00:53:21 (00:00:5e:00:53:21) behind switch-5 (198.51.100.3) 1/28
+  00:00:5e:00:53:23 (00:00:5e:00:53:23) behind switch-4 (198.51.100.4) 1/10
+  00:00:5e:00:53:24 (00:00:5e:00:53:24) behind switch-4 (198.51.100.4) 1/22
+  00:00:5e:00:53:25 (00:00:5e:00:53:25) behind switch-4 (198.51.100.4) 1/16
+  00:00:5e:00:53:26 (00:00:5e:00:53:26) behind switch-4 (198.51.100.4) 1/7
+  00:00:5e:00:53:27 (00:00:5e:00:53:27) behind switch-4 (198.51.100.4) 1/16
+  00:00:5e:00:53:28 (00:00:5e:00:53:28) behind switch-4 (198.51.100.4) 1/11
+  00:00:5e:00:53:29 (00:00:5e:00:53:29) behind switch-4 (198.51.100.4) 1/19
+  00:00:5e:00:53:2a (00:00:5e:00:53:2a) behind switch-4 (198.51.100.4) 1/2
+  00:00:5e:00:53:2b (00:00:5e:00:53:2b) behind switch-4 (198.51.100.4) 1/9
+  00:00:5e:00:53:2c (00:00:5e:00:53:2c) behind switch-2 (198.51.100.5) 1/2
+  00:00:5e:00:53:2e (00:00:5e:00:53:2e) behind switch-1 (198.51.100.6) 5
+  00:00:5e:00:53:2f (00:00:5e:00:53:2f) behind switch-1 (198.51.100.6) 12
+  00:00:5e:00:53:30 (00:00:5e:00:53:30) behind switch-1 (198.51.100.6) 13
+  00:00:5e:00:53:21 (00:00:5e:00:53:21) behind 198.51.100.7 Port25
+  ^ these sent no capabilities TLV. That proves nothing about what they are, so they get no node on the map and raise no alarm — most of them are cameras and phones.

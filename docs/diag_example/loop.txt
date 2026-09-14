@@ -1,0 +1,186 @@
+# Sample output of `python -m moonlan.diag --loop`.
+#
+# Generated from a live network with --anonymize, never edited by
+# hand: addresses come from RFC 5737, MACs from RFC 7042, and the
+# names are the ones the flag assigns. The same device carries the
+# same replacement in every file here, so these read as one network.
+#
+# Attach something like this to an issue — with --anonymize.
+
+
+=== 16. Loop detection (vendor private MIBs) ===
+profiles: dlink-1210, dlink-des3526
+
+--- switch-3 (198.51.100.2) ---
+  sysObjectID                 1.3.6.1.4.1.171.10.153.6.1
+  profile                     dlink-1210 (matched by sysObjectID)
+  branch root                 1.3.6.1.4.1.171.11.153.1000.17
+  global state                enabled
+  mode                        1
+  detection interval          5 s
+  recovery time               300 s
+  table rows                  26
+  ports:
+    Slot0/1      index    1  LBD off  status 1        not watched
+    Slot0/2      index    2  LBD off  status 1        not watched
+    Slot0/3      index    3  LBD off  status 1        not watched
+    Slot0/4      index    4  LBD off  status 1        not watched
+    Slot0/5      index    5  LBD off  status 1        not watched
+    Slot0/6      index    6  LBD off  status 1        not watched
+    Slot0/7      index    7  LBD off  status 1        not watched
+    Slot0/8      index    8  LBD off  status 1        not watched
+    Slot0/9      index    9  LBD on   status 1        ok
+    Slot0/10     index   10  LBD on   status 1        ok
+    Slot0/11     index   11  LBD on   status 1        ok
+    Slot0/12     index   12  LBD on   status 1        ok
+    Slot0/13     index   13  LBD on   status 1        ok
+    Slot0/14     index   14  LBD on   status 1        ok
+    Slot0/15     index   15  LBD on   status 1        ok
+    Slot0/16     index   16  LBD on   status 1        ok
+    Slot0/17     index   17  LBD on   status 1        ok
+    Slot0/18     index   18  LBD on   status 1        ok
+    Slot0/19     index   19  LBD on   status 1        ok
+    Slot0/20     index   20  LBD on   status 1        ok
+    Slot0/21     index   21  LBD off  status 1        not watched
+    Slot0/22     index   22  LBD on   status 1        ok
+    Slot0/23     index   23  LBD on   status 1        ok
+    Slot0/24     index   24  LBD on   status 1        ok
+    Slot0/25     index   25  LBD off  status 1        not watched
+    Slot0/26     index   26  LBD off  status 1        not watched
+
+--- switch-5 (198.51.100.3) ---
+  sysObjectID                 1.3.6.1.4.1.171.10.75.15.2
+  profile                     dlink-1210 (matched by sysObjectID)
+  branch root                 1.3.6.1.4.1.171.10.75.15.2.17
+  global state                enabled
+  mode                        1
+  detection interval          5 s
+  recovery time               300 s
+  table rows                  28
+  ports:
+    1/1          index    1  LBD on   status 1        ok
+    1/2          index    2  LBD on   status 1        ok
+    1/3          index    3  LBD on   status 1        ok
+    1/4          index    4  LBD on   status 1        ok
+    1/5          index    5  LBD on   status 1        ok
+    1/6          index    6  LBD on   status 1        ok
+    1/7          index    7  LBD on   status 1        ok
+    1/8          index    8  LBD on   status 1        ok
+    1/9          index    9  LBD on   status 1        ok
+    1/10         index   10  LBD on   status 1        ok
+    1/11         index   11  LBD on   status 1        ok
+    1/12         index   12  LBD on   status 1        ok
+    1/13         index   13  LBD on   status 1        ok
+    1/14         index   14  LBD on   status 1        ok
+    1/15         index   15  LBD on   status 1        ok
+    1/16         index   16  LBD on   status 1        ok
+    1/17         index   17  LBD off  status 1        not watched
+    1/18         index   18  LBD on   status 1        ok
+    1/19         index   19  LBD off  status 1        not watched
+    1/20         index   20  LBD on   status 1        ok
+    1/21         index   21  LBD on   status 1        ok
+    1/22         index   22  LBD on   status 1        ok
+    1/23         index   23  LBD on   status 1        ok
+    1/24         index   24  LBD on   status 1        ok
+    1/25         index   25  LBD off  status 1        not watched
+    1/26         index   26  LBD off  status 1        not watched
+    1/27         index   27  LBD off  status 1        not watched
+    1/28         index   28  LBD off  status 1        not watched
+
+--- switch-4 (198.51.100.4) ---
+  sysObjectID                 1.3.6.1.4.1.171.10.75.15.2
+  profile                     dlink-1210 (matched by sysObjectID)
+  branch root                 1.3.6.1.4.1.171.10.75.15.2.17
+  global state                enabled
+  mode                        1
+  detection interval          5 s
+  recovery time               300 s
+  table rows                  28
+  ports:
+    1/1          index    1  LBD on   status 1        ok
+    1/2          index    2  LBD on   status 1        ok
+    1/3          index    3  LBD on   status 1        ok
+    1/4          index    4  LBD on   status 1        ok
+    1/5          index    5  LBD on   status 1        ok
+    1/6          index    6  LBD on   status 1        ok
+    1/7          index    7  LBD on   status 1        ok
+    1/8          index    8  LBD on   status 1        ok
+    1/9          index    9  LBD on   status 1        ok
+    1/10         index   10  LBD on   status 1        ok
+    1/11         index   11  LBD on   status 1        ok
+    1/12         index   12  LBD on   status 1        ok
+    1/13         index   13  LBD on   status 1        ok
+    1/14         index   14  LBD on   status 1        ok
+    1/15         index   15  LBD on   status 1        ok
+    1/16         index   16  LBD on   status 1        ok
+    1/17         index   17  LBD on   status 1        ok
+    1/18         index   18  LBD on   status 1        ok
+    1/19         index   19  LBD on   status 1        ok
+    1/20         index   20  LBD on   status 1        ok
+    1/21         index   21  LBD on   status 1        ok
+    1/22         index   22  LBD on   status 1        ok
+    1/23         index   23  LBD on   status 1        ok
+    1/24         index   24  LBD on   status 1        ok
+    1/25         index   25  LBD off  status 1        not watched
+    1/26         index   26  LBD off  status 1        not watched
+    1/27         index   27  LBD off  status 1        not watched
+    1/28         index   28  LBD off  status 1        not watched
+
+--- switch-2 (198.51.100.5) ---
+  sysObjectID                 1.3.6.1.4.1.171.10.64.1
+  profile                     dlink-des3526 (matched by sysObjectID)
+  branch root                 1.3.6.1.4.1.171.11.64.1.2.12
+  global state                enabled
+  mode                        2
+  detection interval          5 s
+  recovery time               300 s
+  table rows                  26
+  ports:
+    1/1          index    1  LBD on   status None     ok
+    1/2          index    2  LBD on   status None     ok
+    1/3          index    3  LBD on   status None     ok
+    1/4          index    4  LBD on   status None     ok
+    1/5          index    5  LBD on   status None     ok
+    1/6          index    6  LBD on   status None     ok
+    1/7          index    7  LBD on   status None     ok
+    1/8          index    8  LBD on   status None     ok
+    1/9          index    9  LBD on   status None     ok
+    1/10         index   10  LBD on   status None     ok
+    1/11         index   11  LBD on   status None     ok
+    1/12         index   12  LBD on   status None     ok
+    1/13         index   13  LBD on   status None     ok
+    1/14         index   14  LBD on   status None     ok
+    1/15         index   15  LBD on   status None     ok
+    1/16         index   16  LBD on   status None     ok
+    1/17         index   17  LBD on   status None     ok
+    1/18         index   18  LBD on   status None     ok
+    1/19         index   19  LBD on   status None     ok
+    1/20         index   20  LBD on   status None     ok
+    1/21         index   21  LBD on   status None     ok
+    1/22         index   22  LBD on   status None     ok
+    1/23         index   23  LBD on   status None     ok
+    1/24         index   24  LBD on   status None     ok
+    1/25         index   25  LBD off  status None     not watched
+    1/26         index   26  LBD off  status None     not watched
+
+--- switch-1 (198.51.100.6) ---
+  sysObjectID                 1.3.6.1.4.1.11.2.3.7.11.171
+  no profile answers: this model does not report loop
+  detection over SNMP, so nothing is claimed about it —
+  neither that there is a loop nor that there is not
+
+--- 198.51.100.7 ---
+  sysObjectID                 1.3.6.1.4.1.259.6.10.94
+  no profile answers: this model does not report loop
+  detection over SNMP, so nothing is claimed about it —
+  neither that there is a loop nor that there is not
+
+VERDICT: no switch with a profile reports a loop
+
+Switches with no loop-detection profile — each line is what a
+new profile in config.yaml needs to be keyed by:
+  198.51.100.6       switch-1           sysObjectID 1.3.6.1.4.1.11.2.3.7.11.171
+  198.51.100.7        —                            sysObjectID 1.3.6.1.4.1.259.6.10.94
+
+Walk the branch under that enterprise number to find the
+objects, e.g.  python -m moonlan.diag --walk 198.51.100.6 1.3.6.1.4.1.<enterprise>

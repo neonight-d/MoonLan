@@ -1,7 +1,9 @@
-# Slice of docs/diag/walk-mb0-full-2026-09-11.txt — the Loop
-# Detection branch of a DGS-1210-26 Rev.F1 (10.0.0.10), exactly as
-# the agent returned it. LBD is switched off on ports 1-8, 21, 25
-# and 26, which is the operator's own exclusion list.
+# The Loop Detection branch of a D-Link DGS-1210-26 Rev.F1, captured
+# with `diag --walk` exactly as the agent returned it. LBD is switched
+# off on ports 1-8, 21, 25 and 26, which is that switch's own
+# exclusion list — the reason this capture is trusted as a reference.
+# sysObjectID of the device: 1.3.6.1.4.1.171.10.153.6.1, which is NOT
+# where this branch lives; see BUILTIN_PROFILES in moonlan/loopdetect.py.
 1.3.6.1.4.1.171.11.153.1000.17.1.0  (Integer) = 1
 1.3.6.1.4.1.171.11.153.1000.17.2.0  (Integer) = 1
 1.3.6.1.4.1.171.11.153.1000.17.3.0  (Integer) = 5

@@ -10,6 +10,7 @@ Usage:  python -m moonlan.diag <ip> [--community public] [--timeout 2]
         python -m moonlan.diag --stp
         python -m moonlan.diag --loop
         python -m moonlan.diag --walk <ip> <oid> [--limit 500]
+        python -m moonlan.diag --topology --anonymize
 
 Community and timeout default to the values from config.yaml. The tool
 writes nothing to the database and does not need the running service.
@@ -31,6 +32,14 @@ sysObjectID of every switch no profile covers — which is exactly what
 adding a new model needs. --walk dumps any OID subtree, which is how a
 private MIB (D-Link 1.3.6.1.4.1.171, HPE 1.3.6.1.4.1.11) gets explored
 before it becomes a feature.
+
+--anonymize may be added to any of them. Every report here is a map of
+somebody's network — addresses, MAC tables, host names, the port
+labels a previous administrator typed in — and that is exactly what
+makes it useful in a bug report and exactly what nobody wants
+published. The flag rewrites all of it through a table that stays
+consistent for the run, so the report still reads as a report. See
+moonlan/anonymize.py for what it covers and what it cannot.
 """
 
 from __future__ import annotations
@@ -43,6 +52,7 @@ import time
 from collections import Counter
 
 from . import counters, loopdetect, pinger, stp
+from .anonymize import Anonymizer, AnonymizingWriter
 from .config import (
     SECRET_KEYS,
     SnmpConfig,
@@ -96,8 +106,39 @@ MAX_IF_ROWS = 40
 _SNMP = {"retries": SnmpConfig.retries,
          "retries_on_break": SnmpConfig.retries_on_break}
 
+# Set by --anonymize. Every collector built here then registers the
+# names it learns, and stdout rewrites them on the way out.
+_ANON: Anonymizer | None = None
+
+
+class _RegisteringCollector(SnmpCollector):
+    """A collector that tells the anonymizer what it just learned.
+
+    One hook rather than a call in each of the eight report
+    functions: the names worth hiding are exactly the ones the tool
+    reads off the devices, and they all come through here. A report
+    added later is anonymised without its author having to remember.
+    """
+
+    async def _get(self, host: str, oid: str):
+        value = await super()._get(host, oid)
+        if oid == OID_SYS_NAME and value is not None and _ANON is not None:
+            _ANON.register_switch(str(value))
+        return value
+
+    async def collect(self, host: str):
+        data = await super().collect(host)
+        if _ANON is not None:
+            _ANON.register_switch(data.sys_name)
+            _ANON.register_names(
+                n.sys_name for n in data.lldp_neighbors if n.sys_name
+            )
+        return data
+
+
 def _make_collector(community: str, timeout: int) -> SnmpCollector:
-    return SnmpCollector(
+    factory = _RegisteringCollector if _ANON is not None else SnmpCollector
+    return factory(
         community=community,
         timeout=timeout,
         retries=_SNMP["retries"],
@@ -551,7 +592,12 @@ def _db_snapshot(path: str) -> list[dict] | None:
         return None
     finally:
         conn.close()
-    return [dict(row) for row in rows]
+    hosts = [dict(row) for row in rows]
+    if _ANON is not None:
+        # reverse-DNS names out of the inventory: the other half of
+        # what a report gives away, and the half no pattern can find
+        _ANON.register_names(row.get("name") or "" for row in hosts)
+    return hosts
 
 
 async def run_host_inventory(community: str, timeout: int, cfg) -> None:
@@ -1508,6 +1554,13 @@ def main() -> None:
              f"stray subtree is not downloaded whole",
     )
     parser.add_argument(
+        "--anonymize", action="store_true",
+        help="rewrite addresses, MACs and names in the output through a "
+             "table that is stable for this run (RFC 5737 / RFC 7042 "
+             "documentation ranges) — use it on anything you attach to "
+             "an issue",
+    )
+    parser.add_argument(
         "--config", action="store_true",
         help="print the effective configuration: every setting, its "
              "value and whether it comes from config.yaml or a default",
@@ -1540,6 +1593,12 @@ def main() -> None:
     timeout = args.timeout or cfg.snmp.timeout
     _SNMP["retries"] = cfg.snmp.retries
     _SNMP["retries_on_break"] = cfg.snmp.retries_on_break
+    if args.anonymize:
+        global _ANON
+        _ANON = Anonymizer()
+        # Wrapping the stream, not each report: the next section
+        # somebody adds is then clean without being told to be.
+        sys.stdout = AnonymizingWriter(sys.stdout, _ANON)
     if args.config:
         run_config_audit(cfg)
     elif args.walk:
