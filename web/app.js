@@ -602,6 +602,35 @@ function buildGraphData() {
 
   // one node per port whose devices are all offline, so the switches
   // are not surrounded by a cloud of grey dots
+  // one node per trunk carrying devices that have no place of their
+  // own. Deliberately not shaped like a switch: nobody knows whether
+  // there is one, only that these addresses come through this cable
+  for (const group of topology.trunk_groups || []) {
+    nodes.push({
+      id: group.id,
+      label: t("trunkGroup") + " · " + group.count,
+      shape: "ellipse",
+      color: {
+        background: "#232c3d",
+        border: colors.link,
+        highlight: { background: "#2e3b52", border: colors.moon },
+      },
+      shapeProperties: { borderDashes: [4, 3] },
+      borderWidth: 2,
+      margin: 6,
+      font: { color: colors.dim, size: 11 },
+    });
+    edges.push(markLoop({
+      id: "trunkedge:" + group.id,
+      // off whatever stands on that cable, if anything does
+      from: group.via || "sw:" + group.switch,
+      to: group.id,
+      dashes: [4, 3],
+      color: { color: colors.link, opacity: 0.5 },
+      width: 2,
+    }, group.switch, group.port));
+  }
+
   for (const group of topology.offline_groups || []) {
     nodes.push({
       id: group.id,
@@ -923,6 +952,31 @@ function showDetails(nodeId) {
         ? `<dt>${t("behindBridge")}</dt><dd>${group.via_name}</dd>`
         : ""}
       <dt>${t("lastSeenLabel")}</dt><dd>${fmtTime(group.last_seen_max)}</dd>
+      </dl><ul class="offline-list">${rows}</ul>`;
+  } else if (nodeId.startsWith("trunk:")) {
+    const group = (topology.trunk_groups || []).find((g) => g.id === nodeId);
+    if (!group) return;
+    const members = topology.hosts.filter((h) => h.via === nodeId);
+    const rows = members
+      .map(
+        (h) => `<li data-mac="${h.mac}"><span>${hostLabel(h)}</span>
+          <span class="sub">${h.ip ? h.mac : ""}</span></li>`
+      )
+      .join("");
+    html = `<h3>${fmt("trunkGroupTitle", { n: group.count })}</h3>
+      <p class="hint">${fmt("trunkGroupHint", {
+        switch: switchName(group.switch),
+        port: group.port,
+      })}</p><dl>
+      <dt>${t("switchLabel")}</dt><dd>${group.switch}</dd>
+      <dt>${t("portLabel")}</dt><dd>${group.port}</dd>
+      ${group.via_name
+        ? `<dt>${t("behindBridge")}</dt><dd>${group.via_name}</dd>`
+        : ""}
+      <dt>${t("devicesBehindPort")}</dt><dd>${group.count}</dd>
+      ${group.silent
+        ? `<dt>${t("trunkGroupSilent")}</dt><dd>${group.silent}</dd>`
+        : ""}
       </dl><ul class="offline-list">${rows}</ul>`;
   } else if (nodeId.startsWith("bridge:")) {
     const bridge = (topology.bridges || []).find((b) => b.id === nodeId);

@@ -82,6 +82,9 @@ class TopologyState:
     unlocated: list[dict] = field(default_factory=list)
     # one node per port whose devices are all offline right now
     offline_groups: list[dict] = field(default_factory=list)
+    # one node per trunk carrying devices that have no place of their
+    # own: seen through that cable, somewhere past it
+    trunk_groups: list[dict] = field(default_factory=list)
     # spanning tree: the per-switch report and the network verdict
     stp: dict = field(default_factory=dict)
     last_scan: float = 0.0
@@ -107,6 +110,7 @@ class TopologyState:
         bridges: list[dict] | None = None,
         stp: dict | None = None,
         external_networks: list[dict] | None = None,
+        trunk_groups: list[dict] | None = None,
     ) -> None:
         with self._lock:
             self.switches = switches
@@ -116,6 +120,7 @@ class TopologyState:
             self.vlan_names = vlan_names
             self.unlocated = unlocated or []
             self.offline_groups = offline_groups or []
+            self.trunk_groups = trunk_groups or []
             self.bridges = bridges or []
             self.external_networks = external_networks or []
             self.stp = stp or {}
@@ -144,6 +149,7 @@ class TopologyState:
                 "vlan_names": self.vlan_names,
                 "unlocated": self.unlocated,
                 "offline_groups": self.offline_groups,
+                "trunk_groups": self.trunk_groups,
                 "stp": self.stp,
                 "last_scan": self.last_scan,
                 "last_scan_ok": self.last_scan_ok,
@@ -1566,3 +1572,83 @@ def build_topology(
         switch_dicts, links, hosts, pseudo_switches, vlan_names,
         bridges, info,
     )
+
+
+def group_beyond_trunk(
+    hosts: list[dict],
+    trunk_names: dict[str, list[str]],
+    threshold: int,
+    nodes_on_port: dict[tuple[str, str], dict] | None = None,
+    silent: set[str] | None = None,
+) -> list[dict]:
+    """Collects the devices of one trunk port under a single node.
+
+    A device seen only through a trunk is placed on that trunk, marked
+    approximate — the port is right, the place behind it is unknown.
+    Drawn one dot at a time, twenty of them make a trunk port look like
+    twenty computers plugged into a switch, mixed in with that port's
+    real neighbours. On mb1 1/28 that is a cable into a segment, and
+    the devices are somewhere past it.
+
+    So they get a container. It is deliberately NOT a "switch without
+    SNMP": that node claims a switch is there, and here nobody knows
+    what is there. The claim this one makes is the weaker, true one —
+    these addresses are visible through this port.
+
+    Pseudo-switches are still never created on a trunk (many MACs on a
+    trunk is what a trunk is for, not evidence of anything). This is
+    the other half of that rule: the devices whose placement has
+    already been decided, and only their drawing is at issue.
+
+    A group hangs off the node standing on that cable when there is
+    one — an unpolled bridge or a pseudo-switch, the way an offline
+    group does. Never off a switch MoonLan polls: if the devices were
+    behind it they would be on its downlink ports, and believing
+    otherwise is the defect v0.6.9 exists to close. The caller keeps
+    polled devices out of `nodes_on_port`.
+
+    Members get `via` set, so the offline grouping that runs afterwards
+    leaves them alone: "we do not know where this is" outranks "this
+    has been quiet for a while", and one segment belongs in one place.
+    `silent` are the MACs not answering right now, for the count the
+    card shows.
+    """
+    if threshold <= 0:
+        return []
+    nodes_on_port = nodes_on_port or {}
+    silent = silent or set()
+    by_port: dict[tuple[str, str], list[dict]] = {}
+    for host in hosts:
+        if host.get("merged_into") or host.get("via"):
+            continue  # already drawn as, or behind, something else
+        key = (host["switch"], host["port"])
+        if host["port"] not in trunk_names.get(host["switch"], ()):
+            continue
+        by_port.setdefault(key, []).append(host)
+    groups: list[dict] = []
+    for (sw_ip, port), members in sorted(by_port.items()):
+        if len(members) < threshold:
+            continue  # two or three dots read perfectly well alone
+        group_id = f"trunk:{sw_ip}:{port}"
+        for host in members:
+            host["via"] = group_id
+        parent = nodes_on_port.get((sw_ip, port))
+        groups.append({
+            "id": group_id,
+            "switch": sw_ip,
+            "port": port,
+            "count": len(members),
+            "silent": sum(1 for m in members if m["mac"] in silent),
+            "via": parent["id"] if parent else "",
+            "via_name": parent["name"] if parent else "",
+        })
+    if groups:
+        log.info(
+            "%d trunk port(s) carry devices with no place of their own: %s",
+            len(groups),
+            "; ".join(
+                f"{g['switch']} {g['port']} ({g['count']} device(s))"
+                for g in groups
+            ),
+        )
+    return groups

@@ -163,6 +163,10 @@ class Config:
     # Offline devices on one port are drawn as a single group node
     # instead of a cloud of grey dots around the switch
     offline_group_threshold: int = 2   # 0 disables the grouping
+    # Devices visible only through a trunk are drawn as one "Beyond the
+    # trunk" node rather than as dots on the trunk itself: the port is
+    # known, the place behind it is not
+    trunk_group_threshold: int = 3     # 0 disables the grouping
     # A stale host whose IP ARP has not confirmed for this long
     # gives the address up: it may belong to another device now
     ip_confirm_hours: float = 6.0
@@ -373,6 +377,9 @@ def load_config(path: Path | None = None) -> Config:
     )
     cfg.offline_group_threshold = r.get(
         "offline_group_threshold", d.offline_group_threshold, int
+    )
+    cfg.trunk_group_threshold = r.get(
+        "trunk_group_threshold", d.trunk_group_threshold, int
     )
     cfg.ip_confirm_hours = r.get(
         "ip_confirm_hours", d.ip_confirm_hours, float

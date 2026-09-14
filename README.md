@@ -42,10 +42,15 @@ An open-source alternative to LanTopoLog. MIT license.
   host record.
 - Honest placement: a device visible only through trunks is drawn on
   the trunk it was seen through, marked approximate, and the card says
-  which trunk and why. A device seen only on *uplinks* is not drawn at
-  all — a MAC on an uplink says the device is on the far side of that
-  cable, not behind the switch that reported it, so it goes to "Not on
-  map" instead of being hung off the one port it cannot be behind.
+  which trunk and why. Where a trunk carries more than a handful of
+  them they are collected under one "Beyond the trunk · N" node past
+  the cable instead of a row of dots on it — the node claims only what
+  is known, that these addresses come through this port, and never
+  that a switch is there. A device seen only on *uplinks* is not drawn
+  at all — a MAC on an uplink says the device is on the far side of
+  that cable, not behind the switch that reported it, so it goes to
+  "Not on map" instead of being hung off the one port it cannot be
+  behind.
 - Stable inventory: a host whose MAC left the switch tables stays on
   the map at its last known port for `host_grace_hours` (default 24),
   greyed out and marked "last seen …", instead of blinking with every

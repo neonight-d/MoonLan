@@ -51,6 +51,12 @@ v0.6.8 scenarios:
   number on every port: its ports stay ordinary, no trunk is drawn,
   no lag_degraded is raised, and the log says what was dropped.
 
+v0.6.10 scenarios:
+- five devices of a segment behind the core's trunk to access-sw-3:
+  one "Beyond the trunk · 5" node past the cable instead of five dots
+  on it, with access-sw-3 itself drawn on the same port beside it and
+  one member of the group not answering ping.
+
 v0.6.9 scenarios:
 - access-sw-5 has one live port and it is its own uplink. Its MAC
   table is full of the rest of the network, and nothing is drawn
@@ -246,6 +252,18 @@ REMEMBERED_MAC = "74:56:3c:9a:97:a0"
 REMEMBERED_IP = "10.0.99.52"
 REMEMBERED_SWITCH = "10.0.0.23"   # access-sw-3
 REMEMBERED_PORT = "Gi0/11"
+
+# v0.6.10 — a segment behind the core's trunk to access-sw-3. Nothing
+# says what is out there: an unmanaged box, a whole floor, a building.
+# Every one of these is seen on both ends of that trunk and on no host
+# port anywhere, so they are placed on the trunk and drawn as one node
+# past it — with the real switch on the same port, beside it rather
+# than above it. The layout of mb1 1/28 on the production network.
+BEYOND_TRUNK_MACS = [f"9c:95:6e:be:{n:02x}:40" for n in range(1, 6)]
+BEYOND_TRUNK_IPS = [f"10.3.6.{200 + n}" for n in range(1, 6)]
+# one of them is not answering: the group counts it, it does not get a
+# node of its own beside the group
+BEYOND_TRUNK_SILENT = 3
 
 # v0.6.9 — a switch whose only live port is its own uplink. Everything
 # it can see, it sees on the way out: its MAC table is the rest of the
@@ -447,6 +465,11 @@ def demo_network() -> list[SwitchData]:
     # …and one the inventory can place properly
     core.fdb[REMEMBERED_MAC] = core_trunk_to_ray3
     ray3.fdb[REMEMBERED_MAC] = ray3_trunk
+    # A whole segment visible through that same trunk: on the map they
+    # are one node past the cable, not a row of dots on it
+    for mac in BEYOND_TRUNK_MACS:
+        core.fdb[mac] = core_trunk_to_ray3
+        ray3.fdb[mac] = ray3_trunk
 
     # Four devices behind the unmanaged box on access-sw-1 Gi0/14, with
     # two bridges of their own further down the chain
@@ -830,7 +853,7 @@ def enrich_db(db: Database, hosts: list[dict]) -> None:
         CORRUPT_REAL, CORRUPT_NEIGHBOR, TRUNK_ONLY_MAC, REMEMBERED_MAC,
         ROUTER_CHASSIS,
         EDGE_ROUTER_CHASSIS, UPLINK_CHASSIS, *UPLINK_HOST_MACS, *CAMERAS,
-        *UPLINK_ONLY_MACS,
+        *UPLINK_ONLY_MACS, *BEYOND_TRUNK_MACS,
     )
     hosts = [h for h in hosts if h["mac"] not in fixed]
     for mac, ip, name in (
@@ -855,11 +878,23 @@ def enrich_db(db: Database, hosts: list[dict]) -> None:
                 zip(UPLINK_ONLY_MACS, UPLINK_ONLY_IPS), start=4
             )
         ),
+        # the segment past the trunk: ordinary devices whose place
+        # nobody can name more precisely than "through that cable"
+        *(
+            (mac, ip, "")
+            for mac, ip in zip(BEYOND_TRUNK_MACS, BEYOND_TRUNK_IPS)
+        ),
     ):
         db.set_ips({mac: ip})
         db.set_name(mac, name)
         if not rows.get(mac, {}).get("last_ping_ok"):
             db.set_ping_state(mac, up=True, last_ok=now)
+    # One device of the segment past the trunk does not answer. It gets
+    # counted inside the group rather than a grey dot of its own beside
+    # it: "we do not know where this is" already covers it.
+    silent = BEYOND_TRUNK_MACS[BEYOND_TRUNK_SILENT]
+    if not rows.get(silent, {}).get("last_ping_ok"):
+        db.set_ping_state(silent, up=False, last_ok=now - 20 * 60)
     for i, host in enumerate(hosts):
         mac = host["mac"]
         if i % 5 == 4:

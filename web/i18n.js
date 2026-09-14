@@ -322,6 +322,12 @@ const I18N = {
     offlineGroupHint:
       "These devices are missing from the current switch tables; they "
       + "are shown on the port where they were seen last.",
+    trunkGroup: "Beyond the trunk",
+    trunkGroupTitle: "Beyond the trunk · {n}",
+    trunkGroupHint:
+      "Visible through the trunk {switch} {port}. The exact place is "
+      + "unknown: the devices are somewhere past that cable.",
+    trunkGroupSilent: "Of those, not answering",
   },
   ru: {
     title: "MoonLan — карта сети",
@@ -644,5 +650,11 @@ const I18N = {
     offlineGroupHint:
       "Устройства не найдены в текущих таблицах коммутаторов; показаны "
       + "на порту, где были замечены в последний раз.",
+    trunkGroup: "За магистралью",
+    trunkGroupTitle: "За магистралью · {n}",
+    trunkGroupHint:
+      "Видно через магистраль {switch} {port}. Точное место "
+      + "неизвестно: устройства где-то за этим кабелем.",
+    trunkGroupSilent: "Из них не отвечают",
   },
 };

@@ -25,7 +25,7 @@ Run with:  python -m unittest discover -s tests
 import unittest
 
 from moonlan.snmp_collector import PortInfo, SwitchData
-from moonlan.topology import build_topology
+from moonlan.topology import build_topology, group_beyond_trunk
 
 WANDERER = "aa:bb:cc:00:00:01"
 
@@ -216,6 +216,147 @@ class OrdinaryPlacementTest(unittest.TestCase):
         hosts, uplink_only = place([core, mid, leaf], place_trunk_only=False)
         self.assertNotIn(WANDERER, hosts)
         self.assertEqual(uplink_only, {})
+
+
+class BeyondTheTrunkTest(unittest.TestCase):
+    """Devices placed on a trunk are drawn past it, not on it.
+
+    The placement is already decided — the port is right and the place
+    behind it is unknown — so what is left is the drawing. Twenty dots
+    on a trunk read as twenty computers plugged into the switch,
+    mixed in with that port's real neighbours.
+    """
+
+    def hosts_on(self, switch: str, port: str, count: int) -> list[dict]:
+        return [
+            {"mac": f"aa:bb:cc:00:01:{n:02x}", "switch": switch,
+             "port": port, "approximate": True}
+            for n in range(count)
+        ]
+
+    def test_a_crowded_trunk_becomes_one_node(self):
+        hosts = self.hosts_on("10.0.0.2", "Gi0/2", 5)
+        groups = group_beyond_trunk(
+            hosts, {"10.0.0.2": ["Gi0/2"]}, 3
+        )
+        self.assertEqual(len(groups), 1)
+        self.assertEqual(groups[0]["count"], 5)
+        self.assertEqual(groups[0]["switch"], "10.0.0.2")
+        self.assertEqual(groups[0]["port"], "Gi0/2")
+        # every member now hangs off the group rather than the switch
+        self.assertEqual({h["via"] for h in hosts}, {groups[0]["id"]})
+
+    def test_below_the_threshold_nothing_is_grouped(self):
+        hosts = self.hosts_on("10.0.0.2", "Gi0/2", 2)
+        groups = group_beyond_trunk(hosts, {"10.0.0.2": ["Gi0/2"]}, 3)
+        self.assertEqual(groups, [])
+        self.assertFalse(any("via" in h for h in hosts))
+
+    def test_zero_disables_the_grouping(self):
+        hosts = self.hosts_on("10.0.0.2", "Gi0/2", 9)
+        self.assertEqual(group_beyond_trunk(hosts, {"10.0.0.2": ["Gi0/2"]}, 0), [])
+
+    def test_a_port_that_is_not_a_trunk_is_left_alone(self):
+        """An access port with many devices is a pseudo-switch's job."""
+        hosts = self.hosts_on("10.0.0.2", "Gi0/7", 5)
+        groups = group_beyond_trunk(hosts, {"10.0.0.2": ["Gi0/2"]}, 3)
+        self.assertEqual(groups, [])
+
+    def test_the_group_hangs_off_the_node_on_that_cable(self):
+        hosts = self.hosts_on("10.0.0.2", "Gi0/2", 4)
+        groups = group_beyond_trunk(
+            hosts, {"10.0.0.2": ["Gi0/2"]}, 3,
+            {("10.0.0.2", "Gi0/2"): {"id": "bridge:aa", "name": "RouterOS"}},
+        )
+        self.assertEqual(groups[0]["via"], "bridge:aa")
+        self.assertEqual(groups[0]["via_name"], "RouterOS")
+
+    def test_a_polled_switch_is_never_the_parent(self):
+        """The case v0.6.9 exists for, one level up.
+
+        The caller keeps polled devices out of `nodes_on_port`, so the
+        group falls back to the switch's own port — where the real
+        switch is drawn beside it, not above it.
+        """
+        hosts = self.hosts_on("10.0.0.2", "Gi0/2", 4)
+        groups = group_beyond_trunk(hosts, {"10.0.0.2": ["Gi0/2"]}, 3, {})
+        self.assertEqual(groups[0]["via"], "")
+        self.assertEqual(groups[0]["via_name"], "")
+
+    def test_devices_drawn_elsewhere_are_not_taken(self):
+        hosts = self.hosts_on("10.0.0.2", "Gi0/2", 4)
+        hosts[0]["via"] = "external:10.0.0.2:Gi0/2"   # past a handover
+        hosts[1]["merged_into"] = "bridge:aa"         # it IS that bridge
+        groups = group_beyond_trunk(hosts, {"10.0.0.2": ["Gi0/2"]}, 3)
+        self.assertEqual(groups, [])
+
+    def test_the_quiet_ones_are_counted_not_separated(self):
+        """One segment, one place — with the silence noted inside it."""
+        hosts = self.hosts_on("10.0.0.2", "Gi0/2", 4)
+        silent = {hosts[0]["mac"], hosts[3]["mac"]}
+        groups = group_beyond_trunk(
+            hosts, {"10.0.0.2": ["Gi0/2"]}, 3, None, silent
+        )
+        self.assertEqual(groups[0]["count"], 4)
+        self.assertEqual(groups[0]["silent"], 2)
+
+    def test_each_trunk_gets_its_own_group(self):
+        hosts = (
+            self.hosts_on("10.0.0.2", "Gi0/2", 3)
+            + [
+                {"mac": f"aa:bb:cc:00:02:{n:02x}", "switch": "10.0.0.1",
+                 "port": "Gi0/1", "approximate": True}
+                for n in range(4)
+            ]
+        )
+        groups = group_beyond_trunk(
+            hosts, {"10.0.0.2": ["Gi0/2"], "10.0.0.1": ["Gi0/1"]}, 3
+        )
+        self.assertEqual(
+            sorted((g["switch"], g["port"], g["count"]) for g in groups),
+            [("10.0.0.1", "Gi0/1", 4), ("10.0.0.2", "Gi0/2", 3)],
+        )
+
+
+class TrunkGroupOnARealTreeTest(unittest.TestCase):
+    """The grouping applied to what build_topology actually produces."""
+
+    def test_the_devices_of_one_trunk_end_up_in_one_group(self):
+        core, mid, leaf = chain()
+        for n in range(4):
+            mac = f"aa:bb:cc:00:03:{n:02x}"
+            mid.fdb[mac] = 2     # mid's downlink trunk toward the leaf
+            leaf.fdb[mac] = 25   # and the leaf's uplink
+        result = build_topology([core, mid, leaf], unmanaged_threshold=0)
+        hosts, info = result[2], result[6]
+        trunks = info["trunk_names"]
+        groups = group_beyond_trunk(hosts, trunks, 3)
+        self.assertEqual(len(groups), 1)
+        self.assertEqual((groups[0]["switch"], groups[0]["port"]),
+                         ("10.0.0.2", "Gi0/2"))
+        self.assertEqual(groups[0]["count"], 4)
+        # the ordinary hosts of the core keep their own ports
+        ordinary = [h for h in hosts if not h.get("via")]
+        self.assertTrue(ordinary)
+        self.assertTrue(all(h["switch"] != "10.0.0.2" or h["port"] != "Gi0/2"
+                            for h in ordinary))
+
+    def test_a_precisely_placed_device_is_not_swept_in(self):
+        core, mid, leaf = chain()
+        for n in range(4):
+            mac = f"aa:bb:cc:00:03:{n:02x}"
+            mid.fdb[mac] = 2
+            leaf.fdb[mac] = 25
+        # this one is on a real access port of the leaf
+        leaf.fdb[WANDERER] = 7
+        mid.fdb[WANDERER] = 2
+        result = build_topology([core, mid, leaf], unmanaged_threshold=0)
+        hosts, info = result[2], result[6]
+        group_beyond_trunk(hosts, info["trunk_names"], 3)
+        placed = {h["mac"]: h for h in hosts}
+        self.assertEqual(placed[WANDERER]["switch"], "10.0.0.3")
+        self.assertEqual(placed[WANDERER]["port"], "Gi0/7")
+        self.assertNotIn("via", placed[WANDERER])
 
 
 if __name__ == "__main__":

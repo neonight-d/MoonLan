@@ -90,6 +90,20 @@ host_retention_days: 30
 # Сами устройства остаются на карте.
 offline_group_threshold: 2
 
+# Devices a switch sees only through a trunk are placed on that trunk —
+# the port is known, the place behind it is not. More than this many on
+# one trunk are drawn as a single "Beyond the trunk · N" node instead
+# of a row of dots on the cable (0 — do not group). The node does NOT
+# claim there is a switch there; that is what the pseudo-switch above
+# is for, and it is never created on a trunk.
+# Устройства, которые коммутатор видит только через магистраль,
+# размещаются на ней: порт известен, место за ним — нет. Если таких на
+# одной магистрали больше стольких, они рисуются одним узлом «За
+# магистралью · N» вместо россыпи точек на кабеле (0 — не группировать).
+# Узел не утверждает, что там коммутатор: для этого есть
+# «коммутатор без SNMP» выше, и на магистрали он не создаётся никогда.
+trunk_group_threshold: 3
+
 # A host whose MAC is gone from every switch table and whose IP no ARP
 # table has confirmed for this long gives the address up: another
 # device may hold it, and its replies would fake the old host alive.

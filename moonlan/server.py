@@ -33,6 +33,7 @@ from .topology import (
     FdbStability,
     TopologyState,
     build_topology,
+    group_beyond_trunk,
     port_name,
     suspect_uplink_ports,
 )
@@ -346,12 +347,13 @@ async def run_scan() -> None:
         fdb_macs = {h["mac"] for h in hosts}
         db_rows = await asyncio.to_thread(db.hosts_by_mac)
         await _release_unconfirmed_ips(db_rows)
-        hosts, offline_groups, unlocated = _assemble_hosts(
+        hosts, offline_groups, unlocated, trunk_groups = _assemble_hosts(
             hosts, db_rows, pseudo_switches, {sw["ip"] for sw in switches},
             unconfirmed,
             {h["mac"]: h["merged_into"] for h in hosts if h.get("merged_into")},
             _nodes_on_port(bridges, pseudo_switches),
             uplink_only,
+            topo_info.get("trunk_names", {}),
         )
         # A group that sits on a trunk was never seen there as devices:
         # its location is inherited guesswork, and the card should not
@@ -429,6 +431,7 @@ async def run_scan() -> None:
             switches, links, hosts, pseudo_switches, vlan_names, unlocated,
             offline_groups, bridges, stp_report,
             topo_info.get("external_networks", []),
+            trunk_groups,
         )
         if config.demo:
             await run_ping()  # set the switches' ping state right away
@@ -781,10 +784,20 @@ def _nodes_on_port(
     A pseudo-switch wins over a bridge where both are present: that is
     the case of several bridges behind one unmanaged box, and the live
     devices stay on the box, so the quiet ones must too.
+
+    A device MoonLan polls itself is never offered as a parent. Groups
+    hang off what is on the cable, and if devices were behind a switch
+    we poll they would be on its downlink ports — believing otherwise
+    is the whole of the v0.6.9 defect. Such a switch is drawn as its
+    own node on the same port instead.
     """
+    ours = set(_polled_identities())
     nodes: dict[tuple[str, str], dict] = {}
     for bridge in bridges:
         if bridge.get("trunk") or bridge.get("shares_port"):
+            continue
+        if (bridge["chassis_id"].lower() in ours
+                or bridge.get("mgmt_ip", "").lower() in ours):
             continue
         nodes[(bridge["switch"], bridge["port"])] = {
             "id": bridge["id"], "name": bridge["name"],
@@ -841,7 +854,8 @@ def _assemble_hosts(
     merged: dict[str, str] | None = None,
     nodes_on_port: dict[tuple[str, str], dict] | None = None,
     uplink_only: dict[str, list[tuple[str, str]]] | None = None,
-) -> tuple[list[dict], list[dict], list[dict]]:
+    trunk_names: dict[str, list[str]] | None = None,
+) -> tuple[list[dict], list[dict], list[dict], list[dict]]:
     """Splits the known inventory into map hosts, offline groups and
     off-map devices.
 
@@ -918,8 +932,22 @@ def _assemble_hosts(
             -max(db_rows[h["mac"]]["last_arp"], db_rows[h["mac"]]["last_seen"]),
         )
     )
+    # Devices with no place of their own go first: "we do not know
+    # where this is" is a stronger statement than "this has been quiet
+    # for a while", and the offline grouping below leaves anything that
+    # already has a `via` alone. So one trunk is one node, with the
+    # quiet ones counted inside it rather than standing beside it.
+    silent = {
+        mac for mac, row in db_rows.items()
+        if row.get("ip") and not row.get("ping_up")
+    }
+    trunk_groups = group_beyond_trunk(
+        on_map, trunk_names or {}, config.trunk_group_threshold,
+        nodes_on_port, silent,
+    )
     return (
-        on_map, _group_offline(on_map, db_rows, nodes_on_port), unlocated
+        on_map, _group_offline(on_map, db_rows, nodes_on_port), unlocated,
+        trunk_groups,
     )
 
 
