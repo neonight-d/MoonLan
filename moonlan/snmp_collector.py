@@ -270,6 +270,62 @@ def parse_fdb_entry(
     return mac, bridge_port, ""
 
 
+def sane_lag_members(
+    data: "SwitchData", claimed: dict[int, int], host: str = ""
+) -> dict[int, int]:
+    """dot3adAggPortAttachedAggID, filtered by what the switch actually has.
+
+    An Edge-Core ES3528M answers this column with -402792706 on every
+    one of its 28 ports. The old test — non-zero and not the port
+    itself — passes, so all 28 ports became members of one aggregate
+    with that number for an ifIndex. The ports panel showed 28 rows
+    with the same ifIndex, the map grew a trunk that does not exist,
+    and a lag_degraded alarm sat on it for 66 hours.
+
+    Same rule as the counters learned in v0.6.6: a number that is not
+    in the interface table is not an interface. Plus one more, because
+    a plausible-looking ifIndex can be wrong too — an aggregate that
+    swallowed every physical port of the switch is not an aggregate,
+    it is the column being read the wrong way.
+    """
+    if not claimed:
+        return {}
+    physical = {
+        i for i, port in data.ports.items() if port.is_physical and i > 0
+    }
+    members: dict[int, int] = {}
+    unknown: dict[int, int] = {}
+    for member, aggregate in claimed.items():
+        if aggregate > 0 and aggregate in data.ports:
+            members[member] = aggregate
+        else:
+            unknown[member] = aggregate
+    if unknown:
+        values = sorted({a for a in unknown.values()})
+        log.warning(
+            "%s: dot3adAggPortAttachedAggID names %d port(s) as members of "
+            "aggregate(s) %s, which are not in this switch's interface "
+            "table — the rows are dropped rather than drawn as a trunk "
+            "nobody has",
+            host or data.ip, len(unknown),
+            ", ".join(str(v) for v in values[:5]),
+        )
+    # an aggregate that contains every physical port of the switch
+    by_aggregate: dict[int, set[int]] = {}
+    for member, aggregate in members.items():
+        by_aggregate.setdefault(aggregate, set()).add(member)
+    for aggregate, group in by_aggregate.items():
+        if physical and group >= physical:
+            log.warning(
+                "%s: aggregate %s claims all %d physical port(s) of the "
+                "switch — that is not an aggregate, and the rows are "
+                "dropped", host or data.ip, aggregate, len(physical),
+            )
+            for member in group:
+                members.pop(member, None)
+    return members
+
+
 def infer_lag_groups(
     physical: set[int], mapped: set[int], synthetic: set[int]
 ) -> dict[int, list[int]]:
@@ -561,10 +617,15 @@ class SnmpCollector:
 
         # LACP: membership of physical ports in aggregates. If the switch
         # does not support IEEE8023-LAG-MIB, the walk simply yields nothing.
+        claimed: dict[int, int] = {}
         async for suffix, value in self._walk(host, OID_LAG_ATTACHED_ID):
-            member, aggregate = suffix[0], int(value)
+            try:
+                member, aggregate = suffix[0], int(value)
+            except (TypeError, ValueError):
+                continue
             if aggregate and aggregate != member:
-                data.lag_members[member] = aggregate
+                claimed[member] = aggregate
+        data.lag_members = sane_lag_members(data, claimed, host)
 
         # bridge-port -> ifIndex
         port_to_ifindex: dict[int, int] = {}

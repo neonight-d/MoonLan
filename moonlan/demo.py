@@ -46,6 +46,11 @@ v0.6.7 scenarios:
 - access-sw-4 is a model no profile covers: its card says the model
   does not report it, and no port of it claims to be loop-free.
 
+v0.6.8 scenarios:
+- access-sw-4 answers dot3adAggPortAttachedAggID with one impossible
+  number on every port: its ports stay ordinary, no trunk is drawn,
+  no lag_degraded is raised, and the log says what was dropped.
+
 v0.5.8 scenarios:
 - a port whose cable starts failing on the second scan: the switch
   learns five distorted copies of the address of the device behind it
@@ -93,6 +98,7 @@ from .snmp_collector import (
     aggregate_port,
     infer_lag_groups,
     parse_fdb_entry,
+    sane_lag_members,
 )
 
 # The RNG is re-seeded inside demo_network so every scan rebuilds the
@@ -445,6 +451,9 @@ def demo_network() -> list[SwitchData]:
 
     if _scan_count == 1:
         _report_rejected_fdb(ray4)
+    # every scan: the switch keeps answering the LAG column with the
+    # same impossible number, and every scan it is dropped
+    _report_rejected_lag(ray4)
 
     # Latecomers appear from the second scan on -> new_mac alarms
     if _scan_count >= 2:
@@ -704,6 +713,28 @@ BOGUS_FDB_ROWS = [
     ((0x04, 0xb7, 0x79, 0xab, 0x20, 0x7b, 0x31), 3, 6),
     ((0x01, 0x00, 0x5e, 0x00, 0x00, 0xfb), 3, 6),
 ]
+
+
+# What an Edge-Core ES3528M answers dot3adAggPortAttachedAggID with on
+# every one of its ports: one number that is not an ifIndex of
+# anything. Read at face value it made all 28 ports members of a
+# single aggregate, drew a trunk nobody has and kept a lag_degraded
+# alarm alive for 66 hours. The demo network is built in memory, so
+# the rows are fed to the real validator to show what it now drops.
+BOGUS_LAG_AGG_ID = -402792706
+
+
+def _report_rejected_lag(sw: SwitchData) -> None:
+    """Runs a phantom aggregate through the collector's LAG validator."""
+    claimed = {
+        p.if_index: BOGUS_LAG_AGG_ID
+        for p in sw.ports.values() if p.is_physical and p.if_index > 0
+    }
+    kept = sane_lag_members(sw, claimed, sw.ip)
+    if kept:  # pragma: no cover — the validator is supposed to drop them
+        log.error(
+            "%s: the demo's phantom aggregate was accepted: %s", sw.ip, kept
+        )
 
 
 def _report_rejected_fdb(sw: SwitchData) -> None:
