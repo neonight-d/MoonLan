@@ -1663,7 +1663,9 @@ def _loop_report(sw: SwitchData | None) -> dict:
         "mode": loop.mode,
         "interval": loop.interval,
         "recover_time": loop.recover_time,
-        "watched": sum(1 for p in loop.ports.values() if p.lbd_enabled),
+        "watched": sum(
+            1 for p in loop.ports.values() if p.lbd_enabled is True
+        ),
         "ports_total": len(loop.ports),
         "looped_ports": [
             port_name(sw, p.if_index) for p in loop.looped_ports()

@@ -96,7 +96,6 @@ MAX_IF_ROWS = 40
 _SNMP = {"retries": SnmpConfig.retries,
          "retries_on_break": SnmpConfig.retries_on_break}
 
-
 def _make_collector(community: str, timeout: int) -> SnmpCollector:
     return SnmpCollector(
         community=community,
@@ -1337,8 +1336,14 @@ async def run_loop_view(community: str, timeout: int, cfg) -> None:
         print(f"  profile                     {data.profile} "
               f"(matched by {data.matched_by})")
         print(f"  branch root                 {data.root}")
-        print(f"  global state                "
-              f"{'enabled' if data.enabled else 'DISABLED'}")
+        # three-valued, and it stays that way: a scalar that did not
+        # come back is not a switch with its loop protection off
+        global_state = (
+            "enabled" if data.enabled is True
+            else "DISABLED" if data.enabled is False
+            else "UNKNOWN — the global scalar did not come back"
+        )
+        print(f"  global state                {global_state}")
         print(f"  mode                        {_num(data.mode)}")
         print(f"  detection interval          {_num(data.interval)} s")
         print(f"  recovery time               {_num(data.recover_time)} s")
@@ -1363,10 +1368,16 @@ async def run_loop_view(community: str, timeout: int, cfg) -> None:
                 )
                 if state.lbd_enabled is False:
                     verdict = "not watched"
+                # the per-port flag is three-valued too: a port the
+                # column had no row for is "?", not "off"
+                lbd = (
+                    "on " if state.lbd_enabled is True
+                    else "off" if state.lbd_enabled is False else "?  "
+                )
                 print(
                     f"    {(port.name if port else str(if_index)):<12} "
                     f"index {state.port:>4}  "
-                    f"LBD {'on ' if state.lbd_enabled else 'off'}  "
+                    f"LBD {lbd}  "
                     f"status {state.status_raw or '—':<8} {verdict}"
                 )
         if data.looped_ports():

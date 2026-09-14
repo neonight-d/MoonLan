@@ -835,7 +835,11 @@ function loopCardLine(loop) {
       ports: (loop.looped_ports || []).join(", "),
     });
   }
+  // three-valued: on, off, and "the switch did not tell us". Never a
+  // bare truthiness test — `!loop.enabled` reads the third as the
+  // second, which is how three switches were reported as unprotected
   if (loop.enabled === false) return t("loopCardOff");
+  if (loop.enabled !== true) return t("loopCardUnknown");
   const base = fmt("loopCardOn", {
     interval: loop.interval == null ? "—" : loop.interval,
     recover: loop.recover_time == null ? "—" : loop.recover_time,
