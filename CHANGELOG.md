@@ -6,6 +6,23 @@ for before the next one started.
 
 Русская версия — [CHANGELOG_RU.md](CHANGELOG_RU.md).
 
+## v0.6.10 — 2026-09-14
+
+Devices seen through a trunk are grouped beyond it, not on it. A
+device visible only through a trunk is placed on that trunk and marked
+approximate — the port is right, the place behind it is unknown — and
+twenty of them drawn one dot at a time make the port look like twenty
+computers plugged into the switch, mixed in with its real neighbours.
+They now get a container: one "Beyond the trunk · N" node past the
+cable, which expands into the list of what is out there. It is
+deliberately not a "switch without SNMP": that node claims a switch is
+there, and here nobody knows what is. Pseudo-switches are still never
+created on a trunk — many MACs on a trunk is what a trunk is for. The
+group hangs off whatever stands on that cable when something does, and
+never off a switch MoonLan polls: if the devices were behind it they
+would be on its downlink ports. Threshold: `trunk_group_threshold`,
+default 3.
+
 ## v0.6.9 — 2026-09-14
 
 A device seen on an uplink is not behind it. The switch that reports a

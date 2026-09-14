@@ -16,7 +16,7 @@ An open-source alternative to LanTopoLog. MIT license.
 
 *Alarm panel: port errors, discards and host outages with one-click access to the switch port table.*
 
-## Features (v0.6.9)
+## Features (v0.6.10)
 
 - SNMP v2c polling of switches: device name, ports, speeds, statuses.
 - MAC address tables (BRIDGE-MIB and Q-BRIDGE-MIB) from every switch,
@@ -222,6 +222,7 @@ Version history: [CHANGELOG.md](CHANGELOG.md)
 | v0.6.7 ✓| Loop Detection from the vendors' private MIBs, honest unsupported state |
 | v0.6.8 ✓| Identify the model before reading it; diagnostics that can be shared |
 | v0.6.9 ✓| A device seen on an uplink is not behind it; host placement under test |
+| v0.6.10 ✓| Devices seen through a trunk are grouped beyond it, not on it |
 | v0.7    | Export to PDF and Draw.io, MAC address info import |
 | v0.8    | Windows computer inventory (WMI/WinRM) |
 
