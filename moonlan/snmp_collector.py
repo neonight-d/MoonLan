@@ -24,7 +24,7 @@ from dataclasses import dataclass, field
 
 from . import lldp as lldp_mod
 from . import stp as stp_mod
-from .snmpval import as_octets
+from .snmpval import as_octets, is_no_such
 
 from pysnmp.hlapi.v3arch.asyncio import (
     CommunityData,
@@ -358,7 +358,18 @@ class SnmpCollector:
         if error_ind or error_status:
             log.debug("%s GET %s: %s", host, oid, error_ind or error_status)
             return None
-        return var_binds[0][1]
+        value = var_binds[0][1]
+        if is_no_such(value):
+            # An SNMPv2c agent answers "I do not implement that" with a
+            # perfectly successful PDU carrying noSuchObject /
+            # noSuchInstance / endOfMibView. Nothing above catches it,
+            # and all three derive from OctetString, so the caller gets
+            # what looks like an empty string. "Not implemented" has to
+            # come back the same way "no reply" does, or every probe
+            # for a private branch succeeds on every device alive.
+            log.debug("%s GET %s: %s", host, oid, type(value).__name__)
+            return None
+        return value
 
     async def _open_walk(self, host: str, start: str):
         """The pysnmp walk generator, starting just after `start`.
@@ -429,6 +440,10 @@ class SnmpCollector:
                             left_subtree = True  # the table is finished
                             break
                         last_oid = full
+                        if is_no_such(value):
+                            # same sentinel as in _get: a row that says
+                            # "nothing here" is not a row
+                            continue
                         status.rows += 1
                         yield full[len(base):], value
                     if left_subtree:

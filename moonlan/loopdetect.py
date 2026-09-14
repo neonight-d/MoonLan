@@ -70,18 +70,32 @@ class LoopProfile:
         return f"{root}.{suffix}"
 
 
-# The three families found by walking the live network on 2026-09-11
-# (docs/diag/walk-*-full-2026-09-11.txt). The port layout each one
-# reports was checked against the operator's own list of ports with
-# LBD switched off, on all four switches, before any of it was
-# written down here.
+# The three families found by walking the live network, with the port
+# layout each one reports checked against the operator's own list of
+# ports with LBD switched off, on all four switches, before any of it
+# was written down here. The captured branches are in
+# tests/fixtures/loop-*.txt, which is what the parser tests run on.
+#
+# The keys are sysObjectIDs the devices actually answered with, and
+# there is no rule connecting them to the branch roots — the first
+# version of this table assumed a D-Link product's private branch sits
+# under its own sysObjectID, and the network said otherwise:
+#
+#   DGS-1210-26 Rev.F1   sysObjectID 171.10.153.6.1 -> branch 171.11.153.1000
+#   DES-1210-28/ME       sysObjectID 171.10.75.15.2 -> branch 171.10.75.15.2
+#   DES-3526             sysObjectID 171.10.64.1    -> branch 171.11.64.1.2.12
+#
+# Two of the three cross from the .10 subtree into .11, and they do it
+# by different arithmetic. Nothing here is derivable; a new model gets
+# added by walking it, never by guessing from its sysObjectID.
 BUILTIN_PROFILES: tuple[LoopProfile, ...] = (
     LoopProfile(
         name="dlink-1210",
         roots={
             # DGS-1210-26 Rev.F1
-            "1.3.6.1.4.1.171.11.153.1000": "1.3.6.1.4.1.171.11.153.1000.17",
-            # DES-1210-28/ME
+            "1.3.6.1.4.1.171.10.153.6.1": "1.3.6.1.4.1.171.11.153.1000.17",
+            # DES-1210-28/ME — the one model whose branch does sit
+            # under its own sysObjectID
             "1.3.6.1.4.1.171.10.75.15.2": "1.3.6.1.4.1.171.10.75.15.2.17",
         },
         enabled="1.0", mode="2.0", interval="3.0", recover_time="4.0",
@@ -90,7 +104,7 @@ BUILTIN_PROFILES: tuple[LoopProfile, ...] = (
     ),
     LoopProfile(
         name="dlink-des3526",
-        roots={"1.3.6.1.4.1.171.11.64.1": "1.3.6.1.4.1.171.11.64.1.2.12"},
+        roots={"1.3.6.1.4.1.171.10.64.1": "1.3.6.1.4.1.171.11.64.1.2.12"},
         # the scalars sit one level deeper here, and interval and mode
         # are the other way round
         enabled="1.1.0", mode="1.4.0", interval="1.2.0",
@@ -143,13 +157,21 @@ class LoopDetectionData:
 
     @property
     def status(self) -> str:
-        """One word for the UI and the log."""
+        """One word for the UI and the log.
+
+        `enabled` is three-valued and stays that way: True, False and
+        "the scalar did not come back". The third is `unknown`, never
+        `disabled` — a switch nobody managed to read is not a switch
+        with its loop protection switched off.
+        """
         if not self.supported:
             return "unsupported"
         if self.looped_ports():
             return "loop"
         if self.enabled is False:
             return "disabled"
+        if self.enabled is None:
+            return "unknown"
         if self.truncated or self.index_mismatch:
             return "partial"
         return "ok"
@@ -312,6 +334,13 @@ def map_ports(
     """
     mapped: dict[int, LoopPortState] = {}
     unmapped: list[int] = []
+    if not rows:
+        # No table is not a disagreement about numbering. An empty one
+        # used to raise index_mismatch against the 26 ports of the
+        # interface table and print "the vendor table and the interface
+        # table disagree on the port count" for a switch that has no
+        # vendor table at all.
+        return mapped, unmapped, False
     for index, state in sorted(rows.items()):
         if index in physical:
             state.if_index = index
@@ -320,6 +349,72 @@ def map_ports(
             unmapped.append(index)
     mismatch = bool(unmapped) or len(rows) != len(physical)
     return mapped, unmapped, mismatch
+
+
+def parse_enum(value, allowed: tuple[int, ...]) -> int | None:
+    """An integer inside a known enumeration, or None.
+
+    The gate every probe has to pass. "The agent answered" is not
+    evidence that the OID exists — in SNMPv2c a missing object comes
+    back inside a successful PDU (see snmpval.is_no_such), and even
+    once that is filtered out, a branch belonging to another vendor can
+    answer with something of the wrong shape entirely. A value that
+    does not parse as one of the enumeration's own numbers is not this
+    object, and so this is not this profile's branch.
+    """
+    if value is None:
+        return None
+    try:
+        number = int(value)
+    except (TypeError, ValueError):
+        return None
+    return number if number in allowed else None
+
+
+async def _read_rows(
+    collector, host: str, profile: LoopProfile, root: str
+) -> tuple[dict[int, LoopPortState], str]:
+    """The three per-port columns of one branch, as (rows, status OID).
+
+    The index column is walked first and on its own: an empty one means
+    this branch has no port table, which settles the profile question
+    before two more walks are spent on it. It is also walked rather
+    than inferred from the row suffixes, so an agent that numbers its
+    rows 1..N while reporting other port numbers does not go unnoticed.
+    """
+    rows: dict[int, LoopPortState] = {}
+
+    def row(index: int) -> LoopPortState:
+        state = rows.get(index)
+        if state is None:
+            state = rows[index] = LoopPortState(port=index)
+        return state
+
+    index_oid = profile.column(root, profile.col_index)
+    enabled_oid = profile.column(root, profile.col_enabled)
+    status_oid = profile.column(root, profile.col_status)
+
+    async for suffix, value in collector._walk(host, index_oid):
+        if suffix:
+            row(suffix[0])
+    if not rows:
+        return rows, status_oid
+
+    async for suffix, value in collector._walk(host, enabled_oid):
+        if not suffix:
+            continue
+        try:
+            row(suffix[0]).lbd_enabled = int(value) == ENABLED
+        except (TypeError, ValueError):
+            pass
+    async for suffix, value in collector._walk(host, status_oid):
+        if not suffix:
+            continue
+        row(suffix[0]).status_raw = status_text(value, profile.status_type)
+
+    for state in rows.values():
+        judge_port(state, profile.normal)
+    return rows, status_oid
 
 
 async def collect_loop_detection(
@@ -333,6 +428,15 @@ async def collect_loop_detection(
 
     `ports` is the interface table of the last scan (ifIndex ->
     PortInfo); it is what the vendor row numbers are resolved against.
+
+    A candidate branch is accepted only when it produces **data**: the
+    global scalar has to parse as one of the two values its enumeration
+    allows, and the port table has to return at least one row. Both
+    tests exist because the first version accepted a candidate on the
+    strength of the agent having replied at all, which every device
+    that speaks SNMP does — three switches were consequently read off
+    the wrong branch and reported as having loop protection switched
+    off. An unread device must come back unread.
     """
     profiles = list(profiles or BUILTIN_PROFILES)
     data = LoopDetectionData()
@@ -342,15 +446,27 @@ async def collect_loop_detection(
     data.sys_object_id = sys_object_id or ""
 
     chosen: tuple[LoopProfile, str, str] | None = None
+    rows: dict[int, LoopPortState] = {}
+    status_oid = ""
     for profile, root, how in candidates(profiles, data.sys_object_id):
         value = await collector._get(host, profile.scalar(root, profile.enabled))
-        if value is None:
+        state = parse_enum(value, (ENABLED, DISABLED))
+        if state is None:
+            log.debug(
+                "%s: %s is not the loop-detection branch of this device "
+                "(%s answered %r)",
+                host, root, profile.enabled, value,
+            )
             continue
+        rows, status_oid = await _read_rows(collector, host, profile, root)
+        if not rows:
+            log.debug(
+                "%s: %s answers its global scalar but has no port table "
+                "— not this profile", host, root,
+            )
+            continue
+        data.enabled = state == ENABLED
         chosen = (profile, root, how)
-        try:
-            data.enabled = int(value) == ENABLED
-        except (TypeError, ValueError):
-            data.enabled = None
         break
     if chosen is None:
         log.debug(
@@ -378,40 +494,6 @@ async def collect_loop_detection(
         except (TypeError, ValueError):
             pass
 
-    rows: dict[int, LoopPortState] = {}
-
-    def row(index: int) -> LoopPortState:
-        state = rows.get(index)
-        if state is None:
-            state = rows[index] = LoopPortState(port=index)
-        return state
-
-    enabled_oid = profile.column(root, profile.col_enabled)
-    status_oid = profile.column(root, profile.col_status)
-    index_oid = profile.column(root, profile.col_index)
-
-    # The index column is walked too, even though the row suffix
-    # already carries the number: an agent that numbers its rows
-    # 1..N while reporting other port numbers in the column would
-    # otherwise go unnoticed.
-    async for suffix, value in collector._walk(host, index_oid):
-        if suffix:
-            row(suffix[0])
-    async for suffix, value in collector._walk(host, enabled_oid):
-        if not suffix:
-            continue
-        try:
-            row(suffix[0]).lbd_enabled = int(value) == ENABLED
-        except (TypeError, ValueError):
-            pass
-    async for suffix, value in collector._walk(host, status_oid):
-        if not suffix:
-            continue
-        row(suffix[0]).status_raw = status_text(value, profile.status_type)
-
-    for state in rows.values():
-        judge_port(state, profile.normal)
-
     status_walk = collector.last_walk_status(host, status_oid)
     data.error = status_walk.error
     data.truncated = status_walk.truncated
@@ -435,11 +517,13 @@ def describe(data: LoopDetectionData) -> str:
     parts = [f"profile {data.profile} via {data.matched_by}"]
     if data.enabled is False:
         parts.append("LBD is switched off globally")
+    elif data.enabled is None:
+        parts.append("the global state did not come back")
     else:
         parts.append(
             f"interval {data.interval}s, recovery {data.recover_time}s"
         )
-    on = sum(1 for p in data.ports.values() if p.lbd_enabled)
+    on = sum(1 for p in data.ports.values() if p.lbd_enabled is True)
     parts.append(f"{on} of {len(data.ports)} port(s) watched")
     looped = data.looped_ports()
     if looped:

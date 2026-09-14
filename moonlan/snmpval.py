@@ -17,6 +17,17 @@ the service down rather than a CLI.
 
 So: convert only what actually carries octets, and decide that by the
 type rather than by whether `bytes()` happened to succeed.
+
+The same module answers a second question of the same shape: whether
+the agent answered at all. In SNMPv2c "there is no such object here"
+arrives inside a **successful** PDU, as one of three sentinel values in
+the varbind — noSuchObject, noSuchInstance, endOfMibView. No error
+status, no error indication, so every check further up passes and a
+non-answer travels on as a value. All three derive from OctetString,
+so they even survive `as_octets` as an innocent-looking b"". That is
+how a probe for a vendor branch succeeded on every device that speaks
+SNMP at all, and three switches were told their loop protection was
+switched off. `is_no_such` is the one place that knows the difference.
 """
 
 from __future__ import annotations
@@ -34,6 +45,24 @@ def is_octets(value) -> bool:
         hasattr(value, "asOctets")
         or isinstance(value, (bytes, bytearray, memoryview))
     )
+
+
+# The three varbind values that mean "no answer for this OID". They are
+# matched by class name rather than by isinstance for the same reason
+# the rest of this module uses duck typing: it keeps pysnmp out of the
+# import graph of lldp.py, stp.py and loopdetect.py.
+NO_SUCH_TYPES = frozenset({"NoSuchObject", "NoSuchInstance", "EndOfMibView"})
+
+
+def is_no_such(value) -> bool:
+    """True for noSuchObject / noSuchInstance / endOfMibView.
+
+    An SNMPv2c agent reports "I do not implement that" with a normal,
+    successful response carrying one of these in place of the value.
+    It is the absence of an answer wearing the shape of one, and
+    treating it as data is the mistake this function exists to stop.
+    """
+    return type(value).__name__ in NO_SUCH_TYPES
 
 
 def as_octets(value) -> bytes:
