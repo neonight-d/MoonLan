@@ -16,7 +16,7 @@ An open-source alternative to LanTopoLog. MIT license.
 
 *Alarm panel: port errors, discards and host outages with one-click access to the switch port table.*
 
-## Features (v0.6.8)
+## Features (v0.6.9)
 
 - SNMP v2c polling of switches: device name, ports, speeds, statuses.
 - MAC address tables (BRIDGE-MIB and Q-BRIDGE-MIB) from every switch,
@@ -40,6 +40,12 @@ An open-source alternative to LanTopoLog. MIT license.
   host names via reverse DNS. An IP belongs to exactly one MAC, so a
   device replaced or re-addressed by DHCP does not linger as a second
   host record.
+- Honest placement: a device visible only through trunks is drawn on
+  the trunk it was seen through, marked approximate, and the card says
+  which trunk and why. A device seen only on *uplinks* is not drawn at
+  all — a MAC on an uplink says the device is on the far side of that
+  cable, not behind the switch that reported it, so it goes to "Not on
+  map" instead of being hung off the one port it cannot be behind.
 - Stable inventory: a host whose MAC left the switch tables stays on
   the map at its last known port for `host_grace_hours` (default 24),
   greyed out and marked "last seen …", instead of blinking with every
@@ -189,6 +195,9 @@ An open-source alternative to LanTopoLog. MIT license.
 - Demo mode with a virtual network — explore the UI without real switches.
 - SNMP diagnostic tool: `python -m moonlan.diag <ip>`.
 
+Version history: [CHANGELOG.md](CHANGELOG.md)
+([русская версия](CHANGELOG_RU.md)).
+
 ## Roadmap
 
 | Version | Functionality |
@@ -207,6 +216,7 @@ An open-source alternative to LanTopoLog. MIT license.
 | v0.6.6 ✓| One bad OID no longer stops the counters; offline groups behind their bridge |
 | v0.6.7 ✓| Loop Detection from the vendors' private MIBs, honest unsupported state |
 | v0.6.8 ✓| Identify the model before reading it; diagnostics that can be shared |
+| v0.6.9 ✓| A device seen on an uplink is not behind it; host placement under test |
 | v0.7    | Export to PDF and Draw.io, MAC address info import |
 | v0.8    | Windows computer inventory (WMI/WinRM) |
 

@@ -234,3 +234,7 @@ docs/tz/
 # MAC tables, host names, port labels. docs/diag_example/ holds
 # anonymised samples instead; `diag --anonymize` is how to make one.
 docs/diag/
+# Working copies made while rewriting history. Committing the mirror
+# would put every purged object back into the repository.
+moonlan-backup.git/
+moonlan-clean/
