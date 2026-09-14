@@ -51,6 +51,13 @@ v0.6.8 scenarios:
   number on every port: its ports stay ordinary, no trunk is drawn,
   no lag_degraded is raised, and the log says what was dropped.
 
+v0.6.9 scenarios:
+- access-sw-5 has one live port and it is its own uplink. Its MAC
+  table is full of the rest of the network, and nothing is drawn
+  behind it: the device that really sits behind the core's trunk stays
+  there, and the two nobody else has ever seen go to "Not on map"
+  rather than being hung off the one cable they cannot be behind.
+
 v0.5.8 scenarios:
 - a port whose cable starts failing on the second scan: the switch
   learns five distorted copies of the address of the device behind it
@@ -240,6 +247,20 @@ REMEMBERED_IP = "10.0.99.52"
 REMEMBERED_SWITCH = "10.0.0.23"   # access-sw-3
 REMEMBERED_PORT = "Gi0/11"
 
+# v0.6.9 — a switch whose only live port is its own uplink. Everything
+# it can see, it sees on the way out: its MAC table is the rest of the
+# network, and none of it is behind it. On a real one this drew twenty
+# devices belonging to other switches around a box with every other
+# port dark.
+UPLINK_ONLY_SWITCH = "10.0.0.25"
+UPLINK_ONLY_NAME = "access-sw-5"
+UPLINK_ONLY_PORT = 25          # its uplink, the only live port it has
+UPLINK_ONLY_CORE_PORT = 8      # where the core sees it
+# Devices no switch sees anywhere but on that uplink: nobody knows
+# where they are, so they belong in "Not on map" rather than on it
+UPLINK_ONLY_MACS = ["74:56:3c:9a:97:b1", "74:56:3c:9a:97:b2"]
+UPLINK_ONLY_IPS = ["10.0.99.201", "10.0.99.202"]
+
 # v0.6.7 — Loop Detection from the vendors' private MIBs. The demo
 # network answers the D-Link 1210 branch on three switches, and the
 # fourth is deliberately a model nobody has written a profile for: the
@@ -334,7 +355,8 @@ def demo_network() -> list[SwitchData]:
     ray2 = _switch("10.0.0.22", "access-sw-2", 3)
     ray3 = _switch("10.0.0.23", "access-sw-3", 4)
     ray4 = _switch("10.0.0.24", "access-sw-4", 5)
-    switches = [core, ray1, ray2, ray3, ray4]
+    edge = _switch(UPLINK_ONLY_SWITCH, UPLINK_ONLY_NAME, 6)
+    switches = [core, ray1, ray2, ray3, ray4, edge]
 
     # A 2×1G LACP aggregate (IEEE8023-LAG-MIB) between the core
     # (ports 1 and 25) and the first ray (ports 25 and 26)
@@ -446,8 +468,25 @@ def demo_network() -> list[SwitchData]:
     for mac in UPLINK_HOST_MACS:
         connect_host(core, UPLINK_PORT, 1, mac)
 
+    # A switch with nothing behind it. Every port but its uplink is
+    # down, and its MAC table holds addresses that live elsewhere in
+    # the network — which is what an uplink's table always holds.
+    for port in edge.ports.values():
+        port.oper_up = port.if_index == UPLINK_ONLY_PORT
+    core.ports[UPLINK_ONLY_CORE_PORT].oper_up = True
+    core.fdb[edge.bridge_mac] = UPLINK_ONLY_CORE_PORT
+    edge.fdb[_iface_mac(core)] = UPLINK_ONLY_PORT
+    edge.fdb[core.bridge_mac] = UPLINK_ONLY_PORT
+    # …including a device that really is behind the core's trunk to
+    # ray3. The deeper switch must not win it just by being deeper:
+    # it saw the device on the cable it came in on.
+    edge.fdb[TRUNK_ONLY_MAC] = UPLINK_ONLY_PORT
+    # …and two nobody sees anywhere else at all
+    for mac in UPLINK_ONLY_MACS:
+        edge.fdb[mac] = UPLINK_ONLY_PORT
+
     _add_lldp(core, ray1, ray2, ray3, ray4, core_port_to_ray)
-    _add_stp(core, ray1, ray2, ray3, ray4)
+    _add_stp(core, ray1, ray2, ray3, ray4, edge)
 
     if _scan_count == 1:
         _report_rejected_fdb(ray4)
@@ -654,7 +693,7 @@ def _stp_ports(
     return ports
 
 
-def _add_stp(core, ray1, ray2, ray3, ray4) -> None:
+def _add_stp(core, ray1, ray2, ray3, ray4, edge) -> None:
     """A spanning tree that is running — except on one switch.
 
     The core is the root at priority 4096. ray2 holds its uplink in
@@ -700,7 +739,14 @@ def _add_stp(core, ray1, ray2, ray3, ray4) -> None:
         version=2, sys_uptime=uptime,
         ports=_stp_ports(ray4, {i: 1 for i in range(1, 5)}, False, ""),
     ))
-    for sw in (core, ray1, ray2, ray3, ray4):
+    edge.stp = judge(StpData(
+        supported=True, protocol_spec=3, priority=32768,
+        time_since_change=118_000, top_changes=7,
+        designated_root=root_id, root_cost=40000,
+        root_port=UPLINK_ONLY_PORT, version=2, sys_uptime=uptime,
+        ports=_stp_ports(edge, {UPLINK_ONLY_PORT: 5}, True, root_id),
+    ))
+    for sw in (core, ray1, ray2, ray3, ray4, edge):
         sw.sys_uptime = uptime
 
 
@@ -784,6 +830,7 @@ def enrich_db(db: Database, hosts: list[dict]) -> None:
         CORRUPT_REAL, CORRUPT_NEIGHBOR, TRUNK_ONLY_MAC, REMEMBERED_MAC,
         ROUTER_CHASSIS,
         EDGE_ROUTER_CHASSIS, UPLINK_CHASSIS, *UPLINK_HOST_MACS, *CAMERAS,
+        *UPLINK_ONLY_MACS,
     )
     hosts = [h for h in hosts if h["mac"] not in fixed]
     for mac, ip, name in (
@@ -798,6 +845,15 @@ def enrich_db(db: Database, hosts: list[dict]) -> None:
         *(
             (mac, f"10.0.98.{n}", f"cam-hall-{n:02d}.demo.lan")
             for n, mac in enumerate(CAMERAS, start=1)
+        ),
+        # Seen only on one switch's uplink: real devices, somewhere.
+        # ARP knows them, which is the only reason the inventory can
+        # say anything about them at all.
+        *(
+            (mac, ip, f"nvr-{n}floor.demo.lan")
+            for n, (mac, ip) in enumerate(
+                zip(UPLINK_ONLY_MACS, UPLINK_ONLY_IPS), start=4
+            )
         ),
     ):
         db.set_ips({mac: ip})

@@ -872,6 +872,12 @@ function loopCardTitle(loop) {
   );
 }
 
+/* A switch's name for a card, falling back to its address */
+function switchName(ip) {
+  const sw = (topology.switches || []).find((s) => s.ip === ip);
+  return sw ? sw.name : ip;
+}
+
 function showDetails(nodeId) {
   let html = "";
   if (nodeId.startsWith("sw:")) {
@@ -1008,7 +1014,11 @@ function showDetails(nodeId) {
     const host = findHost(nodeId);
     if (!host) return;
     const offMap = host.unlocated;
-    const hint = offMap
+    // A device seen only on uplinks is a third case: it was seen this
+    // very scan, and every sighting was of the cable it is NOT behind.
+    const hint = host.uplink_only
+      ? t("uplinkOnlyHint")
+      : offMap
       ? host.ip
         ? t("unlocatedHint")
         : t("offMapHint")
@@ -1020,7 +1030,12 @@ function showDetails(nodeId) {
     const aliveByIp = host.stale && !offMap && host.ping_up && host.ip_confirmed;
     html = `<h3>${hostLabel(host)}</h3>
       ${labelFromLldp(host) ? `<p class="hint">${t("nameFromLldpHint")}</p>` : ""}
-      ${host.approximate ? `<p class="hint">${t("approximateHint")}</p>` : ""}
+      ${host.approximate
+        ? `<p class="hint">${t("approximateHint")}<br>${fmt("approximateWhy", {
+            switch: switchName(host.switch),
+            port: host.port,
+          })}</p>`
+        : ""}
       ${host.remembered ? `<p class="hint">${t("rememberedHint")}</p>` : ""}
       ${aliveByIp ? `<p class="hint">${t("staleButAliveHint")}</p>` : ""}
       ${hint ? `<p class="hint">${hint}</p>` : ""}<dl>
@@ -1032,6 +1047,11 @@ function showDetails(nodeId) {
       <dt>${t("macAddr")}</dt><dd>${host.mac}${
         host.random_mac ? ` <span class="chip" title="${t("randomMacHint")}">${t("randomMac")}</span>` : ""
       }</dd>
+      ${(host.seen_on || []).length
+        ? `<dt>${t("uplinkOnlySeenOn")}</dt><dd>${host.seen_on
+            .map((s) => `${switchName(s.switch)} ${s.port}`)
+            .join(", ")}</dd>`
+        : ""}
       <dt>${t("switchLabel")}</dt><dd>${host.switch || "—"}</dd>
       <dt>${t("portLabel")}</dt><dd>${host.port || "—"}${
         host.approximate ? ` <span class="chip">${t("approximate")}</span>` : ""
@@ -1457,10 +1477,7 @@ function renderPorts(data) {
 function showLinkDetails(edgeId) {
   const link = topology.links.find((l) => linkId(l) === edgeId);
   if (!link) return;
-  const swName = (ip) => {
-    const sw = topology.switches.find((s) => s.ip === ip);
-    return sw ? sw.name : ip;
-  };
+  const swName = switchName;
   let html = `<h3>${swName(link.a)} — ${swName(link.b)}</h3><dl>
     <dt>${fmt("portOnSide", { name: swName(link.a) })}</dt><dd>${linkPortLabel(link, link.a_port)}</dd>
     <dt>${fmt("portOnSide", { name: swName(link.b) })}</dt><dd>${linkPortLabel(link, link.b_port)}</dd>`;

@@ -1146,28 +1146,68 @@ def build_topology(
     # where they were last seen".
     approximate: set[str] = set()
     remembered_at: set[str] = set()
+    # Devices every sighting of which was on an uplink: nobody knows
+    # where they are, and the caller lists them off the map
+    uplink_only: dict[str, list[tuple[str, str]]] = {}
     if place_trunk_only:
         depth = tree_depth(info["root"], links)
         port_index = {
             sw.ip: {port_name(sw, i): i for i in sw.ports} for sw in switches
         }
+        # Which port of each switch points at the root.
+        #
+        # infer_tree's `uplinks` answers that only for a switch that
+        # can see past its own branch, because that is all it needs it
+        # for. A leaf two hops down sees nothing but its parent, which
+        # is in the same branch, and comes back None — and None here
+        # would mean "no uplink", so every one of its trunks would
+        # count as pointing away from the root. That is exactly the
+        # switch this version is about: an Edge-Core behind mb1, whose
+        # one live port is the cable to mb1.
+        #
+        # The tree that was just inferred knows the answer: on every
+        # link the deeper end is the child, and the port at that end is
+        # its uplink. Where both agree, they agree; where they do not,
+        # the link is the one actually drawn on the map.
+        uplink_index: dict[str, int | None] = dict(uplinks)
+        for link in links:
+            a, b = link["a"], link["b"]
+            da, db = depth.get(a), depth.get(b)
+            if da is None or db is None or da == db:
+                continue
+            child, port = (b, link["b_port"]) if db > da else (a, link["a_port"])
+            index = port_index.get(child, {}).get(port)
+            if index is not None:
+                uplink_index[child] = index
         claims: dict[str, tuple] = {}
+        seen_on: dict[str, list[tuple[str, int]]] = {}
         for sw in switches:
             for mac, if_index in fdb[sw.ip].items():
                 if mac in switch_macs or mac in best_location:
                     continue
                 if if_index not in trunk_port_ids[sw.ip]:
                     continue
-                # The root has no uplink, so calling every one of its
-                # trunks a "downlink" made it outrank every real switch.
-                # Depth decides first now: the deeper switch is nearer
-                # the truth even when the root's port points down.
-                uplink = uplinks.get(sw.ip)
-                downlink = uplink is not None and if_index != uplink
-                claim = (depth.get(sw.ip, 0), downlink, sw.ip, if_index)
+                # Direction decides FIRST, depth only among equals.
+                # A MAC on an uplink says the device is on the far side
+                # of that cable — the opposite of "behind this switch".
+                # With depth first, the deepest leaf won every claim it
+                # could make, and an Edge-Core whose only live port was
+                # its own uplink collected twenty devices belonging to
+                # the rest of the network.
+                #
+                # The root has no uplink, and that is not the same as
+                # "direction unknown": nothing sits above the root in
+                # this picture, so all of its trunks point down. Safe
+                # now that depth comes second — the root, at depth 0,
+                # loses to any downlink claim from any deeper switch.
+                uplink = uplink_index.get(sw.ip)
+                downlink = if_index != uplink if uplink is not None else True
+                claim = (downlink, depth.get(sw.ip, 0), sw.ip, if_index)
                 if mac not in claims or claim > claims[mac]:
                     claims[mac] = claim
-        for mac, (_depth, _downlink, sw_ip, if_index) in claims.items():
+                if not downlink:
+                    seen_on.setdefault(mac, []).append((sw.ip, if_index))
+        for mac, (downlink, _depth, sw_ip, if_index) in claims.items():
             place = remembered_locations.get(mac)
             if place and place[0] in port_index:
                 known_index = port_index[place[0]].get(place[1])
@@ -1181,13 +1221,26 @@ def build_topology(
                     best_location[mac] = (0, place[0], known_index)
                     remembered_at.add(mac)
                     continue
+            if not downlink:
+                # Every switch that saw it, saw it on the way out. That
+                # tells us where the device is NOT — hanging it off
+                # somebody's uplink would be a statement about the one
+                # place it cannot be.
+                uplink_only[mac] = [
+                    (ip, port_name(switch_by_ip[ip], index))
+                    for ip, index in seen_on.get(mac, [])
+                ]
+                continue
             best_location[mac] = (0, sw_ip, if_index)
             approximate.add(mac)
-        if approximate or remembered_at:
-            log.debug(
+        if approximate or remembered_at or uplink_only:
+            log.info(
                 "%d device(s) visible only through trunks: %d kept at the "
-                "port the database remembers, %d placed approximately",
+                "port the database remembers, %d placed on the downlink "
+                "they were seen through, %d seen on uplinks only and left "
+                "off the map",
                 len(claims), len(remembered_at), len(approximate),
+                len(uplink_only),
             )
 
     hosts = []
@@ -1504,6 +1557,11 @@ def build_topology(
         sw.ip: sorted(port_name(sw, i) for i in trunk_port_ids[sw.ip])
         for sw in switches
     }
+    # mac -> where it was seen, all of them uplinks. The caller keeps
+    # these off the map however recently the database saw them
+    # somewhere: a location written down by an earlier guess is still
+    # a guess.
+    info["uplink_only"] = uplink_only
     return (
         switch_dicts, links, hosts, pseudo_switches, vlan_names,
         bridges, info,

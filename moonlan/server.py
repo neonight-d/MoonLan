@@ -282,8 +282,19 @@ async def run_scan() -> None:
         suspect_macs = {
             s["mac"] for found in suspects.values() for s in found
         }
+        # Devices seen only on uplinks are not on the map, but they
+        # were seen: the sighting is recorded with no location at all,
+        # so the inventory keeps them without anyone claiming a port.
+        # `approximate` is what stops the empty location from
+        # overwriting whatever the database already holds.
+        uplink_only = topo_info.get("uplink_only", {})
+        seen_nowhere = [
+            {"mac": mac, "switch": "", "port": "", "vlan": 0,
+             "approximate": True}
+            for mac in uplink_only
+        ]
         new_macs = await asyncio.to_thread(
-            db.upsert_hosts, hosts, confirm_scans,
+            db.upsert_hosts, hosts + seen_nowhere, confirm_scans,
             suspect_macs if config.filter_suspect_macs else set(),
         )
         if config.demo:
@@ -331,6 +342,7 @@ async def run_scan() -> None:
             unconfirmed,
             {h["mac"]: h["merged_into"] for h in hosts if h.get("merged_into")},
             _nodes_on_port(bridges, pseudo_switches),
+            uplink_only,
         )
         # A group that sits on a trunk was never seen there as devices:
         # its location is inherited guesswork, and the card should not
@@ -819,6 +831,7 @@ def _assemble_hosts(
     unconfirmed: set[str] | None = None,
     merged: dict[str, str] | None = None,
     nodes_on_port: dict[tuple[str, str], dict] | None = None,
+    uplink_only: dict[str, list[tuple[str, str]]] | None = None,
 ) -> tuple[list[dict], list[dict], list[dict]]:
     """Splits the known inventory into map hosts, offline groups and
     off-map devices.
@@ -835,12 +848,19 @@ def _assemble_hosts(
 
     Unconfirmed MACs are in neither list: they are stored, and nothing
     more, until enough polls agree that they exist.
+
+    `uplink_only` are MACs every sighting of which was on an uplink.
+    They go off the map whatever the database remembers about them,
+    because what it remembers is an earlier guess at the same question
+    — that is how twenty devices of the rest of the network came to be
+    drawn behind a switch with every port but its uplink dark.
     """
     for h in fresh:
         h["stale"] = False
     now = time.time()
     merged = merged or {}
     grace = config.host_grace_hours * 3600
+    uplink_only = uplink_only or {}
     known = {h["mac"] for h in fresh} | _switch_macs() | (unconfirmed or set())
     pseudo_by_port = {(p["switch"], p["port"]): p["id"] for p in pseudo_switches}
     on_map = list(fresh)
@@ -860,6 +880,19 @@ def _assemble_hosts(
         # it is quiet, instead of reappearing as a bare MAC beside it
         if mac in merged:
             host["merged_into"] = merged[mac]
+        if mac in uplink_only:
+            # seen this very scan, and seen nowhere that means anything
+            host["stale"] = False
+            host["unlocated"] = True
+            host["uplink_only"] = True
+            host["seen_on"] = [
+                {"switch": ip, "port": port}
+                for ip, port in uplink_only[mac]
+            ]
+            host["switch"] = ""
+            host["port"] = ""
+            unlocated.append(host)
+            continue
         located = row["switch_ip"] in switch_ips
         if located and grace > 0 and now - row["last_seen"] < grace:
             via = pseudo_by_port.get((row["switch_ip"], row["port"]))

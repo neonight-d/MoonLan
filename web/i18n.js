@@ -292,6 +292,16 @@ const I18N = {
       "Approximate location: the MAC address is visible only on trunk "
       + "ports, so the device sits behind a switch MoonLan does not poll. "
       + "It is drawn on the trunk it was seen through.",
+    approximateWhy:
+      "Seen on the downlink trunk {switch} {port} — the side of that "
+      + "cable that leads away from the root, which is why the device "
+      + "is drawn behind it.",
+    uplinkOnlyHint:
+      "Seen only on uplink ports, so the exact place is unknown. A MAC "
+      + "address on an uplink says the device is on the far side of "
+      + "that cable — not behind the switch that reported it — so "
+      + "nothing here can be drawn.",
+    uplinkOnlySeenOn: "Seen on",
     ev_ip_released: "IP address released",
     staleHint:
       "The MAC address is missing from the current switch tables — " +
@@ -605,6 +615,15 @@ const I18N = {
       "Расположение приблизительное: MAC виден только на магистральных "
       + "портах — устройство подключено за неопрашиваемым коммутатором. "
       + "Показано на магистрали, через которую его видно.",
+    approximateWhy:
+      "Виден на нисходящей магистрали {switch} {port} — на той стороне "
+      + "кабеля, что ведёт от корня, поэтому устройство и нарисовано "
+      + "за ней.",
+    uplinkOnlyHint:
+      "Виден только на приходящих портах, точное место неизвестно. MAC "
+      + "на аплинке говорит, что устройство по ту сторону кабеля, а не "
+      + "за коммутатором, который его увидел, — рисовать тут нечего.",
+    uplinkOnlySeenOn: "Виден на",
     ev_ip_released: "IP-адрес освобождён",
     staleHint:
       "MAC-адреса нет в текущих таблицах коммутаторов — устройство " +
