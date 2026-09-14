@@ -211,6 +211,7 @@ const I18N = {
     loopCardUnknown: "state unknown \u2014 the switch did not report it",
     loopCardLoop: "LOOP on {ports}",
     loopCardUnsupported: "the model does not report it over SNMP",
+    loopCardNotPolled: "no data yet \u2014 the counters cycle has not run since the last scan",
     loopCardPartial: "answered only in part \u2014 some ports are unknown",
     loopUnsupportedHint:
       "This switch model keeps no loop-detection state in any MIB "
@@ -532,6 +533,7 @@ const I18N = {
     loopCardUnknown: "состояние неизвестно \u2014 коммутатор его не сообщил",
     loopCardLoop: "ПЕТЛЯ на {ports}",
     loopCardUnsupported: "модель не сообщает по SNMP",
+    loopCardNotPolled: "данных пока нет \u2014 цикл счётчиков после скана ещё не отработал",
     loopCardPartial: "ответ неполный \u2014 часть портов неизвестна",
     loopUnsupportedHint:
       "Эта модель не отдаёт состояние Loop Detection ни в одной MIB, "

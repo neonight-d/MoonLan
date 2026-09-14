@@ -235,6 +235,15 @@ async def run_scan() -> None:
                 if mac:
                     sw.own_macs.add(mac)
         for sw in collected:
+            previous = switch_data.get(sw.ip)
+            if previous is not None and sw.loop_detection is None:
+                # Loop detection is refreshed by the counters cycle,
+                # not by the scan. A fresh SwitchData carries none, and
+                # dropping the last one made every switch report "the
+                # model does not say" for up to a minute after every
+                # scan — a claim about hardware, made because of our
+                # own bookkeeping.
+                sw.loop_detection = previous.loop_detection
             switch_data[sw.ip] = sw
         # A MAC has to be seen more than once before it counts as a
         # device (unless ARP vouches for it); the verdict is needed
@@ -1721,7 +1730,11 @@ def _loop_report(sw: SwitchData | None) -> dict:
     if loop is None or not loop.supported:
         return {
             "supported": False,
-            "status": "unsupported",
+            # "nobody has asked yet" is not "the model does not
+            # answer": before the first counters cycle there is no
+            # evidence either way, and saying otherwise is the same
+            # mistake in miniature
+            "status": "unsupported" if loop is not None else "not_polled",
             "sys_object_id": (
                 loop.sys_object_id if loop is not None
                 else (sw.sys_object_id if sw is not None else "")

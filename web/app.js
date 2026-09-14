@@ -835,7 +835,11 @@ function findHost(nodeId) {
    or that it says nothing. "No loops" is a claim; a model that keeps
    no loop state in any readable MIB does not get to make it. */
 function loopCardLine(loop) {
-  if (!loop || loop.supported === false) {
+  if (!loop || loop.polled === false) {
+    // the counters cycle has not run since this switch was polled
+    return t("loopCardNotPolled");
+  }
+  if (loop.supported === false) {
     return t("loopCardUnsupported");
   }
   if (loop.status === "loop") {
@@ -1313,7 +1317,12 @@ const LOOP_RANK = { loop: 3, unknown: 2, ok: 1, off: 0 };
 function loopCell(tr, loop, report) {
   const cell = document.createElement("td");
   const state = loop ? loop.state : "";
-  if (!loop) {
+  if (!loop && report && report.polled === false) {
+    // nobody has asked yet: unknown, not "the model says nothing"
+    cell.textContent = t("loopNoData");
+    cell.className = "loop-unknown";
+    cell.title = t("loopCardNotPolled");
+  } else if (!loop) {
     // the model reports nothing at all — see the switch card
     cell.textContent = "—";
     cell.className = "loop-none";
