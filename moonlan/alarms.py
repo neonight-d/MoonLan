@@ -46,7 +46,10 @@ Rules:
   nobody put on the map and nobody polls. Cleared when the neighbour
   has been gone from LLDP for the flap window. Bridges listed in
   config.known_bridges (by chassis id or management IP) never raise
-  it, nor do the ones behind a port in config.uplink_ports. A bridge
+  it, nor do the ones behind a port in config.uplink_ports, nor the
+  devices MoonLan polls itself — a switch in `switches:` or a router
+  in `routers:` is by definition not "a switch nobody polls", and
+  making the operator list it twice to say so was a bug. A bridge
   inferred rather than self-declared (cap_assumed: the switch reports
   no capabilities for anyone) raises the same alarm at severity info.
 - stp_root_changed (critical) / stp_topology_change (warning) /
@@ -648,11 +651,17 @@ class AlarmEngine:
             if bridge.get("external"):
                 continue  # a port that leaves the network: not ours
             chassis_id = bridge["chassis_id"]
+            if (chassis_id.lower() in known
+                    or bridge.get("mgmt_ip", "").lower() in known):
+                # Known by configuration, or one of the devices MoonLan
+                # polls itself. Deliberately not recorded in
+                # _bridges_seen: that set exists to time out an alarm
+                # when its neighbour disappears, and there is no alarm
+                # here to time out. The standing one, if any, is closed
+                # by clear_suppressed with the reason.
+                self._bridges_seen.pop(chassis_id, None)
+                continue
             self._bridges_seen[chassis_id] = now
-            if chassis_id.lower() in known:
-                continue
-            if bridge.get("mgmt_ip", "").lower() in known:
-                continue
             where = f"{bridge['switch']} port {bridge['port']}"
             name = bridge.get("name") or chassis_id
             address = f", {bridge['mgmt_ip']}" if bridge.get("mgmt_ip") else ""

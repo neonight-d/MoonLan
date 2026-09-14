@@ -419,7 +419,7 @@ async def run_scan() -> None:
         await alarm_engine.clear_suppressed(
             _suppressed_bridges(bridges, bridge_rows)
         )
-        await alarm_engine.on_bridges(bridges, set(config.known_bridges))
+        await alarm_engine.on_bridges(bridges, _known_bridge_ids())
         await alarm_engine.on_stp(stp_report)
         await alarm_engine.on_corruption(
             {f"{sw_ip}:{port}": found
@@ -607,10 +607,14 @@ def _suppressed_bridges(
     Covers bridges seen in this scan and bridges only the database
     remembers: a device behind a port that has since been declared an
     uplink may not be in LLDP right now, and its alarm would otherwise
-    outlive the setting that answers it.
+    outlive the setting that answers it. The same applies to a device
+    that turned out to be one of our own polled switches — the alarm
+    for it is closed by this path, with the reason in the journal,
+    rather than waiting for a neighbour that is never going away.
     """
     uplinks = _uplink_ports()
     known = set(config.known_bridges)
+    ours = _polled_identities()
     located: dict[str, tuple[str, str, str]] = {
         row["chassis_id"]: (row["switch_ip"], row["port"], row["mgmt_ip"])
         for row in bridge_rows.values()
@@ -627,12 +631,52 @@ def _suppressed_bridges(
             )
         elif chassis_id.lower() in known or (mgmt_ip or "").lower() in known:
             suppressed[chassis_id] = "listed in known_bridges"
+        elif chassis_id.lower() in ours:
+            suppressed[chassis_id] = ours[chassis_id.lower()]
+        elif (mgmt_ip or "").lower() in ours:
+            suppressed[chassis_id] = ours[mgmt_ip.lower()]
     return suppressed
 
 
+def _polled_identities() -> dict[str, str]:
+    """Every way a device we already poll can appear in someone's LLDP.
+
+    A switch listed in `switches:` is polled by definition, and so a
+    neighbour reporting it is not "a switch nobody polls". It used to
+    be: the ES3528M sat in `switches:`, answered every scan, and still
+    carried an unmanaged_bridge_detected alarm for 91 hours, because
+    only `known_bridges` counted as known. Making the operator copy
+    their own switch addresses into a second list to silence that is
+    asking them to work around a bug.
+
+    Returns identity -> why it is ours, lowercased: the configured
+    switch and router addresses, and every MAC each polled switch is
+    known by (bridge base MAC, interface MACs, its management-IP MAC
+    from ARP) — a neighbour may name any of them as the chassis id.
+    """
+    ours: dict[str, str] = {}
+    for ip in _infrastructure():
+        ours[ip.lower()] = (
+            "it is a router MoonLan polls" if ip in set(config.routers)
+            else "it is a switch MoonLan polls"
+        )
+    for ip, sw in switch_data.items():
+        why = f"it is {sw.sys_name or ip}, a switch MoonLan polls"
+        for mac in sw.own_macs:
+            ours[mac.lower()] = why
+        if sw.bridge_mac:
+            ours[sw.bridge_mac.lower()] = why
+    return ours
+
+
+def _known_bridge_ids() -> set[str]:
+    """Chassis ids and addresses that must never raise a bridge alarm."""
+    return set(config.known_bridges) | set(_polled_identities())
+
+
 def _is_known_bridge(bridge: dict) -> bool:
-    """Listed in config.known_bridges by chassis id or management IP."""
-    known = set(config.known_bridges)
+    """Known by configuration, or one of the devices we poll ourselves."""
+    known = _known_bridge_ids()
     return (
         bridge["chassis_id"].lower() in known
         or bridge.get("mgmt_ip", "").lower() in known
