@@ -16,7 +16,7 @@ An open-source alternative to LanTopoLog. MIT license.
 
 *Alarm panel: port errors, discards and host outages with one-click access to the switch port table.*
 
-## Features (v0.6.7)
+## Features (v0.6.8)
 
 - SNMP v2c polling of switches: device name, ports, speeds, statuses.
 - MAC address tables (BRIDGE-MIB and Q-BRIDGE-MIB) from every switch,
@@ -100,7 +100,10 @@ An open-source alternative to LanTopoLog. MIT license.
   port that is not a trunk; `known_bridges` suppresses it for the ones
   that belong there, and `uplink_ports` marks the ports that leave the
   network — a provider handover — so what is behind them is collected
-  under one "External network" node and raises nothing. A port that
+  under one "External network" node and raises nothing. A device
+  MoonLan polls itself — anything in `switches:` or `routers:`, by any
+  of its addresses or MACs — never raises it either: a switch that
+  answers every scan is not "a switch nobody polls". A port that
   looks like a way out — a public address behind it, or a neighbour
   managed from a subnet nothing else shows — says so in its card and
   in `diag --topology`, so the setting is discoverable rather than
@@ -119,10 +122,13 @@ An open-source alternative to LanTopoLog. MIT license.
   `stp_fragmented` fire only for switches whose tree actually operates.
   See "STP status" below.
 - Loop detection from the vendors' private MIBs: profiles keyed by
-  `sysObjectID` (built in for the D-Link DGS-1210-26 Rev.F1,
-  DES-1210-28/ME and DES-3526; more can be added in
-  `loop_detection.profiles`), polled on the counters cycle rather than
-  on the ten-minute scan. `loop_detected` is critical and carries the
+  the `sysObjectID` each model actually answers with (built in for the
+  D-Link DGS-1210-26 Rev.F1, DES-1210-28/ME and DES-3526; more can be
+  added in `loop_detection.profiles`), polled on the counters cycle
+  rather than on the ten-minute scan. A branch counts as identified
+  only when it answers with data — in SNMPv2c a missing object comes
+  back inside a *successful* reply, so "the agent answered" identifies
+  nothing. `loop_detected` is critical and carries the
   raw status value the agent returned; `loop_detection_disabled` notes
   a switch that stopped watching. A model that reports nothing is shown
   as reporting nothing — never as "no loops". See "Loop Detection"
@@ -200,6 +206,7 @@ An open-source alternative to LanTopoLog. MIT license.
 | v0.6.5 ✓| Resuming a truncated walk, honest partial answers, per-port counter fallback |
 | v0.6.6 ✓| One bad OID no longer stops the counters; offline groups behind their bridge |
 | v0.6.7 ✓| Loop Detection from the vendors' private MIBs, honest unsupported state |
+| v0.6.8 ✓| Identify the model before reading it; diagnostics that can be shared |
 | v0.7    | Export to PDF and Draw.io, MAC address info import |
 | v0.8    | Windows computer inventory (WMI/WinRM) |
 
@@ -264,7 +271,10 @@ place_trunk_only_hosts: true # a MAC seen only on trunks is drawn there,
                              # marked "approximate"
 known_bridges: []            # bridges that are supposed to be behind an
                              # access port (chassis id or management IP):
-                             # found and named, but never alarmed on
+                             # found and named, but never alarmed on.
+                             # Only for devices MoonLan does NOT poll —
+                             # anything in switches: or routers: is
+                             # already known and needs no entry here
 uplink_ports: []             # ports that leave the network, as
                              # "<switch ip>:<port name>": what is behind
                              # them is one "External network" node and
@@ -765,6 +775,38 @@ says so through the LLDP bridge nodes instead.
 raised for operating switches only. A switch that stops operating drops
 its remembered root, so coming back does not read as a root change.
 
+### Sharing a diagnostic report
+
+```bash
+python -m moonlan.diag --topology --anonymize
+```
+
+Every `diag` report is a map of your network: addresses, MAC tables,
+host names, the port labels somebody typed into the switches. That is
+exactly what makes it useful in a bug report and exactly what you do
+not want published — this project learned that by publishing nine of
+them in its own history.
+
+`--anonymize` works with any of the reports. It rewrites the output
+through a substitution table that is **stable for the run**: one
+address always becomes the same replacement, so the report still reads
+as a report — the same switch is the same switch on every line, and a
+MAC seen on two ports is still one device. Replacements come from the
+documentation ranges so nobody mistakes one for a real device:
+`198.51.100.0/24` (RFC 5737) for addresses, `00:00:5e:00:53:xx`
+(RFC 7042) for MACs, `switch-N` and `host-NN` for names.
+
+It covers every address and MAC in the text — including the ones
+hiding inside an OID, where an ARP row carries an address and a MAC
+table row carries a MAC as six decimal octets — and every name the
+tool itself learned: switch `sysName`s, LLDP neighbour names, host
+names from the database. What it cannot cover is a bare word somebody
+typed into a port description, because nothing marks it as a name. The
+output is short; skim it before you attach it.
+
+`docs/diag_example/` holds one anonymised sample of each report,
+generated this way and not edited afterwards.
+
 ### Loop Detection
 
 ```bash
@@ -780,14 +822,21 @@ per-port columns, and which raw status value means "no loop".
 
 Built in:
 
-| Profile | Models | Branch |
-|---------|--------|--------|
-| `dlink-1210` | DGS-1210-26 Rev.F1 | `1.3.6.1.4.1.171.11.153.1000.17` |
-| `dlink-1210` | DES-1210-28/ME | `1.3.6.1.4.1.171.10.75.15.2.17` |
-| `dlink-des3526` | DES-3526 | `1.3.6.1.4.1.171.11.64.1.2.12` |
+| Profile | Model | sysObjectID | Branch |
+|---------|-------|-------------|--------|
+| `dlink-1210` | DGS-1210-26 Rev.F1 | `…171.10.153.6.1` | `…171.11.153.1000.17` |
+| `dlink-1210` | DES-1210-28/ME | `…171.10.75.15.2` | `…171.10.75.15.2.17` |
+| `dlink-des3526` | DES-3526 | `…171.10.64.1` | `…171.11.64.1.2.12` |
 
 The two 1210 models share one profile: different roots, identical
 structure below them.
+
+Note the third column against the fourth. A product's private branch
+is **not** under its own sysObjectID — two of these three cross from
+the `.10` subtree into `.11`, and they do it by different arithmetic.
+The first version of this table assumed the obvious rule and got two
+of four D-Links wrong. There is nothing to derive here; a new model is
+added by walking it.
 
 **HPE OfficeConnect 1820 reports nothing.** A full walk of
 `1.3.6.1.4.1.11` on one returns versions, serial numbers and PoE — no
@@ -852,10 +901,22 @@ that moved its branch can be corrected without touching the code.
 
 Profiles are matched by `sysObjectID` first. A switch whose
 `sysObjectID` matches nothing is still probed against every known
-branch with a single GET each: a vendor branch is not something another
-vendor also implements, so an answer identifies the model. `diag --loop`
-prints which of the two ways matched, and a firmware revision with a new
-`sysObjectID` therefore does not silently stop being watched.
+branch — but a probe only counts when the branch answers with **data**:
+the global scalar has to parse as one of the two values its enumeration
+allows, and the port table has to return at least one row.
+
+That bar exists because the obvious one does not work. In SNMPv2c an
+agent answers a request for an object it does not implement with a
+*successful* reply carrying `noSuchObject` — no error status, no error
+indication. A probe that accepts "it replied" therefore succeeds on
+every device that speaks SNMP at all, and v0.6.7 shipped exactly that:
+an HPE, an Edge-Core and a DES-3526 were all claimed by the first
+D-Link branch in the list and then reported as having loop protection
+switched off. They had not been read at all.
+
+`diag --loop` prints which of the two ways matched. `matched by probe`
+on a model that is already in the table is the signal that the table
+has drifted from the hardware again.
 
 ### Walking an arbitrary MIB
 
@@ -928,6 +989,7 @@ MoonLan/
 │   ├── lldp.py             # LLDP neighbours, capabilities, forwarding guard
 │   ├── stp.py              # BRIDGE-MIB dot1dStp* and the "is it running" verdict
 │   ├── loopdetect.py       # loop detection profiles for the vendors' private MIBs
+│   ├── anonymize.py        # rewriting a diag report so it can be shared
 │   ├── alarms.py           # stateful alarm engine
 │   ├── notify.py           # email/Telegram/Syslog notifications
 │   ├── db.py               # SQLite: hosts, event journal, alarms
@@ -936,7 +998,9 @@ MoonLan/
 │   ├── demo.py             # demo network generator
 │   └── server.py           # FastAPI application and REST API
 ├── web/                    # web UI (HTML/CSS/JS, ru/en)
+├── tests/                  # python -m unittest discover -s tests
 └── docs/
+    └── diag_example/       # anonymised sample of each diag report
 ```
 
 ## API
