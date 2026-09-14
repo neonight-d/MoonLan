@@ -355,8 +355,12 @@ function li(main, sub, dotClass, onClick, searchText, cssClass) {
 function renderSidebar() {
   els.switchList.replaceChildren(
     ...topology.switches.map((sw) =>
-      li(sw.name, sw.ip, sw.ping_up ? "up" : "down", () =>
-        focusNode("sw:" + sw.ip)
+      li(
+        sw.name,
+        // same rule as the map caption: no address over the address
+        sw.named === false ? sw.model || "" : sw.ip,
+        sw.ping_up ? "up" : "down",
+        () => focusNode("sw:" + sw.ip)
       )
     )
   );
@@ -458,10 +462,14 @@ function buildGraphData() {
       : sw.stp_root
       ? colors.ok
       : colors.moon;
+    // A switch with an empty sysName is captioned by its address, and
+    // repeating the address underneath tells nobody anything. The
+    // model out of sysDescr goes there instead, or nothing at all.
+    const second = sw.named === false ? sw.model || "" : sw.ip;
     nodes.push({
       id: "sw:" + sw.ip,
       label:
-        sw.name + "\n" + sw.ip +
+        sw.name + (second ? "\n" + second : "") +
         (sw.stp_root ? "\n" + t("stpRootMark") : "") +
         (looping ? "\n" + t("loopMark") : ""),
       shape: "box",

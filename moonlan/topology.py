@@ -400,6 +400,32 @@ DEVICE_KINDS = (
 )
 
 
+# sysDescr runs from a bare model name to a paragraph of firmware
+# build details. The first clause of the first line is the part a
+# person would call the model.
+MODEL_MAX_CHARS = 40
+
+
+def short_model(sys_descr: str) -> str:
+    """The model out of sysDescr, for a switch whose sysName is empty.
+
+    Cut at the first line break and the first separator, because that
+    is where the useful half ends on every device this has been tried
+    on: "ES3528M ..." keeps the model, and a D-Link that answers with
+    its whole firmware banner keeps the first clause of it.
+    """
+    text = (sys_descr or "").strip().splitlines()
+    if not text:
+        return ""
+    head = text[0]
+    for sep in (",", ";"):
+        head = head.split(sep)[0]
+    head = " ".join(head.split())
+    if len(head) > MODEL_MAX_CHARS:
+        head = head[:MODEL_MAX_CHARS - 1].rstrip() + "…"
+    return head
+
+
 def device_kind(capabilities: set[str], cap_known: bool) -> str:
     """What the neighbour says it is: "router", "phone", … or "unknown".
 
@@ -1448,6 +1474,12 @@ def build_topology(
     switch_dicts = [{
         "ip": sw.ip,
         "name": sw.sys_name or sw.ip,
+        # A switch that answers sysName with an empty string is named
+        # by its address, and a map caption of the address over the
+        # address says nothing twice. The model out of sysDescr is the
+        # second line for those.
+        "named": bool(sw.sys_name),
+        "model": short_model(sw.sys_descr),
         "mac": sw.bridge_mac,
         "descr": sw.sys_descr,
         "stp_operating": bool(sw.stp and sw.stp.operating),
