@@ -75,6 +75,33 @@ PHYSICAL_IF_TYPES = {IF_TYPE_ETHERNET, 62, 69, 117}
 RESUME_PAUSE = 0.2
 
 
+# What `last_walk_status` reports for a walk that was never sent. It
+# has to read as "no answer", not as "an empty table": the difference
+# between those two is the whole point of WalkStatus.
+SKIPPED_ERROR = (
+    "not asked: this OID has answered nothing but timeouts on this host"
+)
+
+
+def is_timeout(error: str) -> bool:
+    """True for the one failure the dead-OID rule acts on.
+
+    pysnmp reports it as "No SNMP response received before timeout".
+    An agent error, a malformed OID, a table that ends early — none of
+    those mean the agent will go on saying nothing, and none of them
+    cost a full timeout budget to ask again.
+    """
+    return "timeout" in error.lower()
+
+
+@dataclass
+class DeadOid:
+    """How one (host, OID) pair has been behaving."""
+
+    strikes: int = 0     # walks in a row with no rows and a timeout
+    skip_until: int = 0  # scan cycle at which it is tried again
+
+
 @dataclass
 class WalkStatus:
     """How one walk of one OID subtree ended."""
@@ -375,6 +402,8 @@ class SnmpCollector:
         retries: int = 1,
         retries_on_break: int = 2,
         per_host: dict | None = None,
+        dead_oid_strikes: int = 0,
+        dead_oid_cooldown_scans: int = 30,
     ):
         self._community = CommunityData(community, mpModel=1)  # v2c
         self._timeout = timeout
@@ -392,6 +421,80 @@ class SnmpCollector:
         # above, which are the global `snmp:` section.
         self._per_host = dict(per_host or {})
         self._communities: dict[str, CommunityData] = {}
+        # (host, oid) -> the dead-OID record for it, and the scan
+        # cycle counter the cooldown is measured in
+        self._dead_oids: dict[tuple[str, str], DeadOid] = {}
+        self._cycle = 0
+        # 0 disables the rule: every OID is asked for every time
+        self._dead_oid_strikes = dead_oid_strikes
+        self._dead_oid_cooldown = dead_oid_cooldown_scans
+
+    def begin_scan_cycle(self) -> None:
+        """One more scan has started; the cooldown is counted in these."""
+        self._cycle += 1
+
+    def paused_oids(self) -> list[dict]:
+        """(host, OID) pairs nobody is asking for right now."""
+        return [
+            {
+                "host": host,
+                "oid": oid,
+                "strikes": record.strikes,
+                "cycles_left": record.skip_until - self._cycle,
+            }
+            for (host, oid), record in sorted(self._dead_oids.items())
+            if record.skip_until > self._cycle
+        ]
+
+    def _skipping(self, host: str, oid: str) -> bool:
+        """Is this OID on pause — and, if the pause is over, say so.
+
+        The resumption is logged as loudly as the pause. An operator
+        looking at a gap in the data has to be able to tell "the device
+        does not report this" from "MoonLan stopped asking", and that
+        means both edges are in the log.
+        """
+        record = self._dead_oids.get((host, oid))
+        if record is None or not record.skip_until:
+            return False
+        if record.skip_until > self._cycle:
+            return True
+        log.info(
+            "%s: asking for %s again after %d scan(s) of silence — the "
+            "firmware may have learned to answer it",
+            host, oid, self._dead_oid_cooldown,
+        )
+        record.skip_until = 0
+        record.strikes = 0
+        return False
+
+    def _note_walk_outcome(
+        self, host: str, oid: str, status: "WalkStatus"
+    ) -> None:
+        """Count the one outcome worth giving up on.
+
+        No rows AND a timeout: the agent does not implement the table
+        and cannot say so, so every cycle spends the whole retry budget
+        to learn nothing. Anything else resets the count.
+        """
+        key = (host, oid)
+        if not (status.rows == 0 and is_timeout(status.error)):
+            self._dead_oids.pop(key, None)
+            return
+        if not self._dead_oid_strikes:
+            return
+        record = self._dead_oids.setdefault(key, DeadOid())
+        record.strikes += 1
+        if record.strikes < self._dead_oid_strikes or record.skip_until:
+            return
+        record.skip_until = self._cycle + self._dead_oid_cooldown
+        log.warning(
+            "%s: walk of %s has returned no rows and timed out %d time(s) "
+            "in a row — not asking for it again for %d scan(s). The data "
+            "is missing because MoonLan stopped asking, not because the "
+            "device denies having it.",
+            host, oid, record.strikes, self._dead_oid_cooldown,
+        )
 
     def _community_for(self, host: str) -> CommunityData:
         """The community string this host answers to.
@@ -508,6 +611,12 @@ class SnmpCollector:
         base = tuple(int(x) for x in oid.split("."))
         status = WalkStatus(oid=oid)
         self._walk_status[(host, oid)] = status
+        if self._skipping(host, oid):
+            # Not sent, and not reported as an empty table either: the
+            # caller sees the same "no answer" it would see from a walk
+            # that failed, which is exactly what this is.
+            status.error = SKIPPED_ERROR
+            return
         start = oid
         last_oid: tuple[int, ...] | None = None
 
@@ -523,6 +632,7 @@ class SnmpCollector:
                     "%s: walk of %s could not be started (%s)",
                     host, start, exc,
                 )
+                self._note_walk_outcome(host, oid, status)
                 return
             left_subtree = False
             try:
@@ -552,6 +662,7 @@ class SnmpCollector:
             finally:
                 await objects.aclose()
             if left_subtree or not broke:
+                self._note_walk_outcome(host, oid, status)
                 return  # read to the end
             status.error = broke
             if status.resumes >= self._breaks_for(host) or last_oid is None:
@@ -566,6 +677,7 @@ class SnmpCollector:
                     host, oid, status.rows, broke,
                     f", last OID {status.last_oid}" if status.last_oid else "",
                 )
+                self._note_walk_outcome(host, oid, status)
                 return
             status.resumes += 1
             # an agent that has run out of breath needs a moment before

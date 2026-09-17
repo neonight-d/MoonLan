@@ -150,6 +150,8 @@ def get_collector() -> SnmpCollector:
             retries=config.snmp.retries,
             retries_on_break=config.snmp.retries_on_break,
             per_host=config.switch_snmp,
+            dead_oid_strikes=config.snmp.dead_oid_strikes,
+            dead_oid_cooldown_scans=config.snmp.dead_oid_cooldown_scans,
         )
     return _collector
 
@@ -238,6 +240,7 @@ async def run_scan() -> None:
             collected = demo.demo_network()
         else:
             collector = get_collector()
+            collector.begin_scan_cycle()
             results = await asyncio.gather(
                 *(
                     _collect_within_budget(
@@ -2105,6 +2108,24 @@ async def api_scan() -> dict:
 @app.get("/api/search")
 async def api_search(q: str = Query(default="")) -> dict:
     return {"query": q, "results": state.search(q)}
+
+
+@app.get("/api/skipped-oids")
+async def api_skipped_oids() -> dict:
+    """OIDs MoonLan has stopped asking for, and for how much longer.
+
+    The pause lives in the running process, so `diag --skipped` asks
+    the service rather than guessing: a separate CLI run has its own
+    collector and has never seen any of this.
+    """
+    collector = _collector
+    paused = collector.paused_oids() if collector is not None else []
+    return {
+        "strikes": config.snmp.dead_oid_strikes,
+        "cooldown_scans": config.snmp.dead_oid_cooldown_scans,
+        "polled": collector is not None,
+        "paused": paused,
+    }
 
 
 @app.get("/api/status")

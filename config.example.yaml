@@ -46,6 +46,29 @@ snmp:
   # медленный потому, что на часть запросов не отвечает вовсе, лучше
   # уменьшить его собственный `timeout` (см. параметры на устройство).
   host_budget_seconds: 120
+  # Some agents do not implement a table and cannot say so: instead of
+  # answering noSuchObject, which is cheap, they go quiet and the walk
+  # pays the whole retry budget for nothing — every cycle, forever.
+  # After this many walks in a row that returned no rows AND ended in a
+  # timeout, MoonLan stops asking that host for that OID for
+  # dead_oid_cooldown_scans scans, then tries again (firmware gets
+  # updated). Both the pause and the resumption are logged: data
+  # missing because MoonLan stopped asking must never look like data
+  # the device denies having. `python -m moonlan.diag --skipped` lists
+  # what is on pause right now. 0 in dead_oid_strikes disables it.
+  # Некоторые агенты не реализуют таблицу и не умеют об этом сказать:
+  # вместо дешёвого noSuchObject они молчат, и walk впустую тратит весь
+  # бюджет повторов — каждый цикл, всегда. После стольких walk-ов
+  # подряд, вернувших ноль строк И оборвавшихся по таймауту, MoonLan
+  # перестаёт спрашивать этот OID у этого хоста на
+  # dead_oid_cooldown_scans сканов, потом пробует снова (прошивки
+  # обновляют). И пауза, и возобновление пишутся в лог: данные,
+  # которых нет потому, что MoonLan перестал спрашивать, не должны
+  # выглядеть как данные, которых нет у устройства. Что сейчас на
+  # паузе, показывает `python -m moonlan.diag --skipped`. 0 в
+  # dead_oid_strikes выключает правило.
+  dead_oid_strikes: 3
+  dead_oid_cooldown_scans: 30
 
 # IP addresses of managed switches. An entry is either an address, as
 # below, or a mapping with `ip:` and any of the snmp: keys — community,

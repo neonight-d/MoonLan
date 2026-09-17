@@ -78,6 +78,10 @@ class StubCollector(SnmpCollector):
         self._walk_status = {}
         self._retries_on_break = retries_on_break
         self._per_host = {}
+        self._dead_oids = {}
+        self._cycle = 0
+        self._dead_oid_strikes = 0
+        self._dead_oid_cooldown = 30
         self._communities = {}
 
     async def _open_walk(self, host, start):

@@ -40,6 +40,17 @@ class SnmpConfig:
     # as well. Two minutes is several times what the slowest healthy
     # switch on the network this was written for needs.
     host_budget_seconds: int = 120
+    # An agent that does not implement a table is supposed to say so
+    # (noSuchObject), and that answer is cheap. Some simply go quiet,
+    # and the walk pays the full timeout budget for nothing — every
+    # cycle, forever. After this many walks in a row that returned no
+    # rows AND ended in a timeout, the OID is left alone on that host
+    # for `dead_oid_cooldown_scans` scans, then tried again: firmware
+    # gets updated. Only that one outcome counts. A partial answer is
+    # picked back up (retries_on_break), and an honest noSuchObject
+    # costs nothing to keep asking for.
+    dead_oid_strikes: int = 3
+    dead_oid_cooldown_scans: int = 30
 
 
 @dataclass
@@ -500,6 +511,13 @@ def load_config(path: Path | None = None) -> Config:
         ),
         host_budget_seconds=r.get(
             "snmp.host_budget_seconds", d.snmp.host_budget_seconds, int
+        ),
+        dead_oid_strikes=r.get(
+            "snmp.dead_oid_strikes", d.snmp.dead_oid_strikes, int
+        ),
+        dead_oid_cooldown_scans=r.get(
+            "snmp.dead_oid_cooldown_scans", d.snmp.dead_oid_cooldown_scans,
+            int,
         ),
     )
 

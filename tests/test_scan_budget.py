@@ -51,6 +51,10 @@ class StubCollector:
     def __init__(self, delay: float = 30.0):
         self.delay = delay
         self.finished: list[str] = []
+        self.cycles = 0
+
+    def begin_scan_cycle(self) -> None:
+        self.cycles += 1
 
     async def collect(self, host: str) -> SwitchData:
         if host in SLOW:

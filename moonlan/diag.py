@@ -46,9 +46,11 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import json
 import sqlite3
 import sys
 import time
+import urllib.request
 from collections import Counter
 
 from . import counters, loopdetect, pinger, stp
@@ -782,6 +784,52 @@ def run_config_audit(cfg) -> None:
             mark = "*" if name in settings.explicit else " "
             cells.append(f"{str(value) + mark:>21}")
         print(f"  {ip:<18}" + "".join(cells))
+
+
+def run_skipped_view(cfg) -> None:
+    """Section 12: OIDs the service has stopped asking for.
+
+    The pause is state of the running process — a CLI run builds its
+    own collector and has seen nothing — so this asks the service over
+    its own API rather than inventing an answer.
+    """
+    _section("12. OIDs currently not asked for")
+    host = cfg.listen_host
+    if host in ("0.0.0.0", "::", ""):
+        host = "127.0.0.1"
+    url = f"http://{host}:{cfg.listen_port}/api/skipped-oids"
+    try:
+        with urllib.request.urlopen(url, timeout=5) as response:
+            data = json.loads(response.read().decode("utf-8"))
+    except Exception as exc:
+        print(f"could not ask the service at {url}: {exc}")
+        print(
+            "This list lives in the running process. Start MoonLan, or "
+            "point listen.host / listen.port at the instance you mean."
+        )
+        return
+    print(
+        f"rule: pause an OID after {data['strikes']} walk(s) with no rows "
+        f"and a timeout, for {data['cooldown_scans']} scan(s)"
+    )
+    if not data.get("polled"):
+        print("\nthe service has not polled anything yet")
+        return
+    paused = data.get("paused") or []
+    if not paused:
+        print("\nnothing is on pause: every OID is being asked for")
+        return
+    print(f"\n{'switch':<18} {'OID':<34} {'strikes':>8} {'scans left':>11}")
+    for entry in paused:
+        print(
+            f"{entry['host']:<18} {entry['oid']:<34} "
+            f"{entry['strikes']:>8} {entry['cycles_left']:>11}"
+        )
+    print(
+        "\nThese are not missing because the devices deny having them. "
+        "They are missing because MoonLan stopped asking, and it will "
+        "ask again when the count above runs out."
+    )
 
 
 FDB_TABLES = ((OID_FDB_PORT, 6, "dot1dTpFdbPort"),
@@ -1618,6 +1666,11 @@ def main() -> None:
              "an issue",
     )
     parser.add_argument(
+        "--skipped", action="store_true",
+        help="ask the running service which OIDs it has stopped "
+             "polling on which hosts, and for how many more scans",
+    )
+    parser.add_argument(
         "--config", action="store_true",
         help="print the effective configuration: every setting, its "
              "value and whether it comes from config.yaml or a default",
@@ -1639,11 +1692,12 @@ def main() -> None:
     modes = (
         args.topology or args.hosts or args.port or args.config
         or args.host or args.fdb or args.stp or args.walk or args.loop
+        or args.skipped
     )
     if not modes and not args.ip:
         parser.error(
             "an ip is required unless --topology, --hosts, --host, --fdb, "
-            "--stp, --loop, --walk, --port or --config is given"
+            "--stp, --loop, --walk, --port, --skipped or --config is given"
         )
     cfg = load_config()
     community = args.community or cfg.snmp.community
@@ -1660,6 +1714,8 @@ def main() -> None:
         sys.stdout = AnonymizingWriter(sys.stdout, _ANON)
     if args.config:
         run_config_audit(cfg)
+    elif args.skipped:
+        run_skipped_view(cfg)
     elif args.walk:
         asyncio.run(
             run_walk(args.walk[0], args.walk[1], args.limit, community, timeout)
