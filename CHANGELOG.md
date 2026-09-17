@@ -6,6 +6,41 @@ for before the next one started.
 
 Русская версия — [CHANGELOG_RU.md](CHANGELOG_RU.md).
 
+## v0.6.11 — 2026-09-17
+
+One root is one root, and a panel header stays put. RSTP went live on
+the network this project was written for, and the STP panel answered
+by showing three of its own defects.
+
+A Bridge ID is a 4-bit priority and a 12-bit system id extension, not
+one number — and some agents put the priority in the low byte, so one
+root read as `4096/34:0a:...` from an HPE and `16/34:0a:...` from an
+Edge-Core, and the network was reported as having two trees. Bridge
+IDs are now parsed per 802.1t, the shifted encoding is detected,
+corrected and logged rather than silently repaired, and roots are
+compared by MAC.
+
+Four D-Links running RSTP were called "not operating" because the
+only test was historical — topology changes, or a change newer than
+the uptime — and a tree switched on an hour ago has neither. Two tests
+now come first: a bridge that accepted somebody else's root at a cost
+above zero is participating, full stop; and a switch whose neighbours
+follow its own address is the root, which is the one thing a switch
+cannot establish about itself. `diag --stp` and the panel say which
+test decided. A switch that answers BRIDGE-MIB with nothing at all —
+zero Bridge ID, no topology changes, no port out of disabled — is now
+reported as exactly that, instead of as a tree that failed to
+converge.
+
+Also: a port reported blocking with no cable in it is not a blocked
+link (RouterOS reports blocking on every spare socket); the panel
+skeleton from v0.6.2 is now a shared class, so the STP, alarms,
+journal and details panels keep their header and close button in view
+while their contents scroll; and `stp_fragmented` says what it may
+well be — segments whose trunk ports sit in different VLANs form
+separate trees by design, and the panel lists the VLANs beside each
+root.
+
 ## v0.6.10 — 2026-09-14
 
 Devices seen through a trunk are grouped beyond it, not on it. A

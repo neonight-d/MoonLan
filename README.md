@@ -16,7 +16,7 @@ An open-source alternative to LanTopoLog. MIT license.
 
 *Alarm panel: port errors, discards and host outages with one-click access to the switch port table.*
 
-## Features (v0.6.10)
+## Features (v0.6.11)
 
 - SNMP v2c polling of switches: device name, ports, speeds, statuses.
 - MAC address tables (BRIDGE-MIB and Q-BRIDGE-MIB) from every switch,
@@ -223,6 +223,7 @@ Version history: [CHANGELOG.md](CHANGELOG.md)
 | v0.6.8 ✓| Identify the model before reading it; diagnostics that can be shared |
 | v0.6.9 ✓| A device seen on an uplink is not behind it; host placement under test |
 | v0.6.10 ✓| Devices seen through a trunk are grouped beyond it, not on it |
+| v0.6.11 ✓| One root is one root; a panel header stays put |
 | v0.7    | Export to PDF and Draw.io, MAC address info import |
 | v0.8    | Windows computer inventory (WMI/WinRM) |
 
@@ -758,8 +759,27 @@ misleadingly, itself as the designated root. Read at face value, five
 such switches become five root bridges of five trees. That is exactly
 the false diagnosis this project started from.
 
-So root, cost and root port are used only for a switch that passes all
-three tests:
+A switch is taken as part of a tree on the first of these that holds:
+
+1. **it accepted somebody else's root** — the designated root is not
+   one of its own addresses and the cost to it is above zero. Only a
+   bridge that processes BPDUs answers that way; one with its tree off
+   names itself, at cost zero, always;
+2. **a neighbour confirms it as the root** — another polled switch,
+   already known to be operating by (1), follows this switch's own
+   address. "I am the root" reads identically from the real root and
+   from a switch with STP disabled, and from inside one device they
+   cannot be told apart. From outside they can, and MoonLan polls the
+   whole network;
+3. **the tree demonstrably converged**, which is the historical test
+   below. It is last because history is what a tree switched on an
+   hour ago does not have: `dot1dStpTimeSinceTopologyChange` equals
+   the uptime and `dot1dStpTopChanges` is zero, so a freshly converged
+   tree used to read as one that never converged.
+
+`diag --stp` prints which of the three decided, and so does the
+tooltip on the state cell in the panel. For test 3, root, cost and
+root port are used only for a switch that passes all three of:
 
 1. at least one port has `dot1dStpPortEnable` = enabled(1);
 2. at least one port is in a state other than disabled(1);
@@ -782,6 +802,20 @@ The network verdict on top of the panel is one of three:
   Held for two scans before `stp_fragmented` is raised: a converging
   tree passes through disagreement on its way to agreement.
 
+Fragmentation is **not necessarily a fault**. BPDUs are untagged and
+are handled in the VLAN of the port they arrive on, so two segments
+whose trunk ports sit in different VLANs form two trees entirely by
+design and never meet — which is exactly what was happening on the
+network this was written for, where trunk ports 27 and 28 were in
+VLAN 500 and VLAN 600 and in no VLAN each other could reach. The
+panel lists each root with the VLANs of its followers' trunk ports
+beside it, and the alarm text says the same. Check the VLAN
+membership of the trunks before treating it as damage.
+
+Roots are compared by MAC, never by the text of the Bridge ID: see
+"What BRIDGE-MIB really says" below for why two switches can spell
+one root two different ways.
+
 A partial tree is a normal state here, not an error. Bridges that
 answer no SNMP (the MikroTik boxes behind the access ports) take part
 in spanning tree without appearing in any of these numbers, and the map
@@ -790,6 +824,51 @@ says so through the LLDP bridge nodes instead.
 `stp_root_changed`, `stp_topology_change` and `stp_fragmented` are
 raised for operating switches only. A switch that stops operating drops
 its remembered root, so coming back does not read as a root change.
+
+#### What BRIDGE-MIB really says
+
+Four things on this hardware mean something other than what they look
+like. All four were found the hard way; they are written down so the
+next person adding a switch does not find them again.
+
+**The priority in the Bridge ID can be in the wrong byte.** A Bridge
+ID is eight bytes: two of identifier, six of MAC. 802.1t splits the
+first two into a 4-bit priority (hence always a multiple of 4096) and
+a 12-bit system id extension. An Edge-Core ES3528M answers
+`00 10 34 0a 33 bc ca f0` where an HPE 1820 answers
+`10 00 34 0a 33 bc ca f0` for the same root — the priority is in the
+low byte, and read honestly that is 16 rather than 4096. MoonLan
+detects the shifted encoding, corrects it, logs a warning naming the
+host, and marks the value in the panel. It does not correct it
+silently: the number will differ from the one the switch's own web
+interface prints, and the operator has to know why.
+
+**`dot1dStpProtocolSpecification` is not the protocol version.**
+RouterOS answers 3 (`ieee8021d`) with RSTP running, and it is not
+alone. MoonLan reads the version from `dot1dStpVersion`
+(`1.3.6.1.2.1.17.2.16.0`) and prints the specification only in
+`diag --stp`, with a note beside it.
+
+**`dot1dStpPortState = 2` (blocking) does not mean a blocked link.**
+RouterOS reports blocking on ports with nothing plugged into them —
+`ether3` and `ether4` of a four-port box. A port is treated as
+blocking only when `ifOperStatus` for it is up; otherwise it is dark,
+and there is no edge on the map to block.
+
+**A switch can run a spanning tree and report none of it.** Four
+D-Links on this network run RSTP — their CLI names the root, the root
+port and the cost — and answer every BRIDGE-MIB object with a zero:
+designated root `00 00 00 00 00 00 00 00`, priority 0, no topology
+changes, and either an empty `dot1dStpPortTable` or one where every
+port is disabled. MoonLan says exactly that rather than calling the
+tree broken, and the root among them is still identified, because its
+neighbours name it.
+
+Read correctly on all of them: `dot1dBaseBridgeAddress`,
+`dot1dBasePortIfIndex`, and the per-port `dot1dStpPortDesignatedRoot`
+/ `DesignatedCost` / `DesignatedPort`. `dot1dTpFdbPort = 0` means "no
+port" and is dropped, so nothing binds to a port zero that does not
+exist.
 
 ### Sharing a diagnostic report
 
