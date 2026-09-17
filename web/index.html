@@ -46,21 +46,26 @@
 
     <section id="map-panel">
       <div id="network"></div>
-      <div id="details" class="hidden">
-        <button id="details-close">×</button>
-        <div id="details-body"></div>
+      <div id="details" class="panel hidden">
+        <div class="panel-head">
+          <h3 id="details-title"></h3>
+          <button id="details-close">×</button>
+        </div>
+        <div class="panel-scroll"><div id="details-body"></div></div>
       </div>
-      <div id="journal" class="hidden">
-        <button id="journal-close">×</button>
-        <h3 data-i18n="journalTitle"></h3>
-        <ul id="journal-list"></ul>
+      <div id="journal" class="panel hidden">
+        <div class="panel-head">
+          <h3 data-i18n="journalTitle"></h3>
+          <button id="journal-close">×</button>
+        </div>
+        <div class="panel-scroll"><ul id="journal-list"></ul></div>
       </div>
-      <div id="ports" class="hidden">
+      <div id="ports" class="panel hidden">
         <div class="panel-head">
           <h3 id="ports-title"></h3>
           <button id="ports-close">×</button>
         </div>
-        <div id="ports-scroll">
+        <div class="panel-scroll">
         <table class="ports-table">
           <thead>
             <tr>
@@ -78,15 +83,19 @@
         </table>
         </div>
       </div>
-      <div id="alarms" class="hidden">
-        <button id="alarms-close">×</button>
-        <h3 data-i18n="alarmsTitle"></h3>
-        <div id="alarms-body"></div>
+      <div id="alarms" class="panel hidden">
+        <div class="panel-head">
+          <h3 data-i18n="alarmsTitle"></h3>
+          <button id="alarms-close">×</button>
+        </div>
+        <div class="panel-scroll"><div id="alarms-body"></div></div>
       </div>
-      <div id="stp" class="hidden">
-        <button id="stp-close">×</button>
-        <h3 data-i18n="stpTitle"></h3>
-        <div id="stp-body"></div>
+      <div id="stp" class="panel hidden">
+        <div class="panel-head">
+          <h3 data-i18n="stpTitle"></h3>
+          <button id="stp-close">×</button>
+        </div>
+        <div class="panel-scroll"><div id="stp-body"></div></div>
       </div>
       <div id="empty-state" class="hidden">
         <p data-i18n="emptyLine1"></p>

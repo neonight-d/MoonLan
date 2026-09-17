@@ -162,47 +162,70 @@ main { flex: 1; display: flex; min-height: 0; }
 #map-panel { flex: 1; position: relative; min-width: 0; }
 #network { position: absolute; inset: 0; }
 
-/* ---------- details panel ---------- */
+/* ---------- floating panels ---------- */
 
-#details {
+/* One skeleton for all of them. v0.6.2 gave the ports panel a head
+   that stays put and a single scrolling area under it, and gave it to
+   that panel alone: `grep panel-head web/index.html` found one hit out
+   of five. The others scrolled as a whole, so the STP title slid away
+   to "ee (STP)" while the close button — absolutely positioned — sat
+   where it was, and a long alarm list pushed its heading off the top.
+   A fix applied to one instance of a class of bug is half a fix. */
+.panel {
   position: absolute;
   top: 14px; right: 14px;
-  width: 280px;
+  max-width: calc(100vw - 28px);
+  max-height: calc(100% - 28px);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
   background: var(--bg-panel);
   border: 1px solid var(--line);
   border-radius: 8px;
   padding: 14px;
   box-shadow: 0 6px 24px rgba(0, 0, 0, 0.5);
 }
-#details h3 { margin: 0 0 8px; font-size: 1rem; color: var(--moon); }
+.panel-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+  flex: 0 0 auto;
+}
+.panel-head h3 {
+  margin: 0 0 8px;
+  font-size: 1rem;
+  color: var(--moon);
+  overflow-wrap: anywhere;
+}
+/* in the flow of the head, not floating over the content: a close
+   button that keeps its place while the title moves is how you get a
+   header with no title and a cross */
+.panel-head button {
+  flex: 0 0 auto;
+  border: none;
+  font-size: 1.1rem;
+  padding: 2px 6px;
+}
+.panel-scroll { overflow: auto; flex: 1 1 auto; }
+/* a wide table inside a panel of prose: the table scrolls, the prose
+   stays where it was written */
+.table-scroll { overflow-x: auto; }
+
+/* Widths: wanted, but never wider than the window. */
+#details { width: min(320px, calc(100vw - 28px)); }
+#journal { width: min(360px, calc(100vw - 28px)); }
+#alarms  { width: min(380px, calc(100vw - 28px)); }
+#stp     { width: min(760px, calc(100vw - 28px)); }
+#ports   { width: min(820px, calc(100vw - 28px)); }
+
+/* ---------- details panel ---------- */
 #details .hint { margin: 0 0 6px; font-size: 0.82rem; color: var(--text-dim); }
 #details dl { margin: 0; font-size: 0.85rem; }
 #details dt { color: var(--text-dim); margin-top: 8px; }
 #details dd { margin: 2px 0 0; font-family: ui-monospace, monospace; word-break: break-all; }
-#details-close {
-  position: absolute; top: 6px; right: 8px;
-  border: none; font-size: 1.1rem; padding: 2px 6px;
-}
-
 /* ---------- event journal ---------- */
 
-#journal {
-  position: absolute;
-  top: 14px; right: 14px;
-  width: 360px;
-  max-height: calc(100% - 28px);
-  overflow-y: auto;
-  background: var(--bg-panel);
-  border: 1px solid var(--line);
-  border-radius: 8px;
-  padding: 14px;
-  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.5);
-}
-#journal h3 { margin: 0 0 8px; font-size: 1rem; color: var(--moon); }
-#journal-close {
-  position: absolute; top: 6px; right: 8px;
-  border: none; font-size: 1.1rem; padding: 2px 6px;
-}
 #journal-list { list-style: none; margin: 0; padding: 0; font-size: 0.85rem; }
 #journal-list li {
   padding: 7px 0;
@@ -231,30 +254,12 @@ main { flex: 1; display: flex; min-height: 0; }
 }
 .badge.critical { background: #d96b6b; }
 
-#alarms {
-  position: absolute;
-  top: 14px; right: 14px;
-  width: 380px;
-  max-width: calc(100% - 28px);
-  max-height: calc(100% - 28px);
-  overflow-y: auto;
-  background: var(--bg-panel);
-  border: 1px solid var(--line);
-  border-radius: 8px;
-  padding: 14px;
-  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.5);
-}
-#alarms h3 { margin: 0 0 8px; font-size: 1rem; color: var(--moon); }
 #alarms h4 {
   margin: 12px 0 6px;
   font-size: 0.8rem;
   text-transform: uppercase;
   letter-spacing: 0.08em;
   color: var(--text-dim);
-}
-#alarms-close {
-  position: absolute; top: 6px; right: 8px;
-  border: none; font-size: 1.1rem; padding: 2px 6px;
 }
 #alarms .no-alarms { margin: 0; color: var(--text-dim); font-size: 0.85rem; }
 .alarm-list { list-style: none; margin: 0; padding: 0; font-size: 0.85rem; }
@@ -317,34 +322,6 @@ main { flex: 1; display: flex; min-height: 0; }
 /* Only the table scrolls. The whole panel used to, so scrolling
    sideways to reach the error columns took the title, the close button
    and the port names with it: numbers with nothing to attach them to. */
-#ports {
-  position: absolute;
-  top: 14px; right: 14px;
-  width: min(820px, calc(100vw - 28px));
-  max-width: calc(100% - 28px);
-  max-height: calc(100% - 28px);
-  display: flex;
-  flex-direction: column;
-  overflow: hidden;
-  background: var(--bg-panel);
-  border: 1px solid var(--line);
-  border-radius: 8px;
-  padding: 14px;
-  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.5);
-}
-.panel-head {
-  display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: 10px;
-  flex: 0 0 auto;
-  margin-bottom: 8px;
-}
-#ports h3 { margin: 0; font-size: 1rem; color: var(--moon); }
-#ports-scroll { overflow: auto; flex: 1 1 auto; }
-#ports-close {
-  border: none; font-size: 1.1rem; padding: 2px 6px; line-height: 1;
-}
 .ports-table { width: 100%; border-collapse: collapse; font-size: 0.82rem; }
 .ports-table th {
   text-align: left;
@@ -448,24 +425,6 @@ main { flex: 1; display: flex; min-height: 0; }
 }
 
 /* STP panel: the verdict first, then the raw per-switch numbers */
-#stp {
-  position: absolute;
-  top: 14px; right: 14px;
-  width: 760px;
-  max-width: calc(100% - 28px);
-  max-height: calc(100% - 28px);
-  overflow: auto;
-  background: var(--bg-panel);
-  border: 1px solid var(--line);
-  border-radius: 8px;
-  padding: 14px;
-  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.5);
-}
-#stp h3 { margin: 0 0 8px; font-size: 1rem; color: var(--moon); }
-#stp-close {
-  position: absolute; top: 6px; right: 8px;
-  border: none; font-size: 1.1rem; padding: 2px 6px;
-}
 #stp .no-alarms { margin: 0; color: var(--text-dim); font-size: 0.85rem; }
 .stp-verdict { margin: 0 0 6px; font-size: 0.95rem; font-weight: 600; }
 .stp-verdict.ok { color: var(--ok); }
