@@ -234,6 +234,10 @@ docs/tz/
 # MAC tables, host names, port labels. docs/diag_example/ holds
 # anonymised samples instead; `diag --anonymize` is how to make one.
 docs/diag/
+# Reports on finished work: written for the operator of one
+# deployment, and they quote its addresses and switch names. The
+# repository keeps the CHANGELOG instead.
+docs/results/
 # Working copies made while rewriting history. Committing the mirror
 # would put every purged object back into the repository.
 moonlan-backup.git/
