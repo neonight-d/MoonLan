@@ -504,6 +504,10 @@ def _stp_report(collected: list[SwitchData]) -> dict:
     per_switch = {
         sw.ip: sw.stp for sw in collected if sw.reachable and sw.stp is not None
     }
+    # The cross-switch test runs once the whole network is in hand: a
+    # switch that names itself root is believed only when a neighbour
+    # names it too (see stp.judge_network).
+    stp.judge_network(per_switch)
     verdict = stp.network_verdict(per_switch)
     switches = []
     for ip, data in sorted(per_switch.items()):
@@ -523,6 +527,9 @@ def _stp_report(collected: list[SwitchData]) -> dict:
             # the agent put the priority in the wrong byte and MoonLan
             # corrected it; the panel says so rather than hiding it
             "root_nonstandard": data.root_nonstandard,
+            # its neighbours established this, not its own answers:
+            # the numbers beside it are zeros it cannot vouch for
+            "confirmed_root": data.confirmed_root,
             "root_cost": data.root_cost,
             "root_port": (
                 port_name(sw, data.ports[data.root_port].if_index)

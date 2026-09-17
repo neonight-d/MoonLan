@@ -1797,10 +1797,27 @@ function renderStp() {
   const thead = document.createElement("thead");
   thead.append(head);
   table.append(thead);
+  // The root of the tree, as the network agreed it. A switch that had
+  // to be identified as root by its neighbours reports zeros about
+  // itself, and printing those in its own row would undo the finding.
+  const agreedRoot = Object.keys((data.verdict || {}).roots || {})[0] || "";
   const tbody = document.createElement("tbody");
   for (const sw of data.switches) {
     const tr = document.createElement("tr");
-    const cells = sw.operating
+    const cells = sw.confirmed_root
+      ? [
+          sw.name,
+          t("stpStateRoot"),
+          // it never told us its priority; the root's identity came
+          // from the switches that follow it
+          "—",
+          agreedRoot || sw.designated_root || "—",
+          "—",
+          "—",
+          "—",
+          "—",
+        ]
+      : sw.operating
       ? [
           sw.name,
           sw.is_root ? t("stpStateRoot") : t("stpStateMember"),
@@ -1817,10 +1834,10 @@ function renderStp() {
     cells.forEach((value, i) => {
       const td = document.createElement("td");
       td.textContent = value;
-      if (i === 1 && !sw.operating) {
-        td.className = "stp-off";
-        td.title = sw.reason || "";
-      }
+      // the basis for the verdict, either way: an operator who cannot
+      // see why a switch is called operating cannot check the claim
+      if (i === 1) td.title = sw.reason || "";
+      if (i === 1 && !sw.operating) td.className = "stp-off";
       if (i === 1 && sw.is_root) td.className = "stp-root";
       if (i === 3 && sw.root_nonstandard) {
         // the agent put the priority in the low byte and MoonLan put

@@ -1261,6 +1261,7 @@ async def run_stp_view(community: str, timeout: int, cfg) -> None:
         sys.exit("no reachable switches")
 
     per_switch = {sw.ip: sw.stp for sw in reachable if sw.stp is not None}
+    stp.judge_network(per_switch)
     verdict = stp.network_verdict(per_switch)
     if verdict["verdict"] == "not_operating":
         headline = (
@@ -1287,6 +1288,12 @@ async def run_stp_view(community: str, timeout: int, cfg) -> None:
         )
         print(f"  dot1dStpProtocolSpecification  {data.protocol_spec} "
               f"({data.protocol_name})")
+        # Read by a person, this number invites the wrong conclusion:
+        # RouterOS answers 3 (ieee8021d) with RSTP running, and so do
+        # others. MoonLan takes the version from dot1dStpVersion below
+        # and never from this object.
+        print("      (always 3 on some agents, RSTP or not — the version "
+              "comes from dot1dStpVersion)")
         if data.version is not None:
             print(f"  dot1dStpVersion               {data.version} "
                   f"({data.version_name})")
@@ -1310,6 +1317,9 @@ async def run_stp_view(community: str, timeout: int, cfg) -> None:
         if data.operating:
             role = "ROOT BRIDGE" if data.is_root(sw.own_macs) else "in the tree"
             print(f"  verdict: operating — {role}")
+            # which of the three tests decided it: a verdict whose
+            # basis is invisible is a verdict nobody can check
+            print(f"           basis: {data.reason}")
         else:
             print(f"  verdict: NOT operating — {data.reason}")
             print("           root, cost and root port above are ignored")

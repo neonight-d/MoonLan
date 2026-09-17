@@ -634,7 +634,11 @@ class SnmpCollector:
 
         # Spanning tree, read with the "disabled STP still answers"
         # trap in mind (see stp.py)
-        data.stp = await stp_mod.collect_stp(self, host, port_to_ifindex)
+        # own_macs goes in: "did this bridge accept somebody else's
+        # root" is a comparison against every address it answers to
+        data.stp = await stp_mod.collect_stp(
+            self, host, port_to_ifindex, data.own_macs
+        )
         data.sys_uptime = data.stp.sys_uptime
 
         # VLANs: port PVIDs (Q-BRIDGE-MIB, indexed by bridge-port) and names
