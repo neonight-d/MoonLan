@@ -430,6 +430,15 @@ main { flex: 1; display: flex; min-height: 0; }
 .stp-verdict.ok { color: var(--ok); }
 .stp-verdict.bad { color: var(--warn); }
 .stp-verdict.none { color: var(--text-dim); }
+/* the roots of a fragmented tree, each with the VLANs its trunks are in */
+.stp-roots {
+  list-style: none;
+  margin: 0 0 6px;
+  padding: 0;
+  font-size: 0.82rem;
+  color: var(--text-dim);
+}
+.stp-roots li { padding: 2px 0; font-family: ui-monospace, monospace; }
 .stp-table { margin-top: 10px; }
 .stp-table td { white-space: nowrap; }
 .stp-table td.stp-off { color: var(--text-dim); cursor: help; }

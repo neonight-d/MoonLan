@@ -56,6 +56,9 @@ Rules:
   stp_fragmented (warning): see moonlan/stp.py. Raised ONLY for
   switches whose spanning tree is actually operating — a switch with
   STP disabled answers every dot1dStp* object and names itself root.
+  stp_fragmented says so carefully: several roots on a physically
+  connected network can be the VLAN layout rather than a fault, since
+  BPDUs are handled in the VLAN of the port they arrive on.
 - port_flapping (warning): a port changed link state
   thresholds.flaps_per_window times inside
   thresholds.flap_window_minutes; cleared by a window without a single
@@ -768,7 +771,12 @@ class AlarmEngine:
                 )
                 await self._raise(
                     "stp_fragmented", "network",
-                    f"{len(roots)} separate spanning trees — {detail}",
+                    f"{len(roots)} separate spanning trees — {detail}. "
+                    f"Not necessarily a fault: BPDUs are untagged and "
+                    f"handled in the VLAN of the port they arrive on, so "
+                    f"segments whose trunk ports sit in different VLANs "
+                    f"form separate trees by design. Check the VLAN "
+                    f"membership of the trunks before treating it as one",
                 )
         else:
             self._stp_fragmented_cycles = 0

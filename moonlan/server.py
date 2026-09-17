@@ -426,7 +426,7 @@ async def run_scan() -> None:
                 "devices, and raises no bridge alarms.",
                 sw_ip, port, why["text"], sw_ip, port,
             )
-        stp_report = _stp_report(collected)
+        stp_report = _stp_report(collected, topo_info.get("trunk_names", {}))
         state.update(
             switches, links, hosts, pseudo_switches, vlan_names, unlocated,
             offline_groups, bridges, stp_report,
@@ -492,7 +492,9 @@ def _lldp_rows(collected: list[SwitchData]) -> list[dict]:
     return rows
 
 
-def _stp_report(collected: list[SwitchData]) -> dict:
+def _stp_report(
+    collected: list[SwitchData], trunk_names: dict[str, list[str]] | None = None
+) -> dict:
     """Spanning tree of every polled switch plus the network verdict.
 
     The root, the cost and the root port are reported only for a switch
@@ -509,10 +511,23 @@ def _stp_report(collected: list[SwitchData]) -> dict:
     # names it too (see stp.judge_network).
     stp.judge_network(per_switch)
     verdict = stp.network_verdict(per_switch)
+    trunk_names = trunk_names or {}
     switches = []
     for ip, data in sorted(per_switch.items()):
         sw = switch_data.get(ip)
         own_macs = sw.own_macs if sw else set()
+        # The VLANs of this switch's trunk ports. Untagged BPDUs are
+        # handled in the VLAN of the port they arrive on, so two
+        # segments whose trunks sit in different VLANs never meet and
+        # form two trees legitimately. With the numbers in front of
+        # them, an operator can tell that case from a real break
+        # without going to the switch.
+        trunk_vlans = sorted({
+            sw.port_pvid[i]
+            for i in (sw.ports if sw else ())
+            if port_name(sw, i) in trunk_names.get(ip, ())
+            and sw.port_pvid.get(i)
+        }) if sw else []
         switches.append({
             "ip": ip,
             "name": sw.sys_name or ip if sw else ip,
@@ -543,6 +558,7 @@ def _stp_report(collected: list[SwitchData]) -> dict:
             "blocking_ports": [
                 p.name or str(p.bridge_port) for p in data.blocking_ports()
             ],
+            "trunk_vlans": trunk_vlans,
         })
     return {"verdict": verdict, "switches": switches}
 

@@ -182,6 +182,13 @@ const I18N = {
     stpVerdictNone: "STP is not running anywhere in this network",
     stpVerdictSingle: "One spanning tree, root {root}",
     stpVerdictFragmented: "The tree is fragmented: {n} separate roots",
+    stpFragmentedVlanHint:
+      "Several roots on a physically connected network is not "
+      + "necessarily a fault. BPDUs are untagged and are handled in "
+      + "the VLAN of the port they arrive on, so segments whose trunk "
+      + "ports sit in different VLANs form separate trees by design "
+      + "and never meet. Check the VLAN membership of the trunk ports "
+      + "before treating this as damage.",
     stpBridgeIdFixed:
       "This switch reports the Bridge ID with the priority in the low "
       + "byte, where the standard puts it in the high one — its own "
@@ -515,6 +522,13 @@ const I18N = {
     stpVerdictNone: "STP в этой сети не работает",
     stpVerdictSingle: "Единое дерево, корень {root}",
     stpVerdictFragmented: "Дерево фрагментировано: {n} корней",
+    stpFragmentedVlanHint:
+      "Несколько корней при физически связной сети — не обязательно "
+      + "поломка. BPDU нетегированы и обрабатываются в VLAN того "
+      + "порта, куда пришли, поэтому сегменты, чьи магистральные порты "
+      + "лежат в разных VLAN, законно образуют разные деревья и "
+      + "никогда не встречаются. Прежде чем считать это поломкой, "
+      + "проверьте принадлежность магистральных портов к VLAN.",
     stpBridgeIdFixed:
       "Этот коммутатор отдаёт Bridge ID с приоритетом в младшем байте, "
       + "тогда как по стандарту он в старшем: его собственное значение "

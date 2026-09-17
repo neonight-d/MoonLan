@@ -1765,6 +1765,33 @@ function renderStp() {
   hint.className = "hint";
   hint.textContent = t("stpHint");
   body.append(hint);
+  // several roots on a physically connected network is a legal state,
+  // not necessarily a fault — BPDUs travel inside the VLAN of the port
+  // they arrive on, so segments in different VLANs form separate trees
+  // by design. Said here because the word "fragmented" implies damage.
+  if (data.verdict && data.verdict.verdict === "fragmented") {
+    const why = document.createElement("p");
+    why.className = "hint";
+    why.textContent = t("stpFragmentedVlanHint");
+    body.append(why);
+    // …and the VLANs each island's trunks sit in, which is usually the
+    // whole answer to "why are there two of them"
+    const byIp = Object.fromEntries(data.switches.map((sw) => [sw.ip, sw]));
+    const list = document.createElement("ul");
+    list.className = "stp-roots";
+    for (const [root, ips] of Object.entries(data.verdict.roots || {})) {
+      const vlans = [
+        ...new Set(ips.flatMap((ip) => (byIp[ip] || {}).trunk_vlans || [])),
+      ].sort((a, b) => a - b);
+      const li = document.createElement("li");
+      li.textContent =
+        root + " — " + ips.map((ip) => (byIp[ip] || {}).name || ip).join(", ") +
+        (vlans.length ? "  (" + t("vlan") + " " + vlans.join(", ") + ")" : "");
+      list.append(li);
+    }
+    if (list.childElementCount) body.append(list);
+  }
+
   if (!data.switches.length) {
     const empty = document.createElement("p");
     empty.className = "no-alarms";
