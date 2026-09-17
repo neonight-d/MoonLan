@@ -6,6 +6,68 @@ for before the next one started.
 
 Русская версия — [CHANGELOG_RU.md](CHANGELOG_RU.md).
 
+## v0.6.12 — 2026-09-17
+
+One slow agent delays itself, not the whole map. Four MikroTik boxes
+joined `switches:` and the map stopped updating. They were not silent:
+they answered, taking 272 and 468 seconds each, and the scan waited for
+the last one — then the next scan returned immediately because that one
+was still running.
+
+`return_exceptions=True` (v0.6.6) had covered a switch that raises, not
+one that is slow. Every request stayed inside `snmp.timeout`; nothing
+bounded their sum. `snmp.host_budget_seconds` (default 120) now does.
+A switch that runs past it is left out of that scan and the rest of the
+network gets its map on time.
+
+It is **not** reported as unreachable, because it is not: it answers,
+only too slowly. No `switch_down` is raised for it and none is cleared
+— we stopped asking, which is a fact about MoonLan and not about the
+switch. Its last complete reading stays on the map, its card dates it,
+and the header says how many switches ran out of time.
+
+A `switches:` entry may now be a mapping with `ip:` and any of
+`community`, `timeout`, `retries`, `retries_on_break`,
+`host_budget_seconds`, applying to that switch alone; everything else
+is inherited from `snmp:`. The plain list of addresses every existing
+config.yaml uses keeps working untouched. A slow box usually wants a
+*shorter* timeout and one retry, not a longer one — the requests that
+cost the time are the ones it will never answer. `diag --config` prints
+the settings each switch is actually polled with, marking the ones it
+was given of its own.
+
+`1.0.8802.1.1.2.1.4.2.1.3` — the LLDP management-address table — came
+back from both RouterOS boxes as zero rows after the full retry budget,
+every cycle. The other thirteen walks on the same device got through:
+the agent does not implement the table and cannot say so, where an
+agent that can answers `noSuchObject` in one round trip. After
+`snmp.dead_oid_strikes` walks in a row that returned no rows **and**
+ended in a timeout, that OID is left alone on that host for
+`snmp.dead_oid_cooldown_scans` scans and then tried again. Only that
+one outcome counts: a partial answer is what `retries_on_break` is for.
+Both edges are logged and the skipped walk reports "no answer" rather
+than an empty table — data missing because MoonLan stopped asking must
+never be mistaken for data the device denies having. `diag --skipped`
+asks the running service what is on pause and for how much longer.
+
+Both RouterOS boxes also reported "4 of 4 neighbours sit on a local
+port that could not be matched to an interface". `lldpRemLocalPortNum`
+is 0 on every row there, so the remote table says nothing about the
+local port — but that was not what broke it. `lldpRemChassisId`
+announces subtype macAddress and then carries seventeen bytes of ASCII
+instead of six octets, and a string is in nobody's forwarding table, so
+the FDB fallback — which knows all four of these addresses — never got
+the chance to place them. A MAC spelled out is still a MAC; all four
+now land on their ports. `lldpRemLocalPortNum` is additionally tried as
+a bridge-port number, between the forwarding table and the bare
+ifIndex.
+
+The header counts switches off while a scan runs ("Scanning: 6 of 8"),
+`/api/status` carries the same fields, and a scan that gave up waiting
+for somebody says so in amber with the names in the tooltip. Ten
+minutes of a map that did not move, with nothing in the interface
+saying so, is what sent the operator to journalctl.
+
 ## v0.6.11 — 2026-09-17
 
 One root is one root, and a panel header stays put. RSTP went live on
