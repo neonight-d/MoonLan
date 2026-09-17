@@ -159,6 +159,33 @@ async def _collect_locked(collector: SnmpCollector, ip: str) -> SwitchData:
         return await collector.collect(ip)
 
 
+async def _collect_within_budget(
+    collector: SnmpCollector, ip: str, budget: float
+) -> SwitchData | None:
+    """A full poll, or None when it ran past its budget.
+
+    `snmp.timeout` bounds one request. A poll is a dozen walks of a
+    dozen requests each, so an agent that answers everything slowly
+    stays inside every single timeout and still takes eight minutes —
+    and `gather` waits for the last one. Nothing here makes that agent
+    faster; it only stops it from deciding when the rest of the
+    network gets its map.
+    """
+    started = time.monotonic()
+    try:
+        return await asyncio.wait_for(
+            _collect_locked(collector, ip), budget
+        )
+    except asyncio.TimeoutError:
+        log.warning(
+            "%s did not finish its poll within the %.0f s budget (gave up "
+            "after %.0f s) — it is left out of this scan, which is not the "
+            "same as not answering: see snmp.host_budget_seconds",
+            ip, budget, time.monotonic() - started,
+        )
+        return None
+
+
 async def _counters_locked(collector: SnmpCollector, ip: str):
     """A counters poll, but only if the switch is free right now.
 
@@ -203,6 +230,7 @@ async def run_scan() -> None:
     if state.scanning:
         return
     state.scanning = True
+    over_budget: list[str] = []
     try:
         arp: dict[str, str] = {}
         if config.demo:
@@ -210,7 +238,12 @@ async def run_scan() -> None:
         else:
             collector = get_collector()
             results = await asyncio.gather(
-                *(_collect_locked(collector, ip) for ip in config.switches),
+                *(
+                    _collect_within_budget(
+                        collector, ip, config.snmp.host_budget_seconds
+                    )
+                    for ip in config.switches
+                ),
                 return_exceptions=True,
             )
             collected = []
@@ -224,6 +257,21 @@ async def run_scan() -> None:
                         ip, exc_info=result,
                     )
                     collected.append(SwitchData(ip=ip))
+                    continue
+                if result is None:
+                    # Over budget. Not an answer, and not a silence
+                    # either: the last reading that did arrive is kept
+                    # and dated, so the branch behind this switch stays
+                    # on the map instead of vanishing every cycle.
+                    over_budget.append(ip)
+                    previous = switch_data.get(ip)
+                    if previous is not None and previous.reachable:
+                        previous.over_budget = True
+                        collected.append(previous)
+                    else:
+                        collected.append(
+                            SwitchData(ip=ip, over_budget=True)
+                        )
                     continue
                 collected.append(result)
             if config.routers:
@@ -436,10 +484,24 @@ async def run_scan() -> None:
         if config.demo:
             await run_ping()  # set the switches' ping state right away
 
+        # A switch that ran out of budget is not reported either way.
+        # "Missed an SNMP poll" is a statement about the switch; this
+        # one is a statement about us, and switch_down must not be
+        # raised on the strength of it — nor cleared, which would be
+        # just as much of an invention.
         await alarm_engine.on_scan(
-            {sw.ip: sw.reachable for sw in collected},
+            {sw.ip: sw.reachable for sw in collected if not sw.over_budget},
             {sw.ip: sw.sys_name or sw.ip for sw in collected},
         )
+        if over_budget:
+            log.warning(
+                "Scan finished without %d of %d switch(es): %s did not "
+                "answer in full inside the budget. The map below is "
+                "everything else, and their last readings are kept as "
+                "they were.",
+                len(over_budget), len(config.switches),
+                ", ".join(over_budget),
+            )
         await alarm_engine.clear_suppressed(
             _suppressed_bridges(bridges, bridge_rows)
         )

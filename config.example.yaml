@@ -31,6 +31,21 @@ snmp:
   # большим числом интерфейсов таблицу приходится читать в несколько
   # приёмов.
   retries_on_break: 2
+  # The whole poll of one switch, start to finish. `timeout` bounds one
+  # request; this bounds the sum of them. A switch that runs past it is
+  # left out of that scan and keeps its previous data on the map — it
+  # is NOT reported as unreachable and raises no switch_down: it
+  # answers, only too slowly. Raise it for a genuinely slow agent;
+  # lower that device's own `timeout` instead if it is slow because it
+  # does not answer at all (see the per-switch settings below).
+  # Весь опрос одного коммутатора целиком. `timeout` ограничивает один
+  # запрос, а это — их сумму. Не уложившийся коммутатор выпадает из
+  # этого скана и остаётся на карте с прежними данными; недоступным он
+  # НЕ считается и switch_down по нему не поднимается: он отвечает,
+  # просто медленно. Медленному агенту бюджет поднимают; если же он
+  # медленный потому, что на часть запросов не отвечает вовсе, лучше
+  # уменьшить его собственный `timeout` (см. параметры на устройство).
+  host_budget_seconds: 120
 
 # IP addresses of managed switches
 # IP-адреса управляемых коммутаторов

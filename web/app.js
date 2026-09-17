@@ -361,7 +361,11 @@ function renderSidebar() {
         // same rule as the map caption: no address over the address
         sw.named === false ? sw.model || "" : sw.ip,
         sw.ping_up ? "up" : "down",
-        () => focusNode("sw:" + sw.ip)
+        () => focusNode("sw:" + sw.ip),
+        undefined,
+        // greyed the way an old host record is: the switch is there,
+        // its numbers are from the last poll that finished
+        sw.over_budget ? "stale" : ""
       )
     )
   );
@@ -932,7 +936,11 @@ function showDetails(nodeId) {
     if (!sw) return;
     const loop = sw.loop || {};
     html = `<h3>${sw.name}</h3>
-      ${loop.supported === false
+      ${sw.over_budget
+        ? `<p class="hint">${fmt("overBudgetHint", {
+            time: fmtTime(sw.polled_at),
+          })}</p>`
+        : ""}${loop.supported === false
         ? `<p class="hint">${fmt("loopUnsupportedHint", {
             oid: loop.sys_object_id || "—",
           })}</p>`
@@ -941,6 +949,9 @@ function showDetails(nodeId) {
       <dt>${t("bridgeMac")}</dt><dd>${sw.mac || "—"}</dd>
       <dt>${t("portsUpTotal")}</dt><dd>${sw.ports_up} / ${sw.ports_total}</dd>
       <dt>${t("lastReply")}</dt><dd>${fmtTime(sw.last_ping_ok)}</dd>
+      ${sw.over_budget
+        ? `<dt>${t("dataFrom")}</dt><dd>${fmtTime(sw.polled_at)}</dd>`
+        : ""}
       <dt>${t("loopDetection")}</dt><dd${
         loop.status === "loop" ? ' class="loop-alarm"' : ""
       } title="${loopCardTitle(loop)}">${loopCardLine(loop)}</dd>

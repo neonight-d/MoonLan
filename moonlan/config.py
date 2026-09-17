@@ -33,6 +33,13 @@ class SnmpConfig:
     # back up from the last OID that did arrive. Not the same as
     # `retries`, which re-sends a single request.
     retries_on_break: int = 2
+    # The whole poll of one switch, start to finish. `timeout` bounds a
+    # single request; nothing bounded the sum of them, so one slow
+    # agent held up the entire scan — and, because a scan already
+    # running makes the next one return at once, every scan after it
+    # as well. Two minutes is several times what the slowest healthy
+    # switch on the network this was written for needs.
+    host_budget_seconds: int = 120
 
 
 @dataclass
@@ -350,6 +357,9 @@ def load_config(path: Path | None = None) -> Config:
         retries=r.get("snmp.retries", d.snmp.retries, int),
         retries_on_break=r.get(
             "snmp.retries_on_break", d.snmp.retries_on_break, int
+        ),
+        host_budget_seconds=r.get(
+            "snmp.host_budget_seconds", d.snmp.host_budget_seconds, int
         ),
     )
 

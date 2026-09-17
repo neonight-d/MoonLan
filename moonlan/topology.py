@@ -1543,6 +1543,13 @@ def build_topology(
         "descr": sw.sys_descr,
         "stp_operating": bool(sw.stp and sw.stp.operating),
         "stp_root": bool(sw.stp and sw.stp.is_root(sw.own_macs)),
+        # This switch did not finish its poll inside the budget, so
+        # everything above it is the last reading that did arrive, and
+        # `polled_at` says when that was. Drawn as an old reading, not
+        # as a switch that has gone quiet — those are different faults
+        # and they get different fixes.
+        "over_budget": bool(getattr(sw, "over_budget", False)),
+        "polled_at": float(getattr(sw, "polled_at", 0.0)),
         # Physical ports only (ifType 6/62/69/117): aggregates, CPU and
         # VLAN interfaces must not inflate the counters
         "ports_total": sum(1 for p in sw.ports.values() if p.is_physical),

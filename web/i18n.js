@@ -233,6 +233,15 @@ const I18N = {
       + "Detection\u201d in the README for how to walk the private "
       + "branch and add a profile to config.yaml.",
     loopProfileHint: "profile {profile}, matched by {how}",
+    dataFrom: "Data from",
+    overBudgetHint:
+      "This switch did not finish answering inside its poll budget, so "
+      + "everything on this card is the last reading that did arrive, "
+      + "taken at {time}. That is not the same as the switch being "
+      + "unreachable \u2014 it answers, only too slowly \u2014 and no "
+      + "\u201cswitch down\u201d alarm is raised for it. Give it more "
+      + "time or a shorter SNMP timeout of its own: see "
+      + "snmp.host_budget_seconds in config.yaml.",
     portFlapping: "flapping",
     portFlappingHint:
       "The port has changed link state {n} time(s) inside the window; "
@@ -573,6 +582,14 @@ const I18N = {
       + "обойти приватную ветку и добавить профиль в config.yaml, "
       + "написано в README, раздел «Loop Detection».",
     loopProfileHint: "профиль {profile}, опознан по {how}",
+    dataFrom: "Данные от",
+    overBudgetHint:
+      "Коммутатор не уложился в бюджет опроса, поэтому всё на этой "
+      + "карточке \u2014 последнее полученное измерение, снятое {time}. "
+      + "Это не то же самое, что «нет ответа»: он отвечает, просто "
+      + "слишком медленно, и тревога «коммутатор недоступен» по нему не "
+      + "поднимается. Дайте ему больше времени или свой, более короткий "
+      + "таймаут SNMP \u2014 см. snmp.host_budget_seconds в config.yaml.",
     portFlapping: "флаппинг",
     portFlappingHint:
       "Порт менял состояние линка {n} раз(а) за окно; последний переход "

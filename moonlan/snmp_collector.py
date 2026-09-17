@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 from dataclasses import dataclass, field
 
 from . import lldp as lldp_mod
@@ -142,6 +143,12 @@ class SwitchData:
     # counters loop rather than by the scan: a loop is an incident,
     # and ten minutes is too long to hear about one.
     loop_detection: object | None = None
+    # When this reading was taken, and whether it is a reading at all.
+    # A switch that did not finish inside its budget keeps the last
+    # data it did produce, and both fields say so — "the map is from
+    # 15:58" is a different statement from "the map is from now".
+    polled_at: float = 0.0
+    over_budget: bool = False
 
 
 def _fmt_mac(raw: bytes) -> str:
@@ -550,7 +557,7 @@ class SnmpCollector:
 
     async def collect(self, host: str) -> SwitchData:
         """Full poll of a single switch."""
-        data = SwitchData(ip=host)
+        data = SwitchData(ip=host, polled_at=time.time())
 
         sys_name = await self._get(host, OID_SYS_NAME)
         if sys_name is None:
