@@ -883,6 +883,7 @@ class SnmpCollector:
             lldp_mod.build_port_names(data.ports, phys_addr),
             set(data.ports),
             data.fdb,
+            port_to_ifindex,
         )
         # lldpLocPortDesc is an administrative port name on some agents
         # and a copy of ifDescr on others; only the former is worth

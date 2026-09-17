@@ -126,6 +126,31 @@ def _printable(raw: bytes) -> str:
     return text if all(c == "\t" or c >= " " for c in text) else ""
 
 
+def mac_from_text(text: str) -> str:
+    """"18:FD:74:FD:E3:80" -> "18:fd:74:fd:e3:80"; "" for anything else.
+
+    RouterOS answers lldpRemChassisId with subtype macAddress and then
+    puts seventeen bytes of ASCII in the value instead of the six bytes
+    the subtype promises. Taken literally, that is a string, and a
+    string never matched anything: not the forwarding table, which is
+    keyed by real addresses, and not the switch it names. All four
+    neighbours of both RouterOS boxes were consequently placed on no
+    port at all, every scan.
+
+    A MAC written out as text is still a MAC.
+    """
+    cleaned = text.strip().replace("-", ":")
+    parts = cleaned.split(":")
+    if len(parts) != 6:
+        return ""
+    if not all(
+        len(part) == 2 and all(c in "0123456789abcdefABCDEF" for c in part)
+        for part in parts
+    ):
+        return ""
+    return cleaned.lower()
+
+
 def normalize_id(subtype: int, raw: bytes, mac_subtype: int) -> str:
     """Chassis / port id as a string: a MAC when the subtype says so,
     the text when it is text, hex otherwise."""
@@ -137,7 +162,11 @@ def normalize_id(subtype: int, raw: bytes, mac_subtype: int) -> str:
         return ".".join(str(octet) for octet in raw[1:])
     text = _printable(raw)
     if text:
-        return text
+        # An agent that spells an address out instead of encoding it
+        # still means the address. Written in one form everywhere, it
+        # matches the MAC tables and the switches it names; left as
+        # typed, it matches nothing.
+        return mac_from_text(text) or text
     if len(raw) == 6:
         return _fmt_mac(raw)  # a MAC that forgot to say it is one
     return raw.hex()
@@ -177,6 +206,7 @@ def match_local_port(
     port_names: dict[str, int],
     if_indexes: set[int],
     fdb_port: int | None = None,
+    bridge_ports: dict[int, int] | None = None,
 ) -> tuple[int | None, str]:
     """lldpRemLocalPortNum -> (ifIndex, how it was found).
 
@@ -186,9 +216,13 @@ def match_local_port(
        table — the switch naming its own port;
     2. this switch's MAC table: the neighbour's chassis address is
        behind a port of ours, and a forwarding table is hard evidence;
-    3. `lldpRemLocalPortNum` read as an ifIndex. On most agents the two
+    3. `lldpRemLocalPortNum` read as a bridge-port number and put
+       through dot1dBasePortIfIndex. Still a guess about what the
+       number means, but a guess the switch itself can be asked to
+       resolve;
+    4. `lldpRemLocalPortNum` read as an ifIndex. On most agents the two
        coincide, but that is a convention, not a rule, which is why the
-       result is labelled and treated as the weakest of the three.
+       result is labelled and treated as the weakest of the four.
     """
     for candidate, how in ((port_id, "loc_id"), (port_desc, "loc_desc")):
         key = (candidate or "").strip().lower()
@@ -200,6 +234,10 @@ def match_local_port(
             return int(key), how
     if fdb_port is not None:
         return fdb_port, "fdb"
+    if bridge_ports:
+        through_bridge = bridge_ports.get(port_num)
+        if through_bridge is not None and through_bridge in if_indexes:
+            return through_bridge, "bridge_port"
     if port_num in if_indexes:
         return port_num, "num"
     return None, ""
@@ -247,6 +285,7 @@ async def collect_lldp(
     port_names: dict[str, int],
     if_indexes: set[int],
     fdb: dict[str, int] | None = None,
+    bridge_ports: dict[int, int] | None = None,
 ) -> tuple[list[LldpNeighbor], dict[int, str]]:
     """Walks lldpRemTable of one switch and resolves the local ports.
 
@@ -337,7 +376,7 @@ async def collect_lldp(
         )
         if_index, matched_by = match_local_port(
             port_num, loc_id.get(port_num, ""), loc_desc.get(port_num, ""),
-            port_names, if_indexes, fdb.get(chassis_id),
+            port_names, if_indexes, fdb.get(chassis_id), bridge_ports,
         )
         neighbor = LldpNeighbor(
             local_ifindex=if_index,
