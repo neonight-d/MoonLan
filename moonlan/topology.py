@@ -96,7 +96,42 @@ class TopologyState:
     last_error: str = ""
     last_error_ts: float = 0.0
     scanning: bool = False
+    # Progress of the scan running right now, and what the last one
+    # could not finish. Ten minutes of a map that did not move, with
+    # nothing in the interface saying so, sent the operator to
+    # journalctl to find out whether anything was happening at all.
+    scan_started_at: float = 0.0
+    scan_total: int = 0
+    scan_done: int = 0
+    scan_over_budget: list[str] = field(default_factory=list)
     _lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
+
+    def scan_started(self, total: int) -> None:
+        with self._lock:
+            self.scanning = True
+            self.scan_started_at = time.time()
+            self.scan_total = total
+            self.scan_done = 0
+
+    def host_polled(self) -> None:
+        """One more switch has answered, or run out of budget."""
+        with self._lock:
+            self.scan_done += 1
+
+    def scan_ended(self, over_budget: list[str]) -> None:
+        with self._lock:
+            self.scanning = False
+            self.scan_over_budget = list(over_budget)
+
+    def scan_progress(self) -> dict:
+        with self._lock:
+            return {
+                "scanning": self.scanning,
+                "scan_started_at": self.scan_started_at,
+                "scan_total": self.scan_total,
+                "scan_done": self.scan_done,
+                "scan_over_budget": list(self.scan_over_budget),
+            }
 
     def update(
         self,
@@ -156,6 +191,10 @@ class TopologyState:
                 "last_error": self.last_error,
                 "last_error_ts": self.last_error_ts,
                 "scanning": self.scanning,
+                "scan_started_at": self.scan_started_at,
+                "scan_total": self.scan_total,
+                "scan_done": self.scan_done,
+                "scan_over_budget": list(self.scan_over_budget),
             }
 
     def search(self, query: str) -> list[dict]:

@@ -234,6 +234,14 @@ const I18N = {
       + "branch and add a profile to config.yaml.",
     loopProfileHint: "profile {profile}, matched by {how}",
     dataFrom: "Data from",
+    scanningProgress: "Scanning: {done} of {total}",
+    scanOverBudgetMark: "\u00b7 {n} switch(es) ran out of time",
+    scanOverBudgetHint:
+      "These switches did not finish answering inside their poll "
+      + "budget, so their part of the map is from an earlier scan: "
+      + "{switches}. They are not unreachable \u2014 they answer, only "
+      + "too slowly \u2014 and no alarm is raised for them. Their cards "
+      + "say when their data was taken.",
     overBudgetHint:
       "This switch did not finish answering inside its poll budget, so "
       + "everything on this card is the last reading that did arrive, "
@@ -583,6 +591,14 @@ const I18N = {
       + "написано в README, раздел «Loop Detection».",
     loopProfileHint: "профиль {profile}, опознан по {how}",
     dataFrom: "Данные от",
+    scanningProgress: "Идёт опрос: {done} из {total}",
+    scanOverBudgetMark: "\u00b7 не уложились: {n}",
+    scanOverBudgetHint:
+      "Эти коммутаторы не успели ответить целиком за отведённый бюджет "
+      + "опроса, поэтому их часть карты \u2014 с прошлого скана: "
+      + "{switches}. Недоступными они не считаются: они отвечают, просто "
+      + "медленно, и тревог по ним не поднимается. Время, на которое "
+      + "сняты их данные, написано в карточке каждого.",
     overBudgetHint:
       "Коммутатор не уложился в бюджет опроса, поэтому всё на этой "
       + "карточке \u2014 последнее полученное измерение, снятое {time}. "

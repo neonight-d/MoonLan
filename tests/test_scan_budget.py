@@ -99,6 +99,14 @@ class ScanBudgetTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(over), 2)
         self.assertTrue(any("10.0.0.3" in line for line in over))
         self.assertTrue(any("10.0.0.7" in line for line in over))
+        # …and the interface can say the same thing without journalctl
+        progress = server.state.scan_progress()
+        self.assertFalse(progress["scanning"])
+        self.assertEqual(progress["scan_total"], 8)
+        self.assertEqual(progress["scan_done"], 8)
+        self.assertEqual(
+            sorted(progress["scan_over_budget"]), ["10.0.0.3", "10.0.0.7"]
+        )
 
     async def test_over_budget_is_not_switch_down(self):
         """The alarm engine hears nothing about a switch we gave up on.

@@ -187,6 +187,8 @@ async def _collect_within_budget(
             ip, budget, time.monotonic() - started,
         )
         return None
+    finally:
+        state.host_polled()
 
 
 async def _counters_locked(collector: SnmpCollector, ip: str):
@@ -232,7 +234,7 @@ async def run_scan() -> None:
     global first_scan_done, fdb_macs, prev_pseudo_ports
     if state.scanning:
         return
-    state.scanning = True
+    state.scan_started(len(config.switches))
     over_budget: list[str] = []
     try:
         arp: dict[str, str] = {}
@@ -267,7 +269,6 @@ async def run_scan() -> None:
                     # either: the last reading that did arrive is kept
                     # and dated, so the branch behind this switch stays
                     # on the map instead of vanishing every cycle.
-                    over_budget.append(ip)
                     previous = switch_data.get(ip)
                     if previous is not None and previous.reachable:
                         previous.over_budget = True
@@ -287,6 +288,9 @@ async def run_scan() -> None:
                 mac = ip_to_mac.get(sw.ip)
                 if mac:
                     sw.own_macs.add(mac)
+        # Demo mode marks a switch over budget too, so the list comes
+        # from the data rather than from the polling loop
+        over_budget = [sw.ip for sw in collected if sw.over_budget]
         for sw in collected:
             previous = switch_data.get(sw.ip)
             if previous is not None and sw.loop_detection is None:
@@ -530,7 +534,7 @@ async def run_scan() -> None:
             len(switches), len(links), len(hosts),
         )
     finally:
-        state.scanning = False
+        state.scan_ended(over_budget)
 
 
 def _lldp_rows(collected: list[SwitchData]) -> list[dict]:
@@ -2144,7 +2148,7 @@ async def api_status() -> dict:
         "last_scan_ok": state.last_scan_ok,
         "last_error": state.last_error,
         "last_error_ts": state.last_error_ts,
-        "scanning": state.scanning,
+        **state.scan_progress(),
         "uptime_hint": time.time(),
         "open_fds": open_fds,
         "rss_kb": rss_kb,

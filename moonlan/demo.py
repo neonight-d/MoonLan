@@ -51,6 +51,13 @@ v0.6.8 scenarios:
   number on every port: its ports stay ordinary, no trunk is drawn,
   no lag_degraded is raised, and the log says what was dropped.
 
+v0.6.12 scenarios:
+- access-sw-2 stops finishing its poll inside the budget from the
+  second scan on: the header says one switch ran out of time, its card
+  dates the reading it last produced, its branch of the map stays
+  where it was, and no switch_down is raised for it. A device that
+  answers slowly is not a device that has gone quiet.
+
 v0.6.11 scenarios:
 - the core reports its spanning tree the way the real D-Links do —
   every dot1dStp* object a zero — and is recognised as the root only
@@ -350,6 +357,7 @@ def _switch(ip: str, name: str, mac_octet: int) -> SwitchData:
         NO_PROFILE_SYS_OBJECT_ID if ip == NO_PROFILE_SWITCH
         else LOOP_SYS_OBJECT_ID
     )
+    sw.polled_at = time.time()
     return sw
 
 
@@ -526,6 +534,14 @@ def demo_network() -> list[SwitchData]:
     _add_lldp(core, ray1, ray2, ray3, ray4, core_port_to_ray)
     _add_stp(core, ray1, ray2, ray3, ray4, edge)
 
+    # From the second scan on, one ray answers too slowly to finish
+    # inside its budget. Its node and its branch stay on the map with
+    # the reading they last produced; the header counts it as late and
+    # its card dates the data. Nothing about it is alarmed on, because
+    # nothing about it is known to be wrong — it answers, slowly.
+    if _scan_count >= 2:
+        ray2.over_budget = True
+        ray2.polled_at = time.time() - 640
     if _scan_count == 1:
         _report_rejected_fdb(ray4)
     # every scan: the switch keeps answering the LAG column with the

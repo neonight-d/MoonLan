@@ -277,9 +277,19 @@ function fmtDate(ts) {
 
 function updateScanStatus() {
   els.scanStatus.classList.remove("failed");
+  els.scanStatus.classList.remove("partial");
   els.scanStatus.title = "";
-  if (isScanning) {
-    els.scanStatus.textContent = t("scanning");
+  // A scan of eight switches took ten minutes and the interface said
+  // nothing at all about it — the only way to find out whether
+  // anything was happening was journalctl. One line settles it.
+  if (isScanning || topology.scanning) {
+    els.scanStatus.textContent =
+      topology.scan_total > 0
+        ? fmt("scanningProgress", {
+            done: topology.scan_done || 0,
+            total: topology.scan_total,
+          })
+        : t("scanning");
     return;
   }
   // A failed scan used to read exactly like a service that had just
@@ -295,6 +305,47 @@ function updateScanStatus() {
   els.scanStatus.textContent = topology.last_scan
     ? t("scanPrefix") + new Date(topology.last_scan * 1000).toLocaleString(locale())
     : t("noData");
+  // Switches the last scan gave up waiting for. Worth seeing — their
+  // part of the map is older than the rest — but not an alarm: they
+  // answer, and nothing about them is being claimed.
+  const late = topology.scan_over_budget || [];
+  if (late.length) {
+    els.scanStatus.classList.add("partial");
+    els.scanStatus.textContent +=
+      "  " + fmt("scanOverBudgetMark", { n: late.length });
+    els.scanStatus.title = fmt("scanOverBudgetHint", {
+      switches: late.map(switchName).join(", "),
+    });
+  }
+}
+
+/* While a scan runs the header counts switches off. The map itself is
+   only refreshed every REFRESH_MS, which is no use to somebody
+   watching a scan that may last minutes. */
+let scanWatcher = null;
+
+function watchScan() {
+  if (scanWatcher) return;
+  scanWatcher = setInterval(async () => {
+    let status;
+    try {
+      status = await (await fetch("/api/status")).json();
+    } catch (e) {
+      return; // the service is restarting; the next tick will tell
+    }
+    topology.scanning = status.scanning;
+    topology.scan_done = status.scan_done;
+    topology.scan_total = status.scan_total;
+    topology.scan_over_budget = status.scan_over_budget;
+    updateScanStatus();
+    if (!status.scanning) {
+      clearInterval(scanWatcher);
+      scanWatcher = null;
+      els.rescan.disabled = false;
+      isScanning = false;
+      await loadTopology();
+    }
+  }, 2000);
 }
 
 /* ---------- data loading and rendering ---------- */
@@ -310,6 +361,10 @@ async function loadTopology() {
   renderSidebar();
   renderGraph();
   updateScanStatus();
+  // A scan the operator did not start is worth counting off too: the
+  // periodic one is when they are most likely to wonder why nothing
+  // has moved for ten minutes.
+  if (topology.scanning) watchScan();
   els.emptyState.classList.toggle("hidden", topology.switches.length > 0);
 }
 
@@ -1977,16 +2032,7 @@ async function rescan() {
   isScanning = true;
   updateScanStatus();
   await fetch("/api/scan", { method: "POST" });
-  // poll the status until the scan finishes
-  const timer = setInterval(async () => {
-    const status = await (await fetch("/api/status")).json();
-    if (!status.scanning) {
-      clearInterval(timer);
-      els.rescan.disabled = false;
-      isScanning = false;
-      await loadTopology();
-    }
-  }, 1500);
+  watchScan();
 }
 
 els.search.addEventListener("input", applySearchFilter);
