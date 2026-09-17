@@ -51,6 +51,15 @@ v0.6.8 scenarios:
   number on every port: its ports stay ordinary, no trunk is drawn,
   no lag_degraded is raised, and the log says what was dropped.
 
+v0.6.11 scenarios:
+- the core reports its spanning tree the way the real D-Links do —
+  every dot1dStp* object a zero — and is recognised as the root only
+  because its neighbours follow its address;
+- access-sw-5 answers with the priority in the low byte of the Bridge
+  ID: one root in two spellings, which has to come out as one tree;
+- two ports of access-sw-2 report blocking with no cable in them, and
+  no blocked link is drawn for either.
+
 v0.6.10 scenarios:
 - five devices of a segment behind the core's trunk to access-sw-3:
   one "Beyond the trunk · 5" node past the cable instead of five dots
@@ -235,6 +244,12 @@ ASSUMED_MGMT_IP = "10.3.7.15"
 # thirty seconds.
 FLAP_SWITCH = "10.0.0.22"
 FLAP_PORT = 7
+
+# v0.6.11 — ports a switch reports as blocking with nothing plugged
+# into them. RouterOS does this on every spare socket; drawn from that
+# value alone, every MikroTik on the map grows blocked links that do
+# not exist.
+BLOCKING_WITHOUT_LINK = (20, 21)
 
 # A device behind an unmanaged switch on the core—access-sw-3 trunk: no
 # switch has it on a host port, both ends of the trunk see it. Before
@@ -703,15 +718,19 @@ def _stp_ports(
 ) -> dict[int, StpPort]:
     ports: dict[int, StpPort] = {}
     for if_index, state in states.items():
+        port = sw.ports.get(if_index)
         ports[if_index] = StpPort(
             bridge_port=if_index,
             if_index=if_index,
-            name=sw.ports[if_index].name if if_index in sw.ports else str(if_index),
+            name=port.name if port else str(if_index),
             state=state,
             enabled=enabled,
             path_cost=20000,
             designated_root=root_id,
             designated_bridge=root_id,
+            # the real rule: blocking is only blocking with a cable in
+            # it, and the demo goes through the same check
+            link_up=port.oper_up if port else None,
         )
     return ports
 
@@ -725,7 +744,8 @@ def _add_stp(core, ray1, ray2, ray3, ray4, edge) -> None:
     root: the exact trap the verdict in stp.py exists to catch, and the
     reason a demo needs it.
     """
-    from .stp import judge  # local import: demo data, real verdict
+    # local imports: demo data, real verdicts
+    from .stp import format_bridge_id, judge, judge_network
 
     root_id = f"4096/{core.bridge_mac}"
     uptime = 4_000_000  # ~11 hours in TimeTicks
@@ -733,12 +753,16 @@ def _add_stp(core, ray1, ray2, ray3, ray4, edge) -> None:
     core.ports[EDGE_ROUTER_PORT].oper_up = True
     core.ports[UPLINK_PORT].oper_up = True
     ray4.ports[ASSUMED_PORT].oper_up = True
+    # The root as the D-Links on the real network report one: every
+    # dot1dStp* object a zero, while the CLI names the root, the cost
+    # and the root port. Nothing in its own answers says it is the
+    # root — the neighbours say it, and judge_network listens to them.
     core.stp = judge(StpData(
-        supported=True, protocol_spec=3, priority=4096,
-        time_since_change=120_000, top_changes=7,
-        designated_root=root_id, root_cost=0, root_port=0, version=2,
-        sys_uptime=uptime,
-        ports=_stp_ports(core, {1: 5, 2: 5, 5: 5, 25: 5}, True, root_id),
+        supported=True, protocol_spec=3, priority=0,
+        time_since_change=0, top_changes=0,
+        designated_root="0/00:00:00:00:00:00", root_cost=0, root_port=0,
+        version=2, sys_uptime=uptime, own_macs=set(core.own_macs),
+        ports=_stp_ports(core, {1: 1, 2: 1, 5: 1, 25: 1}, True, ""),
     ))
     for ray, root_port, blocking in (
         (ray1, 25, None), (ray2, 24, 24), (ray3, 23, None),
@@ -746,12 +770,19 @@ def _add_stp(core, ray1, ray2, ray3, ray4, edge) -> None:
         states = {root_port: 5}
         if blocking is not None:
             states[blocking] = 2  # blocking(2): the link carries nothing
+        if ray is ray2:
+            # …and two ports reported blocking with nothing plugged in,
+            # the way a RouterOS box reports its spare sockets. They
+            # must not become blocked links on the map.
+            for empty in BLOCKING_WITHOUT_LINK:
+                ray.ports[empty].oper_up = False
+                states[empty] = 2
         ray.stp = judge(StpData(
             supported=True, protocol_spec=3, priority=32768,
             time_since_change=118_000 + _scan_count * 100,
             top_changes=7 + _scan_count // 4,
             designated_root=root_id, root_cost=20000, root_port=root_port,
-            version=2, sys_uptime=uptime,
+            version=2, sys_uptime=uptime, own_macs=set(ray.own_macs),
             ports=_stp_ports(ray, states, True, root_id),
         ))
     # STP disabled: every field still answers, and every field lies
@@ -759,16 +790,29 @@ def _add_stp(core, ray1, ray2, ray3, ray4, edge) -> None:
         supported=True, protocol_spec=3, priority=0,
         time_since_change=uptime, top_changes=0,
         designated_root=f"0/{ray4.bridge_mac}", root_cost=0, root_port=0,
-        version=2, sys_uptime=uptime,
+        version=2, sys_uptime=uptime, own_macs=set(ray4.own_macs),
         ports=_stp_ports(ray4, {i: 1 for i in range(1, 5)}, False, ""),
     ))
+    # The same root, from an agent that puts the priority in the low
+    # byte. Read as it arrives that is 16, not 4096 — one root in two
+    # spellings, which used to come out as two trees and a false
+    # stp_fragmented. Built through the real parser, not hand-written.
+    shifted = bytes([0x00, 0x10]) + bytes(
+        int(part, 16) for part in core.bridge_mac.split(":")
+    )
     edge.stp = judge(StpData(
-        supported=True, protocol_spec=3, priority=32768,
+        supported=True, protocol_spec=3, priority=16384,
         time_since_change=118_000, top_changes=7,
-        designated_root=root_id, root_cost=40000,
+        designated_root=format_bridge_id(shifted), root_nonstandard=True,
+        root_cost=40000,
         root_port=UPLINK_ONLY_PORT, version=2, sys_uptime=uptime,
+        own_macs=set(edge.own_macs),
         ports=_stp_ports(edge, {UPLINK_ONLY_PORT: 5}, True, root_id),
     ))
+    # the cross-switch test, exactly as the service runs it
+    judge_network({
+        sw.ip: sw.stp for sw in (core, ray1, ray2, ray3, ray4, edge)
+    })
     for sw in (core, ray1, ray2, ray3, ray4, edge):
         sw.sys_uptime = uptime
 
