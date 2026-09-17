@@ -14,6 +14,7 @@ const els = {
   scanStatus: document.getElementById("scan-status"),
   details: document.getElementById("details"),
   detailsBody: document.getElementById("details-body"),
+  detailsTitle: document.getElementById("details-title"),
   detailsClose: document.getElementById("details-close"),
   journal: document.getElementById("journal"),
   journalBtn: document.getElementById("journal-btn"),
@@ -911,6 +912,19 @@ function switchName(ip) {
   return sw ? sw.name : ip;
 }
 
+/* Fills the details card, hoisting its own <h3> into the panel head.
+   Each branch below writes its title as part of the HTML — that is
+   where it belongs, next to the thing it titles — and the head is
+   where it has to end up, so it stays put while the card scrolls. */
+function setDetails(html) {
+  els.detailsBody.innerHTML = html;
+  const heading = els.detailsBody.querySelector("h3");
+  els.detailsTitle.replaceChildren(
+    ...(heading ? [...heading.childNodes] : [])
+  );
+  if (heading) heading.remove();
+}
+
 function showDetails(nodeId) {
   let html = "";
   if (nodeId.startsWith("sw:")) {
@@ -1132,7 +1146,7 @@ function showDetails(nodeId) {
         ${host.monitored ? "★" : "☆"} ${t("monitorBtn")}</button>`;
   }
   shownDetails = { type: "node", id: nodeId };
-  els.detailsBody.innerHTML = html;
+  setDetails(html);
   els.details.classList.remove("hidden");
   els.journal.classList.add("hidden");
   els.alarms.classList.add("hidden");
@@ -1573,7 +1587,7 @@ function showLinkDetails(edgeId) {
     html += `<p class="hint">${t("stpBlockingHint")}</p>`;
   }
   shownDetails = { type: "link", id: edgeId };
-  els.detailsBody.innerHTML = html;
+  setDetails(html);
   els.details.classList.remove("hidden");
   els.journal.classList.add("hidden");
   els.alarms.classList.add("hidden");
@@ -1751,6 +1765,16 @@ function renderStp() {
   hint.className = "hint";
   hint.textContent = t("stpHint");
   body.append(hint);
+  // several roots on a physically connected network is a legal state,
+  // not necessarily a fault — BPDUs travel inside the VLAN of the port
+  // they arrive on, so segments in different VLANs form separate trees
+  // by design. Said here because the word "fragmented" implies damage.
+  if (data.verdict && data.verdict.verdict === "fragmented") {
+    const why = document.createElement("p");
+    why.className = "hint";
+    why.textContent = t("stpFragmentedVlanHint");
+    body.append(why);
+  }
 
   if (!data.switches.length) {
     const empty = document.createElement("p");
@@ -1798,6 +1822,12 @@ function renderStp() {
         td.title = sw.reason || "";
       }
       if (i === 1 && sw.is_root) td.className = "stp-root";
+      if (i === 3 && sw.root_nonstandard) {
+        // the agent put the priority in the low byte and MoonLan put
+        // it back; the number here is not the one the switch prints
+        td.className = "stp-corrected";
+        td.title = t("stpBridgeIdFixed");
+      }
       tr.append(td);
     });
     tbody.append(tr);
@@ -1813,7 +1843,12 @@ function renderStp() {
     }
   }
   table.append(tbody);
-  body.append(table);
+  // only the table scrolls sideways; the verdict and the hint above it
+  // are prose and have no business moving off the left edge
+  const scroller = document.createElement("div");
+  scroller.className = "table-scroll";
+  scroller.append(table);
+  body.append(scroller);
 }
 
 async function toggleStp() {

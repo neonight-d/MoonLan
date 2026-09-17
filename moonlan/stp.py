@@ -107,6 +107,9 @@ class StpData:
     time_since_change: int = 0   # TimeTicks
     top_changes: int = 0
     designated_root: str = ""    # "32768/34:0a:33:bc:ca:f0"
+    # the agent put the priority in the low byte and MoonLan corrected
+    # it — a property of the hardware, kept so the panel can say so
+    root_nonstandard: bool = False
     root_cost: int = 0
     root_port: int = 0
     version: int | None = None
@@ -135,19 +138,80 @@ class StpData:
         Only meaningful for an operating switch: a disabled one always
         names itself.
         """
-        return bool(self.operating and self.root_mac and self.root_mac in own_macs)
+        macs = own_macs
+        return bool(self.operating and self.root_mac and self.root_mac in macs)
 
     def blocking_ports(self) -> list[StpPort]:
         return [p for p in self.ports.values() if p.blocking]
 
 
-def format_bridge_id(raw: bytes) -> str:
-    """dot1dStpDesignatedRoot (8 bytes: 2 priority + 6 MAC) as text."""
+# A Bridge ID is 8 bytes: two of identifier, six of MAC. The two are
+# not one number — 802.1t splits them into a priority in the high 4
+# bits, which is therefore always a multiple of 4096, and a 12-bit
+# system id extension carrying the MSTI or VLAN number.
+PRIORITY_MASK = 0xF000
+SYS_ID_EXT_MASK = 0x0FFF
+PRIORITY_STEP = 4096
+
+
+@dataclass(frozen=True)
+class BridgeId:
+    """dot1dStpDesignatedRoot, taken apart.
+
+    `nonstandard` marks an agent that put the priority in the low byte
+    and left the high byte zero. Two of the six switches on the network
+    this was written for do exactly that, which is why one root showed
+    up as "4096/34:0a:..." from one switch and "16/34:0a:..." from
+    another, and why the network was reported as having two trees.
+    """
+
+    priority: int
+    sys_id_ext: int
+    mac: str
+    nonstandard: bool = False
+
+    def __str__(self) -> str:
+        if not self.mac:
+            return ""
+        # the extension is shown only when it carries something: on a
+        # single tree it is zero, and printing "+0" everywhere would
+        # bury the one case where it matters
+        ext = f"+{self.sys_id_ext}" if self.sys_id_ext else ""
+        return f"{self.priority}{ext}/{self.mac}"
+
+
+def parse_bridge_id(raw: bytes) -> BridgeId | None:
+    """Eight bytes of Bridge ID, read the way the standard writes them.
+
+    With one allowance. An Edge-Core ES3528M answers
+    `00 10 34 0a 33 bc ca f0` where an HPE 1820 on the same network,
+    for the same root, answers `10 00 34 0a 33 bc ca f0`: the priority
+    is in the wrong byte. Read honestly that is 16, and 16 and 4096 are
+    two different roots as far as any comparison is concerned.
+
+    So a high byte of zero beside a low byte that is a whole number of
+    priority steps is read as the shifted encoding it is. The
+    alternative reading — priority 0, system id extension 16 — is a
+    per-VLAN tree numbered 16, which `dot1dStpDesignatedRoot` does not
+    carry. The caller logs the correction rather than applying it
+    quietly: it is a property of the hardware, and the operator has to
+    be able to see it.
+    """
     if len(raw) != 8:
-        return raw.hex() if raw else ""
-    priority = (raw[0] << 8) | raw[1]
+        return None
     mac = ":".join(f"{b:02x}" for b in raw[2:])
-    return f"{priority}/{mac}"
+    value = (raw[0] << 8) | raw[1]
+    if raw[0] == 0 and raw[1] and raw[1] % (PRIORITY_STEP >> 8) == 0:
+        return BridgeId(raw[1] << 8, 0, mac, nonstandard=True)
+    return BridgeId(value & PRIORITY_MASK, value & SYS_ID_EXT_MASK, mac)
+
+
+def format_bridge_id(raw: bytes) -> str:
+    """dot1dStpDesignatedRoot as text, or the raw hex if it is not one."""
+    parsed = parse_bridge_id(raw)
+    if parsed is None:
+        return raw.hex() if raw else ""
+    return str(parsed)
 
 
 def judge(data: StpData) -> StpData:
@@ -223,7 +287,12 @@ async def collect_stp(collector, host: str, port_to_ifindex: dict[int, int]):
                 pass
     root = await collector._get(host, OID_STP_DESIGNATED_ROOT)
     if root is not None:
-        data.designated_root = format_bridge_id(as_octets(root))
+        parsed = parse_bridge_id(as_octets(root))
+        if parsed is not None:
+            data.designated_root = str(parsed)
+            data.root_nonstandard = parsed.nonstandard
+        else:
+            data.designated_root = as_octets(root).hex()
     version = await collector._get(host, OID_STP_VERSION)
     if version is not None:
         try:
@@ -248,7 +317,12 @@ async def collect_stp(collector, host: str, port_to_ifindex: dict[int, int]):
     async for suffix, value in collector._walk(host, OID_STP_PORT_PATH_COST):
         port(suffix[0]).path_cost = int(value)
     async for suffix, value in collector._walk(host, OID_STP_PORT_DESIGNATED_ROOT):
-        port(suffix[0]).designated_root = format_bridge_id(as_octets(value))
+        parsed = parse_bridge_id(as_octets(value))
+        port(suffix[0]).designated_root = (
+            str(parsed) if parsed is not None else ""
+        )
+        if parsed is not None and parsed.nonstandard:
+            data.root_nonstandard = True
     async for suffix, value in collector._walk(host, OID_STP_PORT_DESIGNATED_COST):
         port(suffix[0]).designated_cost = int(value)
     async for suffix, value in collector._walk(host, OID_STP_PORT_DESIGNATED_BRIDGE):
@@ -259,6 +333,16 @@ async def collect_stp(collector, host: str, port_to_ifindex: dict[int, int]):
     async for suffix, value in collector._walk(host, OID_STP_EXT_OPER_EDGE):
         port(suffix[0]).oper_edge = int(value) == 1
 
+    if data.root_nonstandard:
+        # Once per host per poll, and loudly: silently repairing a
+        # vendor's encoding would leave the operator wondering why
+        # MoonLan and the switch's own web interface disagree.
+        log.warning(
+            "%s encodes the Bridge ID with the priority in the low byte "
+            "(its own reading of the root would be %d times smaller); "
+            "MoonLan corrects it to %s",
+            host, 256, data.designated_root or "an unreadable value",
+        )
     return judge(data)
 
 
@@ -277,11 +361,27 @@ def network_verdict(per_switch: dict[str, StpData]) -> dict:
             "operating": [],
             "total": len(per_switch),
         }
-    roots: dict[str, list[str]] = {}
+    # Grouped by the root's MAC, not by the text of its Bridge ID. The
+    # MAC is the identity; the priority beside it is a number two
+    # agents can disagree about (see parse_bridge_id), and grouping by
+    # the string turned one root into two and raised stp_fragmented on
+    # a network with a single tree.
+    by_mac: dict[str, list[str]] = {}
+    labels: dict[str, str] = {}
     for ip, data in sorted(operating.items()):
-        roots.setdefault(data.designated_root or "unknown", []).append(ip)
+        mac = data.root_mac or "unknown"
+        by_mac.setdefault(mac, []).append(ip)
+        # A switch that reports the standard encoding names the group:
+        # where two spellings of one root meet, the right one wins, and
+        # a confirmed root — which reports zeros about itself — never
+        # gets to name anything.
+        if mac not in labels or not data.root_nonstandard:
+            labels[mac] = data.designated_root or "unknown"
+    roots = {
+        labels.get(mac, mac): ips for mac, ips in by_mac.items()
+    }
     return {
-        "verdict": "single" if len(roots) == 1 else "fragmented",
+        "verdict": "single" if len(by_mac) == 1 else "fragmented",
         "roots": roots,
         "operating": sorted(operating),
         "total": len(per_switch),

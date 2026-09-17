@@ -1291,7 +1291,12 @@ async def run_stp_view(community: str, timeout: int, cfg) -> None:
             print(f"  dot1dStpVersion               {data.version} "
                   f"({data.version_name})")
         print(f"  dot1dStpPriority              {data.priority}")
-        print(f"  dot1dStpDesignatedRoot        {data.designated_root or '—'}")
+        root_note = (
+            "   (the agent puts the priority in the low byte; corrected)"
+            if data.root_nonstandard else ""
+        )
+        print(f"  dot1dStpDesignatedRoot        "
+              f"{data.designated_root or '—'}{root_note}")
         print(f"  dot1dStpRootCost              {data.root_cost}")
         print(f"  dot1dStpRootPort              {data.root_port}")
         print(f"  dot1dStpTopChanges            {data.top_changes}")

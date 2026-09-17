@@ -182,6 +182,12 @@ const I18N = {
     stpVerdictNone: "STP is not running anywhere in this network",
     stpVerdictSingle: "One spanning tree, root {root}",
     stpVerdictFragmented: "The tree is fragmented: {n} separate roots",
+    stpBridgeIdFixed:
+      "This switch reports the Bridge ID with the priority in the low "
+      + "byte, where the standard puts it in the high one — its own "
+      + "reading of the number is 256 times smaller. MoonLan shows the "
+      + "corrected value, which is why it differs from the switch's "
+      + "own web interface.",
     al_stp_root_changed: "STP root changed",
     al_stp_topology_change: "STP topology changes",
     al_stp_fragmented: "STP fragmented",
@@ -509,6 +515,11 @@ const I18N = {
     stpVerdictNone: "STP в этой сети не работает",
     stpVerdictSingle: "Единое дерево, корень {root}",
     stpVerdictFragmented: "Дерево фрагментировано: {n} корней",
+    stpBridgeIdFixed:
+      "Этот коммутатор отдаёт Bridge ID с приоритетом в младшем байте, "
+      + "тогда как по стандарту он в старшем: его собственное значение "
+      + "в 256 раз меньше. MoonLan показывает исправленное — поэтому "
+      + "оно отличается от того, что пишет веб-интерфейс коммутатора.",
     al_stp_root_changed: "Смена корня STP",
     al_stp_topology_change: "Изменения топологии STP",
     al_stp_fragmented: "Фрагментация STP",

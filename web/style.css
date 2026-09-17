@@ -475,6 +475,7 @@ main { flex: 1; display: flex; min-height: 0; }
 .stp-table td { white-space: nowrap; }
 .stp-table td.stp-off { color: var(--text-dim); cursor: help; }
 .stp-table td.stp-root { color: var(--ok); font-weight: 600; }
+.stp-table td.stp-corrected { color: var(--warn); cursor: help; }
 .stp-table td.stp-blocking {
   color: #d96b6b; font-size: 0.8rem; white-space: normal;
 }

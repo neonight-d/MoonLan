@@ -520,6 +520,9 @@ def _stp_report(collected: list[SwitchData]) -> dict:
             "version": data.version_name,
             "priority": data.priority,
             "designated_root": data.designated_root,
+            # the agent put the priority in the wrong byte and MoonLan
+            # corrected it; the panel says so rather than hiding it
+            "root_nonstandard": data.root_nonstandard,
             "root_cost": data.root_cost,
             "root_port": (
                 port_name(sw, data.ports[data.root_port].if_index)
