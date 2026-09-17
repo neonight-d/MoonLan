@@ -77,6 +77,8 @@ class StubCollector(SnmpCollector):
         self.agent = agent
         self._walk_status = {}
         self._retries_on_break = retries_on_break
+        self._per_host = {}
+        self._communities = {}
 
     async def _open_walk(self, host, start):
         agent = self.agent

@@ -47,8 +47,41 @@ snmp:
   # уменьшить его собственный `timeout` (см. параметры на устройство).
   host_budget_seconds: 120
 
-# IP addresses of managed switches
-# IP-адреса управляемых коммутаторов
+# IP addresses of managed switches. An entry is either an address, as
+# below, or a mapping with `ip:` and any of the snmp: keys — community,
+# timeout, retries, retries_on_break, host_budget_seconds — which then
+# apply to that switch alone. Anything not written there is inherited
+# from the snmp: section above, and `python -m moonlan.diag --config`
+# prints which is which.
+#
+# Reach for this when one device is unlike the rest: a box that answers
+# slowly (give it a short timeout and one retry, so a request it will
+# never answer is given up on quickly), or a corner of the network that
+# was set up years apart from the rest and has its own community.
+#
+# IP-адреса управляемых коммутаторов. Элемент списка — либо адрес, как
+# ниже, либо отображение с `ip:` и любыми ключами из snmp: — community,
+# timeout, retries, retries_on_break, host_budget_seconds, — которые
+# тогда действуют только на этот коммутатор. Всё неуказанное
+# наследуется из секции snmp: выше; что задано явно, а что унаследовано,
+# печатает `python -m moonlan.diag --config`.
+#
+# Это нужно, когда одно устройство не похоже на остальные: коробка,
+# которая отвечает медленно (дайте ей короткий таймаут и один повтор —
+# запрос, на который она не ответит никогда, тогда бросают быстро), или
+# участок сети, собранный на годы раньше прочих и со своей строкой
+# сообщества.
+#
+# switches:
+#   - 10.0.0.10                    # as before: everything from snmp:
+#                                  # как раньше: всё из snmp:
+#   - ip: 10.3.6.2                 # a slow box: better to give up fast
+#     timeout: 2                   # медленная коробка: лучше быстро сдаться
+#     retries: 1
+#     host_budget_seconds: 90
+#   - ip: 10.3.7.15
+#     community: OtherString       # its own community
+#                                  # своя строка сообщества
 switches:
   - 192.168.1.2
   - 192.168.1.3

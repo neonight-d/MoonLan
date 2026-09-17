@@ -374,6 +374,7 @@ class SnmpCollector:
         timeout: int = 2,
         retries: int = 1,
         retries_on_break: int = 2,
+        per_host: dict | None = None,
     ):
         self._community = CommunityData(community, mpModel=1)  # v2c
         self._timeout = timeout
@@ -386,12 +387,44 @@ class SnmpCollector:
         # confident 0.0.
         self._walk_status: dict[tuple[str, str], WalkStatus] = {}
         self._retries_on_break = retries_on_break
+        # host -> config.HostSnmp for the devices that were given
+        # settings of their own. Everything else uses the arguments
+        # above, which are the global `snmp:` section.
+        self._per_host = dict(per_host or {})
+        self._communities: dict[str, CommunityData] = {}
+
+    def _community_for(self, host: str) -> CommunityData:
+        """The community string this host answers to.
+
+        A parc assembled over years is not one community string. The
+        object is cached because pysnmp derives keys from it.
+        """
+        settings = self._per_host.get(host)
+        if settings is None or settings.community == str(
+            self._community.communityName
+        ):
+            return self._community
+        cached = self._communities.get(host)
+        if cached is None:
+            cached = CommunityData(settings.community, mpModel=1)
+            self._communities[host] = cached
+        return cached
+
+    def _breaks_for(self, host: str) -> int:
+        settings = self._per_host.get(host)
+        return (
+            settings.retries_on_break if settings is not None
+            else self._retries_on_break
+        )
 
     async def _target(self, host: str) -> UdpTransportTarget:
         target = self._targets.get(host)
         if target is None:
+            settings = self._per_host.get(host)
+            timeout = settings.timeout if settings else self._timeout
+            retries = settings.retries if settings else self._retries
             target = await UdpTransportTarget.create(
-                (host, 161), timeout=self._timeout, retries=self._retries
+                (host, 161), timeout=timeout, retries=retries
             )
             self._targets[host] = target
         return target
@@ -410,7 +443,7 @@ class SnmpCollector:
         try:
             error_ind, error_status, _, var_binds = await get_cmd(
                 self._engine,
-                self._community,
+                self._community_for(host),
                 await self._target(host),
                 ContextData(),
                 ObjectType(ObjectIdentity(oid)),
@@ -442,7 +475,7 @@ class SnmpCollector:
         """
         return walk_cmd(
             self._engine,
-            self._community,
+            self._community_for(host),
             await self._target(host),
             ContextData(),
             ObjectType(ObjectIdentity(start)),
@@ -521,7 +554,7 @@ class SnmpCollector:
             if left_subtree or not broke:
                 return  # read to the end
             status.error = broke
-            if status.resumes >= self._retries_on_break or last_oid is None:
+            if status.resumes >= self._breaks_for(host) or last_oid is None:
                 status.truncated = status.rows > 0
                 status.last_oid = (
                     ".".join(str(part) for part in last_oid) if last_oid else ""

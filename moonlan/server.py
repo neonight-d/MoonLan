@@ -149,6 +149,7 @@ def get_collector() -> SnmpCollector:
             timeout=config.snmp.timeout,
             retries=config.snmp.retries,
             retries_on_break=config.snmp.retries_on_break,
+            per_host=config.switch_snmp,
         )
     return _collector
 
@@ -240,7 +241,7 @@ async def run_scan() -> None:
             results = await asyncio.gather(
                 *(
                     _collect_within_budget(
-                        collector, ip, config.snmp.host_budget_seconds
+                        collector, ip, config.host_budget(ip)
                     )
                     for ip in config.switches
                 ),
@@ -1608,6 +1609,22 @@ def _log_config() -> None:
         )
     else:
         log.info("%s", summary)
+    for problem in report.problems:
+        log.warning("config.yaml switches: %s", problem)
+    custom = config.custom_switches()
+    if custom:
+        log.info(
+            "SNMP settings of their own on %d of %d switch(es): %s. "
+            "Everything else is inherited from the snmp: section; "
+            "python -m moonlan.diag --config prints which is which.",
+            len(custom), len(config.switches),
+            ", ".join(
+                f"{ip} ("
+                + ", ".join(sorted(config.switch_snmp[ip].explicit))
+                + ")"
+                for ip in custom
+            ),
+        )
 
 
 async def purge_invalid_macs() -> None:

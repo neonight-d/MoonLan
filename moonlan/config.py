@@ -156,6 +156,11 @@ class Config:
     listen_port: int = 8080
     snmp: SnmpConfig = field(default_factory=SnmpConfig)
     switches: list[str] = field(default_factory=list)
+    # Per-switch SNMP settings, one entry per address in `switches`.
+    # Everything not written for that switch is inherited from `snmp:`,
+    # so this is always complete and nothing has to fall back to the
+    # global section at the point of use.
+    switch_snmp: dict = field(default_factory=dict)
     routers: list[str] = field(default_factory=list)
     scan_interval_minutes: int = 10
     ping_interval_seconds: int = 60
@@ -210,6 +215,35 @@ class Config:
     # filled in by load_config: which settings came from the file
     report: "ConfigReport | None" = None
 
+    def host_snmp(self, ip: str) -> "HostSnmp":
+        """The settings this switch is polled with, inheritance applied.
+
+        A switch that is not in `switches:` — a router from `routers:`,
+        an address typed into diag — gets the global section, which is
+        what every caller assumed before per-switch settings existed.
+        """
+        found = self.switch_snmp.get(ip)
+        if found is not None:
+            return found
+        return HostSnmp(
+            community=self.snmp.community,
+            timeout=self.snmp.timeout,
+            retries=self.snmp.retries,
+            retries_on_break=self.snmp.retries_on_break,
+            host_budget_seconds=self.snmp.host_budget_seconds,
+        )
+
+    def host_budget(self, ip: str) -> int:
+        return self.host_snmp(ip).host_budget_seconds
+
+    def custom_switches(self) -> list[str]:
+        """Addresses whose settings differ from the global section."""
+        return [
+            ip for ip in self.switches
+            if self.switch_snmp.get(ip)
+            and self.switch_snmp[ip].explicit
+        ]
+
 
 def parse_uplink_ports(entries: list[str]) -> set[tuple[str, str]]:
     """"10.0.0.10:Slot0/25" -> {("10.0.0.10", "Slot0/25")}.
@@ -223,6 +257,107 @@ def parse_uplink_ports(entries: list[str]) -> set[tuple[str, str]]:
         if sep and ip.strip() and port.strip():
             parsed.add((ip.strip(), port.strip()))
     return parsed
+
+
+@dataclass(frozen=True)
+class HostSnmp:
+    """The SNMP settings one switch is actually polled with.
+
+    A network is never made of one kind of hardware. Five seconds with
+    two retries is a sensible compromise for a D-Link; on an RB941 it
+    means every request it does not answer costs fifteen seconds, and a
+    poll holds thirteen of those. Until now the only way to account for
+    that was to make the setting worse for every switch at once.
+
+    `explicit` names the keys this switch was given of its own; the
+    rest are inherited from the global `snmp:` section, and
+    `diag --config` prints which is which.
+    """
+
+    community: str
+    timeout: int
+    retries: int
+    retries_on_break: int
+    host_budget_seconds: int
+    explicit: frozenset = frozenset()
+
+
+# Per-switch keys, and where each one is read from a switches: entry
+HOST_SNMP_KEYS = (
+    "community", "timeout", "retries", "retries_on_break",
+    "host_budget_seconds",
+)
+_HOST_SNMP_CAST = {
+    "community": str,
+    "timeout": int,
+    "retries": int,
+    "retries_on_break": int,
+    "host_budget_seconds": int,
+}
+
+
+def parse_switches(
+    value, defaults: SnmpConfig
+) -> tuple[list[str], dict[str, HostSnmp], list[str]]:
+    """`switches:` -> (addresses, per-switch settings, complaints).
+
+    An entry is either an address, exactly as every config.yaml written
+    so far has it, or a mapping with `ip:` and any of the SNMP keys.
+    The old form must keep working untouched: this is the one file an
+    operator edits by hand.
+    """
+    problems: list[str] = []
+    addresses: list[str] = []
+    settings: dict[str, HostSnmp] = {}
+    if value is None:
+        return [], {}, []
+    if not isinstance(value, (list, tuple)):
+        value = [value]
+    for entry in value:
+        if isinstance(entry, dict):
+            ip = str(entry.get("ip") or entry.get("address") or "").strip()
+            if not ip:
+                problems.append(
+                    f"a switches: entry has no ip: {entry!r} — skipped"
+                )
+                continue
+            overrides: dict[str, object] = {}
+            for key, raw in entry.items():
+                if key in ("ip", "address"):
+                    continue
+                if key not in _HOST_SNMP_CAST:
+                    problems.append(
+                        f"{ip}: unknown per-switch key {key!r} — ignored"
+                    )
+                    continue
+                try:
+                    overrides[key] = _HOST_SNMP_CAST[key](raw)
+                except (TypeError, ValueError):
+                    problems.append(
+                        f"{ip}: {key} is not a number: {raw!r} — "
+                        f"the global value is used"
+                    )
+        else:
+            ip = str(entry).strip()
+            overrides = {}
+        if not ip:
+            continue
+        addresses.append(ip)
+        settings[ip] = HostSnmp(
+            community=str(overrides.get("community", defaults.community)),
+            timeout=int(overrides.get("timeout", defaults.timeout)),
+            retries=int(overrides.get("retries", defaults.retries)),
+            retries_on_break=int(
+                overrides.get("retries_on_break", defaults.retries_on_break)
+            ),
+            host_budget_seconds=int(
+                overrides.get(
+                    "host_budget_seconds", defaults.host_budget_seconds
+                )
+            ),
+            explicit=frozenset(overrides),
+        )
+    return addresses, settings, problems
 
 
 def _as_str_list(value) -> list[str]:
@@ -261,6 +396,11 @@ class ConfigReport:
     # (dotted key, value, "config.yaml" | "default")
     values: list[tuple[str, object, str]] = field(default_factory=list)
     unknown: list[str] = field(default_factory=list)
+    # Entries the loader could read but not use: a switches: mapping
+    # with no ip:, a per-switch key nobody implements, a timeout that
+    # is not a number. Silently dropping any of those leaves an
+    # operator convinced a setting is in force when it is not.
+    problems: list[str] = field(default_factory=list)
 
     @property
     def overrides(self) -> list[tuple[str, object, str]]:
@@ -363,7 +503,9 @@ def load_config(path: Path | None = None) -> Config:
         ),
     )
 
-    cfg.switches = r.get("switches", d.switches, _as_str_list)
+    cfg.switches, cfg.switch_snmp, switch_problems = parse_switches(
+        r.get("switches", d.switches), cfg.snmp
+    )
     cfg.routers = r.get("routers", d.routers, _as_str_list)
     cfg.scan_interval_minutes = r.get(
         "scan_interval_minutes", d.scan_interval_minutes, int
@@ -528,6 +670,7 @@ def load_config(path: Path | None = None) -> Config:
         path=str(path.resolve() if exists else path), exists=exists,
         values=r.values,
         unknown=r.unknown_keys(),
+        problems=switch_problems,
     )
 
     if os.environ.get("MOONLAN_DEMO") == "1":

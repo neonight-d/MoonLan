@@ -104,7 +104,13 @@ MAX_IF_ROWS = 40
 # uses them. A CLI run must retry exactly the way the service does, or
 # it diagnoses a different machine than the one that is running.
 _SNMP = {"retries": SnmpConfig.retries,
-         "retries_on_break": SnmpConfig.retries_on_break}
+         "retries_on_break": SnmpConfig.retries_on_break,
+         # Per-switch settings from config.yaml, so a device with its
+         # own timeout is diagnosed on that timeout. Emptied when
+         # --community or --timeout is given: an explicit value on the
+         # command line is an instruction, not a suggestion, and it
+         # applies to every address in the run.
+         "per_host": {}}
 
 # Set by --anonymize. Every collector built here then registers the
 # names it learns, and stdout rewrites them on the way out.
@@ -143,6 +149,7 @@ def _make_collector(community: str, timeout: int) -> SnmpCollector:
         timeout=timeout,
         retries=_SNMP["retries"],
         retries_on_break=_SNMP["retries_on_break"],
+        per_host=_SNMP["per_host"],
     )
 
 
@@ -744,6 +751,37 @@ def run_config_audit(cfg) -> None:
             print(f"  {key} = {_mask(key, value)}")
     else:
         print("  none")
+
+    if report.problems:
+        print("\nentries in switches: that could not be used:")
+        for problem in report.problems:
+            print(f"  {problem}")
+
+    # The settings each switch is actually polled with. The global
+    # section is only half the answer once a switch may carry keys of
+    # its own, and "which timeout is this device on" is the first
+    # question asked of a device that polls slowly.
+    print("\nSNMP settings per switch (* = set for this switch, "
+          "the rest inherited from snmp:):")
+    if not cfg.switches:
+        print("  no switches configured")
+        return
+    columns = ("timeout", "retries", "retries_on_break",
+               "host_budget_seconds", "community")
+    header = f"  {'switch':<18}" + "".join(
+        f"{name:>21}" for name in columns
+    )
+    print(header)
+    for ip in cfg.switches:
+        settings = cfg.host_snmp(ip)
+        cells = []
+        for name in columns:
+            value = getattr(settings, name)
+            if name in SECRET_KEYS:
+                value = _mask(name, value)
+            mark = "*" if name in settings.explicit else " "
+            cells.append(f"{str(value) + mark:>21}")
+        print(f"  {ip:<18}" + "".join(cells))
 
 
 FDB_TABLES = ((OID_FDB_PORT, 6, "dot1dTpFdbPort"),
@@ -1521,10 +1559,14 @@ def main() -> None:
     )
     parser.add_argument("ip", nargs="?", help="switch IP address")
     parser.add_argument(
-        "--community", help="SNMP community (defaults to config.yaml)"
+        "--community",
+        help="SNMP community for every address in this run (by default "
+             "each switch uses the one config.yaml gives it)",
     )
     parser.add_argument(
-        "--timeout", type=int, help="SNMP timeout in seconds (defaults to config.yaml)"
+        "--timeout", type=int,
+        help="SNMP timeout in seconds for every address in this run (by "
+             "default each switch uses the one config.yaml gives it)",
     )
     parser.add_argument(
         "--topology", action="store_true",
@@ -1608,6 +1650,8 @@ def main() -> None:
     timeout = args.timeout or cfg.snmp.timeout
     _SNMP["retries"] = cfg.snmp.retries
     _SNMP["retries_on_break"] = cfg.snmp.retries_on_break
+    if not args.community and not args.timeout:
+        _SNMP["per_host"] = cfg.switch_snmp
     if args.anonymize:
         global _ANON
         _ANON = Anonymizer()

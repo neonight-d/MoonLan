@@ -37,6 +37,8 @@ class StubCollector(SnmpCollector):
         self._community = None
         self._walk_status = {}
         self._retries_on_break = 0
+        self._per_host = {}
+        self._communities = {}
 
     async def _target(self, host):
         return None
