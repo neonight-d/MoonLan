@@ -13,12 +13,16 @@ network the day RSTP was switched on:
   RSTP running and one of them being the root. The old test asked for
   history — topology changes, or a change newer than the uptime — and
   a tree switched on an hour ago has none;
+- blocking ports with no cable in them, which RouterOS reports on
+  every spare socket.
+
 Run with:  python -m unittest discover -s tests
 """
 
 import unittest
 
 from moonlan.stp import (
+    STATE_BLOCKING,
     STATE_FORWARDING,
     StpData,
     StpPort,
@@ -93,7 +97,7 @@ def member(ip_mac: str, root: str, cost: int, **kw) -> StpData:
         designated_root=root, root_cost=cost, root_port=25,
         own_macs={ip_mac}, sys_uptime=400_000,
         ports={25: StpPort(bridge_port=25, if_index=25, state=STATE_FORWARDING,
-                           enabled=True)},
+                           enabled=True, link_up=True)},
         **kw,
     ))
 
@@ -218,6 +222,34 @@ class NetworkVerdictTest(unittest.TestCase):
         verdict = network_verdict(network)
         self.assertEqual(verdict["verdict"], "fragmented")
         self.assertEqual(len(verdict["roots"]), 2)
+
+
+class BlockingPortTest(unittest.TestCase):
+    """RouterOS reports blocking on sockets with nothing in them."""
+
+    def workshop(self) -> StpData:
+        return StpData(
+            supported=True, own_macs={"18:fd:74:fd:b3:af"},
+            ports={
+                1: StpPort(bridge_port=1, if_index=1, state=STATE_FORWARDING,
+                           enabled=True, link_up=True, name="ether1"),
+                2: StpPort(bridge_port=2, if_index=2, state=STATE_BLOCKING,
+                           enabled=True, link_up=True, name="ether2"),
+                3: StpPort(bridge_port=3, if_index=3, state=STATE_BLOCKING,
+                           enabled=True, link_up=False, name="ether3"),
+                4: StpPort(bridge_port=4, if_index=4, state=STATE_BLOCKING,
+                           enabled=True, link_up=False, name="ether4"),
+            },
+        )
+
+    def test_only_a_port_with_a_cable_counts_as_blocking(self):
+        blocking = [p.name for p in self.workshop().blocking_ports()]
+        self.assertEqual(blocking, ["ether2"])
+
+    def test_an_unknown_link_state_is_not_held_against_the_port(self):
+        """Before the interface table is in, blocking still reads as blocking."""
+        port = StpPort(bridge_port=9, state=STATE_BLOCKING, link_up=None)
+        self.assertTrue(port.blocking)
 
 
 if __name__ == "__main__":

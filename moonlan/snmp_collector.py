@@ -637,7 +637,8 @@ class SnmpCollector:
         # own_macs goes in: "did this bridge accept somebody else's
         # root" is a comparison against every address it answers to
         data.stp = await stp_mod.collect_stp(
-            self, host, port_to_ifindex, data.own_macs
+            self, host, port_to_ifindex, data.own_macs,
+            {i: p.oper_up for i, p in data.ports.items()},
         )
         data.sys_uptime = data.stp.sys_uptime
 

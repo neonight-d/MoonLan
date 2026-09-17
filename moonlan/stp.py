@@ -84,6 +84,9 @@ class StpPort:
     designated_bridge: str = ""
     admin_edge: bool | None = None
     oper_edge: bool | None = None
+    # ifOperStatus of this port's interface, filled in by the caller.
+    # None means the interface table said nothing about it.
+    link_up: bool | None = None
 
     @property
     def state_name(self) -> str:
@@ -94,7 +97,15 @@ class StpPort:
 
     @property
     def blocking(self) -> bool:
-        return self.state == STATE_BLOCKING
+        """In the blocking state AND actually plugged in.
+
+        RouterOS reports blocking(2) on ports with nothing in them —
+        ether3 and ether4 of a four-port box — and drawing that would
+        put a blocked link on every empty socket of every MikroTik on
+        the map. A port with no link is not held down by the tree; it
+        is dark, and there is no edge there to draw.
+        """
+        return self.state == STATE_BLOCKING and self.link_up is not False
 
 
 @dataclass
@@ -390,6 +401,7 @@ def judge_network(per_switch: dict[str, StpData]) -> dict[str, StpData]:
 async def collect_stp(
     collector, host: str, port_to_ifindex: dict[int, int],
     own_macs: set[str] | None = None,
+    oper_status: dict[int, bool] | None = None,
 ):
     """Walks BRIDGE-MIB dot1dStp* of one switch and judges the result.
 
@@ -446,9 +458,11 @@ async def collect_stp(
     def port(bridge_port: int) -> StpPort:
         entry = data.ports.get(bridge_port)
         if entry is None:
+            if_index = port_to_ifindex.get(bridge_port)
             entry = StpPort(
                 bridge_port=bridge_port,
-                if_index=port_to_ifindex.get(bridge_port),
+                if_index=if_index,
+                link_up=(oper_status or {}).get(if_index),
             )
             data.ports[bridge_port] = entry
         return entry
