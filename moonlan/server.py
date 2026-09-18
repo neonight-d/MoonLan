@@ -327,6 +327,16 @@ async def run_scan() -> None:
                 # own bookkeeping.
                 sw.loop_detection = previous.loop_detection
             switch_data[sw.ip] = sw
+        # The cross-switch spanning-tree test comes BEFORE the map is
+        # built, because the map reads its results. A root recognised
+        # only because its neighbours follow its address (v0.6.11) has
+        # `operating` and `confirmed_root` set by judge_network — and
+        # judge_network used to run after build_topology, so the node
+        # was drawn with a plain border, no root caption and its
+        # blocking ports ignored, while the STP panel two panels away
+        # called it the root. One order of operations, three wrong
+        # fields.
+        _judge_stp(collected)
         # A MAC has to be seen more than once before it counts as a
         # device (unless ARP vouches for it); the verdict is needed
         # before the topology so that unconfirmed addresses stay out of
@@ -587,6 +597,25 @@ def _lldp_rows(collected: list[SwitchData]) -> list[dict]:
     return rows
 
 
+def _per_switch_stp(collected: list[SwitchData]) -> dict:
+    """ip -> StpData for every switch that answered."""
+    return {
+        sw.ip: sw.stp for sw in collected
+        if sw.reachable and sw.stp is not None
+    }
+
+
+def _judge_stp(collected: list[SwitchData]) -> None:
+    """The cross-switch test, run once the whole network is in hand.
+
+    A switch that names itself root is believed only when a neighbour
+    names it too (see stp.judge_network). It mutates the StpData
+    objects in place, so everything downstream — the map, the panel,
+    the alarms — sees the same verdict, provided it runs first.
+    """
+    stp.judge_network(_per_switch_stp(collected))
+
+
 def _stp_report(
     collected: list[SwitchData], trunk_names: dict[str, list[str]] | None = None
 ) -> dict:
@@ -598,13 +627,7 @@ def _stp_report(
     0 — believing that is how five disabled switches turn into five
     root bridges (see moonlan/stp.py).
     """
-    per_switch = {
-        sw.ip: sw.stp for sw in collected if sw.reachable and sw.stp is not None
-    }
-    # The cross-switch test runs once the whole network is in hand: a
-    # switch that names itself root is believed only when a neighbour
-    # names it too (see stp.judge_network).
-    stp.judge_network(per_switch)
+    per_switch = _per_switch_stp(collected)
     verdict = stp.network_verdict(per_switch)
     trunk_names = trunk_names or {}
     switches = []
