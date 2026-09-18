@@ -191,29 +191,52 @@ async def _collect_within_budget(
         state.host_polled()
 
 
-async def _counters_locked(collector: SnmpCollector, ip: str):
-    """A counters poll, but only if the switch is free right now.
+def _counters_wait_budget() -> float:
+    """How long a counters cycle waits for a switch the scan is holding.
 
-    Waiting would pile cycles up behind a slow scan; a skipped cycle
-    costs one point of history and says so.
+    Long enough to outlast a normal scan of one host, short enough that
+    cycles never pile up: half an interval, capped at twenty seconds.
+    """
+    return min(max(config.counters_interval_seconds, 2) / 2, 20)
+
+
+async def _counters_locked(collector: SnmpCollector, ip: str):
+    """A counters poll, waiting briefly if the scan holds this switch.
+
+    Giving up the moment the lock was taken had a consequence nobody
+    intended: a scan holds a host for as long as its budget allows, so
+    any budget of two intervals or more guaranteed that this host
+    missed cycles — and before v0.6.13 a missed cycle meant its whole
+    panel went to dashes. A short wait catches the common case where
+    the scan is nearly done with it.
+
+    Queueing indefinitely is still not an option: cycles would pile up
+    behind a slow host. Past the wait it is skipped, as before, and
+    says so.
     """
     lock = host_lock(ip)
-    if lock.locked():
+    wait = _counters_wait_budget()
+    try:
+        await asyncio.wait_for(lock.acquire(), wait)
+    except asyncio.TimeoutError:
         log.info(
-            "%s is busy with the topology scan — skipping this counters "
-            "cycle rather than queueing behind it", ip,
+            "%s is still busy with the topology scan after %.0f s — "
+            "skipping this counters cycle rather than queueing behind it. "
+            "Its rates stay on the panel with their age; a poll budget at "
+            "or above twice counters_interval_seconds makes this happen "
+            "after every scan.", ip, wait,
         )
         return {}, {}, {}, None
-    sw = switch_data.get(ip)
-    # The interface table from the last scan: without it a truncated
-    # column has no way of knowing which ports it failed to reach.
-    # Real interfaces only — a negative ifIndex is one of our own
-    # synthetic aggregates, which SNMP has never heard of.
-    expected = (
-        {p.if_index for p in sw.ports.values() if p.if_index > 0}
-        if sw else None
-    )
-    async with lock:
+    try:
+        sw = switch_data.get(ip)
+        # The interface table from the last scan: without it a truncated
+        # column has no way of knowing which ports it failed to reach.
+        # Real interfaces only — a negative ifIndex is one of our own
+        # synthetic aggregates, which SNMP has never heard of.
+        expected = (
+            {p.if_index for p in sw.ports.values() if p.if_index > 0}
+            if sw else None
+        )
         samples, oper, columns = await counters.collect_samples(
             collector, ip, expected
         )
@@ -227,6 +250,8 @@ async def _counters_locked(collector: SnmpCollector, ip: str):
                 sys_object_id=sw.sys_object_id,
             )
         return samples, oper, columns, loop
+    finally:
+        lock.release()
 
 
 async def run_scan() -> None:
@@ -1634,6 +1659,18 @@ def _log_config() -> None:
         log.info("%s", summary)
     for problem in report.problems:
         log.warning("config.yaml switches: %s", problem)
+    starved = config.starved_counters()
+    if starved:
+        log.warning(
+            "Poll budget at or above twice counters_interval_seconds "
+            "(%d s) on %d switch(es): %s. While a scan holds one of "
+            "these, its counters cycle is skipped, so its rates will "
+            "visibly age between scans — the panel shows them with their "
+            "age rather than hiding them. Lower host_budget_seconds for "
+            "those devices, or raise counters_interval_seconds.",
+            config.counters_interval_seconds, len(starved),
+            ", ".join(f"{ip} ({budget} s)" for ip, budget in starved),
+        )
     custom = config.custom_switches()
     if custom:
         log.info(

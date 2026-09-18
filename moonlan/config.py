@@ -256,6 +256,27 @@ class Config:
     def host_budget(self, ip: str) -> int:
         return self.host_snmp(ip).host_budget_seconds
 
+    def starved_counters(self) -> list[tuple[str, int]]:
+        """Switches whose poll budget outlasts their counters cycle.
+
+        A scan holds a switch for as long as its budget allows, and a
+        counters cycle that finds it held gives up after a short wait.
+        At two intervals or more that is not an occasional miss: it is
+        every scan, and the switch's rates age visibly between them.
+
+        Not forbidden — a genuinely slow agent may need the budget —
+        but the operator should be told rather than left to work it out
+        from a panel full of stale values.
+        """
+        if self.counters_interval_seconds <= 0:
+            return []
+        limit = self.counters_interval_seconds * 2
+        return [
+            (ip, self.host_snmp(ip).host_budget_seconds)
+            for ip in self.switches
+            if self.host_snmp(ip).host_budget_seconds >= limit
+        ]
+
     def custom_switches(self) -> list[str]:
         """Addresses whose settings differ from the global section."""
         return [

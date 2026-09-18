@@ -754,6 +754,21 @@ def run_config_audit(cfg) -> None:
     else:
         print("  none")
 
+    starved = cfg.starved_counters()
+    if starved:
+        print(
+            f"\npoll budget at or above twice counters_interval_seconds "
+            f"({cfg.counters_interval_seconds} s):"
+        )
+        for ip, budget in starved:
+            print(f"  {ip}: host_budget_seconds = {budget}")
+        print(
+            "  ^ while a scan holds one of these, its counters cycle is\n"
+            "    skipped, so its rates age visibly between scans. Not an\n"
+            "    error — the panel shows them with their age — but lower\n"
+            "    the budget for those devices if you can."
+        )
+
     if report.problems:
         print("\nentries in switches: that could not be used:")
         for problem in report.problems:

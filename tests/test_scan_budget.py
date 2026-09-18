@@ -39,6 +39,7 @@ _CONFIG.write_text(
 os.environ["MOONLAN_CONFIG"] = str(_CONFIG)
 
 from moonlan import server  # noqa: E402
+from moonlan.config import Config, HostSnmp  # noqa: E402
 from moonlan.snmp_collector import SwitchData  # noqa: E402
 
 SLOW = {"10.0.0.3", "10.0.0.7"}
@@ -162,6 +163,92 @@ class ScanBudgetTest(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(second["10.0.0.3"]["over_budget"])
         self.assertEqual(second["10.0.0.3"]["polled_at"], taken_at)
         self.assertFalse(second["10.0.0.1"]["over_budget"])
+
+
+class CountersStarvationTest(unittest.IsolatedAsyncioTestCase):
+    """A scan holding a switch must not cost it every counters cycle.
+
+    The counters cycle used to give up the instant it found the lock
+    taken. A scan holds a host for as long as its budget allows, so any
+    budget of two intervals or more guaranteed that host missed cycles
+    — and before v0.6.13 a missed cycle meant its whole panel went to
+    dashes. The operator walked straight into it: budget 180 against an
+    interval of 60.
+    """
+
+    def setUp(self):
+        self._interval = server.config.counters_interval_seconds
+        server.config.counters_interval_seconds = 4  # wait budget: 2 s
+
+    def tearDown(self):
+        server.config.counters_interval_seconds = self._interval
+
+    async def test_it_waits_for_a_scan_that_is_nearly_done(self):
+        polled: list[str] = []
+
+        async def fake_samples(collector, ip, expected):
+            polled.append(ip)
+            return {}, {}, {}
+
+        original = server.counters.collect_samples
+        server.counters.collect_samples = fake_samples
+        lock = server.host_lock("10.0.0.5")
+
+        async def hold():
+            async with lock:
+                await asyncio.sleep(0.3)
+
+        try:
+            holder = asyncio.create_task(hold())
+            await asyncio.sleep(0)  # let it take the lock
+            self.assertTrue(lock.locked())
+            await server._counters_locked(None, "10.0.0.5")
+            await holder
+        finally:
+            server.counters.collect_samples = original
+        self.assertEqual(polled, ["10.0.0.5"])
+
+    async def test_it_gives_up_rather_than_queueing(self):
+        lock = server.host_lock("10.0.0.6")
+
+        async def hold():
+            async with lock:
+                await asyncio.sleep(5)
+
+        holder = asyncio.create_task(hold())
+        await asyncio.sleep(0)
+        started = time.monotonic()
+        with self.assertLogs("moonlan", "INFO") as logged:
+            result = await server._counters_locked(None, "10.0.0.6")
+        elapsed = time.monotonic() - started
+        holder.cancel()
+        self.assertEqual(result, ({}, {}, {}, None))
+        self.assertLess(elapsed, 4.0)
+        self.assertGreater(elapsed, 1.0)  # it did wait
+        self.assertTrue(
+            any("still busy with the topology scan" in line
+                for line in logged.output),
+            logged.output,
+        )
+
+    def test_a_budget_that_outlasts_two_cycles_is_reported(self):
+        cfg = Config()
+        cfg.counters_interval_seconds = 60
+        cfg.switches = ["10.0.0.10", "10.3.6.2"]
+        cfg.switch_snmp = {
+            "10.0.0.10": HostSnmp(
+                community="c", timeout=5, retries=2, retries_on_break=2,
+                host_budget_seconds=90,
+            ),
+            "10.3.6.2": HostSnmp(
+                community="c", timeout=2, retries=1, retries_on_break=2,
+                host_budget_seconds=180,
+                explicit=frozenset({"host_budget_seconds"}),
+            ),
+        }
+        self.assertEqual(cfg.starved_counters(), [("10.3.6.2", 180)])
+        cfg.counters_interval_seconds = 0  # counters cycle switched off
+        self.assertEqual(cfg.starved_counters(), [])
 
 
 if __name__ == "__main__":
