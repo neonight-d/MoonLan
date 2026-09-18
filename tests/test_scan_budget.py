@@ -165,6 +165,93 @@ class ScanBudgetTest(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(second["10.0.0.1"]["over_budget"])
 
 
+class StaleSwitchTest(unittest.IsolatedAsyncioTestCase):
+    """A switch that answers and never finishes answering.
+
+    10.3.7.10 was not polled in full once in six hours: thirty scans,
+    thirty budget failures. On the map it looked alive — from its last
+    complete reading — and the only way to learn otherwise was the
+    journal. That is a third state beside "answering" and "down", and
+    calling it either of those is wrong in a different direction each
+    time.
+    """
+
+    def setUp(self):
+        self.collector = StubCollector()
+        self._get_collector = server.get_collector
+        server.get_collector = lambda: self.collector
+        server.switch_data.clear()
+        self._scans = server.config.stale_switch_scans
+        server.config.stale_switch_scans = 3
+        self.raised: list[tuple[str, str, str]] = []
+        self._raise = server.alarm_engine._raise
+        self._clear = server.alarm_engine._clear
+
+        # switch_stale only: every other alarm path runs too, and the
+        # point here is what this one says
+        async def record_raise(alarm_type, subject, message, **kwargs):
+            if alarm_type == "switch_stale":
+                self.raised.append(("raise", subject, message))
+
+        async def record_clear(alarm_type, subject, message, note=""):
+            if alarm_type == "switch_stale":
+                self.raised.append(("clear", subject, message))
+
+        server.alarm_engine._raise = record_raise
+        server.alarm_engine._clear = record_clear
+        server.alarm_engine._stale_switches.clear()
+
+    def tearDown(self):
+        server.get_collector = self._get_collector
+        server.alarm_engine._raise = self._raise
+        server.alarm_engine._clear = self._clear
+        server.config.stale_switch_scans = self._scans
+        server.state.scanning = False
+
+    async def test_the_streak_is_counted_and_then_said_out_loud(self):
+        self.collector.delay = 0.0
+        with self.assertLogs("moonlan", "WARNING"):
+            await server.run_scan()          # one good scan for a baseline
+        self.collector.delay = 30.0
+        for _ in range(2):
+            with self.assertLogs("moonlan", "WARNING"):
+                await server.run_scan()
+        drawn = {sw["ip"]: sw for sw in server.state.as_dict()["switches"]}
+        self.assertEqual(drawn["10.0.0.3"]["over_budget_scans"], 2)
+        # …but two is under the threshold, so nothing has been claimed
+        self.assertEqual(self.raised, [])
+
+        with self.assertLogs("moonlan", "WARNING"):
+            await server.run_scan()
+        raised = [r for r in self.raised if r[0] == "raise"]
+        self.assertEqual(
+            sorted(r[1] for r in raised), ["10.0.0.3", "10.0.0.7"]
+        )
+        self.assertIn("3 scans running", raised[0][2])
+        # it is answering: that must be said in the same breath
+        self.assertIn("reachable", raised[0][2])
+
+    async def test_one_full_poll_clears_it(self):
+        self.collector.delay = 30.0
+        for _ in range(3):
+            with self.assertLogs("moonlan", "WARNING"):
+                await server.run_scan()
+        self.assertTrue([r for r in self.raised if r[0] == "raise"])
+        self.raised.clear()
+
+        self.collector.delay = 0.0
+        with self.assertLogs("moonlan", "WARNING"):
+            await server.run_scan()
+        cleared = [r for r in self.raised if r[0] == "clear"]
+        self.assertEqual(
+            sorted(r[1] for r in cleared), ["10.0.0.3", "10.0.0.7"]
+        )
+        drawn = {sw["ip"]: sw for sw in server.state.as_dict()["switches"]}
+        self.assertEqual(drawn["10.0.0.3"]["over_budget_scans"], 0)
+        self.assertFalse(drawn["10.0.0.3"]["over_budget"])
+        self.assertGreater(drawn["10.0.0.3"]["polled_at"], 0)
+
+
 class CountersStarvationTest(unittest.IsolatedAsyncioTestCase):
     """A scan holding a switch must not cost it every counters cycle.
 

@@ -130,6 +130,20 @@ routers:
 # один и тот же прочерк в обоих случаях.
 stale_rate_hide_minutes: 30
 
+# Scans in a row a switch may fail to finish its poll before its card
+# says so and a switch_stale alarm is raised. It is answering — that is
+# never switch_down — but its data has stopped being refreshed, and on
+# the map it goes on looking alive. One deployment had a switch that
+# was not read in full once in six hours: thirty scans, thirty budget
+# failures, and nothing said so outside the journal.
+# Сколько сканов подряд коммутатор может не уложиться в опрос, прежде
+# чем об этом скажет карточка и поднимется тревога switch_stale. Он
+# отвечает — switch_down тут не при чём, — но его данные перестали
+# обновляться, а на карте он выглядит живым. В одном развёртывании
+# коммутатор не был опрошен целиком ни разу за шесть часов: 30 сканов,
+# 30 отказов по бюджету, и нигде, кроме журнала, об этом не говорилось.
+stale_switch_scans: 5
+
 # Periodic scan, minutes (0 — manual only via /api/scan)
 # Периодический автоопрос, минут (0 — только вручную через /api/scan)
 scan_interval_minutes: 10
@@ -397,6 +411,11 @@ notifications:
 alarm_notify:
   host_down: [email, telegram, syslog]
   switch_down: [email, telegram, syslog]
+  # It answers; it just never finishes. Nobody needs waking for that,
+  # but it must not go unsaid.
+  # Он отвечает, просто не успевает. Будить из-за этого никого не надо,
+  # но и молчать нельзя.
+  switch_stale: [syslog]
   port_errors: [syslog]
   port_discards: [syslog]
   port_util: [telegram, syslog]

@@ -15,6 +15,12 @@ Rules:
   than from a fresh FDB) are never alarmed on.
 - switch_down (critical): a configured switch fails 2 consecutive SNMP
   polls; cleared by a successful poll.
+- switch_stale (warning): a switch that answers but has not finished a
+  full poll for stale_switch_scans scans running — its budget ran out
+  every time. Its data is on the map, it is simply not being
+  refreshed. Deliberately not switch_down: sending somebody to look for
+  a dead device that is answering wastes the trip, and one of these two
+  is urgent while the other is a setting to adjust.
 - port_errors (warning): damaged frames (ifInErrors+ifOutErrors) above
   errors_per_minute AND, where packet counters exist, above
   error_ratio_percent of all frames, for port_alarm_cycles consecutive
@@ -93,6 +99,9 @@ log = logging.getLogger(__name__)
 SEVERITIES = {
     "host_down": "warning",
     "switch_down": "critical",
+    # It answers. It just never finishes answering, so its data stops
+    # being refreshed — which is neither "up" nor "down".
+    "switch_stale": "warning",
     "port_errors": "warning",
     "port_discards": "info",
     "port_util": "warning",
@@ -199,6 +208,9 @@ class AlarmEngine:
         self._active: set[tuple[str, str]] = set()  # (type, subject)
         self._ping_fails: dict[str, int] = {}       # mac -> consecutive misses
         self._snmp_fails: dict[str, int] = {}       # ip -> consecutive misses
+        # switches currently carrying switch_stale, so the alarm
+        # can be cleared the moment one of them finishes a poll
+        self._stale_switches: set[str] = set()
         self._over: dict[tuple[str, str], int] = {}   # port rule hysteresis
         self._under: dict[tuple[str, str], int] = {}
         # consecutive successful pings per MAC (0 = silent right now)
@@ -426,6 +438,41 @@ class AlarmEngine:
                         "switch_down", ip,
                         f"{names.get(ip, ip)} missed {misses} SNMP polls in a row",
                     )
+
+    async def on_stale_switches(
+        self, stale: dict[str, dict], names: dict[str, str]
+    ) -> None:
+        """Switches answering without ever finishing a poll.
+
+        `stale` holds one entry per switch that has now missed its
+        budget often enough to be worth saying so about: `scans` in a
+        row and `polled_at` of the last complete reading. A switch that
+        managed a full poll is simply absent from the mapping, and its
+        alarm clears.
+        """
+        for ip in list(self._stale_switches):
+            if ip in stale:
+                continue
+            self._stale_switches.discard(ip)
+            await self._clear(
+                "switch_stale", ip, "a full poll finished again"
+            )
+        for ip, info in stale.items():
+            self._stale_switches.add(ip)
+            since = info.get("polled_at") or 0
+            age = (
+                "the data on the map is from "
+                + time.strftime("%Y-%m-%d %H:%M", time.localtime(since))
+                if since
+                else "it has never been read in full"
+            )
+            await self._raise(
+                "switch_stale", ip,
+                f"{names.get(ip, ip)} has answered but not finished a full "
+                f"poll in {info['scans']} scans running; {age}. It is "
+                f"reachable — this is a poll budget too small for it, not "
+                f"a switch that is down",
+            )
 
     async def on_counters(self, ip: str, metrics: list[dict]) -> None:
         """One counters cycle. Each metric describes one logical port:

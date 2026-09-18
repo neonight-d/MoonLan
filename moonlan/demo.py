@@ -51,6 +51,13 @@ v0.6.8 scenarios:
   number on every port: its ports stay ordinary, no trunk is drawn,
   no lag_degraded is raised, and the log says what was dropped.
 
+v0.6.13 scenarios:
+- access-sw-2 keeps missing its budget, so from the fifth scan on it is
+  a switch that answers and never finishes: the card counts the scans
+  and dates the reading, the list says the same on hover, and
+  switch_stale is raised — never switch_down, which would send somebody
+  to look for a device that is answering.
+
 v0.6.12 scenarios:
 - access-sw-2 stops finishing its poll inside the budget from the
   second scan on: the header says one switch ran out of time, its card
@@ -541,6 +548,7 @@ def demo_network() -> list[SwitchData]:
     # nothing about it is known to be wrong — it answers, slowly.
     if _scan_count >= 2:
         ray2.over_budget = True
+        ray2.over_budget_scans = _scan_count - 1
         ray2.polled_at = time.time() - 640
     if _scan_count == 1:
         _report_rejected_fdb(ray4)

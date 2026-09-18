@@ -176,9 +176,13 @@ async def _collect_within_budget(
     """
     started = time.monotonic()
     try:
-        return await asyncio.wait_for(
+        data = await asyncio.wait_for(
             _collect_locked(collector, ip), budget
         )
+        # How long a complete poll really takes, so budgets can be set
+        # from measurements instead of guesses
+        data.poll_seconds = time.monotonic() - started
+        return data
     except asyncio.TimeoutError:
         log.warning(
             "%s did not finish its poll within the %.0f s budget (gave up "
@@ -295,12 +299,21 @@ async def run_scan() -> None:
                     # and dated, so the branch behind this switch stays
                     # on the map instead of vanishing every cycle.
                     previous = switch_data.get(ip)
+                    streak = (
+                        previous.over_budget_scans + 1 if previous else 1
+                    )
                     if previous is not None and previous.reachable:
                         previous.over_budget = True
+                        previous.over_budget_scans = streak
                         collected.append(previous)
                     else:
+                        # Nothing to keep — this one has never been read
+                        # in full. The streak still counts: a switch
+                        # that has never finished a poll is further from
+                        # fine than one whose data is merely old.
                         collected.append(
-                            SwitchData(ip=ip, over_budget=True)
+                            SwitchData(ip=ip, over_budget=True,
+                                       over_budget_scans=streak)
                         )
                     continue
                 collected.append(result)
@@ -534,6 +547,22 @@ async def run_scan() -> None:
         # just as much of an invention.
         await alarm_engine.on_scan(
             {sw.ip: sw.reachable for sw in collected if not sw.over_budget},
+            {sw.ip: sw.sys_name or sw.ip for sw in collected},
+        )
+        # A switch that keeps answering and keeps not finishing. It is
+        # on the map, from a reading that may be hours old, and until
+        # now the only way to learn that was to read the journal.
+        stale_switches = {
+            sw.ip: {
+                "scans": sw.over_budget_scans,
+                "polled_at": sw.polled_at,
+            }
+            for sw in collected
+            if sw.over_budget
+            and sw.over_budget_scans >= max(config.stale_switch_scans, 1)
+        }
+        await alarm_engine.on_stale_switches(
+            stale_switches,
             {sw.ip: sw.sys_name or sw.ip for sw in collected},
         )
         if over_budget:
@@ -2224,6 +2253,33 @@ async def api_skipped_oids() -> dict:
         "cooldown_scans": config.snmp.dead_oid_cooldown_scans,
         "polled": collector is not None,
         "paused": paused,
+    }
+
+
+@app.get("/api/polling")
+async def api_polling() -> dict:
+    """When each switch was last polled in full, and how long it took.
+
+    A poll budget set by eye is a budget set wrong. These are the
+    numbers to set it from, and they live in this process, so
+    `diag --config` asks for them rather than guessing.
+    """
+    return {
+        "counters_interval_seconds": config.counters_interval_seconds,
+        "switches": [
+            {
+                "ip": ip,
+                "name": (sw.sys_name or ip) if sw else "",
+                "budget_seconds": config.host_budget(ip),
+                "polled_at": sw.polled_at if sw else 0.0,
+                "poll_seconds": round(sw.poll_seconds, 1) if sw else 0.0,
+                "over_budget_scans": sw.over_budget_scans if sw else 0,
+                "reachable": bool(sw and sw.reachable),
+            }
+            for ip, sw in (
+                (ip, switch_data.get(ip)) for ip in config.switches
+            )
+        ],
     }
 
 

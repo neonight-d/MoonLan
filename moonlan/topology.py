@@ -1589,6 +1589,11 @@ def build_topology(
         # and they get different fixes.
         "over_budget": bool(getattr(sw, "over_budget", False)),
         "polled_at": float(getattr(sw, "polled_at", 0.0)),
+        # Scans in a row that ended without a complete reading of this
+        # switch. One is a slow moment; thirty in a row, which is what
+        # 10.3.7.10 managed, is a switch whose numbers stopped moving
+        # six hours ago while it went on looking alive.
+        "over_budget_scans": int(getattr(sw, "over_budget_scans", 0)),
         # Physical ports only (ifType 6/62/69/117): aggregates, CPU and
         # VLAN interfaces must not inflate the counters
         "ports_total": sum(1 for p in sw.ports.values() if p.is_physical),

@@ -800,6 +800,72 @@ def run_config_audit(cfg) -> None:
             cells.append(f"{str(value) + mark:>21}")
         print(f"  {ip:<18}" + "".join(cells))
 
+    _print_poll_times(cfg)
+
+
+def _ask_service(cfg, path: str) -> dict | None:
+    """One GET against the running service, or None with a reason.
+
+    Several reports need state that lives in the service process and
+    nowhere else — which OIDs are on pause, how long each poll took.
+    Guessing at it would be worse than saying it is not available.
+    """
+    host = cfg.listen_host
+    if host in ("0.0.0.0", "::", ""):
+        host = "127.0.0.1"
+    url = f"http://{host}:{cfg.listen_port}{path}"
+    try:
+        with urllib.request.urlopen(url, timeout=5) as response:
+            return json.loads(response.read().decode("utf-8"))
+    except Exception as exc:
+        print(f"could not ask the service at {url}: {exc}")
+        return None
+
+
+def _print_poll_times(cfg) -> None:
+    """Section of `--config`: what each poll actually costs.
+
+    `host_budget_seconds` is guesswork until somebody measures the
+    poll. This is the measurement, per switch, from the service that
+    took it.
+    """
+    print("\nlast complete poll of each switch (from the running service):")
+    data = _ask_service(cfg, "/api/polling")
+    if data is None:
+        print(
+            "  the durations live in the service process. Start MoonLan, "
+            "or point listen.host / listen.port at the instance you mean."
+        )
+        return
+    rows = data.get("switches") or []
+    if not rows:
+        print("  no switches configured")
+        return
+    print(
+        f"  {'switch':<18} {'budget':>8} {'took':>9} {'when':>18}  state"
+    )
+    for row in rows:
+        when = (
+            time.strftime("%Y-%m-%d %H:%M", time.localtime(row["polled_at"]))
+            if row["polled_at"] else "never"
+        )
+        took = f"{row['poll_seconds']:.1f} s" if row["poll_seconds"] else "—"
+        if row["over_budget_scans"]:
+            state = f"{row['over_budget_scans']} scan(s) over budget"
+        elif not row["reachable"]:
+            state = "no answer"
+        else:
+            state = "ok"
+        print(
+            f"  {row['ip']:<18} {str(row['budget_seconds']) + ' s':>8} "
+            f"{took:>9} {when:>18}  {state}"
+        )
+    print(
+        "  ^ set host_budget_seconds from the 'took' column, not by eye. "
+        "A switch\n    listed as over budget has not been read in full "
+        "since the time shown."
+    )
+
 
 def run_skipped_view(cfg) -> None:
     """Section 12: OIDs the service has stopped asking for.
@@ -809,15 +875,8 @@ def run_skipped_view(cfg) -> None:
     its own API rather than inventing an answer.
     """
     _section("12. OIDs currently not asked for")
-    host = cfg.listen_host
-    if host in ("0.0.0.0", "::", ""):
-        host = "127.0.0.1"
-    url = f"http://{host}:{cfg.listen_port}/api/skipped-oids"
-    try:
-        with urllib.request.urlopen(url, timeout=5) as response:
-            data = json.loads(response.read().decode("utf-8"))
-    except Exception as exc:
-        print(f"could not ask the service at {url}: {exc}")
+    data = _ask_service(cfg, "/api/skipped-oids")
+    if data is None:
         print(
             "This list lives in the running process. Start MoonLan, or "
             "point listen.host / listen.port at the instance you mean."

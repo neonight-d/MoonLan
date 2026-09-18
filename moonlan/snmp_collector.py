@@ -176,6 +176,12 @@ class SwitchData:
     # 15:58" is a different statement from "the map is from now".
     polled_at: float = 0.0
     over_budget: bool = False
+    # How long the last complete poll took, and how many scans in a row
+    # have ended without one. A switch that answers and never finishes
+    # is a third state next to "answering" and "down", and it needs its
+    # own numbers to be said out loud.
+    poll_seconds: float = 0.0
+    over_budget_scans: int = 0
 
 
 def _fmt_mac(raw: bytes) -> str:

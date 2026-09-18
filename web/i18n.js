@@ -234,6 +234,17 @@ const I18N = {
       + "branch and add a profile to config.yaml.",
     loopProfileHint: "profile {profile}, matched by {how}",
     dataFrom: "Data from",
+    staleSwitchScans: "{n} scans running without a full poll",
+    staleSwitchHint:
+      "This switch has answered but not finished a full poll for {n} "
+      + "scans running, so everything on this card is from {time}. It is "
+      + "reachable \u2014 no \u201cswitch down\u201d alarm is raised for "
+      + "it \u2014 but its numbers have stopped moving. Its poll budget "
+      + "is too small for it: give it more time, or a shorter SNMP "
+      + "timeout of its own so the requests it never answers are given "
+      + "up on sooner. See switches: and snmp.host_budget_seconds in "
+      + "config.yaml.",
+    al_switch_stale: "Switch data not refreshing",
     ageUnderMinute: "less than a minute ago",
     ageMinutes: "{n} min ago",
     ageHours: "{h} h ago",
@@ -604,6 +615,16 @@ const I18N = {
       + "написано в README, раздел «Loop Detection».",
     loopProfileHint: "профиль {profile}, опознан по {how}",
     dataFrom: "Данные от",
+    staleSwitchScans: "{n} сканов подряд без полного опроса",
+    staleSwitchHint:
+      "Коммутатор отвечает, но не завершил полный опрос уже {n} сканов "
+      + "подряд, поэтому всё на этой карточке — от {time}. Он доступен, "
+      + "и тревога «коммутатор недоступен» по нему не поднимается, — но "
+      + "его показания перестали меняться. Бюджет опроса для него мал: "
+      + "дайте ему больше времени или свой, более короткий таймаут SNMP, "
+      + "чтобы запросы, на которые он не ответит, бросали раньше. См. "
+      + "switches: и snmp.host_budget_seconds в config.yaml.",
+    al_switch_stale: "Данные коммутатора не обновляются",
     ageUnderMinute: "меньше минуты назад",
     ageMinutes: "{n} мин назад",
     ageHours: "{h} ч назад",

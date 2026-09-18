@@ -137,6 +137,9 @@ class NotificationsConfig:
 DEFAULT_ALARM_NOTIFY: dict[str, list[str]] = {
     "host_down": ["email", "telegram", "syslog"],
     "switch_down": ["email", "telegram", "syslog"],
+    # Nobody needs waking for a switch that is answering; the operator
+    # does need to know its numbers stopped moving
+    "switch_stale": ["syslog"],
     "port_errors": ["syslog"],
     # discards are noisy and usually harmless: syslog only, never
     # Telegram or email
