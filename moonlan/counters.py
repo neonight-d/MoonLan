@@ -479,7 +479,20 @@ class CounterStore:
         return fresh
 
     def current(self, ip: str, max_age: float | None = None) -> dict[int, PortRates]:
-        """Latest rates of every port of a switch (fresh enough ones only)."""
+        """Latest rates of every port of a switch, however old they are.
+
+        Age is reported, not acted on. Dropping a measurement because
+        it had gone quiet made the ports panel show "—" — the same "—"
+        it shows for a column the agent never answered — so a switch
+        whose counters cycle had been skipped looked exactly like a
+        switch that does not implement the counters. One of those is
+        worth investigating and the other is not.
+
+        `max_age` is kept for callers that genuinely want a cutoff, but
+        nothing in the service passes one any more: the decision about
+        what is too old to show belongs to whatever is doing the
+        showing, and it needs the age to make it.
+        """
         now = time.time()
         out: dict[int, PortRates] = {}
         for (sw_ip, if_index), history in self._rates.items():
@@ -493,6 +506,29 @@ class CounterStore:
 
     def history(self, ip: str, if_index: int) -> list[PortRates]:
         return list(self._rates.get((ip, if_index), ()))
+
+
+def rate_for_display(
+    rates: dict, if_index: int, now: float, hide_age: float
+) -> tuple[object | None, float | None]:
+    """(the rate to show, how old the measurement is).
+
+    Three outcomes, and the panel has to tell them apart:
+
+    - a measurement inside the cutoff: shown, with its age;
+    - a measurement past it: withheld, but the age still goes out, so
+      the empty cell can say when this port was last measured;
+    - no measurement at all: nothing and no age. That is the only case
+      a bare "—" is allowed to mean, and before v0.6.13 the first two
+      were rendered as it too.
+    """
+    r = rates.get(if_index)
+    if r is None:
+        return None, None
+    age = max(now - r.ts, 0.0)
+    if hide_age > 0 and age > hide_age:
+        return None, age
+    return r, age
 
 
 FLAP_HISTORY = 64  # transitions remembered per port

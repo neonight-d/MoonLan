@@ -193,6 +193,15 @@ class Config:
     # A stale host whose IP ARP has not confirmed for this long
     # gives the address up: it may belong to another device now
     ip_confirm_hours: float = 6.0
+    # A measured rate is shown however old it is, with its age beside
+    # it — until this many minutes, past which it stops being data and
+    # becomes a memory. "—" is reserved for "never measured".
+    stale_rate_hide_minutes: float = 30.0
+    # Scans in a row a switch may miss its poll budget before its card
+    # says so and switch_stale is raised. It is reachable; its data is
+    # not being refreshed, which is a different thing from both
+    # "answering" and "down".
+    stale_switch_scans: int = 5
     # Polls a brand-new MAC must appear in before it becomes a device
     # (a MAC ARP already knows by IP is taken at once). Damaged frames
     # invent addresses that live for one poll — this is what keeps them
@@ -553,6 +562,12 @@ def load_config(path: Path | None = None) -> Config:
     )
     cfg.ip_confirm_hours = r.get(
         "ip_confirm_hours", d.ip_confirm_hours, float
+    )
+    cfg.stale_rate_hide_minutes = r.get(
+        "stale_rate_hide_minutes", d.stale_rate_hide_minutes, float
+    )
+    cfg.stale_switch_scans = r.get(
+        "stale_switch_scans", d.stale_switch_scans, int
     )
     cfg.new_host_confirm_scans = r.get(
         "new_host_confirm_scans", d.new_host_confirm_scans, int

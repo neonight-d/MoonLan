@@ -275,6 +275,19 @@ function fmtDate(ts) {
   return ts ? new Date(ts * 1000).toLocaleDateString(locale()) : "—";
 }
 
+/* "4 min", "2 h 10 min" — how long ago something was measured. */
+function fmtAge(seconds) {
+  if (seconds == null) return "—";
+  const minutes = Math.round(seconds / 60);
+  if (minutes < 1) return t("ageUnderMinute");
+  if (minutes < 60) return fmt("ageMinutes", { n: minutes });
+  const hours = Math.floor(minutes / 60);
+  const rest = minutes % 60;
+  return rest
+    ? fmt("ageHoursMinutes", { h: hours, n: rest })
+    : fmt("ageHours", { h: hours });
+}
+
 function updateScanStatus() {
   els.scanStatus.classList.remove("failed");
   els.scanStatus.classList.remove("partial");
@@ -1488,6 +1501,10 @@ function renderPorts(data) {
   });
   markSilentColumns(data.columns);
   const limits = data.thresholds || {};
+  // Past this age a rate is shown dimmed with its age beside it; past
+  // `hide_after_seconds` the server withholds the number itself. Both
+  // come from the service, which is where the intervals live.
+  const staleAfter = (data.rates || {}).stale_after_seconds ?? Infinity;
   let highlighted = null;
   // physical ports only; the server puts active ones first
   const rows = sortPorts(data.ports.filter((p) => p.is_physical)).map((p) => {
@@ -1502,6 +1519,36 @@ function renderPorts(data) {
         if (cls) cell.className = cls;
         cell.append(content);
         tr.append(cell);
+      };
+      // A rate cell carries its own age. The number is real but was
+      // measured a while ago — the counters cycle skipped this switch,
+      // or it is busy being scanned — and dropping it would draw the
+      // same "—" as a column the agent never answers. Those two say
+      // very different things about a switch.
+      const rateTd = (value, cls) => {
+        const stale =
+          p.rate_age_seconds != null && p.rate_age_seconds >= staleAfter;
+        // expired: a dash that has something to say, so it asks to be
+        // hovered — a dash with nothing behind it does not
+        const expired = value == null && p.rate_age_seconds != null;
+        td(
+          fmtRate(value),
+          (cls || "") +
+            (stale && value != null ? " stale-rate" : "") +
+            (expired ? " rate-expired" : "")
+        );
+        const cell = tr.lastChild;
+        if (expired) {
+          // measured once, too long ago to show: say when, do not
+          // leave a bare dash that reads as "never polled"
+          cell.title = fmt("rateTooOld", {
+            when: fmtAge(p.rate_age_seconds),
+          });
+        } else if (stale) {
+          cell.title = fmt("rateMeasured", {
+            when: fmtAge(p.rate_age_seconds),
+          });
+        }
       };
       let name = p.name;
       if (p.lag) name += " (" + p.lag + ")";
@@ -1601,14 +1648,14 @@ function renderPorts(data) {
       dot.className = "dot " + (p.oper_up ? "up" : "down");
       td(dot);
       td(p.oper_up && p.speed_mbps ? fmtSpeed(p.speed_mbps) : "—");
-      td(fmtRate(p.in_mbps), "num");
-      td(fmtRate(p.out_mbps), "num");
+      rateTd(p.in_mbps, "num");
+      rateTd(p.out_mbps, "num");
       // damaged frames are a fault, discards are usually filtering
       const overErr = p.errors_per_min > (limits.errors_per_minute ?? Infinity);
       const overDisc =
         p.discards_per_min > (limits.discards_per_minute ?? Infinity);
-      td(fmtRate(p.errors_per_min), "num" + (overErr ? " over-error" : ""));
-      td(fmtRate(p.discards_per_min), "num" + (overDisc ? " over-discard" : ""));
+      rateTd(p.errors_per_min, "num" + (overErr ? " over-error" : ""));
+      rateTd(p.discards_per_min, "num" + (overDisc ? " over-discard" : ""));
       loopCell(tr, p.loop, data.loop_detection);
       return tr;
     });

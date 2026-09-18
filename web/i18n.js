@@ -234,6 +234,19 @@ const I18N = {
       + "branch and add a profile to config.yaml.",
     loopProfileHint: "profile {profile}, matched by {how}",
     dataFrom: "Data from",
+    ageUnderMinute: "less than a minute ago",
+    ageMinutes: "{n} min ago",
+    ageHours: "{h} h ago",
+    ageHoursMinutes: "{h} h {n} min ago",
+    rateMeasured:
+      "Measured {when}. The counters cycle has not reached this switch "
+      + "since \u2014 it is being scanned, or it answers slowly. The "
+      + "number is real, only not current.",
+    rateTooOld:
+      "Last measured {when}. That is too long ago to show as a rate, so "
+      + "the cell is empty \u2014 but this port has been measured, "
+      + "which a port that never has never says. See "
+      + "stale_rate_hide_minutes in config.yaml.",
     scanningProgress: "Scanning: {done} of {total}",
     scanOverBudgetMark: "\u00b7 {n} switch(es) ran out of time",
     scanOverBudgetHint:
@@ -591,6 +604,19 @@ const I18N = {
       + "написано в README, раздел «Loop Detection».",
     loopProfileHint: "профиль {profile}, опознан по {how}",
     dataFrom: "Данные от",
+    ageUnderMinute: "меньше минуты назад",
+    ageMinutes: "{n} мин назад",
+    ageHours: "{h} ч назад",
+    ageHoursMinutes: "{h} ч {n} мин назад",
+    rateMeasured:
+      "Измерено {when}. С тех пор цикл счётчиков до этого коммутатора не "
+      + "добрался — его опрашивает скан, либо он отвечает медленно. "
+      + "Значение настоящее, просто не сиюминутное.",
+    rateTooOld:
+      "Последний раз измерено {when}. Это слишком давно, чтобы "
+      + "показывать как скорость, поэтому ячейка пуста, — но порт "
+      + "измеряли, чего никогда не скажет порт, который не измеряли ни "
+      + "разу. См. stale_rate_hide_minutes в config.yaml.",
     scanningProgress: "Идёт опрос: {done} из {total}",
     scanOverBudgetMark: "\u00b7 не уложились: {n}",
     scanOverBudgetHint:

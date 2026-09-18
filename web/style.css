@@ -363,6 +363,12 @@ main { flex: 1; display: flex; min-height: 0; }
 .ports-table th.sorted-desc::after { content: " ▼"; font-size: 0.7rem; }
 /* damaged frames are a fault; discards are usually just filtering */
 .ports-table td.over-error { color: #d96b6b; font-weight: 600; }
+/* A real measurement that has gone quiet: dimmed, and it says
+   when it was taken. Not the same as a cell that never had one. */
+.ports-table td.stale-rate { opacity: 0.55; cursor: help; }
+/* A dash with a reason behind it. The dash that means "never
+   measured" stays plain, and hovering it says nothing. */
+.ports-table td.rate-expired { cursor: help; }
 .ports-table td.over-discard { color: var(--warn); }
 /* Loop Detection. "no data" is deliberately not grey-on-grey like an
    em dash: unknown has to look different from "nothing to watch here". */

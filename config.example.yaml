@@ -116,6 +116,20 @@ switches:
 routers:
   - 192.168.1.1
 
+# A measured port rate is shown however old it is, dimmed and with its
+# age in the tooltip, until this many minutes have passed — past that
+# the cell goes empty, because a half-hour-old speed is a memory rather
+# than a measurement. "—" without a tooltip means the port has never
+# been measured at all, which is a different thing entirely: MoonLan
+# used to draw the same dash for both.
+# Измеренная скорость порта показывается независимо от возраста —
+# приглушённо и с возрастом в подсказке, — пока не пройдёт столько
+# минут; дальше ячейка пустеет, потому что получасовая скорость это
+# уже не измерение, а воспоминание. «—» без подсказки означает, что
+# порт не измеряли ни разу, а это совсем другое: раньше MoonLan рисовал
+# один и тот же прочерк в обоих случаях.
+stale_rate_hide_minutes: 30
+
 # Periodic scan, minutes (0 — manual only via /api/scan)
 # Периодический автоопрос, минут (0 — только вручную через /api/scan)
 scan_interval_minutes: 10

@@ -1511,8 +1511,16 @@ async def periodic_resource_log() -> None:
             pass  # not a Linux /proc — skip silently
 
 
-def _rates_max_age() -> float:
-    return max(config.counters_interval_seconds, 5) * 3
+def _rates_hide_age() -> float:
+    """Past this age a measured rate stops being shown at all.
+
+    It used to be three counters intervals, and anything older was
+    dropped from the answer — which drew the same "—" as a column the
+    agent never answered. Half an hour is the point at which a rate
+    really is a memory rather than a measurement; everything younger is
+    shown with its age next to it.
+    """
+    return max(config.stale_rate_hide_minutes, 0.0) * 60
 
 
 def _refresh_link_lag(link: dict) -> None:
@@ -1560,7 +1568,7 @@ def _link_load(link: dict) -> dict | None:
         sw = switch_data.get(link[side])
         if sw is None:
             continue
-        rates = counter_store.current(link[side], max_age=_rates_max_age())
+        rates = counter_store.current(link[side], max_age=_rates_hide_age())
         if not rates:
             continue
         names = lag.get(f"{side}_members") or [link[f"{side}_port"]]
@@ -1578,7 +1586,15 @@ def _link_load(link: dict) -> dict | None:
             continue  # this side knows nothing; try the other one
         if flip:  # B's in is A's out and vice versa
             in_mbps, out_mbps = out_mbps, in_mbps
-        return {"in_mbps": _round(in_mbps), "out_mbps": _round(out_mbps)}
+        # The oldest of the measurements this number is made of: an
+        # edge label is as fresh as its stalest member, and the tooltip
+        # has to be able to say so.
+        age = round(max(time.time() - r.ts for r in found))
+        return {
+            "in_mbps": _round(in_mbps),
+            "out_mbps": _round(out_mbps),
+            "age_seconds": age,
+        }
     return None
 
 
@@ -1768,7 +1784,11 @@ async def api_switch_ports(ip: str) -> dict:
     sw = switch_data.get(ip)
     if sw is None:
         return {"switch": ip, "name": ip, "ports": []}
-    rates = counter_store.current(ip, max_age=_rates_max_age())
+    # Everything measured, however old. What is too old to show is
+    # decided below, once, and said out loud rather than by omission.
+    rates = counter_store.current(ip)
+    hide_age = _rates_hide_age()
+    now = time.time()
     db_hosts = await asyncio.to_thread(db.hosts_by_mac)
     host_counts: Counter = Counter()
     monitored_counts: Counter = Counter()
@@ -1796,7 +1816,9 @@ async def api_switch_ports(ip: str) -> dict:
         )
     ports = []
     for p in sw.ports.values():
-        r = rates.get(p.if_index)
+        r, age = counters.rate_for_display(
+            rates, p.if_index, now, hide_age
+        )
         name = p.name or str(p.if_index)
         ports.append({
             "if_index": p.if_index,
@@ -1810,6 +1832,11 @@ async def api_switch_ports(ip: str) -> dict:
             "out_mbps": _round(r.out_mbps if r else None),
             "errors_per_min": _round(r.errors_per_min if r else None),
             "discards_per_min": _round(r.discards_per_min if r else None),
+            # When the numbers above were measured, and how long ago.
+            # None in both means this port has never been measured at
+            # all — the one case "—" is allowed to mean.
+            "rate_ts": None if age is None else rates[p.if_index].ts,
+            "rate_age_seconds": None if age is None else round(age),
             "hosts": host_counts.get(name, 0),
             "monitored_hosts": monitored_counts.get(name, 0),
             # MACs that look like damaged copies of a real one here
@@ -1846,6 +1873,14 @@ async def api_switch_ports(ip: str) -> dict:
         # …and the same honesty about loop detection: which profile
         # answered, or that the model does not report it at all
         "loop_detection": _loop_report(sw),
+        # When a measured rate stops being fresh (shown dimmed, with
+        # its age) and when it stops being shown at all. The panel
+        # needs both to tell "stale" from "never measured"; neither
+        # belongs hardcoded in the front end.
+        "rates": {
+            "stale_after_seconds": max(config.counters_interval_seconds, 5) * 3,
+            "hide_after_seconds": hide_age,
+        },
         # so the panel can colour the values it shows
         "thresholds": {
             "errors_per_minute": config.thresholds.errors_per_minute,
