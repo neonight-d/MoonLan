@@ -175,6 +175,12 @@ const I18N = {
     stpLastChange: "Since the last one",
     stpRootMark: "STP root",
     stpBlocking: "BLOCKING",
+    stpRootless:
+      "Answer dot1dStp* and name no root: {switches}. Their port tables "
+      + "are real, but they do not implement the objects that hold the "
+      + "root \u2014 RouterOS is one such agent. A bridge in a tree "
+      + "knows its root, so these are not counted as a spanning tree of "
+      + "their own, and they do not make the network fragmented.",
     stpBlockingHint:
       "Spanning tree holds this port in the blocking state: the link "
       + "exists but carries no user traffic. It is the standby path of "
@@ -556,6 +562,12 @@ const I18N = {
     stpLastChange: "С последнего",
     stpRootMark: "корень STP",
     stpBlocking: "BLOCKING",
+    stpRootless:
+      "Отвечают на dot1dStp*, но корня не называют: {switches}. Таблицы "
+      + "портов у них настоящие, а объекты, где лежит корень, они не "
+      + "реализуют — так делает, например, RouterOS. Мост, участвующий "
+      + "в дереве, свой корень знает, поэтому отдельным деревом они не "
+      + "считаются и фрагментации не создают.",
     stpBlockingHint:
       "Остовное дерево держит этот порт в состоянии blocking: связь "
       + "есть, но пользовательский трафик через неё не идёт. Это "

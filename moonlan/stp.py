@@ -334,6 +334,25 @@ def judge(data: StpData) -> StpData:
         data.operating = False
         data.reason = "every port is in state disabled(1)"
         return data
+    if data.root_mac in ("", ZERO_MAC):
+        # A bridge in a tree knows its root — itself or somebody else.
+        # There is no third option, so the historical heuristic below
+        # has nothing to work with here and must not be allowed to
+        # guess. RouterOS implements dot1dStpPortTable and none of the
+        # dot1dStp scalars past priority, so it answers "no root" with
+        # a TimeSinceTopologyChange of zero against a six-week uptime —
+        # which reads as "the tree converged long ago". Three of those
+        # became a second spanning tree called "unknown" and a
+        # stp_fragmented alarm that raised, cleared and raised again.
+        data.operating = False
+        data.reason = (
+            "answers dot1dStp* and names no root at all (designated root "
+            f"{data.designated_root or 'empty'}, cost {data.root_cost}). "
+            "A bridge taking part in a tree knows its root, its own "
+            "address or another's; this agent implements the port table "
+            "and not the scalars around it"
+        )
+        return data
     converged = data.top_changes > 0 or (
         data.sys_uptime > 0
         and data.sys_uptime - data.time_since_change > CONVERGED_MARGIN_TICKS
@@ -503,19 +522,42 @@ async def collect_stp(
     return judge(data)
 
 
+def rootless(per_switch: dict[str, StpData]) -> list[str]:
+    """Switches that answer dot1dStp* and name no root.
+
+    Not the same as `reports_nothing`, where the whole subtree is
+    zeros: these have a real port table with real states and costs,
+    and simply do not implement the scalars that hold the root. They
+    have to be listed rather than counted — a switch with no root is
+    not a tree of its own, and treating it as one is how three
+    RouterOS boxes became a second spanning tree called "unknown".
+    """
+    return sorted(
+        ip for ip, data in per_switch.items()
+        if data.supported
+        and not data.effective_root_mac
+        and not reports_nothing(data)
+    )
+
+
 def network_verdict(per_switch: dict[str, StpData]) -> dict:
     """The one-line answer for the whole network.
 
     verdict: "not_operating" — nobody is running a tree;
              "single" — every operating switch agrees on one root;
              "fragmented" — operating switches report different roots.
+
+    A switch that names no root is in none of those counts. It is
+    listed under `rootless` instead, because it is still worth seeing.
     """
     operating = {ip: s for ip, s in per_switch.items() if s.operating}
+    no_root = rootless(per_switch)
     if not operating:
         return {
             "verdict": "not_operating",
             "roots": {},
             "operating": [],
+            "rootless": no_root,
             "total": len(per_switch),
         }
     # Grouped by the root's MAC, not by the text of its Bridge ID. The
@@ -526,7 +568,14 @@ def network_verdict(per_switch: dict[str, StpData]) -> dict:
     by_mac: dict[str, list[str]] = {}
     labels: dict[str, str] = {}
     for ip, data in sorted(operating.items()):
-        mac = data.effective_root_mac or "unknown"
+        mac = data.effective_root_mac
+        if not mac:
+            # It used to be filed under the string "unknown", which
+            # then lived on as a perfectly good group key and counted
+            # as a second tree. The absence of a value is not a value —
+            # the same rule v0.6.4 applied to zero and v0.6.11 to the
+            # Bridge ID, arrived at here for the third time.
+            continue
         by_mac.setdefault(mac, []).append(ip)
         # A switch that reports the standard encoding names the group:
         # where two spellings of one root meet, the right one wins, and
@@ -540,8 +589,15 @@ def network_verdict(per_switch: dict[str, StpData]) -> dict:
         labels.get(mac, mac): ips for mac, ips in by_mac.items()
     }
     return {
-        "verdict": "single" if len(by_mac) == 1 else "fragmented",
+        # Fragmentation means two or more real, named roots. One root
+        # and a handful of switches that name none is one tree.
+        "verdict": (
+            "not_operating" if not by_mac
+            else "single" if len(by_mac) == 1
+            else "fragmented"
+        ),
         "roots": roots,
         "operating": sorted(operating),
+        "rootless": no_root,
         "total": len(per_switch),
     }

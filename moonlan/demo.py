@@ -52,6 +52,11 @@ v0.6.8 scenarios:
   no lag_degraded is raised, and the log says what was dropped.
 
 v0.6.13 scenarios:
+- access-sw-3 answers dot1dStp* with a real port table and none of the
+  scalars that hold the root, the way a RouterOS box does. It names no
+  root, so it is not counted as a spanning tree of its own: the panel
+  says one tree with the core at its head and lists that switch
+  separately underneath, and no stp_fragmented is raised.
 - access-sw-2 keeps missing its budget, so from the fifth scan on it is
   a switch that answers and never finishes: the card counts the scans
   and dates the reading, the list says the same on hover, and
@@ -789,7 +794,7 @@ def _add_stp(core, ray1, ray2, ray3, ray4, edge) -> None:
         ports=_stp_ports(core, {1: 1, 2: 1, 5: 1, 25: 1}, True, ""),
     ))
     for ray, root_port, blocking in (
-        (ray1, 25, None), (ray2, 24, 24), (ray3, 23, None),
+        (ray1, 25, None), (ray2, 24, 24),
     ):
         states = {root_port: 5}
         if blocking is not None:
@@ -809,6 +814,19 @@ def _add_stp(core, ray1, ray2, ray3, ray4, edge) -> None:
             version=2, sys_uptime=uptime, own_macs=set(ray.own_macs),
             ports=_stp_ports(ray, states, True, root_id),
         ))
+    # A bridge shaped like a RouterOS one: dot1dStpPortTable is real —
+    # forwarding, blocking, path costs — and none of the scalars that
+    # hold the root are implemented. So it names no root while its
+    # uptime is weeks and its TimeSinceTopologyChange is zero, which
+    # the historical heuristic used to read as "converged long ago".
+    # Three of these became a second spanning tree called "unknown".
+    ray3.stp = judge(StpData(
+        supported=True, protocol_spec=3, priority=32768,
+        designated_root="", root_cost=0, root_port=0,
+        version=2, sys_uptime=413_991_900, time_since_change=0,
+        top_changes=0, own_macs=set(ray3.own_macs),
+        ports=_stp_ports(ray3, {23: 5, 24: 2}, True, ""),
+    ))
     # STP disabled: every field still answers, and every field lies
     ray4.stp = judge(StpData(
         supported=True, protocol_spec=3, priority=0,

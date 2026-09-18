@@ -1987,7 +1987,10 @@ function renderStp() {
       tr.append(td);
     });
     tbody.append(tr);
-    if (sw.blocking_ports && sw.blocking_ports.length) {
+    // Only for a switch whose tree we say is operating. "BLOCKING" is
+    // a statement about a spanning tree, and printing one under a row
+    // of dashes that says there is no tree contradicts it in place.
+    if (sw.operating && sw.blocking_ports && sw.blocking_ports.length) {
       const note = document.createElement("tr");
       const td = document.createElement("td");
       td.colSpan = 8;
@@ -2005,6 +2008,21 @@ function renderStp() {
   scroller.className = "table-scroll";
   scroller.append(table);
   body.append(scroller);
+  // Switches that answer dot1dStp* and name no root. They are not a
+  // tree of their own — counting them as one turned three RouterOS
+  // boxes into a second spanning tree called "unknown" — but they must
+  // not quietly disappear from the panel either.
+  const noRoot = (data.verdict || {}).rootless || [];
+  if (noRoot.length) {
+    const byIp = Object.fromEntries(data.switches.map((sw) => [sw.ip, sw]));
+    const line = document.createElement("p");
+    line.className = "hint";
+    line.textContent =
+      fmt("stpRootless", {
+        switches: noRoot.map((ip) => (byIp[ip] || {}).name || ip).join(", "),
+      });
+    body.append(line);
+  }
 }
 
 async function toggleStp() {

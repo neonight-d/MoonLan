@@ -722,6 +722,9 @@ def _stp_report(
                 p.name or str(p.bridge_port) for p in data.blocking_ports()
             ],
             "trunk_vlans": trunk_vlans,
+            # answers dot1dStp* and names no root: shown, but not
+            # counted as a tree of its own
+            "rootless": ip in verdict.get("rootless", ()),
         })
     return {"verdict": verdict, "switches": switches}
 
