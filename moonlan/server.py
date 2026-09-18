@@ -549,6 +549,22 @@ async def run_scan() -> None:
             {sw.ip: sw.reachable for sw in collected if not sw.over_budget},
             {sw.ip: sw.sys_name or sw.ip for sw in collected},
         )
+        # Every single switch silent at once is not ten faults, it is
+        # one. The day `community: public` went back into the config,
+        # the map emptied and the log said "does not respond to SNMP"
+        # ten times over — true, unhelpful, and identical to what a
+        # power cut would have printed.
+        answered = [sw for sw in collected if sw.reachable]
+        if collected and not answered and not over_budget:
+            log.error(
+                "All %d configured switch(es) are unreachable at once. One "
+                "common cause is likelier than %d simultaneous faults: "
+                "snmp.community (SNMPv2c does not answer a wrong one at "
+                "all — silence is what a mismatch looks like), or the "
+                "network of this machine. `python -m moonlan.diag --walk "
+                "<switch> 1.3.6.1.2.1.1.5` says which.",
+                len(collected), len(collected),
+            )
         # A switch that keeps answering and keeps not finishing. It is
         # on the map, from a reading that may be hours old, and until
         # now the only way to learn that was to read the journal.

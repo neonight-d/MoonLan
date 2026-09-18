@@ -94,6 +94,7 @@ from .snmp_collector import (
     SnmpCollector,
     SwitchData,
     _fmt_mac,
+    diagnose_silence,
     infer_lag_groups,
     is_random_mac,
     parse_fdb_entry,
@@ -204,10 +205,8 @@ async def run_diag(
 
     sys_name = await collector._get(ip, OID_SYS_NAME)
     if sys_name is None:
-        sys.exit(
-            f"{ip} does not respond to SNMP. Check the community, "
-            f"the timeout and device availability."
-        )
+        _verdict, why = await diagnose_silence(collector, ip, OID_SYS_NAME)
+        sys.exit(f"{ip} does not respond to SNMP: {why}")
 
     # 1. General information
     _section("1. General information")
@@ -1669,7 +1668,12 @@ async def run_walk(
                         or not text.isprintable()):
                 print(f"      hex: {raw.hex(' ')}")
     if count == 0:
-        print("  the subtree is empty, or the agent does not implement it")
+        # "The subtree is empty, or the agent does not implement it"
+        # was the old answer, and on a switch whose community string
+        # had been changed back to `public` both halves of it were
+        # wrong — and pointed away from the cause. Ask before deciding.
+        _verdict, why = await diagnose_silence(collector, host, oid)
+        print(f"  nothing came back: {why}")
     else:
         print(f"\n{min(count, limit)} row(s)")
 

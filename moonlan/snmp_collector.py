@@ -24,6 +24,7 @@ import time
 from dataclasses import dataclass, field
 
 from . import lldp as lldp_mod
+from . import pinger
 from . import stp as stp_mod
 from .snmpval import as_octets, is_no_such
 
@@ -100,6 +101,62 @@ class DeadOid:
 
     strikes: int = 0     # walks in a row with no rows and a timeout
     skip_until: int = 0  # scan cycle at which it is tried again
+
+
+# Objects every SNMP agent has to implement. Silence on one of these
+# is never "the agent does not have it".
+MANDATORY_OIDS = frozenset({
+    OID_SYS_NAME, OID_SYS_DESCR, OID_SYS_OBJECT_ID,
+})
+
+# What silence on an OID turned out to mean
+SILENCE_COMMUNITY = "community"    # answers ping, says nothing to SNMP
+SILENCE_UNREACHABLE = "unreachable"  # says nothing to anything
+SILENCE_OID = "oid"                # the agent is alive; this OID is not
+
+
+async def diagnose_silence(
+    collector, host: str, oid: str = ""
+) -> tuple[str, str]:
+    """Why an OID returned nothing: (verdict, a sentence for a human).
+
+    SNMPv2c does not answer a wrong community string at all. From the
+    outside that is indistinguishable from an agent that does not
+    implement the object — and MoonLan used to print exactly that:
+    "the subtree is empty, or the agent does not implement it". Both
+    halves were wrong on a switch that pings in 3 ms, implements
+    sysName and works perfectly; somebody had put `community: public`
+    back into the config. The answer was not merely incomplete, it
+    pointed away from the cause.
+
+    So: ask for sysDescr, which every agent must implement, and ping
+    the host. Silent SNMP on a host that answers ICMP is a community
+    string or a disabled agent, not a missing OID. Asking about an
+    object that is itself mandatory skips the redundant probe — its
+    silence already carries the same weight.
+    """
+    if oid not in MANDATORY_OIDS:
+        probe = await collector._get(host, OID_SYS_DESCR)
+        if probe is not None:
+            return SILENCE_OID, (
+                f"the agent is alive and answers sysDescr "
+                f"({str(probe)[:60]!r}), so this OID really is empty or "
+                f"not implemented on it"
+            )
+    alive = await pinger.ping(host)
+    if alive:
+        return SILENCE_COMMUNITY, (
+            "the host answers ping but says nothing to sysDescr either — "
+            "most likely the community string does not match, or SNMP is "
+            "switched off on it. An agent that does not implement an OID "
+            "does not look like this: it answers, and says it has no such "
+            "object"
+        )
+    return SILENCE_UNREACHABLE, (
+        "the host answers neither SNMP nor ping — it is not reachable "
+        "from here at all, which is a network question before it is an "
+        "SNMP one"
+    )
 
 
 @dataclass
@@ -712,7 +769,15 @@ class SnmpCollector:
 
         sys_name = await self._get(host, OID_SYS_NAME)
         if sys_name is None:
-            log.warning("Switch %s does not respond to SNMP", host)
+            # "Does not respond to SNMP" was the whole message, and it
+            # suggested nothing. The two causes need different people
+            # doing different things, and one probe tells them apart.
+            _verdict, why = await diagnose_silence(
+                self, host, OID_SYS_NAME
+            )
+            log.warning(
+                "Switch %s does not respond to SNMP: %s", host, why
+            )
             return data
 
         data.reachable = True
