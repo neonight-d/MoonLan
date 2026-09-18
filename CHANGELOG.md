@@ -6,6 +6,68 @@ for before the next one started.
 
 Русская версия — [CHANGELOG_RU.md](CHANGELOG_RU.md).
 
+## v0.6.13 — 2026-09-18
+
+A dash means never measured, not quietly expired. Four absences that
+looked alike, and one that pointed the wrong way.
+
+The ports panel lost whole columns of counters and got them back a
+minute later. Nothing was wrong with the switches: `current()` dropped
+every rate older than three counters intervals, the port fell out of
+the answer, and the panel drew "—" — the same "—" it draws for a column
+the agent does not implement. Opposite diagnoses. A measurement is now
+reported however old it is, with its age: shown dimmed past three
+intervals, withheld past `stale_rate_hide_minutes` (30), where a rate
+really has become a memory — and even then the empty cell says when the
+port was last measured. Only a port never measured at all gets a bare
+dash.
+
+Half of why those cycles were being missed: the counters cycle gave up
+the instant it found a host's lock taken by the scan, and a scan holds
+a host for as long as its poll budget allows. Any budget of two
+intervals or more therefore guaranteed a missed cycle after every scan
+— the operator had set 180 against an interval of 60 and made himself
+four permanently ageing switches. It now waits up to
+min(counters_interval / 2, 20) seconds, and a budget at or above twice
+the interval is reported at startup and in `diag --config`, per device.
+
+`10.3.7.10` was not polled in full once in six hours: thirty scans,
+thirty budget failures, while the map showed it alive from its last
+complete reading. That is a third state beside "answering" and "down".
+After `stale_switch_scans` (5) consecutive scans the card counts them
+and dates the reading, and a `switch_stale` alarm is raised — warning,
+syslog, cleared by one full poll. Never `switch_down`: sending somebody
+to look for a dead device that is answering wastes the trip. Each poll
+now records how long it took, and `diag --config` prints it — a budget
+set by eye is a budget set wrong.
+
+The STP panel called mb0 the root while the map drew it as an ordinary
+switch. Both read the same fields off the same objects, at different
+moments: `judge_network`, which is the only test that can recognise a
+root reporting zeros about itself, ran after `build_topology` had
+already decided the node was not operating. It now runs first.
+
+`community: public` went back into the config by accident, every switch
+went dark, and `diag --walk` said "the subtree is empty, or the agent
+does not implement it". Both halves were wrong — SNMPv2c does not
+answer a wrong community at all, and that silence is shaped exactly
+like an unimplemented object. MoonLan now asks `sysDescr` and pings
+before deciding, and names the community first when the host answers
+ICMP and nothing else. All switches silent at once is reported as one
+fact rather than N.
+
+And the panel showed two spanning trees, the second one rooted at the
+string "unknown" and holding three RouterOS bridges, with
+`stp_fragmented` raising and clearing over it. A walk of
+1.3.6.1.2.1.17.2 on an RB941 returns the protocol, the priority and the
+whole port table — and none of the scalars in between, so the bridge
+names no root while its uptime is six weeks and its
+TimeSinceTopologyChange is zero, which the historical heuristic read as
+"converged long ago". A bridge in a tree knows its root; where there is
+none, the heuristic no longer gets to guess. And the absence of a root
+is no longer allowed to become a grouping key: switches with no root
+are listed under the table rather than counted as an island.
+
 ## v0.6.12 — 2026-09-17
 
 One slow agent delays itself, not the whole map. Four MikroTik boxes
