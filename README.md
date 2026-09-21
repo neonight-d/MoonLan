@@ -1,4 +1,4 @@
-[Читать по-русски → README_RU.md](README_RU.md)
+[Русская версия → README_RU.md](README_RU.md)
 
 # MoonLan
 
@@ -1309,3 +1309,7 @@ MoonLan/
 | GET    | `/api/search?q=…` | Search by name, IP or MAC |
 | GET    | `/api/journal?limit=100` | Event journal, newest first |
 | GET    | `/api/status`     | Service status and last poll time |
+
+## Acknowledgments
+
+AI-Assisted Development: Built with [Claude Code](https://github.com/anthropics/claude-code) by [Anthropic](https://www.anthropic.com/)
