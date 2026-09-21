@@ -16,7 +16,7 @@ An open-source alternative to LanTopoLog. MIT license.
 
 *Alarm panel: port errors, discards and host outages with one-click access to the switch port table.*
 
-## Features (v0.6.13)
+## Features (v0.6.14)
 
 - SNMP v2c polling of switches: device name, ports, speeds, statuses.
   Each switch has a time budget for its whole poll
@@ -33,6 +33,22 @@ An open-source alternative to LanTopoLog. MIT license.
   the rays of a star. A switch is recognized in neighbors' FDB by its full
   MAC set (bridge MAC, interface MACs, management-IP MAC), with a fallback
   exclusion rule for one-way visibility. Link cards show ports of both ends.
+  Inside a branch the order is taken from LLDP first, where the two
+  devices name each other, and from the MAC tables where they do not —
+  a device reachable *through* a port is not the same statement as a
+  device *on the cable*, and a garland of switches behind one port used
+  to be drawn as a bunch hanging off it. A link the rule of "behind,
+  not beside" forbids is withdrawn, with both ends, both ports and the
+  reason in the journal. Where nothing can establish the order, the
+  lines are dashed and say so: a guess must not look like a measured
+  cable.
+- Rings among polled switches are resolved or explained. A ring with a
+  port the spanning tree holds in discarding is real and is drawn as
+  it is. A ring with no blocked port is an error of inference, and its
+  weakest link goes — a forwarding-table guess before a statement by
+  one device before a statement by both. A ring nothing can account for
+  keeps all its links, marked: erasing an arbitrary cable would be
+  worse than admitting it cannot be explained.
 - Link stability: FDB entries are merged over the last 3 polls, so links
   do not flicker when MAC table entries age out.
 - LACP (IEEE8023-LAG-MIB): an aggregate is drawn as a single thick line
@@ -239,6 +255,7 @@ Version history: [CHANGELOG.md](CHANGELOG.md)
 | v0.6.11 ✓| One root is one root; a panel header stays put |
 | v0.6.12 ✓| A slow agent delays itself, not the whole map; per-switch SNMP settings |
 | v0.6.13 ✓| A dash means never measured; an unknown root is not a root |
+| v0.6.14 ✓| LLDP builds the tree; rings are resolved or explained |
 | v0.7    | Export to PDF and Draw.io, MAC address info import |
 | v0.8    | Windows computer inventory (WMI/WinRM) |
 

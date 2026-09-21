@@ -6,6 +6,65 @@ for before the next one started.
 
 Русская версия — [CHANGELOG_RU.md](CHANGELOG_RU.md).
 
+## v0.6.14 — 2026-09-21
+
+LLDP builds the tree, it does not decorate it. And one branch of the
+live network turned out to need something else entirely.
+
+Behind port 1/28 of mb1 hang three boxes: two RouterOS bridges and an
+Edge-Core. LanTopoLog draws them as a garland. MoonLan drew all three
+straight onto mb1 and laid the one LLDP edge it had on top, closing a
+ring that does not exist.
+
+The order of the two passes was wrong. A MAC table says a device is
+*reachable through* a port; LLDP says a device is *on the cable*. The
+second is the stronger statement, and it was arriving after the weaker
+one had drawn the picture — `merge_lldp_links` could refine ports and
+add a missing pair, but never remove the link that pair contradicted.
+`lldp_link_candidates` now runs before `infer_tree`, which takes the
+pairs: a member another member reports on a port of its own that is not
+its uplink is *behind* that member, leaves the contest for "nearest",
+and is hung off its host afterwards.
+
+The same rule, stated once and applied to the finished link set,
+withdraws a MAC-table link that LLDP forbids — but only where the link
+it prefers is present, and only where the switch in question is the far
+end. Each removal is a WARNING and a journal entry: the tree is not
+rearranged silently.
+
+A ring among polled switches is now either real or an invention. Real
+means the spanning tree is holding one of its ports in discarding, and
+that ring is drawn as it is. A ring with no blocked port loses its
+weakest link; where several are equally weak, the one "behind, not
+beside" forbids; where nothing tells them apart, nothing is removed and
+every link is marked, because erasing an arbitrary cable is worse than
+admitting the ring cannot be explained.
+
+Then the live network said the diagnosis was half right. LLDP in that
+branch is unusable: those RouterOS bridges forward LLDP frames, so
+every port of theirs carries extra talkers and yields no link — and
+mutual agreement does not rescue it, since forwarding is symmetric and
+mb1 and the Edge-Core two hops apart name each other as confidently as
+two devices sharing a cable. What was actually missing was direction.
+`uplink_of` finds the way out of a branch by looking for switches
+outside it, and this branch sees nothing outside itself, so all three
+came back with an unknown uplink — which disarmed the very test that
+orders a branch. Inside a branch there is a second answer, already used
+to draw the far end of every link: the port a member sees its parent
+on. With it, the MAC tables order this branch on their own, and the map
+now draws what LanTopoLog draws.
+
+The fallback star is still there for branches nothing can order, and it
+is now dashed and dimmed, with both the edge tooltip and the link card
+saying what is unknown about it. The switch card lists every line drawn
+from that switch — neighbour, port, source, speed, whether STP is
+blocking it.
+
+`diag --topology` finally honours the per-host budget v0.6.12 gave the
+service, runs the same passes in the same order, prints each link's
+speed and both port states, and lists what the inference withdrew and
+which rings are left standing.
+
 ## v0.6.13 — 2026-09-18
 
 A dash means never measured, not quietly expired. Four absences that
