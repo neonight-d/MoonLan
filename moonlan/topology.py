@@ -1161,6 +1161,193 @@ def merge_lldp_links(
     return mismatches
 
 
+def mark_stp_blocking(
+    switches: list[SwitchData], links: list[dict]
+) -> None:
+    """Marks the links a spanning tree is holding in discarding.
+
+    A port STP blocks carries no traffic, and a reader deserves to see
+    that on the edge rather than work it out from the STP panel. Only
+    switches whose tree actually operates count — a disabled one still
+    answers dot1dStp* and names itself root.
+
+    It runs before the cycle check on purpose: a physical ring with a
+    blocked port is a correct picture of a correct network, and the one
+    thing that tells it apart from a ring MoonLan invented.
+    """
+    for sw in switches:
+        if sw.stp is None or not sw.stp.operating:
+            continue
+        blocking = {p.name for p in sw.stp.blocking_ports() if p.name}
+        if not blocking:
+            continue
+        for link in links:
+            for side in ("a", "b"):
+                if link[side] == sw.ip and link[f"{side}_port"] in blocking:
+                    link["stp_blocking"] = True
+                    link["stp_blocking_side"] = sw.ip
+
+
+# How much a link is worth when one of a ring has to go. A statement by
+# both devices beats a statement by one beats an inference from the
+# forwarding tables.
+LINK_STRENGTH = {"lldp": 3, "both": 2, "fdb": 1}
+
+
+def _link_key(link: dict) -> tuple:
+    return (link["a"], link["b"], link["a_port"], link["b_port"])
+
+
+def _path_between(forest: list[dict], a: str, b: str) -> list[dict] | None:
+    """The links joining a to b inside an acyclic link set."""
+    adjacency: dict[str, list[tuple[str, dict]]] = {}
+    for link in forest:
+        adjacency.setdefault(link["a"], []).append((link["b"], link))
+        adjacency.setdefault(link["b"], []).append((link["a"], link))
+    queue = [(a, [])]
+    seen = {a}
+    while queue:
+        node, path = queue.pop(0)
+        if node == b:
+            return path
+        for other, link in adjacency.get(node, ()):
+            if other in seen:
+                continue
+            seen.add(other)
+            queue.append((other, path + [link]))
+    return None
+
+
+def find_cycle(links: list[dict], skip: set | None = None) -> list[dict] | None:
+    """One cycle in the link graph, as the links that form it.
+
+    Cycles whose every edge is in `skip` are stepped over — those have
+    been looked at already and either accepted or given up on.
+    """
+    skip = skip or set()
+    parent: dict[str, str] = {}
+
+    def find(node: str) -> str:
+        parent.setdefault(node, node)
+        while parent[node] != node:
+            parent[node] = parent[parent[node]]
+            node = parent[node]
+        return node
+
+    forest: list[dict] = []
+    for link in links:
+        root_a, root_b = find(link["a"]), find(link["b"])
+        if root_a == root_b:
+            path = _path_between(forest, link["a"], link["b"])
+            if path is None:
+                continue
+            cycle = path + [link]
+            if all(_link_key(c) in skip for c in cycle):
+                continue  # already decided; look for another one
+            return cycle
+        parent[root_a] = root_b
+        forest.append(link)
+    return None
+
+
+def resolve_cycles(
+    links: list[dict],
+    lldp_pairs: dict[frozenset, dict] | None = None,
+    uplinks: dict[str, int | None] | None = None,
+    root: str | None = None,
+) -> list[dict]:
+    """The link graph over polled switches has to be acyclic, or explained.
+
+    A real ring is a fine thing to draw — as long as the spanning tree
+    is holding one of its ports in discarding, which is what a real
+    ring on a working network looks like. Those are left exactly as
+    they are, and the blocked edge says so.
+
+    A ring with no blocked port anywhere in it is an error of
+    inference, and one of its edges has to go: the weakest, where
+    weakest means a plain forwarding-table guess against a statement by
+    one device against a statement by both. Where several are equally
+    weak, the one "behind, not beside" calls impossible goes. Where
+    nothing tells them apart, nothing is removed — but every edge is
+    marked, so a ring nobody can account for does not get drawn as a
+    fact.
+
+    Returns the removals, and mutates `links` in place.
+    """
+    adjacency = lldp_adjacency(lldp_pairs)
+    uplinks = uplinks or {}
+    removed: list[dict] = []
+    skip: set = set()
+    while True:
+        cycle = find_cycle(links, skip)
+        if cycle is None:
+            return removed
+        names = " — ".join(
+            f"{link['a']} [{link['a_port']}]" for link in cycle
+        )
+        blocked = [link for link in cycle if link.get("stp_blocking")]
+        if blocked:
+            log.info(
+                "A ring among polled switches (%s) has a port the "
+                "spanning tree holds in discarding (%s) — it is a real "
+                "ring on a working network and is drawn as one",
+                names, blocked[0].get("stp_blocking_side", "?"),
+            )
+            for link in cycle:
+                skip.add(_link_key(link))
+            continue
+        weakest = min(
+            LINK_STRENGTH.get(link.get("source", "fdb"), 1) for link in cycle
+        )
+        weak = [
+            link for link in cycle
+            if LINK_STRENGTH.get(link.get("source", "fdb"), 1) == weakest
+        ]
+        victim = None
+        if len(weak) == 1:
+            victim = weak[0]
+        else:
+            impossible = [
+                link for link in weak
+                if any(
+                    near not in (link["a"], link["b"])
+                    and places_behind(
+                        adjacency, uplinks, near, link["b"], root
+                    )
+                    for near in adjacency
+                )
+            ]
+            if len(impossible) == 1:
+                victim = impossible[0]
+        if victim is None:
+            log.warning(
+                "A ring among polled switches (%s) has no port in "
+                "discarding and no weakest link — nothing is removed, and "
+                "every edge of it is marked as unaccounted for rather "
+                "than drawn as a measured cable", names,
+            )
+            for link in cycle:
+                link["cycle_unresolved"] = True
+                skip.add(_link_key(link))
+            continue
+        links.remove(victim)
+        removed.append({
+            "a": victim["a"], "b": victim["b"],
+            "a_port": victim["a_port"], "b_port": victim["b_port"],
+            "source": victim.get("source", "fdb"),
+            "reason": "cycle",
+            "cycle": names,
+        })
+        log.warning(
+            "Dropping the link %s [%s] — %s [%s] (%s): it closes a ring "
+            "among polled switches (%s) in which no port is held in "
+            "discarding, so the ring is an error of inference and this "
+            "is its weakest edge",
+            victim["a"], victim["a_port"], victim["b"], victim["b_port"],
+            victim.get("source", "fdb"), names,
+        )
+
+
 def drop_impossible_links(
     links: list[dict],
     lldp_pairs: dict[frozenset, dict] | None,
@@ -1351,9 +1538,15 @@ def build_topology(
     # Anything the two passes above left that LLDP says cannot be. On a
     # branch `attach` owns this finds nothing; it is for the pairs whose
     # ends fell into different branches of the root.
-    info["dropped_links"] = drop_impossible_links(
+    dropped = drop_impossible_links(
         links, lldp_pairs, uplinks, info.get("root")
     )
+    # The blocked edges have to be known before the ring check: a ring
+    # with a port in discarding is a correct picture, and it is the one
+    # thing that tells it apart from a ring MoonLan invented.
+    mark_stp_blocking(switches, links)
+    dropped += resolve_cycles(links, lldp_pairs, uplinks, info.get("root"))
+    info["dropped_links"] = dropped
     info["lldp_forwarded"] = {
         sw.ip: sorted(port_name(sw, i) for i in sw.lldp_forwarded)
         for sw in switches if sw.lldp_forwarded
@@ -1770,22 +1963,6 @@ def build_topology(
     info["bridges"] = bridges
     info["other_devices"] = other_devices
     info["unidentified"] = unidentified
-
-    # 6. Spanning tree on the map: a port STP holds in discarding
-    #    carries no traffic, and the root bridge is worth seeing at a
-    #    glance. Only switches whose tree actually operates count — a
-    #    disabled one still answers dot1dStp* and names itself root.
-    for sw in switches:
-        if sw.stp is None or not sw.stp.operating:
-            continue
-        blocking = {p.name for p in sw.stp.blocking_ports() if p.name}
-        if not blocking:
-            continue
-        for link in links:
-            for side in ("a", "b"):
-                if link[side] == sw.ip and link[f"{side}_port"] in blocking:
-                    link["stp_blocking"] = True
-                    link["stp_blocking_side"] = sw.ip
 
     switch_dicts = [{
         "ip": sw.ip,

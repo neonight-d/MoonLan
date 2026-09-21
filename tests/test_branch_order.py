@@ -24,7 +24,12 @@ import unittest
 
 from moonlan.lldp import LldpNeighbor
 from moonlan.snmp_collector import PortInfo, SwitchData
-from moonlan.topology import build_topology, drop_impossible_links
+from moonlan.topology import (
+    build_topology,
+    drop_impossible_links,
+    find_cycle,
+    resolve_cycles,
+)
 
 MB1 = "10.0.0.21"
 GARAGE = "10.3.6.4"
@@ -260,6 +265,102 @@ class WorkshopSegmentTest(unittest.TestCase):
     def test_the_rest_of_the_network_is_untouched(self):
         _sw, links, *_rest = build(segment())
         self.assertIn(frozenset({CORE, MB1}), pairs(links))
+
+
+def link(a, b, source="fdb", a_port="1", b_port="1", **extra):
+    return {
+        "a": a, "b": b, "a_port": a_port, "b_port": b_port,
+        "source": source, **extra,
+    }
+
+
+class RingTest(unittest.TestCase):
+    """A ring among polled switches is either real or an invention.
+
+    Real means the spanning tree is holding one of its ports in
+    discarding — which is what a working network with a physical ring
+    looks like, and a picture worth drawing. Anything else is the
+    inference contradicting itself, and it has to be resolved out loud
+    rather than left on the map as a fact.
+    """
+
+    def test_a_ring_with_a_blocked_port_is_drawn_as_it_is(self):
+        links = [
+            link("a", "b", "both"),
+            link("b", "c", "both"),
+            link("c", "a", "both", stp_blocking=True, stp_blocking_side="c"),
+        ]
+        with self.assertLogs("moonlan.topology", "INFO") as logged:
+            self.assertEqual(resolve_cycles(links), [])
+        self.assertEqual(len(links), 3)
+        self.assertTrue(
+            any("real ring" in line for line in logged.output), logged.output
+        )
+
+    def test_a_ring_with_no_blocked_port_loses_its_weakest_edge(self):
+        links = [
+            link("a", "b", "lldp"),
+            link("b", "c", "both"),
+            link("c", "a", "fdb"),
+        ]
+        with self.assertLogs("moonlan.topology", "WARNING"):
+            removed = resolve_cycles(links)
+        self.assertEqual(len(removed), 1)
+        self.assertEqual((removed[0]["a"], removed[0]["b"]), ("c", "a"))
+        self.assertEqual(removed[0]["reason"], "cycle")
+        self.assertEqual(len(links), 2)
+
+    def test_two_equally_weak_edges_and_one_of_them_is_impossible(self):
+        """mb1 — Workshop — Edge-Core, and mb1 — Edge-Core on top.
+
+        Both MAC-table edges are equally weak. LLDP says the Edge-Core
+        is behind Workshop, so the edge that puts it beside Workshop is
+        the one that cannot be.
+        """
+        links = [
+            link(MB1, WORKSHOP, "fdb", "1/28", "ether1"),
+            link(MB1, EDGE, "fdb", "1/28", "Port25"),
+            link(WORKSHOP, EDGE, "lldp", "ether2", "Port25"),
+        ]
+        lldp_pairs = {
+            frozenset({WORKSHOP, EDGE}): {
+                WORKSHOP: {"if_index": 2, "name": "ether2",
+                           "matched_by": "fdb"},
+                EDGE: {"if_index": 25, "name": "Port25",
+                       "matched_by": "fdb"},
+            }
+        }
+        with self.assertLogs("moonlan.topology", "WARNING"):
+            removed = resolve_cycles(
+                links, lldp_pairs, {WORKSHOP: 1, EDGE: 25, MB1: 25}
+            )
+        self.assertEqual(len(removed), 1)
+        self.assertEqual((removed[0]["a"], removed[0]["b"]), (MB1, EDGE))
+        self.assertEqual(pairs(links), {
+            frozenset({MB1, WORKSHOP}), frozenset({WORKSHOP, EDGE}),
+        })
+
+    def test_a_ring_nothing_can_account_for_keeps_all_its_edges(self):
+        """Guessing which one to cut would be worse than saying so."""
+        links = [
+            link("a", "b", "fdb"),
+            link("b", "c", "fdb"),
+            link("c", "a", "fdb"),
+        ]
+        with self.assertLogs("moonlan.topology", "WARNING") as logged:
+            self.assertEqual(resolve_cycles(links), [])
+        self.assertEqual(len(links), 3)
+        self.assertTrue(all(link.get("cycle_unresolved") for link in links))
+        self.assertTrue(
+            any("no weakest link" in line for line in logged.output),
+            logged.output,
+        )
+
+    def test_a_tree_is_left_alone(self):
+        links = [link("a", "b"), link("b", "c"), link("b", "d")]
+        self.assertEqual(resolve_cycles(links), [])
+        self.assertEqual(len(links), 3)
+        self.assertIsNone(find_cycle(links))
 
 
 if __name__ == "__main__":
