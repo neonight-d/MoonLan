@@ -377,6 +377,7 @@ const I18N = {
       "while; the device stays in the inventory until the retention " +
       "window ends.",
     ev_hosts_purged: "Old hosts removed",
+    ev_link_dropped: "Link withdrawn",
     offlineGroup: "Offline",
     offlineGroupTitle: "Offline devices · {n}",
     offlineGroupHint:
@@ -762,6 +763,7 @@ const I18N = {
       "MAC-адрес давно не появлялся в таблицах коммутаторов; устройство " +
       "остаётся в инвентаре до истечения срока хранения.",
     ev_hosts_purged: "Удалены старые хосты",
+    ev_link_dropped: "Связь снята",
     offlineGroup: "Офлайн",
     offlineGroupTitle: "Офлайн-устройства · {n}",
     offlineGroupHint:

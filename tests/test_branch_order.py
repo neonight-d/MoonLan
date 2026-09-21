@@ -24,7 +24,7 @@ import unittest
 
 from moonlan.lldp import LldpNeighbor
 from moonlan.snmp_collector import PortInfo, SwitchData
-from moonlan.topology import build_topology
+from moonlan.topology import build_topology, drop_impossible_links
 
 MB1 = "10.0.0.21"
 GARAGE = "10.3.6.4"
@@ -98,6 +98,91 @@ def build(switches):
 
 def pairs(links) -> set[frozenset]:
     return {frozenset({link["a"], link["b"]}) for link in links}
+
+
+class BehindNotBesideTest(unittest.TestCase):
+    """The rule on its own, where `attach` cannot reach.
+
+    Inside one branch the ordering already applies it. This pass is for
+    the pairs whose ends fell into different branches of the root —
+    `attach` never sees those together — and for the paths that bypass
+    `attach`.
+    """
+
+    def _links(self):
+        return [
+            {"a": MB1, "b": WORKSHOP, "a_port": "1/28", "b_port": "ether1",
+             "source": "fdb"},
+            {"a": MB1, "b": EDGE, "a_port": "1/28", "b_port": "Port25",
+             "source": "fdb"},
+            {"a": WORKSHOP, "b": EDGE, "a_port": "ether2", "b_port": "Port25",
+             "source": "lldp"},
+        ]
+
+    def _pairs(self):
+        return {
+            frozenset({WORKSHOP, EDGE}): {
+                WORKSHOP: {"if_index": 2, "name": "ether2",
+                           "matched_by": "fdb"},
+                EDGE: {"if_index": 25, "name": "Port25",
+                       "matched_by": "fdb"},
+            }
+        }
+
+    def test_the_edge_that_cannot_be_is_removed(self):
+        links = self._links()
+        with self.assertLogs("moonlan.topology", "WARNING") as logged:
+            removed = drop_impossible_links(
+                links, self._pairs(), {WORKSHOP: 1, EDGE: 25}
+            )
+        self.assertEqual(len(removed), 1)
+        self.assertEqual((removed[0]["a"], removed[0]["b"]), (MB1, EDGE))
+        self.assertEqual(removed[0]["behind"], WORKSHOP)
+        self.assertEqual(pairs(links), {
+            frozenset({MB1, WORKSHOP}), frozenset({WORKSHOP, EDGE}),
+        })
+        self.assertTrue(
+            any("Dropping the link" in line for line in logged.output)
+        )
+
+    def test_nothing_is_removed_without_the_replacement(self):
+        """Removing the one without having the other orphans a switch."""
+        links = [link for link in self._links() if link["source"] == "fdb"]
+        self.assertEqual(
+            drop_impossible_links(links, self._pairs(), {WORKSHOP: 1}), []
+        )
+        self.assertEqual(len(links), 2)
+
+    def test_an_lldp_confirmed_link_is_never_removed(self):
+        links = self._links()
+        links[1]["source"] = "both"
+        self.assertEqual(
+            drop_impossible_links(links, self._pairs(), {WORKSHOP: 1}), []
+        )
+
+    def test_a_downlink_of_the_switch_itself_is_left_alone(self):
+        """Y being behind X says nothing about what is behind Y."""
+        links = self._links()
+        links.append({
+            "a": EDGE, "b": "10.3.6.9", "a_port": "Port2",
+            "b_port": "Gi1", "source": "fdb",
+        })
+        drop_impossible_links(links, self._pairs(), {WORKSHOP: 1, EDGE: 25})
+        self.assertIn(frozenset({EDGE, "10.3.6.9"}), pairs(links))
+
+    def test_an_unknown_uplink_makes_no_claim(self):
+        """Without knowing which way is up, "behind" is a guess."""
+        links = self._links()
+        self.assertEqual(
+            drop_impossible_links(links, self._pairs(), {WORKSHOP: None}), []
+        )
+
+    def test_the_port_that_is_the_uplink_proves_nothing(self):
+        """A neighbour on my uplink is in front of me, not behind."""
+        links = self._links()
+        self.assertEqual(
+            drop_impossible_links(links, self._pairs(), {WORKSHOP: 2}), []
+        )
 
 
 class WorkshopSegmentTest(unittest.TestCase):

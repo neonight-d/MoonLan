@@ -789,6 +789,7 @@ def places_behind(
     uplinks: dict[str, int | None],
     near: str,
     far: str,
+    root: str | None = None,
 ) -> bool:
     """Does LLDP put `far` behind `near` rather than beside it?
 
@@ -799,15 +800,17 @@ def places_behind(
     root through, then `far` sits further from the root than `near`
     does — so `far` cannot also hang off whatever `near` hangs off.
 
-    An unknown uplink yields False rather than a guess. The root has no
-    uplink at all, and there every port leads away from it.
+    An unknown uplink yields False rather than a guess. The root is the
+    one switch that has no uplink, and there every port leads away —
+    which is why it has to be named rather than inferred from a missing
+    dictionary entry.
     """
     port = adjacency.get(near, {}).get(far)
     if port is None:
         return False
-    if near not in uplinks:
-        return True  # the root
-    uplink = uplinks[near]
+    if root is not None and near == root:
+        return True
+    uplink = uplinks.get(near)
     if uplink is None:
         return False  # no idea which way is up: claim nothing
     return port != uplink
@@ -905,9 +908,13 @@ def infer_tree(
             for far in members:
                 if far is near:
                     continue
-                if not places_behind(adjacency, uplinks, near.ip, far.ip):
+                if not places_behind(
+                    adjacency, uplinks, near.ip, far.ip, root.ip
+                ):
                     continue
-                if places_behind(adjacency, uplinks, far.ip, near.ip):
+                if places_behind(
+                    adjacency, uplinks, far.ip, near.ip, root.ip
+                ):
                     log.warning(
                         "LLDP: %s and %s each report the other on a port "
                         "that is not their uplink — they cannot both be "
@@ -1154,6 +1161,70 @@ def merge_lldp_links(
     return mismatches
 
 
+def drop_impossible_links(
+    links: list[dict],
+    lldp_pairs: dict[frozenset, dict] | None,
+    uplinks: dict[str, int | None],
+    root: str | None = None,
+) -> list[dict]:
+    """Removes links the "behind, not beside" rule forbids.
+
+    If LLDP says Y is behind X — X names a port of its own for Y, and
+    that port is not X's uplink — then Y is further from the root than
+    X. So Y cannot also hang off whatever X hangs off, and a MAC-table
+    link saying it does is an inference beaten by a statement.
+
+    Only links inferred from the MAC tables alone are candidates, only
+    where the link the rule prefers is actually present (removing the
+    one and not having the other would orphan the switch), and only
+    where the switch in question is the far end: a link from Y to
+    something further out is Y's own downlink and none of this rule's
+    business.
+
+    `infer_tree` already orders a branch this way, so on a healthy
+    network this finds nothing. It earns its keep where the two ends
+    landed in different branches of the root, which `attach` cannot
+    see, and on the paths that bypass `attach` entirely.
+
+    Returns the removals, and mutates `links` in place.
+    """
+    adjacency = lldp_adjacency(lldp_pairs)
+    if not adjacency:
+        return []
+    present = {frozenset({link["a"], link["b"]}) for link in links}
+    removed: list[dict] = []
+    for link in list(links):
+        if link.get("source") != "fdb":
+            continue
+        parent, child = link["a"], link["b"]
+        for near in adjacency:
+            if near == parent or near == child:
+                continue
+            if not places_behind(adjacency, uplinks, near, child, root):
+                continue
+            if frozenset({near, child}) not in present:
+                continue
+            links.remove(link)
+            present.discard(frozenset({parent, child}))
+            removed.append({
+                "a": parent, "b": child,
+                "a_port": link["a_port"], "b_port": link["b_port"],
+                "source": link.get("source", "fdb"),
+                "reason": "behind",
+                "behind": near,
+            })
+            log.warning(
+                "Dropping the link %s [%s] — %s [%s]: it was inferred from "
+                "the MAC tables, and LLDP puts %s behind %s, which is "
+                "somewhere else. A MAC table says a device is reachable "
+                "through a port; LLDP says it is on the cable, and that "
+                "is the stronger statement.",
+                parent, link["a_port"], child, link["b_port"], child, near,
+            )
+            break
+    return removed
+
+
 def trunk_ports(
     switches: list[SwitchData],
     switches_on_port: dict[str, dict[int, set[str]]],
@@ -1277,6 +1348,12 @@ def build_topology(
         switches, switches_on_port, sees, lldp_pairs
     )
     info["lldp_mismatches"] = merge_lldp_links(links, lldp_pairs, switch_by_ip)
+    # Anything the two passes above left that LLDP says cannot be. On a
+    # branch `attach` owns this finds nothing; it is for the pairs whose
+    # ends fell into different branches of the root.
+    info["dropped_links"] = drop_impossible_links(
+        links, lldp_pairs, uplinks, info.get("root")
+    )
     info["lldp_forwarded"] = {
         sw.ip: sorted(port_name(sw, i) for i in sw.lldp_forwarded)
         for sw in switches if sw.lldp_forwarded

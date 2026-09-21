@@ -382,6 +382,15 @@ async def run_scan() -> None:
             uplink_ports=_uplink_ports(),
             remembered_locations=_remembered_locations(db_rows),
         )
+        # Links the inference removed, and rings it could not resolve.
+        # The syslog line is for the moment it happens; the journal is
+        # so the history of these decisions can be read from the
+        # interface, where the map they changed is.
+        for dropped in topo_info.get("dropped_links", []):
+            await asyncio.to_thread(
+                db.add_event, time.time(), "link_dropped", "",
+                _dropped_link_text(dropped),
+            )
         prev_pseudo_ports = {
             (p["switch"], p["port"]) for p in pseudo_switches
         }
@@ -615,6 +624,22 @@ async def run_scan() -> None:
         )
     finally:
         state.scan_ended(over_budget)
+
+
+def _dropped_link_text(dropped: dict) -> str:
+    """One journal line about a link the inference took back."""
+    a = f"{dropped['a']} [{dropped['a_port']}]"
+    b = f"{dropped['b']} [{dropped['b_port']}]"
+    if dropped.get("reason") == "behind":
+        return (
+            f"{a} — {b} ({dropped.get('source', 'fdb')}): LLDP puts "
+            f"{dropped['b']} behind {dropped['behind']}, so it cannot "
+            f"also hang off {dropped['a']}"
+        )
+    return (
+        f"{a} — {b} ({dropped.get('source', 'fdb')}): "
+        f"{dropped.get('reason', 'removed by the topology inference')}"
+    )
 
 
 def _lldp_rows(collected: list[SwitchData]) -> list[dict]:
