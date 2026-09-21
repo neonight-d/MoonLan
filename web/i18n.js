@@ -300,6 +300,14 @@ const I18N = {
       + "{switches}. They are not unreachable \u2014 they answer, only "
       + "too slowly \u2014 and no alarm is raised for them. Their cards "
       + "say when their data was taken.",
+    serviceOffline: "No connection to the service · data from {time}",
+    serviceOfflineHint:
+      "The page is not getting answers from MoonLan \u2014 it may be "
+      + "restarting, or this machine has lost the route to it. The map "
+      + "is the last picture that arrived, and it is not being "
+      + "refreshed. This says nothing about the switches: they are not "
+      + "being polled from here right now, that is all. Polling "
+      + "continues, and the notice clears by itself.",
     overBudgetHint:
       "This switch did not finish answering inside its poll budget, so "
       + "everything on this card is the last reading that did arrive, "
@@ -714,6 +722,13 @@ const I18N = {
       + "{switches}. Недоступными они не считаются: они отвечают, просто "
       + "медленно, и тревог по ним не поднимается. Время, на которое "
       + "сняты их данные, написано в карточке каждого.",
+    serviceOffline: "Нет связи с сервисом · данные от {time}",
+    serviceOfflineHint:
+      "Страница не получает ответов от MoonLan — возможно, он "
+      + "перезапускается или до него пропал маршрут с этой машины. На "
+      + "карте последняя пришедшая картина, и она не обновляется. О "
+      + "коммутаторах это не говорит ничего: просто их сейчас отсюда не "
+      + "опрашивают. Опрос продолжается, и пометка снимется сама.",
     overBudgetHint:
       "Коммутатор не уложился в бюджет опроса, поэтому всё на этой "
       + "карточке \u2014 последнее полученное измерение, снятое {time}. "

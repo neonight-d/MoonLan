@@ -291,7 +291,19 @@ function fmtAge(seconds) {
 function updateScanStatus() {
   els.scanStatus.classList.remove("failed");
   els.scanStatus.classList.remove("partial");
+  els.scanStatus.classList.remove("offline");
   els.scanStatus.title = "";
+  // Nothing below this line is arriving any more, so it goes first:
+  // everything else the header could say is about a picture that has
+  // stopped being refreshed.
+  if (!serviceReachable) {
+    els.scanStatus.classList.add("offline");
+    els.scanStatus.textContent = fmt("serviceOffline", {
+      time: topology.last_scan ? fmtTime(topology.last_scan) : t("noData"),
+    });
+    els.scanStatus.title = t("serviceOfflineHint");
+    return;
+  }
   // A scan of eight switches took ten minutes and the interface said
   // nothing at all about it — the only way to find out whether
   // anything was happening was journalctl. One line settles it.
@@ -332,6 +344,36 @@ function updateScanStatus() {
   }
 }
 
+/* The service can go away — restarted, redeployed, or the machine this
+   page is open from lost the route to it. Every periodic request has
+   to survive that: an unhandled rejection every thirty seconds is not
+   information, and a map that simply stops changing looks exactly like
+   a quiet network where nothing is happening.
+
+   So: the last good picture stays on screen, the header says the data
+   is no longer arriving and how old it is, and the console gets one
+   line when the connection is lost and one when it comes back. */
+let serviceReachable = true;
+
+function serviceLost(what) {
+  if (serviceReachable) {
+    serviceReachable = false;
+    console.warn(
+      "MoonLan: the service is not answering (" + what + "). The map " +
+      "below is the last picture that arrived; polling continues."
+    );
+    updateScanStatus();
+  }
+}
+
+function serviceBack() {
+  if (!serviceReachable) {
+    serviceReachable = true;
+    console.info("MoonLan: the service is answering again.");
+    updateScanStatus();
+  }
+}
+
 /* While a scan runs the header counts switches off. The map itself is
    only refreshed every REFRESH_MS, which is no use to somebody
    watching a scan that may last minutes. */
@@ -343,8 +385,10 @@ function watchScan() {
     let status;
     try {
       status = await (await fetch("/api/status")).json();
+      serviceBack();
     } catch (e) {
-      return; // the service is restarting; the next tick will tell
+      serviceLost("scan progress");
+      return; // keep the timer: the next tick may well succeed
     }
     topology.scanning = status.scanning;
     topology.scan_done = status.scan_done;
@@ -364,10 +408,20 @@ function watchScan() {
 /* ---------- data loading and rendering ---------- */
 
 async function loadTopology() {
-  const [topo, alarms] = await Promise.all([
-    fetch("/api/topology").then((r) => r.json()),
-    fetchAlarms("active=1"),
-  ]);
+  let topo;
+  let alarms;
+  try {
+    [topo, alarms] = await Promise.all([
+      fetch("/api/topology").then((r) => r.json()),
+      fetchAlarms("active=1"),
+    ]);
+  } catch (e) {
+    // Whatever is on screen stays there. This is the moment somebody
+    // is most likely to be looking at it.
+    serviceLost("the map");
+    return;
+  }
+  serviceBack();
   topology = topo;
   activeAlarms = alarms;
   renderBadge();
@@ -1449,8 +1503,19 @@ function closePorts() {
 
 async function refreshPorts() {
   if (!portsIp) return;
-  const res = await fetch("/api/switch/" + encodeURIComponent(portsIp) + "/ports");
-  lastPorts = await res.json();
+  let data;
+  try {
+    const res = await fetch(
+      "/api/switch/" + encodeURIComponent(portsIp) + "/ports"
+    );
+    data = await res.json();
+  } catch (e) {
+    // the panel keeps the last table, the header says why
+    serviceLost("the ports panel");
+    return;
+  }
+  serviceBack();
+  lastPorts = data;
   renderPorts(lastPorts);
 }
 

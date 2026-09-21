@@ -483,6 +483,10 @@ main { flex: 1; display: flex; min-height: 0; }
 /* A switch that ran out of time is not a fault: the line stays
    readable and only asks to be hovered. */
 #scan-status.partial { color: #d9b26b; cursor: help; }
+/* The page has lost the service. Not a network fault and not an
+   alarm — but the map below stopped being refreshed, and that
+   must not look like a quiet network. */
+#scan-status.offline { color: #d9b26b; cursor: help; font-weight: 600; }
 
 /* Links inside the panels. Until v0.6.3 there was no rule for `a` at
    all, so every address in a card was rendered in the browser's
