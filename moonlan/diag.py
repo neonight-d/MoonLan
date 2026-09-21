@@ -385,8 +385,10 @@ async def run_topology_view(community: str, timeout: int, cfg) -> None:
     by_ip = {sw.ip: sw for sw in switches}
     fdb = normalized_fdb(switches)
     switches_on_port, sees = switch_sightings(switches, fdb)
-    links, uplinks, info = infer_tree(switches, switches_on_port, sees)
     lldp_pairs = lldp_link_candidates(switches)
+    links, uplinks, info = infer_tree(
+        switches, switches_on_port, sees, lldp_pairs
+    )
     mismatches = merge_lldp_links(links, lldp_pairs, by_ip)
 
     def label(ip: str) -> str:

@@ -765,12 +765,68 @@ def switch_sightings(
     return switches_on_port, sees
 
 
+def lldp_adjacency(
+    lldp_pairs: dict[frozenset, dict] | None,
+) -> dict[str, dict[str, int]]:
+    """ip -> {neighbour ip: this switch's own ifIndex toward it}.
+
+    Only the half each switch reports about itself. The far end's
+    opinion of which port it is on is a separate, weaker statement and
+    lives in the pair entry, not here.
+    """
+    adjacency: dict[str, dict[str, int]] = {}
+    for key, sides in (lldp_pairs or {}).items():
+        for ip in key:
+            other = next(o for o in key if o != ip)
+            if_index = (sides.get(ip) or {}).get("if_index")
+            if if_index is not None:
+                adjacency.setdefault(ip, {})[other] = if_index
+    return adjacency
+
+
+def places_behind(
+    adjacency: dict[str, dict[str, int]],
+    uplinks: dict[str, int | None],
+    near: str,
+    far: str,
+) -> bool:
+    """Does LLDP put `far` behind `near` rather than beside it?
+
+    A MAC table says a device is *reachable through* a port. LLDP says
+    a device is *on the cable*. The second is the stronger statement,
+    and this is where it is worth the most: if `near` names a port of
+    its own for `far`, and that port is not the one `near` reaches the
+    root through, then `far` sits further from the root than `near`
+    does — so `far` cannot also hang off whatever `near` hangs off.
+
+    An unknown uplink yields False rather than a guess. The root has no
+    uplink at all, and there every port leads away from it.
+    """
+    port = adjacency.get(near, {}).get(far)
+    if port is None:
+        return False
+    if near not in uplinks:
+        return True  # the root
+    uplink = uplinks[near]
+    if uplink is None:
+        return False  # no idea which way is up: claim nothing
+    return port != uplink
+
+
 def infer_tree(
     switches: list[SwitchData],
     switches_on_port: dict[str, dict[int, set[str]]],
     sees: dict[str, dict[str, int]],
+    lldp_pairs: dict[frozenset, dict] | None = None,
 ) -> tuple[list[dict], dict[str, int | None], dict]:
     """Root-based tree inference of switch-to-switch links.
+
+    LLDP takes part in this, it does not decorate the result. The MAC
+    tables place a switch in a branch; inside the branch, what the
+    devices say about each other decides the order. On a network where
+    three switches of nine barely fill their forwarding tables, the
+    other way round produced a bunch of boxes hanging off one port and
+    a false ring on top of it.
 
     Returns (links, uplinks, info). uplinks[ip] is the computed uplink
     port of every non-root switch (None if unknown). info holds the
@@ -827,14 +883,88 @@ def infer_tree(
     }
 
     links: list[dict] = []
+    adjacency = lldp_adjacency(lldp_pairs)
 
     def child_port(parent: SwitchData, child: SwitchData) -> int | None:
         """The child's port toward the parent: direct sighting, else uplink."""
         direct = sees[child.ip].get(parent.ip)
         return direct if direct is not None else uplinks.get(child.ip)
 
+    def lldp_chain(
+        members: list[SwitchData],
+    ) -> tuple[dict[str, SwitchData], dict[str, list[SwitchData]]]:
+        """Which members LLDP puts behind which, inside one branch.
+
+        Returns (ip -> the member it sits behind, ip -> its members).
+        A mutual claim — each naming a non-uplink port for the other —
+        is two statements that cannot both be true, so both are dropped
+        rather than resolved by coin toss.
+        """
+        behind: dict[str, SwitchData] = {}
+        for near in members:
+            for far in members:
+                if far is near:
+                    continue
+                if not places_behind(adjacency, uplinks, near.ip, far.ip):
+                    continue
+                if places_behind(adjacency, uplinks, far.ip, near.ip):
+                    log.warning(
+                        "LLDP: %s and %s each report the other on a port "
+                        "that is not their uplink — they cannot both be "
+                        "the further one, so neither claim is used",
+                        near.ip, far.ip,
+                    )
+                    continue
+                behind[far.ip] = near
+        children: dict[str, list[SwitchData]] = {}
+        for ip, host in behind.items():
+            child = next(m for m in members if m.ip == ip)
+            children.setdefault(host.ip, []).append(child)
+        return behind, children
+
     def attach(parent: SwitchData, port: int, members: list[SwitchData]) -> None:
-        """Links members (one branch behind the parent's port) to the tree."""
+        """Links members (one branch behind the parent's port) to the tree.
+
+        LLDP goes first. Whatever it puts behind another member of this
+        branch is not on the parent's cable at all, so it is taken out
+        of the contest for "nearest" and hung off its own host
+        afterwards. What is left — the front of the branch — is ordered
+        by the MAC tables exactly as before.
+        """
+        if not members:
+            return
+        behind, children = lldp_chain(members)
+        front = [m for m in members if m.ip not in behind]
+        if not front:
+            log.warning(
+                "LLDP puts every member of the branch behind %s port %s "
+                "behind another one; the chain has no head, so the "
+                "claims are set aside", parent.ip, port_name(parent, port),
+            )
+            behind, children, front = {}, {}, list(members)
+
+        def descend(host: SwitchData) -> None:
+            """Hangs everything LLDP puts behind `host` off `host`."""
+            for child in sorted(children.get(host.ip, []), key=lambda c: c.ip):
+                local = adjacency[host.ip][child.ip]
+                log.info(
+                    "LLDP: %s is behind %s (on its %s, which is not its "
+                    "uplink) — placed there rather than beside it",
+                    child.ip, host.ip, port_name(host, local),
+                )
+                links.append(
+                    _make_link(host, local, child, child_port(host, child))
+                )
+                descend(child)
+
+        _attach_front(parent, port, front)
+        for member in front:
+            descend(member)
+
+    def _attach_front(
+        parent: SwitchData, port: int, members: list[SwitchData]
+    ) -> None:
+        """The MAC-table ordering, over the members LLDP left in front."""
         if len(members) == 1:
             child = members[0]
             links.append(_make_link(parent, port, child, child_port(parent, child)))
@@ -863,9 +993,11 @@ def infer_tree(
                 ", ".join(m.ip for m in members), parent.ip,
             )
             for child in members:
-                links.append(
-                    _make_link(parent, port, child, child_port(parent, child))
-                )
+                link = _make_link(parent, port, child, child_port(parent, child))
+                # "I do not know the order" must not be drawn like a
+                # measured cable (see the dashed edges in the UI)
+                link["order_unknown"] = True
+                links.append(link)
             return
         nearest = max(candidates, key=lambda c: (len(sees[c.ip]), c.ip))
         links.append(_make_link(parent, port, nearest, child_port(parent, nearest)))
@@ -886,7 +1018,9 @@ def infer_tree(
                 "connecting to %s directly",
                 m.ip, nearest.ip, parent.ip,
             )
-            links.append(_make_link(parent, port, m, child_port(parent, m)))
+            link = _make_link(parent, port, m, child_port(parent, m))
+            link["order_unknown"] = True
+            links.append(link)
 
     for port, members in sorted(branches.items()):
         attach(root, port, members)
@@ -1133,8 +1267,15 @@ def build_topology(
     #    corrected where LLDP has the two devices naming each other.
     #    LLDP is a statement, the FDB tree an inference — but the
     #    disagreements are reported, never quietly "fixed".
-    links, uplinks, info = infer_tree(switches, switches_on_port, sees)
+    # LLDP is read BEFORE the tree is inferred, not after it is drawn.
+    # It used to arrive as a correction pass that could add a link and
+    # refine ports but never remove anything — so a branch the MAC
+    # tables had spread into a star kept its star, and the LLDP edge
+    # laid on top closed a ring that does not exist.
     lldp_pairs = lldp_link_candidates(switches)
+    links, uplinks, info = infer_tree(
+        switches, switches_on_port, sees, lldp_pairs
+    )
     info["lldp_mismatches"] = merge_lldp_links(links, lldp_pairs, switch_by_ip)
     info["lldp_forwarded"] = {
         sw.ip: sorted(port_name(sw, i) for i in sw.lldp_forwarded)
