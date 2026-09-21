@@ -97,6 +97,49 @@ def segment(with_lldp: bool = True) -> list[SwitchData]:
     return [core, mb1, garage, workshop, edge]
 
 
+def live_segment() -> list[SwitchData]:
+    """The same branch as the live network really reports it.
+
+    Every LLDP port of these three is crowded — the RouterOS bridges
+    forward LLDP frames, so two or three extra talkers appear on every
+    one of them — and a crowded port yields no link. So there is no
+    usable LLDP in this branch at all, and the order has to come out of
+    the MAC tables, which do hold it:
+
+        mb1  1/28 -> Garage, Workshop, Edge-Core   (all three)
+        Garage   ether1 -> mb1        ether2 -> Workshop, Edge-Core
+        Workshop ether1 -> mb1, Garage  ether2 -> Edge-Core
+        Edge-Core Port25 -> mb1, Garage, Workshop
+
+    Only Garage sees both of the others away from the way out. That is
+    the garland, stated plainly, and MoonLan drew a three-way star over
+    it for want of knowing which of their ports faced the root.
+    """
+    core = switch(CORE, "comm-mb0", 1, {i: f"Gi0/{i}" for i in range(1, 27)})
+    mb1 = switch(MB1, "comm.mb1", 2, {i: f"1/{i}" for i in range(1, 29)})
+    garage = switch(GARAGE, "RouterOS-Garage", 3,
+                    {1: "ether1", 2: "ether2", 3: "ether3"})
+    workshop = switch(WORKSHOP, "RouterOS-Workshop", 4,
+                      {1: "ether1", 2: "ether2", 3: "ether3"})
+    edge = switch(EDGE, "ES3528M", 5,
+                  {2: "Port2", 25: "Port25", 26: "Port26"})
+    for sw in (mb1, garage, workshop, edge):
+        core.fdb[sw.bridge_mac] = 1
+    mb1.fdb[core.bridge_mac] = 25
+    for sw in (garage, workshop, edge):
+        mb1.fdb[sw.bridge_mac] = 28
+    garage.fdb[mb1.bridge_mac] = 1
+    garage.fdb[workshop.bridge_mac] = 2
+    garage.fdb[edge.bridge_mac] = 2
+    workshop.fdb[mb1.bridge_mac] = 1
+    workshop.fdb[garage.bridge_mac] = 1
+    workshop.fdb[edge.bridge_mac] = 2
+    edge.fdb[mb1.bridge_mac] = 25
+    edge.fdb[garage.bridge_mac] = 25
+    edge.fdb[workshop.bridge_mac] = 25
+    return [core, mb1, garage, workshop, edge]
+
+
 def build(switches):
     return build_topology(switches, unmanaged_threshold=0)
 
@@ -272,6 +315,58 @@ def link(a, b, source="fdb", a_port="1", b_port="1", **extra):
         "a": a, "b": b, "a_port": a_port, "b_port": b_port,
         "source": source, **extra,
     }
+
+
+class BranchUplinkTest(unittest.TestCase):
+    """The uplink of a switch whose whole world is its own branch.
+
+    `uplink_of` looks for ports where a switch sees switches OUTSIDE
+    its branch, because those are only reachable through the way out.
+    A branch that sees nothing outside itself defeats that: all three
+    RouterOS boxes came back with an unknown uplink, `is_nearest` then
+    passed vacuously for every one of them, the "trust only a known
+    uplink" filter threw all three away, and the branch was drawn as a
+    star — with the MAC tables holding the answer the whole time.
+
+    Inside a branch there is a second, better answer, and it was
+    already being used to draw the far end of every link: the port a
+    member sees its parent on.
+    """
+
+    def test_the_garland_comes_out_of_the_mac_tables_alone(self):
+        _sw, links, *_rest = build(live_segment())
+        drawn = pairs(links)
+        self.assertEqual(
+            {p for p in drawn if MB1 in p or GARAGE in p or WORKSHOP in p},
+            {
+                frozenset({CORE, MB1}),
+                frozenset({MB1, GARAGE}),
+                frozenset({GARAGE, WORKSHOP}),
+                frozenset({WORKSHOP, EDGE}),
+            },
+        )
+
+    def test_nothing_is_a_guess_and_nothing_is_a_ring(self):
+        _sw, links, *_rest = build(live_segment())
+        self.assertFalse([link for link in links if link.get("order_unknown")])
+        self.assertFalse(
+            [link for link in links if link.get("cycle_unresolved")]
+        )
+        self.assertIsNone(find_cycle(links))
+
+    def test_the_ports_are_the_ones_the_switches_report(self):
+        _sw, links, *_rest = build(live_segment())
+        by_pair = {
+            frozenset({link["a"], link["b"]}): (link["a_port"], link["b_port"])
+            for link in links
+        }
+        self.assertEqual(by_pair[frozenset({MB1, GARAGE})], ("1/28", "ether1"))
+        self.assertEqual(
+            by_pair[frozenset({GARAGE, WORKSHOP})], ("ether2", "ether1")
+        )
+        self.assertEqual(
+            by_pair[frozenset({WORKSHOP, EDGE})], ("ether2", "Port25")
+        )
 
 
 class RingTest(unittest.TestCase):

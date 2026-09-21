@@ -367,11 +367,21 @@ def lldp_link_candidates(
     """Switch-to-switch links CONFIRMED by LLDP, keyed by the pair.
 
     A candidate needs one LLDP neighbour on the local port whose chassis
-    id belongs to another polled switch. Two kinds of port are skipped:
-    those `lldp.analyse_ports` found to carry forwarded frames (the
-    neighbour is not on the port it claims), and those with several
-    devices behind them (they are all real, but which of them is on the
-    cable is not knowable).
+    id belongs to another polled switch. Ports carrying forwarded
+    frames are skipped outright: `lldp.analyse_ports` has shown the
+    neighbour is not on the port it claims, so there is nothing to
+    build on.
+
+    Ports with several LLDP devices behind them are skipped too: they
+    are all real, but which of them is on the cable is not knowable.
+
+    Being named by both ends does NOT rescue such a port, tempting as
+    it looks. On the network this was written for, the RouterOS bridges
+    of one segment forward LLDP frames in both directions, so mb1 and
+    an Edge-Core two hops apart name each other, each on a port of its
+    own, as confidently as two devices sharing a cable. Forwarding is
+    symmetric; mutual agreement is therefore not evidence of adjacency,
+    and reading it as such drew the link straight back.
 
     Each side's own end comes from its own local port table, which is
     the reliable half of the exchange; the far end is resolved from
@@ -893,8 +903,34 @@ def infer_tree(
         direct = sees[child.ip].get(parent.ip)
         return direct if direct is not None else uplinks.get(child.ip)
 
+    def branch_uplinks(
+        parent: SwitchData, members: list[SwitchData]
+    ) -> dict[str, int | None]:
+        """Which way is up, for the members of one branch.
+
+        `uplinks` is computed from sightings of switches outside the
+        branch, and a whole branch can fail that test: the three
+        RouterOS boxes behind mb1 1/28 see nothing but each other and
+        mb1, all of which are inside their own branch, so every one of
+        them came back with an unknown uplink — and "unknown uplink"
+        disarms every rule that needs to know which way the root is.
+
+        Inside a branch there is a better answer and it was already
+        being used to draw the far end of a link: the port a member
+        sees its parent on. That is the way out of the branch by
+        definition.
+        """
+        local = dict(uplinks)
+        for member in members:
+            toward_parent = sees[member.ip].get(parent.ip)
+            if toward_parent is not None:
+                local[member.ip] = toward_parent
+        return local
+
     def lldp_chain(
+        parent: SwitchData,
         members: list[SwitchData],
+        local_uplinks: dict[str, int | None],
     ) -> tuple[dict[str, SwitchData], dict[str, list[SwitchData]]]:
         """Which members LLDP puts behind which, inside one branch.
 
@@ -909,11 +945,11 @@ def infer_tree(
                 if far is near:
                     continue
                 if not places_behind(
-                    adjacency, uplinks, near.ip, far.ip, root.ip
+                    adjacency, local_uplinks, near.ip, far.ip, root.ip
                 ):
                     continue
                 if places_behind(
-                    adjacency, uplinks, far.ip, near.ip, root.ip
+                    adjacency, local_uplinks, far.ip, near.ip, root.ip
                 ):
                     log.warning(
                         "LLDP: %s and %s each report the other on a port "
@@ -940,7 +976,8 @@ def infer_tree(
         """
         if not members:
             return
-        behind, children = lldp_chain(members)
+        local_uplinks = branch_uplinks(parent, members)
+        behind, children = lldp_chain(parent, members, local_uplinks)
         front = [m for m in members if m.ip not in behind]
         if not front:
             log.warning(
@@ -964,12 +1001,13 @@ def infer_tree(
                 )
                 descend(child)
 
-        _attach_front(parent, port, front)
+        _attach_front(parent, port, front, local_uplinks)
         for member in front:
             descend(member)
 
     def _attach_front(
-        parent: SwitchData, port: int, members: list[SwitchData]
+        parent: SwitchData, port: int, members: list[SwitchData],
+        local_uplinks: dict[str, int | None],
     ) -> None:
         """The MAC-table ordering, over the members LLDP left in front."""
         if len(members) == 1:
@@ -979,7 +1017,7 @@ def infer_tree(
         # The member nearest to the parent sees all the other members
         # on ports different from its own uplink
         def is_nearest(c: SwitchData) -> bool:
-            up = uplinks.get(c.ip)
+            up = local_uplinks.get(c.ip)
             return all(
                 sees[c.ip].get(m.ip) is not None and sees[c.ip][m.ip] != up
                 for m in members
@@ -990,7 +1028,9 @@ def infer_tree(
         if len(candidates) > 1:
             # Symmetric sightings pass the test vacuously when uplinks are
             # unknown; trust only candidates with a known uplink
-            strong = [c for c in candidates if uplinks.get(c.ip) is not None]
+            strong = [
+                c for c in candidates if local_uplinks.get(c.ip) is not None
+            ]
             candidates = strong
         if not candidates:
             log.warning(
@@ -1282,8 +1322,9 @@ def resolve_cycles(
         cycle = find_cycle(links, skip)
         if cycle is None:
             return removed
-        names = " — ".join(
-            f"{link['a']} [{link['a_port']}]" for link in cycle
+        names = ", ".join(
+            f"{link['a']} [{link['a_port']}] — {link['b']} [{link['b_port']}]"
+            for link in cycle
         )
         blocked = [link for link in cycle if link.get("stp_blocking")]
         if blocked:
