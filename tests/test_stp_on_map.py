@@ -19,32 +19,30 @@ Run with:  python -m unittest discover -s tests
 """
 
 import asyncio
-import os
-import tempfile
+import sys
 import time
 import unittest
 from pathlib import Path
 
-# The service reads its configuration at import time. Another test
-# module may have set this up already and imported the service; either
-# way the switch list below is read back from the loaded config, so it
-# does not matter which of them won.
-_TMP = tempfile.TemporaryDirectory()
-_CONFIG = Path(_TMP.name) / "config.yaml"
-_CONFIG.write_text(
-    "db_path: " + str(Path(_TMP.name) / "test.db") + "\n"
-    "scan_interval_minutes: 0\n"
-    "switches:\n  - 10.0.0.10\n  - 10.0.0.21\n",
-    encoding="utf-8",
-)
-os.environ.setdefault("MOONLAN_CONFIG", str(_CONFIG))
+# One shared configuration for every test that imports the service —
+# see tests/service_fixture.py for why it cannot be per-module.
+# `unittest discover -s tests` puts this directory on sys.path;
+# `python -m unittest tests.test_scan_budget` does not.
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from service_fixture import SWITCHES  # noqa: E402,F401
 
 from moonlan import server  # noqa: E402
 from moonlan.snmp_collector import PortInfo, SwitchData  # noqa: E402
 from moonlan.stp import StpData, StpPort, judge  # noqa: E402
 
 ROOT_MAC = "02:4d:4c:00:00:01"
-RAY_MAC = "02:4d:4c:00:00:02"
+
+
+def ray_mac(ip: str) -> str:
+    """A MAC of its own for every ray: the shared config has eight
+    switches, and two of them answering to one address would confuse
+    the very lookup this test is about."""
+    return f"02:4d:4c:00:01:{int(ip.rsplit('.', 1)[1]):02x}"
 
 
 def _root_switch(ip: str) -> SwitchData:
@@ -85,10 +83,10 @@ def _ray_switch(ip: str) -> SwitchData:
     makes it a witness.
     """
     sw = SwitchData(
-        ip=ip, reachable=True, sys_name="ray", bridge_mac=RAY_MAC,
+        ip=ip, reachable=True, sys_name="ray", bridge_mac=ray_mac(ip),
         polled_at=time.time(),
     )
-    sw.own_macs = {RAY_MAC}
+    sw.own_macs = {sw.bridge_mac}
     sw.ports[1] = PortInfo(if_index=1, name="Gi0/1", oper_up=True)
     sw.stp = judge(StpData(
         supported=True, protocol_spec=3, priority=32768,

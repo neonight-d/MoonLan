@@ -1261,6 +1261,12 @@ function showDetails(nodeId) {
           })}</p>`
         : ""}
       ${host.remembered ? `<p class="hint">${t("rememberedHint")}</p>` : ""}
+      ${host.from_saved
+        ? `<p class="hint">${fmt("hostFromSavedHint", {
+            switch: switchName(host.switch),
+            time: fmtTime(host.reading_at),
+          })}</p>`
+        : ""}
       ${aliveByIp ? `<p class="hint">${t("staleButAliveHint")}</p>` : ""}
       ${hint ? `<p class="hint">${hint}</p>` : ""}<dl>
       <dt>${t("name")}</dt><dd>${host.name || "—"}</dd>
@@ -1281,6 +1287,13 @@ function showDetails(nodeId) {
         host.approximate ? ` <span class="chip">${t("approximate")}</span>` : ""
       }${
         host.remembered ? ` <span class="chip">${t("remembered")}</span>` : ""
+      }${
+        host.from_saved
+          ? ` <span class="chip" title="${fmt("hostFromSavedHint", {
+              switch: switchName(host.switch),
+              time: fmtTime(host.reading_at),
+            })}">${t("fromSaved")}</span>`
+          : ""
       }</dd>
       <dt>${t("vlan")}</dt><dd>${vlanLabel(host.vlan)}</dd>
       ${host.router_ip
@@ -1292,6 +1305,9 @@ function showDetails(nodeId) {
         : ""}
       <dt>${t("lastReply")}</dt><dd>${fmtTime(host.last_ping_ok)}</dd>
       <dt>${t("lastSeenLabel")}</dt><dd>${fmtTime(host.last_seen)}</dd>
+      ${host.from_saved
+        ? `<dt>${t("readingFrom")}</dt><dd>${fmtTime(host.reading_at)}</dd>`
+        : ""}
       ${offMap ? `<dt>${t("lastArpLabel")}</dt><dd>${fmtTime(host.last_arp)}</dd>` : ""}
       <dt>${t("firstSeen")}</dt><dd>${fmtDate(host.first_seen)}</dd></dl>
       <button id="monitor-btn" class="panel-btn${host.monitored ? " active" : ""}">

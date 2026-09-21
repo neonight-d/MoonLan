@@ -17,26 +17,17 @@ Run with:  python -m unittest discover -s tests
 """
 
 import asyncio
-import os
-import tempfile
+import sys
 import time
 import unittest
 from pathlib import Path
 
-# The service reads its configuration at import time, so the temporary
-# one has to exist before moonlan.server is imported.
-_TMP = tempfile.TemporaryDirectory()
-_CONFIG = Path(_TMP.name) / "config.yaml"
-_CONFIG.write_text(
-    "db_path: " + str(Path(_TMP.name) / "test.db") + "\n"
-    "scan_interval_minutes: 0\n"
-    "snmp:\n"
-    "  host_budget_seconds: 1\n"
-    "switches:\n"
-    + "".join(f"  - 10.0.0.{n}\n" for n in range(1, 9)),
-    encoding="utf-8",
-)
-os.environ["MOONLAN_CONFIG"] = str(_CONFIG)
+# One shared configuration for every test that imports the service —
+# see tests/service_fixture.py for why it cannot be per-module.
+# `unittest discover -s tests` puts this directory on sys.path;
+# `python -m unittest tests.test_scan_budget` does not.
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from service_fixture import SWITCHES  # noqa: E402,F401
 
 from moonlan import server  # noqa: E402
 from moonlan.config import Config, HostSnmp  # noqa: E402
@@ -266,6 +257,9 @@ class CountersStarvationTest(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
         self._interval = server.config.counters_interval_seconds
         server.config.counters_interval_seconds = 4  # wait budget: 2 s
+        # No poll data from whatever ran before: this test is about the
+        # lock, and a leftover SwitchData sends it into loop detection
+        server.switch_data.clear()
 
     def tearDown(self):
         server.config.counters_interval_seconds = self._interval

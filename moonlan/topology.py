@@ -231,12 +231,32 @@ class FdbStability:
         # ip -> mac -> [if_index, polls remaining]
         self._cache: dict[str, dict[str, list[int]]] = {}
 
-    def merge(self, sw_ip: str, fresh: dict[str, int]) -> dict[str, int]:
+    def merge(
+        self, sw_ip: str, fresh: dict[str, int], confirm: bool = True
+    ) -> dict[str, int]:
+        """Merges this poll's table with the smoothed one.
+
+        `confirm=False` says the table is not this poll's: it is the
+        last reading that did arrive, kept because the switch ran out
+        of its poll budget. Then the countdown still runs — a
+        three-poll smoothing that is refreshed from a copy of itself
+        never expires, and stops being smoothing and starts being
+        permanent memory — but the entries are not stamped fresh.
+
+        The links behind that switch are still drawn from the saved
+        reading: it is returned alongside the cache. Smoothing the
+        aging of a table and drawing what the table said are two
+        different things, and only the first must not be fed a copy.
+        """
         cache = self._cache.setdefault(sw_ip, {})
         for mac in list(cache):
             cache[mac][1] -= 1
             if cache[mac][1] < 0:  # survived ttl unconfirmed polls
                 del cache[mac]
+        if not confirm:
+            merged = {mac: entry[0] for mac, entry in cache.items()}
+            merged.update(fresh)
+            return merged
         for mac, if_index in fresh.items():
             cache[mac] = [if_index, self.ttl]
         return {mac: entry[0] for mac, entry in cache.items()}
@@ -1555,7 +1575,12 @@ def build_topology(
     # For links and uplinks — FDB merged with previous polls (protection
     # against aging); host binding below uses the fresh fdb
     if fdb_stability is not None:
-        link_fdb = {sw.ip: fdb_stability.merge(sw.ip, fdb[sw.ip]) for sw in switches}
+        link_fdb = {
+            sw.ip: fdb_stability.merge(
+                sw.ip, fdb[sw.ip], confirm=not getattr(sw, "over_budget", False)
+            )
+            for sw in switches
+        }
     else:
         link_fdb = fdb
 
@@ -1752,6 +1777,14 @@ def build_topology(
             "vlan": sw.port_pvid.get(if_index, 0),
             "name": "",  # names and IPs are added from the DB (ARP/DNS)
         }
+        if getattr(sw, "over_budget", False):
+            # This switch ran out of its poll budget, so its table is
+            # the last one that did arrive rather than this poll's. The
+            # device is drawn where that table put it — cables do not
+            # move every ten minutes — but nobody looked for it just
+            # now, and the caller must not record a sighting.
+            host["from_saved"] = True
+            host["reading_at"] = float(getattr(sw, "polled_at", 0.0))
         if mac in approximate:
             host["approximate"] = True
         elif mac in remembered_at:

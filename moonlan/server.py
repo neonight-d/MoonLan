@@ -359,9 +359,18 @@ async def run_scan() -> None:
         # yet for a phantom to pollute, and waiting would only show the
         # operator an empty screen on the first poll
         confirm_scans = config.new_host_confirm_scans if db_rows else 1
+        # Only switches actually read this cycle. A switch that ran out
+        # of budget contributes the table it produced last time, and
+        # counting a MAC again out of a copy of one reading is how an
+        # address gets "seen in three polls" without anyone looking for
+        # it twice.
         unconfirmed = await asyncio.to_thread(
             db.projected_unconfirmed,
-            {mac for sw in collected if sw.reachable for mac in sw.fdb},
+            {
+                mac for sw in collected
+                if sw.reachable and not sw.over_budget
+                for mac in sw.fdb
+            },
             confirm_scans,
         )
         # What the database already knows about each port feeds the
@@ -411,13 +420,35 @@ async def run_scan() -> None:
         # `approximate` is what stops the empty location from
         # overwriting whatever the database already holds.
         uplink_only = topo_info.get("uplink_only", {})
+        stale_switches = {
+            sw.ip for sw in collected if sw.reachable and sw.over_budget
+        }
         seen_nowhere = [
             {"mac": mac, "switch": "", "port": "", "vlan": 0,
              "approximate": True}
-            for mac in uplink_only
+            for mac, sightings in uplink_only.items()
+            # every sighting of it came out of a saved table: nobody
+            # saw this address either
+            if any(ip not in stale_switches for ip, _port in sightings)
         ]
+        # A device behind a switch that ran out of budget is drawn from
+        # the reading that did arrive, and that is right — the map must
+        # not lose a whole branch every cycle. Recording it as a
+        # sighting is a different matter: "last seen" is a moment in
+        # time, seen_count counts polls a MAC was found in, and a
+        # confirmation is the claim that several polls agree. None of
+        # the three survives being fed the same reading twice.
+        observed = [h for h in hosts if not h.get("from_saved")]
+        copied = len(hosts) - len(observed)
+        if copied:
+            log.info(
+                "%d device(s) behind %d switch(es) that ran out of budget "
+                "are drawn from saved readings: they stay on the map, and "
+                "none of it is recorded as a sighting",
+                copied, len(stale_switches),
+            )
         new_macs = await asyncio.to_thread(
-            db.upsert_hosts, hosts + seen_nowhere, confirm_scans,
+            db.upsert_hosts, observed + seen_nowhere, confirm_scans,
             suspect_macs if config.filter_suspect_macs else set(),
         )
         if config.demo:

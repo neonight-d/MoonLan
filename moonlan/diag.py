@@ -728,9 +728,14 @@ async def run_host_inventory(community: str, timeout: int, cfg) -> None:
     if not cfg.switches:
         sys.exit("no switches in config.yaml")
     collector = _make_collector(community, timeout)
-    collected = list(
-        await asyncio.gather(*(collector.collect(ip) for ip in cfg.switches))
-    )
+    collected, over_budget = await _collect_all(collector, cfg)
+    for ip, budget in over_budget:
+        print(
+            f"{ip}: did not finish inside its {budget} s poll budget — its "
+            f"MAC table is missing from every comparison below, so the "
+            f"devices behind it will read as \"known but not in any FDB\". "
+            f"That is this poll giving up, not the devices going away."
+        )
     switch_macs = {mac for sw in collected for mac in sw.own_macs}
 
     print("MAC addresses in the FDB (switch MACs excluded):")

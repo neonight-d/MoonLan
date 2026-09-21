@@ -133,6 +133,16 @@ const I18N = {
       + "column shows \u2014 rather than 0. Unknown is not zero: no alarm "
       + "is raised or cleared on it either.",
     remembered: "from the inventory",
+    fromSaved: "from a saved reading",
+    readingFrom: "Reading taken",
+    hostFromSavedHint:
+      "{switch} did not finish its poll inside the budget, so this "
+      + "device is drawn where the last reading that did arrive put it, "
+      + "taken at {time}. Nobody has looked for it since: \u201clast "
+      + "seen\u201d above is the last time it really was found, and it "
+      + "is not moving while this lasts. Cables do not change every ten "
+      + "minutes, which is why the place is still shown \u2014 but a "
+      + "copy of a reading is not an observation.",
     rememberedHint:
       "The MAC is visible only on trunk ports right now, but the "
       + "inventory knows the port this device sits on, so it is drawn "
@@ -539,6 +549,16 @@ const I18N = {
       + "колонке \u2014, а не 0. Неизвестно — это не ноль: тревоги по "
       + "такому значению не поднимаются и не снимаются.",
     remembered: "по инвентарю",
+    fromSaved: "по сохранённым данным",
+    readingFrom: "Показание снято",
+    hostFromSavedHint:
+      "{switch} не уложился в бюджет опроса, поэтому устройство "
+      + "нарисовано там, куда его поместило последнее полученное "
+      + "показание, снятое {time}. С тех пор его никто не искал: "
+      + "«последний раз виден» выше — это когда его действительно "
+      + "нашли, и пока так продолжается, это время не двигается. "
+      + "Кабели не переключаются каждые десять минут, поэтому место "
+      + "по-прежнему показано, — но копия показания не наблюдение.",
     rememberedHint:
       "Сейчас MAC виден только на магистральных портах, но в инвентаре "
       + "известен порт, на котором это устройство стоит, — поэтому оно "
