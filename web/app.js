@@ -578,11 +578,28 @@ function buildGraphData() {
       font: { color: colors.dim, size: 11, strokeWidth: 0 },
       dashes: false,
     };
+    // The MAC tables could not say which of several switches behind
+    // one port is on the cable, so they are all hung off it. A guess
+    // has no business looking like a measured cable: dashed, thinner,
+    // and the tooltip says what is unknown about it.
+    if (link.order_unknown) {
+      edge.dashes = [4, 6];
+      edge.color = { color: colors.moon, opacity: 0.55 };
+      edge.width = 2;
+      edge.title = t("linkOrderUnknown");
+    }
+    // …and a ring nothing could account for: not removed, not believed
+    if (link.cycle_unresolved) {
+      edge.dashes = [2, 4];
+      edge.color = { color: colors.dim, opacity: 0.7 };
+      edge.title = t("linkCycleUnresolved");
+    }
     // a port STP is holding in discarding carries no traffic at all
     if (link.stp_blocking) {
       edge.color = { color: colors.alarm, opacity: 1 };
       edge.dashes = [6, 4];
       edge.label = (edge.label ? edge.label + " · " : "") + t("stpBlocking");
+      edge.title = t("linkStpBlocking");
     }
     markLoop(edge, link.a, link.a_port);
     markLoop(edge, link.b, link.b_port);
@@ -1002,6 +1019,51 @@ function setDetails(html) {
   if (heading) heading.remove();
 }
 
+/* Every line drawn from this switch: the neighbour, our port, whether
+   it is up, and where the link came from. The tooltip on an edge
+   answers that one edge at a time; "how many lines does this box have
+   and why" is a question about the box, and belongs on its card. */
+function switchLinksHtml(ip) {
+  const rows = [];
+  for (const link of topology.links) {
+    const side = link.a === ip ? "a" : link.b === ip ? "b" : null;
+    if (!side) continue;
+    const otherIp = link[side === "a" ? "b" : "a"];
+    const port = link[side + "_port"];
+    const source = link.source || "fdb";
+    const mark = link.cycle_unresolved
+      ? " ⚠"
+      : link.order_unknown
+      ? " ?"
+      : "";
+    const title = link.cycle_unresolved
+      ? t("linkCycleUnresolved")
+      : link.order_unknown
+      ? t("linkOrderUnknown")
+      : link.stp_blocking
+      ? t("linkStpBlocking")
+      : "";
+    rows.push(
+      `<li${title ? ` title="${title}"` : ""}>` +
+        `<span>${port}${mark} → ${switchName(otherIp)}</span>` +
+        `<span class="sub">${
+          source === "both"
+            ? t("srcBoth")
+            : source === "lldp"
+            ? t("srcLldp")
+            : t("srcFdb")
+        }${link.speed_mbps ? " · " + fmtSpeed(link.speed_mbps) : ""}${
+          link.stp_blocking ? " · " + t("stpBlocking") : ""
+        }</span></li>`
+    );
+  }
+  if (!rows.length) return "";
+  return (
+    `<h4 class="card-sub">${fmt("switchLinks", { n: rows.length })}</h4>` +
+    `<ul class="offline-list">${rows.join("")}</ul>`
+  );
+}
+
 function showDetails(nodeId) {
   let html = "";
   if (nodeId.startsWith("sw:")) {
@@ -1034,6 +1096,7 @@ function showDetails(nodeId) {
         loop.status === "loop" ? ' class="loop-alarm"' : ""
       } title="${loopCardTitle(loop)}">${loopCardLine(loop)}</dd>
       <dt>${t("descr")}</dt><dd>${sw.descr || "—"}</dd></dl>
+      ${switchLinksHtml(sw.ip)}
       <button id="ports-btn" class="panel-btn">${t("portsBtn")}</button>`;
   } else if (nodeId.startsWith("offline:")) {
     const group = (topology.offline_groups || []).find((g) => g.id === nodeId);
@@ -1708,6 +1771,14 @@ function showLinkDetails(edgeId) {
   html += "</dl>";
   if (link.stp_blocking) {
     html += `<p class="hint">${t("stpBlockingHint")}</p>`;
+  }
+  // What is uncertain about this line, said in the card and not only
+  // in a tooltip somebody has to know to hover
+  if (link.order_unknown) {
+    html += `<p class="hint">${t("linkOrderUnknown")}</p>`;
+  }
+  if (link.cycle_unresolved) {
+    html += `<p class="hint">${t("linkCycleUnresolved")}</p>`;
   }
   shownDetails = { type: "link", id: edgeId };
   setDetails(html);

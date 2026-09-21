@@ -387,6 +387,17 @@ main { flex: 1; display: flex; min-height: 0; }
 .ports-table tr.port-down td { color: #63708a; }
 
 /* devices of an offline group, listed in its card */
+/* Sub-heading inside a card: the link list under the switch's own
+   fields, so the two do not read as one table. */
+.card-sub {
+  margin: 14px 0 4px;
+  font-size: 0.82rem;
+  font-weight: 600;
+  color: var(--text-dim);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
 .offline-list {
   list-style: none;
   margin: 10px 0 0;

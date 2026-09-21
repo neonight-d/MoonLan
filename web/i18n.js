@@ -175,6 +175,24 @@ const I18N = {
     stpLastChange: "Since the last one",
     stpRootMark: "STP root",
     stpBlocking: "BLOCKING",
+    linkOrderUnknown:
+      "The order of the switches behind this port could not be worked "
+      + "out: their MAC tables do not show each other, and neither side "
+      + "reports the other over LLDP. They are all drawn on the nearest "
+      + "known switch, which is where they are reachable through \u2014 "
+      + "not necessarily what they are plugged into. A dashed line means "
+      + "a guess at the order, not a measured cable.",
+    linkCycleUnresolved:
+      "This link is part of a ring among polled switches in which no "
+      + "port is held in discarding by the spanning tree. One of its "
+      + "links is wrong, and nothing in the data says which \u2014 so "
+      + "none was removed, and all of them are marked rather than shown "
+      + "as facts.",
+    linkStpBlocking:
+      "The spanning tree is holding a port of this link in discarding, "
+      + "so it carries no traffic. A ring with a blocked port is what a "
+      + "working network with a physical ring looks like.",
+    switchLinks: "Links ({n})",
     stpRootless:
       "Answer dot1dStp* and name no root: {switches}. Their port tables "
       + "are real, but they do not implement the objects that hold the "
@@ -563,6 +581,23 @@ const I18N = {
     stpLastChange: "С последнего",
     stpRootMark: "корень STP",
     stpBlocking: "BLOCKING",
+    linkOrderUnknown:
+      "Порядок коммутаторов за этим портом установить не удалось: их "
+      + "таблицы MAC не видят друг друга, и ни один не сообщает о другом "
+      + "по LLDP. Все они нарисованы на ближайшем известном коммутаторе "
+      + "— через него они достижимы, но не обязательно в него включены. "
+      + "Пунктир означает догадку о порядке, а не измеренный кабель.",
+    linkCycleUnresolved:
+      "Эта связь входит в кольцо между опрашиваемыми коммутаторами, в "
+      + "котором ни один порт не заблокирован остовным деревом. Одна из "
+      + "его связей неверна, а какая именно — из данных не следует, "
+      + "поэтому не снято ничего, а помечены все: кольцо, которое не "
+      + "удалось объяснить, не должно выглядеть как факт.",
+    linkStpBlocking:
+      "Остовное дерево держит порт этой связи в блокировке, и трафика по "
+      + "ней нет. Кольцо с заблокированным портом — это то, как выглядит "
+      + "исправная сеть с физическим кольцом.",
+    switchLinks: "Связи ({n})",
     stpRootless:
       "Отвечают на dot1dStp*, но корня не называют: {switches}. Таблицы "
       + "портов у них настоящие, а объекты, где лежит корень, они не "
