@@ -16,7 +16,7 @@ An open-source alternative to LanTopoLog. MIT license.
 
 *Alarm panel: port errors, discards and host outages with one-click access to the switch port table.*
 
-## Features (v0.6.14)
+## Features (v0.6.15)
 
 - SNMP v2c polling of switches: device name, ports, speeds, statuses.
   Each switch has a time budget for its whole poll
@@ -80,6 +80,14 @@ An open-source alternative to LanTopoLog. MIT license.
   subnet behind a router, for instance — are listed under "Not on map",
   searchable and pingable. `python -m moonlan.diag --hosts` reports how
   complete the inventory is and which subnets are missing from it.
+  A device behind a switch that ran out of its poll budget keeps its
+  place on the map, drawn from the last reading that did arrive and
+  labelled with when that was — but nothing about it is recorded as a
+  sighting: "last seen" stops moving, and a new address is never
+  confirmed by repeats of one reading of it.
+- The interface says when it has stopped hearing from the service: the
+  last picture stays on screen and the header says how old it is,
+  instead of a map that quietly never changes again.
 - A readable map at any size: offline devices sharing a port hang off
   one "Offline · N" node instead of surrounding every switch with a
   cloud of grey dots (`offline_group_threshold`); the devices stay
@@ -256,6 +264,7 @@ Version history: [CHANGELOG.md](CHANGELOG.md)
 | v0.6.12 ✓| A slow agent delays itself, not the whole map; per-switch SNMP settings |
 | v0.6.13 ✓| A dash means never measured; an unknown root is not a root |
 | v0.6.14 ✓| LLDP builds the tree; rings are resolved or explained |
+| v0.6.15 ✓| A reading nobody took is not an observation; the map says when it stopped |
 | v0.7    | Export to PDF and Draw.io, MAC address info import |
 | v0.8    | Windows computer inventory (WMI/WinRM) |
 

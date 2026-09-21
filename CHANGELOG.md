@@ -6,6 +6,45 @@ for before the next one started.
 
 Русская версия — [CHANGELOG_RU.md](CHANGELOG_RU.md).
 
+## v0.6.15 — 2026-09-21
+
+A reading nobody took is not an observation. Two defects, neither of
+them about topology, both found while writing up earlier work.
+
+A switch that runs out of its poll budget keeps the last table that did
+arrive, so the branch behind it stays on the map. That is v0.6.12 and
+it stands. What did not stand is that nothing downstream could tell the
+copy from a fresh reading: `upsert_hosts` set `last_seen = now` and
+`seen_count += 1` for every device behind it, so a device unplugged an
+hour ago reported "last seen: just now"; a MAC present in that one
+reading accumulated confirmations from repeats of itself and was
+announced in the journal as a new device, with no second observation
+ever happening; and `FdbStability` re-stamped every entry as fresh, so
+a three-poll smoothing never expired and quietly became permanent
+memory.
+
+The same sin as v0.6.4's "no answer is not zero" and v0.6.13's "a dash
+is not expired", from the other side: not an absence dressed as a
+value, but a copy dressed as an observation. Such hosts are now marked
+and dated. They stay on the map at their port — cables do not move
+every ten minutes — but they are kept out of the inventory write and
+out of the set that projects confirmations, and the smoothing countdown
+runs without being refreshed while the saved table goes on drawing the
+links behind it. The host card says which switch, when the reading was
+taken, and that "last seen" above is the last time the device really
+was found. `diag --hosts` honours the poll budget too, and says whose
+MAC table is missing from its comparisons.
+
+And the map could stop being refreshed without saying so. Three
+periodic requests — the map, the ports panel, the scan progress — none
+of them caught anything, so when the service went away the promise
+rejected unhandled every thirty seconds and the picture simply stopped
+changing, which looks exactly like a quiet network. All three now
+survive it: the last good picture stays on screen, the header says in
+amber that the data is no longer arriving and how old it is, recovery
+clears it silently, and the console gets one line for the loss and one
+for the return instead of one every thirty seconds.
+
 ## v0.6.14 — 2026-09-21
 
 LLDP builds the tree, it does not decorate it. And one branch of the
