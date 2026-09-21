@@ -66,11 +66,14 @@ from .corruption import find_suspects, sample_mac
 from .counters import CounterStore, Sample
 from .topology import (
     detect_bridges,
+    drop_impossible_links,
     suspect_uplink_ports,
     infer_tree,
     lldp_link_candidates,
+    mark_stp_blocking,
     merge_lldp_links,
     normalized_fdb,
+    resolve_cycles,
     switch_sightings,
     trunk_ports,
 )
@@ -352,6 +355,36 @@ async def run_diag(
             )
 
 
+async def _collect_all(collector, cfg) -> tuple[list, list[tuple[str, int]]]:
+    """Polls every configured switch under the same budget as the service.
+
+    v0.6.12 gave each host a time budget so one slow agent could not
+    hold the whole scan. The diagnostics kept a bare `asyncio.gather`,
+    so `diag --topology` on this network waited eight minutes for a
+    RouterOS box while the service it is meant to explain had long
+    since moved on. A tool that behaves differently from the thing it
+    diagnoses is diagnosing something else.
+    """
+
+    async def one(ip: str):
+        try:
+            return await asyncio.wait_for(
+                collector.collect(ip), cfg.host_budget(ip)
+            )
+        except asyncio.TimeoutError:
+            return None
+
+    results = await asyncio.gather(*(one(ip) for ip in cfg.switches))
+    collected = []
+    over_budget: list[tuple[str, int]] = []
+    for ip, data in zip(cfg.switches, results):
+        if data is None:
+            over_budget.append((ip, cfg.host_budget(ip)))
+            continue
+        collected.append(data)
+    return collected, over_budget
+
+
 async def run_topology_view(community: str, timeout: int, cfg) -> None:
     """Section 8: poll every configured switch and print the inferred tree."""
     _section("8. Topology view")
@@ -359,9 +392,12 @@ async def run_topology_view(community: str, timeout: int, cfg) -> None:
         sys.exit("no switches in config.yaml")
     collector = _make_collector(community, timeout)
     print(f"polling {len(cfg.switches)} switches from config.yaml…")
-    collected = list(
-        await asyncio.gather(*(collector.collect(ip) for ip in cfg.switches))
-    )
+    collected, over_budget = await _collect_all(collector, cfg)
+    for ip, budget in over_budget:
+        print(
+            f"{ip}: did not finish inside its {budget} s poll budget — "
+            f"excluded from this view"
+        )
     # Like the server: add the management-IP MAC from the routers' ARP
     arp_by_mac: dict[str, str] = {}
     if cfg.routers:
@@ -390,6 +426,15 @@ async def run_topology_view(community: str, timeout: int, cfg) -> None:
         switches, switches_on_port, sees, lldp_pairs
     )
     mismatches = merge_lldp_links(links, lldp_pairs, by_ip)
+    # The same two passes the service runs, in the same order, or this
+    # view would explain a map nobody is looking at
+    info["dropped_links"] = drop_impossible_links(
+        links, lldp_pairs, uplinks, info.get("root")
+    )
+    mark_stp_blocking(switches, links)
+    info["dropped_links"] += resolve_cycles(
+        links, lldp_pairs, uplinks, info.get("root")
+    )
 
     def label(ip: str) -> str:
         sw = by_ip.get(ip)
@@ -434,6 +479,23 @@ async def run_topology_view(community: str, timeout: int, cfg) -> None:
                   f"{_lag_group_line(bridge_port, members, speeds)}")
     if not any_groups:
         print("  none")
+    # Every line the map would draw, with what is known about it: a
+    # link whose ports are down, or whose source is a guess, or that
+    # only exists because nothing better was available, reads very
+    # differently from one both devices confirmed.
+    oper = {
+        sw.ip: {
+            (p.name or str(p.if_index)): p.oper_up for p in sw.ports.values()
+        }
+        for sw in switches
+    }
+
+    def port_state(ip: str, name: str) -> str:
+        if name in ("?", ""):
+            return "?"
+        up = oper.get(ip, {}).get(name)
+        return "?" if up is None else ("up" if up else "DOWN")
+
     print("links:")
     if not links:
         print("  none")
@@ -444,10 +506,54 @@ async def run_topology_view(community: str, timeout: int, cfg) -> None:
             if link["lag"] and link["lag"].get("count", 0) > 1
             else ""
         )
+        speed = (
+            f"{link['speed_mbps'] / 1000:g} Gbit/s"
+            if link["speed_mbps"] >= 1000
+            else f"{link['speed_mbps']} Mbit/s" if link["speed_mbps"]
+            else "speed unknown"
+        )
+        flags = "".join(
+            mark for mark, on in (
+                ("  [STP BLOCKING]", link.get("stp_blocking")),
+                ("  [branch order unknown]", link.get("order_unknown")),
+                ("  [in an unresolved ring]", link.get("cycle_unresolved")),
+            ) if on
+        )
+        print(
+            f"  {label(link['a'])} [{link['a_port']} "
+            f"{port_state(link['a'], link['a_port'])}] — "
+            f"{label(link['b'])} [{link['b_port']} "
+            f"{port_state(link['b'], link['b_port'])}]"
+            f"  {speed}  source: {link.get('source', 'fdb')}"
+            f"{trunk}{lacp}{flags}"
+        )
+
+    # What the inference took back, and what it could not settle. Both
+    # change the picture, and neither is visible in the picture itself.
+    print("\nlinks withdrawn by the inference:")
+    dropped = info.get("dropped_links") or []
+    if not dropped:
+        print("  none")
+    for entry in dropped:
+        why = (
+            f"LLDP puts {entry['b']} behind {entry['behind']}"
+            if entry.get("reason") == "behind"
+            else f"closes a ring with no blocked port: {entry.get('cycle', '')}"
+        )
+        print(
+            f"  {label(entry['a'])} [{entry['a_port']}] — "
+            f"{label(entry['b'])} [{entry['b_port']}] "
+            f"({entry.get('source', 'fdb')}): {why}"
+        )
+    unresolved = [link for link in links if link.get("cycle_unresolved")]
+    print("rings left standing (no blocked port, nothing to choose by):")
+    if not unresolved:
+        print("  none")
+    for link in unresolved:
         print(
             f"  {label(link['a'])} [{link['a_port']}] — "
-            f"{label(link['b'])} [{link['b_port']}]"
-            f"  source: {link.get('source', 'fdb')}{trunk}{lacp}"
+            f"{label(link['b'])} [{link['b_port']}] "
+            f"({link.get('source', 'fdb')})"
         )
     if info["unplaced"]:
         print("unplaced (not visible from the root):")
