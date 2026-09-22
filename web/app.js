@@ -358,9 +358,116 @@ async function resetLayout() {
   layoutMissing = [];
   layoutSavedAt = 0;
   placed.clear();
-  renderGraph();
+  // Forgetting the positions on the server is only half of it. vis
+  // keeps x and y on the node it has already built, and nothing in
+  // the update path can take them away again — `setOptions` assigns a
+  // coordinate only when one is given, so leaving it out means "keep
+  // what you have". The nodes went on standing exactly where they
+  // were, `stabilize()` restarted the physics from those same points,
+  // and the reset looked like it had done nothing at all until the
+  // page was reloaded.
+  //
+  // So the node set is rebuilt rather than updated: that is what
+  // makes vis drop the old bodies and lay the map out afresh.
+  rebuildGraph();
   updateScanStatus();
   if (network) network.stabilize();
+}
+
+/* Who a node hangs off, taken from the edges that were just built.
+
+   Every node but the root has exactly one edge coming into it from
+   the thing it belongs to — a host from its switch or from the group
+   node standing in for one, a group from its switch, a switch from
+   its parent in the tree. Reading it off the edges rather than
+   re-deriving it per node kind means the two can never disagree.  */
+function anchorMap(edges) {
+  const anchors = new Map();
+  for (const edge of edges) {
+    if (!anchors.has(edge.to)) anchors.set(edge.to, edge.from);
+  }
+  return anchors;
+}
+
+/* A number from a string, so a node's offset is the same in every
+   browser and does not jump between renders. Math.random() would put
+   the same device in a different spot for each person looking. */
+function idHash(id) {
+  let hash = 0;
+  for (let i = 0; i < id.length; i++) {
+    hash = (hash * 31 + id.charCodeAt(i)) | 0;
+  }
+  return Math.abs(hash);
+}
+
+/* Gives a position to every node that has none.
+
+   A node nobody has placed yet used to be dropped wherever vis felt
+   like putting it, which on a fresh map or straight after a reset
+   means a scattering of boxes with no relation to the network. A new
+   device belongs next to the thing it is plugged into, and the
+   physics engine can take it from there. */
+function seedPositions(nodes, edges) {
+  const anchors = anchorMap(edges);
+  const known = new Map();
+  const existing = network ? network.getPositions() : {};
+  for (const node of nodes) {
+    if (node.x != null && node.y != null) {
+      known.set(node.id, { x: node.x, y: node.y });
+    } else if (existing[node.id]) {
+      known.set(node.id, existing[node.id]);
+    }
+  }
+  // A node that hangs off nothing — the root of the tree, or a
+  // switch nobody could link — anchors the rest. Without it a first
+  // load has no starting point at all and every chain below stays
+  // unplaced.
+  for (const node of nodes) {
+    if (known.has(node.id) || anchors.has(node.id)) continue;
+    const hash = idHash(node.id);
+    node.x = (hash % 400) - 200;
+    node.y = ((hash >> 9) % 400) - 200;
+    known.set(node.id, { x: node.x, y: node.y });
+  }
+  // A chain — switch, then the group on it, then the hosts in the
+  // group — needs a pass per level. Four covers every shape the map
+  // draws, and the loop stops as soon as a pass places nothing.
+  for (let pass = 0; pass < 6; pass++) {
+    let placedAny = false;
+    for (const node of nodes) {
+      if (known.has(node.id)) continue;
+      const at = known.get(anchors.get(node.id));
+      if (!at) continue;
+      const hash = idHash(node.id);
+      const angle = ((hash % 360) * Math.PI) / 180;
+      const radius = 70 + (hash % 50);
+      node.x = at.x + Math.cos(angle) * radius;
+      node.y = at.y + Math.sin(angle) * radius;
+      known.set(node.id, { x: node.x, y: node.y });
+      placedAny = true;
+    }
+    if (!placedAny) break;
+  }
+  return nodes;
+}
+
+/* Throws the drawn nodes away and builds them again from the data.
+
+   `renderGraph` updates in place on purpose — it runs every thirty
+   seconds and must not disturb the camera or the positions. This is
+   the opposite operation, and it exists for the one case that needs
+   it. */
+function rebuildGraph() {
+  if (!network) {
+    renderGraph();
+    return;
+  }
+  const { nodes, edges } = buildGraphData();
+  seedPositions(nodes, edges);
+  nodesDs.clear();
+  edgesDs.clear();
+  nodesDs.add(nodes);
+  edgesDs.add(edges);
 }
 
 /* ---------- arrange mode ----------
@@ -1186,6 +1293,9 @@ function setSelectedNode(id) {
 
 function renderGraph() {
   const { nodes, edges } = buildGraphData();
+  // Anything without a saved position starts next to what it is
+  // plugged into, not wherever the engine drops it
+  seedPositions(nodes, edges);
 
   if (!network) {
     nodesDs = new vis.DataSet(nodes);
