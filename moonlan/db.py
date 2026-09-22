@@ -541,6 +541,31 @@ class Database:
             ).fetchone()
         return row["ts"] or 0.0
 
+    def purge_layout(self, keep_days: float, present: set[str]) -> list[str]:
+        """Drops positions of nodes that are old AND gone.
+
+        A device switched off for the night is not a device that was
+        taken away: coming back, it belongs where it was. Only age
+        decides, and only for a node the current topology no longer
+        has — a row for something still on the map is never touched,
+        however long ago it was placed.
+        """
+        if keep_days <= 0:
+            return []
+        cutoff = time.time() - keep_days * 86400
+        with self._lock, self._conn:
+            rows = self._conn.execute(
+                "SELECT node_id FROM layout WHERE updated_at < ?", (cutoff,)
+            ).fetchall()
+            gone = [
+                row["node_id"] for row in rows if row["node_id"] not in present
+            ]
+            for node_id in gone:
+                self._conn.execute(
+                    "DELETE FROM layout WHERE node_id = ?", (node_id,)
+                )
+        return gone
+
     def hosts_by_mac(self) -> dict[str, dict]:
         with self._lock:
             rows = self._conn.execute("SELECT * FROM hosts").fetchall()

@@ -80,6 +80,43 @@ class LayoutStoreTest(unittest.TestCase):
         self.assertEqual(self.db.layout(), {})
 
 
+class PurgeTest(unittest.TestCase):
+    """What forgets a position, and what must not."""
+
+    def setUp(self):
+        self.db = Database(":memory:")
+        self.db.save_layout({
+            CORE: {"x": 1, "y": 1},
+            HOST: {"x": 2, "y": 2},
+            PSEUDO: {"x": 3, "y": 3},
+        })
+        # …placed a hundred days ago
+        old = time.time() - 100 * 86400
+        with self.db._lock, self.db._conn:
+            self.db._conn.execute("UPDATE layout SET updated_at = ?", (old,))
+
+    def test_a_node_still_on_the_map_keeps_its_place_however_old(self):
+        gone = self.db.purge_layout(90, {CORE, HOST, PSEUDO})
+        self.assertEqual(gone, [])
+        self.assertEqual(len(self.db.layout()), 3)
+
+    def test_only_old_and_gone_is_forgotten(self):
+        gone = self.db.purge_layout(90, {CORE})
+        self.assertEqual(sorted(gone), sorted([HOST, PSEUDO]))
+        self.assertEqual(list(self.db.layout()), [CORE])
+
+    def test_a_device_off_for_the_night_comes_back_to_its_place(self):
+        """Gone, but nowhere near old enough to forget."""
+        self.db.set_node_position(HOST, 9, 9)  # placed just now
+        gone = self.db.purge_layout(90, {CORE})
+        self.assertNotIn(HOST, gone)
+        self.assertEqual(self.db.layout()[HOST]["x"], 9.0)
+
+    def test_zero_days_switches_the_housekeeping_off(self):
+        self.assertEqual(self.db.purge_layout(0, set()), [])
+        self.assertEqual(len(self.db.layout()), 3)
+
+
 class MigrationTest(unittest.TestCase):
     """An old database file opens and gains the table."""
 

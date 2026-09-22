@@ -144,6 +144,20 @@ stale_rate_hide_minutes: 30
 # 30 отказов по бюджету, и нигде, кроме журнала, об этом не говорилось.
 stale_switch_scans: 5
 
+# How long a saved node position outlives the node itself. A device
+# switched off for the night is not a device that was taken away:
+# coming back, it belongs where it was. Only a position that is BOTH
+# older than this and has no node on the current map is forgotten, and
+# only once, at the first scan after a restart — before that scan there
+# is no map to compare against.
+# Сколько сохранённая позиция узла живёт после того, как сам узел
+# пропал. Устройство, выключенное на ночь, — это не устройство, которое
+# разобрали: вернувшись, оно должно встать на своё место. Забывается
+# только позиция, которая И старше этого срока, И не имеет узла на
+# текущей карте, — и только один раз, при первом скане после
+# перезапуска: до этого скана сравнивать не с чем.
+layout_keep_days: 90
+
 # Periodic scan, minutes (0 — manual only via /api/scan)
 # Периодический автоопрос, минут (0 — только вручную через /api/scan)
 scan_interval_minutes: 10

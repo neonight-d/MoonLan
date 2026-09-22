@@ -99,6 +99,12 @@ suspect_by_port: dict[tuple[str, str], list[dict]] = {}
 # and might belong in config.uplink_ports
 uplink_suspects: dict[tuple[str, str], dict] = {}
 
+# Saved node positions are cleaned up once, after the first scan —
+# not at startup proper. The rule is "old AND no longer on the map",
+# and before the first scan there is no map: every position would look
+# orphaned and the whole layout would be thrown away on a restart.
+layout_purged = False
+
 # Loop-detection profiles: the built-in ones plus whatever
 # config.yaml adds or overrides by name (see loopdetect.py)
 _loop_profiles: list | None = None
@@ -653,6 +659,7 @@ async def run_scan() -> None:
             "Scan finished: %d switches, %d links, %d hosts",
             len(switches), len(links), len(hosts),
         )
+        await _purge_layout_once()
     finally:
         state.scan_ended(over_budget)
 
@@ -671,6 +678,31 @@ def _dropped_link_text(dropped: dict) -> str:
         f"{a} — {b} ({dropped.get('source', 'fdb')}): "
         f"{dropped.get('reason', 'removed by the topology inference')}"
     )
+
+
+async def _purge_layout_once() -> None:
+    """Forgets positions of nodes that are both old and gone.
+
+    Runs after the first scan of this process, because that is the
+    first moment anything knows which nodes exist. A device switched
+    off for the night keeps its place however long the night is; only
+    age decides, and only for something the map no longer has.
+    """
+    global layout_purged
+    if layout_purged:
+        return
+    layout_purged = True
+    gone = await asyncio.to_thread(
+        db.purge_layout, config.layout_keep_days, _layout_node_ids()
+    )
+    if gone:
+        log.info(
+            "Map layout: forgot the saved position of %d node(s) not seen "
+            "for over %.0f day(s) and no longer on the map: %s",
+            len(gone), config.layout_keep_days,
+            ", ".join(sorted(gone)[:10])
+            + (" and more" if len(gone) > 10 else ""),
+        )
 
 
 def _lldp_rows(collected: list[SwitchData]) -> list[dict]:
@@ -2337,6 +2369,10 @@ async def api_layout() -> dict:
         # day before, and that gap has to be visible rather than found
         # at printing time.
         "missing": sorted(present - set(saved)),
+        # …and the other direction: a saved position whose node is not
+        # on the map. Kept on purpose — a device switched off for the
+        # night comes back to its place — and only forgotten by age.
+        "orphans": sorted(set(saved) - present),
     }
 
 
@@ -2348,6 +2384,10 @@ async def api_put_layout(body: LayoutBody) -> dict:
         for node_id, pos in body.nodes.items()
     }
     stored = await asyncio.to_thread(db.save_layout, positions)
+    await asyncio.to_thread(
+        db.add_event, time.time(), "layout_saved", "",
+        f"{stored} node(s)",
+    )
     log.info("Map layout saved: %d node(s)", stored)
     return {"saved": stored, "saved_at": await asyncio.to_thread(
         db.layout_saved_at
@@ -2379,6 +2419,10 @@ async def api_delete_node_position(node_id: str):
 async def api_clear_layout() -> dict:
     """Forgets the whole layout. The map is laid out from scratch."""
     removed = await asyncio.to_thread(db.clear_layout)
+    await asyncio.to_thread(
+        db.add_event, time.time(), "layout_cleared", "",
+        f"{removed} node(s)",
+    )
     log.info("Map layout cleared: %d node(s) forgotten", removed)
     return {"removed": removed}
 

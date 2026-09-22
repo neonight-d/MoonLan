@@ -9,6 +9,7 @@ const I18N = {
     journalBtn: "Journal",
     freezeBtn: "Freeze layout",
     saveLayoutBtn: "Save layout",
+    resetLayoutBtn: "Reset layout",
     pinnedMark: "\ud83d\udccc",
     pinnedHint:
       "This node is where somebody put it, not where the layout "
@@ -24,6 +25,10 @@ const I18N = {
       + "could. They are drawn with a dashed outline. Move them where "
       + "they belong, or press \u201cSave layout\u201d to record the "
       + "map as it is now.",
+    resetLayoutConfirm:
+      "Forget every saved position, for everyone? The map will lay "
+      + "itself out from scratch, and nodes placed by hand will lose "
+      + "their places. This cannot be undone.",
     unfreezeBtn: "Unfreeze",
     rescanBtn: "Rescan network",
     searchPlaceholder: "Search: name, IP or MAC…",
@@ -430,6 +435,8 @@ const I18N = {
       "window ends.",
     ev_hosts_purged: "Old hosts removed",
     ev_link_dropped: "Link withdrawn",
+    ev_layout_saved: "Layout saved",
+    ev_layout_cleared: "Layout reset",
     offlineGroup: "Offline",
     offlineGroupTitle: "Offline devices · {n}",
     offlineGroupHint:
@@ -448,6 +455,7 @@ const I18N = {
     journalBtn: "Журнал",
     freezeBtn: "Заморозить раскладку",
     saveLayoutBtn: "Сохранить раскладку",
+    resetLayoutBtn: "Сбросить раскладку",
     pinnedMark: "\ud83d\udccc",
     pinnedHint:
       "Этот узел стоит там, куда его поставил человек, а не там, куда "
@@ -463,6 +471,10 @@ const I18N = {
       + "куда смог. Они нарисованы пунктирным контуром. Поставьте их "
       + "куда следует или нажмите «Сохранить раскладку», чтобы "
       + "запомнить карту в нынешнем виде.",
+    resetLayoutConfirm:
+      "Забыть все сохранённые позиции — для всех? Карта разложится "
+      + "заново, а узлы, поставленные руками, потеряют свои места. "
+      + "Отменить это будет нельзя.",
     unfreezeBtn: "Разморозить",
     rescanBtn: "Опросить сеть",
     searchPlaceholder: "Поиск: имя, IP или MAC…",
@@ -866,6 +878,8 @@ const I18N = {
       "остаётся в инвентаре до истечения срока хранения.",
     ev_hosts_purged: "Удалены старые хосты",
     ev_link_dropped: "Связь снята",
+    ev_layout_saved: "Раскладка сохранена",
+    ev_layout_cleared: "Раскладка сброшена",
     offlineGroup: "Офлайн",
     offlineGroupTitle: "Офлайн-устройства · {n}",
     offlineGroupHint:

@@ -200,6 +200,12 @@ class Config:
     # it — until this many minutes, past which it stops being data and
     # becomes a memory. "—" is reserved for "never measured".
     stale_rate_hide_minutes: float = 30.0
+    # How long a saved node position outlives the node itself. A
+    # device switched off for the night is not a device that was taken
+    # away: coming back, it belongs where it was. Only a position that
+    # is BOTH older than this and has no node on the current map is
+    # forgotten, and only at startup.
+    layout_keep_days: float = 90.0
     # Scans in a row a switch may miss its poll budget before its card
     # says so and switch_stale is raised. It is reachable; its data is
     # not being refreshed, which is a different thing from both
@@ -589,6 +595,9 @@ def load_config(path: Path | None = None) -> Config:
     )
     cfg.stale_rate_hide_minutes = r.get(
         "stale_rate_hide_minutes", d.stale_rate_hide_minutes, float
+    )
+    cfg.layout_keep_days = r.get(
+        "layout_keep_days", d.layout_keep_days, float
     )
     cfg.stale_switch_scans = r.get(
         "stale_switch_scans", d.stale_switch_scans, int

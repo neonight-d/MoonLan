@@ -37,6 +37,7 @@ const els = {
   freezeBtn: document.getElementById("freeze-btn"),
   layoutStatus: document.getElementById("layout-status"),
   saveLayoutBtn: document.getElementById("save-layout-btn"),
+  resetLayoutBtn: document.getElementById("reset-layout-btn"),
   langRu: document.getElementById("lang-ru"),
   langEn: document.getElementById("lang-en"),
 };
@@ -305,6 +306,36 @@ async function unpinNode(id) {
    survive encoding; everything else must not. */
 function layoutPath(id) {
   return encodeURIComponent(id).replace(/%2F/g, "/");
+}
+
+async function resetLayout() {
+  if (!window.confirm(t("resetLayoutConfirm"))) return;
+  try {
+    await fetch("/api/layout", { method: "DELETE" });
+  } catch (e) {
+    serviceLost("clearing the layout");
+    return;
+  }
+  serviceBack();
+  savedLayout = {};
+  layoutMissing = [];
+  layoutSavedAt = 0;
+  placed.clear();
+  renderGraph();
+  updateScanStatus();
+  if (network) network.stabilize();
+}
+
+function applyFreeze() {
+  if (network) network.setOptions({ physics: !layoutFrozen });
+  els.freezeBtn.textContent = layoutFrozen ? t("unfreezeBtn") : t("freezeBtn");
+  els.freezeBtn.classList.toggle("active", layoutFrozen);
+}
+
+function toggleFreeze() {
+  layoutFrozen = !layoutFrozen;
+  localStorage.setItem(FREEZE_KEY, layoutFrozen ? "1" : "0");
+  applyFreeze();
 }
 
 /* ---------- helpers ---------- */
@@ -2480,6 +2511,7 @@ for (const th of document.querySelectorAll("#ports th[data-sort]")) {
 }
 els.freezeBtn.addEventListener("click", toggleFreeze);
 els.saveLayoutBtn.addEventListener("click", saveLayout);
+els.resetLayoutBtn.addEventListener("click", resetLayout);
 els.alarmsBtn.addEventListener("click", toggleAlarms);
 els.alarmsClose.addEventListener("click", () =>
   els.alarms.classList.add("hidden")
