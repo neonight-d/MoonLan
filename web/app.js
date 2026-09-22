@@ -675,7 +675,7 @@ function rebuildGraph() {
    be visible as missing. */
 
 // In the order the menu shows them, a separator between each
-const MENU_GROUPS = ["actions", "layout"];
+const MENU_GROUPS = ["actions", "links", "layout"];
 
 // Nodes that stand for a place rather than a device: they have no
 // address of their own, and pinging one means pinging what is on it
@@ -701,7 +701,7 @@ function menuItemsFor(ids, info, tools) {
   const node = info ? info.node : null;
   const items = [];
   // The service did not answer: the actions are shown, and say why
-  // they cannot run
+  // they cannot run. Links need the node's data and are left out.
   const offline = tools ? null : t("reasonNoService");
   const tooMany = (n) =>
     tools && n > tools.max_targets
@@ -746,6 +746,34 @@ function menuItemsFor(ids, info, tools) {
     });
     // No traceroute for a crowd: its output means something only for
     // one destination at a time
+  }
+
+  if (single && node && node.kind !== "group") {
+    for (const link of info.links) {
+      items.push({
+        key: link.key, group: "links", label: t("menu_" + link.key),
+        disabled: link.missing ? missingReason(link.missing) : null,
+        run: () => openLink(link.url),
+      });
+    }
+    // Remote desktop is for computers, not for network boxes
+    if (node.kind === "host") {
+      items.push({
+        key: "rdp", group: "links", label: t("menu_rdp"),
+        disabled: node.ip ? null : missingReason("ip"),
+        run: () => downloadRdp(node),
+      });
+    }
+    items.push({
+      key: "copyIp", group: "links", label: t("menuCopyIp"),
+      disabled: node.ip ? null : missingReason("ip"),
+      run: () => copyText(node.ip),
+    });
+    items.push({
+      key: "copyMac", group: "links", label: t("menuCopyMac"),
+      disabled: node.mac ? null : missingReason("mac"),
+      run: () => copyText(node.mac),
+    });
   }
 
   const loose = ids.filter((id) => !isPinned(id));
@@ -862,6 +890,81 @@ function renderNodeMenu(ids, items, at) {
   const y = Math.min(at.y, window.innerHeight - box.height - 8);
   els.nodeMenu.style.left = Math.max(4, x) + "px";
   els.nodeMenu.style.top = Math.max(4, y) + "px";
+}
+
+/* ---------- links, remote desktop, clipboard ---------- */
+
+/* A web interface opens in a new tab; ssh://, winbox:// and the rest
+   are handed to whatever program the system has for them, without
+   leaving an empty tab behind. The address was filled in by the
+   server. */
+function openLink(url) {
+  const a = document.createElement("a");
+  a.href = url;
+  if (/^https?:/i.test(url)) {
+    a.target = "_blank";
+    a.rel = "noopener noreferrer";
+  }
+  document.body.append(a);
+  a.click();
+  a.remove();
+}
+
+/* Browsers do not agree on rdp:// at all. A .rdp file is the standard
+   way, and it opens wherever there is a remote desktop client. Built
+   here: it holds nothing but the address. */
+function downloadRdp(node) {
+  const blob = new Blob(["full address:s:" + node.ip + "\r\n"], {
+    type: "application/x-rdp",
+  });
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = (node.name || node.ip).replace(/[^A-Za-z0-9._-]+/g, "_") + ".rdp";
+  document.body.append(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+}
+
+/* navigator.clipboard exists only on a secure page — https, or
+   localhost. MoonLan is usually opened over plain http by address,
+   where it is simply undefined, so the old way stays as the fallback. */
+async function copyText(text) {
+  let done = false;
+  if (navigator.clipboard && window.isSecureContext) {
+    try {
+      await navigator.clipboard.writeText(text);
+      done = true;
+    } catch (e) {
+      done = false;
+    }
+  }
+  if (!done) {
+    const area = document.createElement("textarea");
+    area.value = text;
+    area.setAttribute("readonly", "");
+    area.style.position = "fixed";
+    area.style.opacity = "0";
+    document.body.append(area);
+    area.select();
+    try {
+      done = document.execCommand("copy");
+    } catch (e) {
+      done = false;
+    }
+    area.remove();
+  }
+  showToast(done ? fmt("copied", { text: text }) : fmt("copyFailed", { text: text }));
+}
+
+let toastTimer = null;
+
+function showToast(text) {
+  const toast = document.getElementById("toast");
+  toast.textContent = text;
+  toast.classList.add("shown");
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => toast.classList.remove("shown"), 2500);
 }
 
 /* ---------- ping and traceroute ----------

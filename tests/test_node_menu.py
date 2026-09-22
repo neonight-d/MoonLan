@@ -7,7 +7,8 @@ anybody who opens the page can make it do. The rules pinned down here:
   found itself: an unknown node id is refused, and so is an address
   sent in place of an id;
 - one action names at most max_targets nodes — more is refused with
-  the ceiling, not trimmed in silence.
+  the ceiling, not trimmed in silence;
+- every value put into a link is URL-encoded.
 
 Run with:  python -m unittest discover -s tests
 """
@@ -17,7 +18,39 @@ import sys
 import unittest
 from pathlib import Path
 
-from moonlan import probes
+from moonlan import menu, probes
+
+
+class ExpandTest(unittest.TestCase):
+    FACTS = {"ip": "10.0.0.21", "mac": "aa:bb:cc:00:00:01",
+             "name": "pc 01/../admin?x=1&y", "switch": "10.0.0.10",
+             "port": "Gi0/14"}
+
+    def test_a_mac_is_filled_in_and_encoded(self):
+        url, missing = menu.expand(
+            "https://inventory.local/find?mac={mac}", self.FACTS
+        )
+        self.assertIsNone(missing)
+        self.assertEqual(
+            url, "https://inventory.local/find?mac=aa%3Abb%3Acc%3A00%3A00%3A01"
+        )
+
+    def test_a_value_cannot_change_the_shape_of_the_address(self):
+        url, _ = menu.expand("https://x.local/{name}?p={port}", self.FACTS)
+        self.assertEqual(
+            url,
+            "https://x.local/pc%2001%2F..%2Fadmin%3Fx%3D1%26y?p=Gi0%2F14",
+        )
+
+    def test_an_address_stays_readable(self):
+        self.assertEqual(
+            menu.expand("winbox://{ip}", self.FACTS)[0], "winbox://10.0.0.21"
+        )
+
+    def test_a_missing_value_is_named_not_left_empty(self):
+        url, missing = menu.expand("ssh://{ip}", {"ip": "", "mac": "x"})
+        self.assertIsNone(url)
+        self.assertEqual(missing, "ip")
 
 
 class PingOutputTest(unittest.TestCase):
@@ -102,6 +135,7 @@ class ServiceTest(unittest.TestCase):
         self._saved = (
             server.state.switches, server.state.hosts, server.state.bridges,
             server.state.pseudo_switches, server.tools, server.jobs,
+            dict(server.config.switch_web_scheme),
         )
         server.state.switches = [
             {"ip": "10.0.0.1", "name": "core", "mac": "02:00:00:00:00:01"},
@@ -140,11 +174,14 @@ class ServiceTest(unittest.TestCase):
         server.tools = {"ping": "/bin/ping",
                         "traceroute": ("traceroute", "/bin/traceroute")}
         server.jobs = probes.Jobs(server.tools, fake_runner)
+        server.config.switch_web_scheme["10.0.0.2"] = "https"
 
     def tearDown(self):
         (server.state.switches, server.state.hosts, server.state.bridges,
          server.state.pseudo_switches, server.tools, server.jobs,
-         ) = self._saved
+         web) = self._saved
+        server.config.switch_web_scheme.clear()
+        server.config.switch_web_scheme.update(web)
         with server.db._lock, server.db._conn:
             server.db._conn.execute(
                 "DELETE FROM hosts WHERE mac IN (?, ?)", (HOST_MAC, QUIET_MAC)
@@ -161,6 +198,21 @@ class ServiceTest(unittest.TestCase):
     def test_the_menu_of_an_unknown_node_is_refused(self):
         response = asyncio.run(server.api_node_menu(id="host:de:ad:be:ef:00:00"))
         self.assertEqual(response.status_code, 404)
+
+    def test_links_are_filled_in(self):
+        answer = asyncio.run(server.api_node_menu(id="host:" + HOST_MAC))
+        web = next(link for link in answer["links"] if link["key"] == "web")
+        self.assertEqual(web["url"], "http://10.0.0.50")
+
+    def test_a_switch_can_say_it_is_https(self):
+        answer = asyncio.run(server.api_node_menu(id="sw:10.0.0.2"))
+        web = next(link for link in answer["links"] if link["key"] == "web")
+        self.assertEqual(web["url"], "https://10.0.0.2")
+
+    def test_a_link_without_its_value_says_which(self):
+        answer = asyncio.run(server.api_node_menu(id="host:" + QUIET_MAC))
+        ssh = next(link for link in answer["links"] if link["key"] == "ssh")
+        self.assertEqual((ssh["url"], ssh["missing"]), (None, "ip"))
 
     # --- starting an action ---
 

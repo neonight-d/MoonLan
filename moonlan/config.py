@@ -94,7 +94,7 @@ class LoopDetectionConfig:
 
 @dataclass
 class ContextMenuConfig:
-    """The node menu: its diagnostic actions."""
+    """The node menu: its diagnostic actions and links."""
 
     # Nodes one action may name. Double-clicking a switch selects a
     # hundred hosts; a hundred processes from one click is not a
@@ -103,6 +103,9 @@ class ContextMenuConfig:
     # Diagnostic requests running on the server at once; one more is
     # refused with a reason rather than queued without end
     max_running: int = 4
+    # How a switch's own web interface is opened, unless the switch
+    # says otherwise with web_scheme: in its switches: entry
+    web_scheme: str = "http"
 
 
 @dataclass
@@ -249,6 +252,9 @@ class Config:
         default_factory=LoopDetectionConfig
     )
     context_menu: ContextMenuConfig = field(default_factory=ContextMenuConfig)
+    # switch address -> "http" | "https", for the switches whose own
+    # entry says how their web interface is reached
+    switch_web_scheme: dict = field(default_factory=dict)
     thresholds: Thresholds = field(default_factory=Thresholds)
     notifications: NotificationsConfig = field(default_factory=NotificationsConfig)
     alarm_notify: dict[str, list[str]] = field(
@@ -278,6 +284,10 @@ class Config:
 
     def host_budget(self, ip: str) -> int:
         return self.host_snmp(ip).host_budget_seconds
+
+    def web_scheme(self, ip: str) -> str:
+        """How this switch's web interface is opened from the menu."""
+        return self.switch_web_scheme.get(ip) or self.context_menu.web_scheme
 
     def starved_counters(self) -> list[tuple[str, int]]:
         """Switches whose poll budget outlasts their counters cycle.
@@ -360,6 +370,38 @@ _HOST_SNMP_CAST = {
 }
 
 
+# Keys of a switches: entry that are not about polling it; read by
+# parse_switch_web rather than parse_switches
+SWITCH_MENU_KEYS = ("web_scheme",)
+WEB_SCHEMES = ("http", "https")
+
+
+def parse_switch_web(value) -> tuple[dict[str, str], list[str]]:
+    """`web_scheme:` of the switches: entries -> ({ip: scheme}, problems).
+
+    Part of a fleet serves its web interface over https only, and a
+    menu item that opens http:// on those is a menu item that fails.
+    """
+    schemes: dict[str, str] = {}
+    problems: list[str] = []
+    if not isinstance(value, (list, tuple)):
+        return schemes, problems
+    for entry in value:
+        if not isinstance(entry, dict) or "web_scheme" not in entry:
+            continue
+        ip = str(entry.get("ip") or entry.get("address") or "").strip()
+        scheme = str(entry["web_scheme"]).strip().lower()
+        if scheme not in WEB_SCHEMES:
+            problems.append(
+                f"{ip}: web_scheme {entry['web_scheme']!r} is not one of "
+                f"{', '.join(WEB_SCHEMES)} — context_menu.web_scheme is used"
+            )
+            continue
+        if ip:
+            schemes[ip] = scheme
+    return schemes, problems
+
+
 def parse_switches(
     value, defaults: SnmpConfig
 ) -> tuple[list[str], dict[str, HostSnmp], list[str]]:
@@ -387,7 +429,7 @@ def parse_switches(
                 continue
             overrides: dict[str, object] = {}
             for key, raw in entry.items():
-                if key in ("ip", "address"):
+                if key in ("ip", "address") or key in SWITCH_MENU_KEYS:
                     continue
                 if key not in _HOST_SNMP_CAST:
                     problems.append(
@@ -465,6 +507,9 @@ class ConfigReport:
     # is not a number. Silently dropping any of those leaves an
     # operator convinced a setting is in force when it is not.
     problems: list[str] = field(default_factory=list)
+    # The same for context_menu: a web_scheme that is neither http nor
+    # https. The service starts; this is where it says why.
+    menu_problems: list[str] = field(default_factory=list)
 
     @property
     def overrides(self) -> list[tuple[str, object, str]]:
@@ -574,9 +619,12 @@ def load_config(path: Path | None = None) -> Config:
         ),
     )
 
+    raw_switches = r.get("switches", d.switches)
     cfg.switches, cfg.switch_snmp, switch_problems = parse_switches(
-        r.get("switches", d.switches), cfg.snmp
+        raw_switches, cfg.snmp
     )
+    cfg.switch_web_scheme, web_problems = parse_switch_web(raw_switches)
+    switch_problems += web_problems
     cfg.routers = r.get("routers", d.routers, _as_str_list)
     cfg.scan_interval_minutes = r.get(
         "scan_interval_minutes", d.scan_interval_minutes, int
@@ -644,9 +692,18 @@ def load_config(path: Path | None = None) -> Config:
     )
 
     m = d.context_menu
+    web_scheme = r.get("context_menu.web_scheme", m.web_scheme, str).lower()
+    menu_problems: list[str] = []
+    if web_scheme not in WEB_SCHEMES:
+        menu_problems.append(
+            f"web_scheme {web_scheme!r} is not one of "
+            f"{', '.join(WEB_SCHEMES)} — http is used"
+        )
+        web_scheme = "http"
     cfg.context_menu = ContextMenuConfig(
         max_targets=r.get("context_menu.max_targets", m.max_targets, int),
         max_running=r.get("context_menu.max_running", m.max_running, int),
+        web_scheme=web_scheme,
     )
 
     t = d.thresholds
@@ -757,6 +814,7 @@ def load_config(path: Path | None = None) -> Config:
         values=r.values,
         unknown=r.unknown_keys(),
         problems=switch_problems,
+        menu_problems=menu_problems,
     )
 
     if os.environ.get("MOONLAN_DEMO") == "1":

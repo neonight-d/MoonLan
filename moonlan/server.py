@@ -19,8 +19,8 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from . import (
-    __version__, corruption, counters, demo, loopdetect, pinger, probes,
-    stp,
+    __version__, corruption, counters, demo, loopdetect, menu, pinger,
+    probes, stp,
 )
 from .alarms import AlarmEngine
 from .config import Config, load_config, parse_uplink_ports
@@ -1844,6 +1844,8 @@ def _log_config() -> None:
         log.info("%s", summary)
     for problem in report.problems:
         log.warning("config.yaml switches: %s", problem)
+    for problem in report.menu_problems:
+        log.warning("config.yaml context_menu: %s", problem)
     if config.demo:
         log.info("Node menu: ping and traceroute are simulated in demo mode")
     else:
@@ -2466,6 +2468,29 @@ def _tool_state() -> dict:
     }
 
 
+def _menu_links(node_id: str, facts: dict) -> list[dict]:
+    """The built-in links of one node, filled in.
+
+    A link that lacks a value is still listed, with the field it lacks:
+    the page shows it greyed out with the reason, the way "no answer"
+    is never shown as zero.
+    """
+    kind = facts["kind"]
+    builtin: list[dict] = []
+    if kind in ("switch", "host"):
+        if node_id.startswith("sw:"):
+            scheme = config.web_scheme(facts["ip"])
+        elif kind == "switch":
+            scheme = config.context_menu.web_scheme
+        else:
+            scheme = "http"
+        for key, template in (("web", scheme + "://{ip}"),
+                              ("ssh", "ssh://{ip}")):
+            url, missing = menu.expand(template, facts)
+            builtin.append({"key": key, "url": url, "missing": missing})
+    return builtin
+
+
 @app.get("/api/node-menu")
 async def api_node_menu(id: str = Query(...)):
     """What the right-click menu of one node can offer."""
@@ -2475,8 +2500,10 @@ async def api_node_menu(id: str = Query(...)):
         return JSONResponse(
             {"error": "unknown_node", "node": id}, status_code=404
         )
+    builtin = _menu_links(id, facts)
     return {
         "node": {"id": id, **facts},
+        "links": builtin,
         "tools": _tool_state(),
     }
 

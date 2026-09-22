@@ -943,6 +943,13 @@ def _print_node_menu(cfg) -> None:
         f"  at most {menu_cfg.max_targets} node(s) per action, "
         f"{menu_cfg.max_running} action(s) running at once"
     )
+    print(f"  switch web interface: {menu_cfg.web_scheme}://"
+          + "".join(f", {ip} {scheme}://"
+                    for ip, scheme in sorted(cfg.switch_web_scheme.items())))
+    if cfg.report and cfg.report.menu_problems:
+        print("  items left out of the menu:")
+        for problem in cfg.report.menu_problems:
+            print(f"    {problem}")
 
 
 def _ask_service(cfg, path: str) -> dict | None:
