@@ -8,13 +8,19 @@ const I18N = {
     tagline: "local network map",
     journalBtn: "Journal",
     freezeBtn: "Freeze layout",
+    layoutPinnedMark: "placed by hand: {n}",
+    layoutPinnedHint:
+      "That many nodes are where somebody put them, out of reach of the "
+      + "layout engine. Everything else is arranged automatically, and "
+      + "where it ends up is recorded on its own \u2014 there is nothing "
+      + "to save by hand. Turn on Arrange to place a node, or press P "
+      + "with it selected; the same releases it again.",
     arrangeBtn: "Arrange",
     arrangeOnBtn: "Arranging",
     arrangeHint:
       "Arrange mode is on: dragging a node places it and keeps it "
       + "there, and the right button lets it go again. Outside this "
       + "mode dragging only moves the view of the map.",
-    saveLayoutBtn: "Save layout",
     resetLayoutBtn: "Reset layout",
     pinnedMark: "\ud83d\udccc",
     pinnedHint:
@@ -24,13 +30,6 @@ const I18N = {
       + "restarts.",
     unpinBtn: "Release this node",
     unpinConfirm: "Release \u201c{node}\u201d back to the layout engine?",
-    layoutMissingMark: "not in the saved layout: {n}",
-    layoutMissingHint:
-      "These nodes appeared after the layout was saved, so the saved "
-      + "picture has no place for them and the engine put them where it "
-      + "could. They are drawn with a dashed outline. Move them where "
-      + "they belong, or press \u201cSave layout\u201d to record the "
-      + "map as it is now.",
     resetLayoutConfirm:
       "Forget every saved position, for everyone? The map will lay "
       + "itself out from scratch, and nodes placed by hand will lose "
@@ -460,13 +459,19 @@ const I18N = {
     tagline: "карта локальной сети",
     journalBtn: "Журнал",
     freezeBtn: "Заморозить раскладку",
+    layoutPinnedMark: "поставлено руками: {n}",
+    layoutPinnedHint:
+      "Столько узлов стоят там, куда их поставил человек, и движку "
+      + "раскладки недоступны. Всё остальное раскладывается само, и "
+      + "куда оно встало — запоминается само же: сохранять руками "
+      + "нечего. Чтобы поставить узел, включите «Расстановку» или "
+      + "нажмите P на выделенном; тем же способом он и отпускается.",
     arrangeBtn: "Расстановка",
     arrangeOnBtn: "Расставляю",
     arrangeHint:
       "Режим расстановки включён: перетаскивание ставит узел и "
       + "оставляет его там, правая кнопка отпускает обратно. Вне "
       + "режима перетаскивание только двигает вид карты.",
-    saveLayoutBtn: "Сохранить раскладку",
     resetLayoutBtn: "Сбросить раскладку",
     pinnedMark: "\ud83d\udccc",
     pinnedHint:
@@ -476,13 +481,6 @@ const I18N = {
       + "перезагрузки страницы, и после перезапуска сервиса.",
     unpinBtn: "Открепить узел",
     unpinConfirm: "Открепить «{node}» и вернуть его под раскладку?",
-    layoutMissingMark: "не в сохранённой раскладке: {n}",
-    layoutMissingHint:
-      "Эти узлы появились после того, как раскладку сохранили, поэтому "
-      + "в сохранённой картинке для них места нет и движок положил их "
-      + "куда смог. Они нарисованы пунктирным контуром. Поставьте их "
-      + "куда следует или нажмите «Сохранить раскладку», чтобы "
-      + "запомнить карту в нынешнем виде.",
     resetLayoutConfirm:
       "Забыть все сохранённые позиции — для всех? Карта разложится "
       + "заново, а узлы, поставленные руками, потеряют свои места. "

@@ -37,7 +37,6 @@ const els = {
   freezeBtn: document.getElementById("freeze-btn"),
   arrangeBtn: document.getElementById("arrange-btn"),
   layoutStatus: document.getElementById("layout-status"),
-  saveLayoutBtn: document.getElementById("save-layout-btn"),
   resetLayoutBtn: document.getElementById("reset-layout-btn"),
   langRu: document.getElementById("lang-ru"),
   langEn: document.getElementById("lang-en"),
@@ -172,20 +171,20 @@ let layoutFrozen = localStorage.getItem(FREEZE_KEY) === "1";
    left to the physics engine — re-applying the coordinates on every
    thirty-second refresh would drag it back and fight the layout. */
 let savedLayout = {};
-let layoutMissing = [];
 let layoutSavedAt = 0;
 const placed = new Set();
+// How long to let the layout settle before writing down where a new
+// node ended up
+const AUTOSAVE_SETTLE_MS = 4000;
 
 async function loadLayout() {
   try {
     const data = await (await fetch("/api/layout")).json();
     savedLayout = data.nodes || {};
-    layoutMissing = data.missing || [];
     layoutSavedAt = data.saved_at || 0;
   } catch (e) {
     // no saved layout is not an error: the map lays itself out
     savedLayout = {};
-    layoutMissing = [];
     layoutSavedAt = 0;
   }
 }
@@ -204,64 +203,72 @@ function layoutFor(id) {
   return first ? { x: pos.x, y: pos.y } : null;
 }
 
-/* Applied to every node as it is built. Two marks, and they answer
-   two different questions: "did I put this here" and "is this node
-   newer than the picture I saved". */
+/* Applied to every node as it is built: where it goes, whether the
+   physics engine may move it, and whether to say a person put it
+   there. */
 function applyLayout(node) {
-  const pinned = !!(savedLayout[node.id] && savedLayout[node.id].pinned);
-  // A node the saved picture does not contain. Marked only when there
-  // IS a saved picture — on a fresh install every node would be
-  // marked, which says nothing at all.
-  const unplaced = !!layoutSavedAt && !savedLayout[node.id];
+  const pinned = isPinned(node.id);
   const pos = layoutFor(node.id);
   if (pos) Object.assign(node, pos);
-  // Both marks are set on EVERY render, including to their off state.
-  // vis merges an update field by field, so a property left out keeps
-  // whatever it had — and a node unpinned or a layout reset would go
-  // on wearing its old outline.
+  // Set on EVERY render, including to its off state. vis merges an
+  // update field by field, so a property left out keeps whatever it
+  // had — and a node just released would go on being held.
   node.fixed = pinned ? { x: true, y: true } : { x: false, y: false };
   if (pinned) node.label = (node.label || "") + " " + t("pinnedMark");
-  const ownDashes =
-    (node.shapeProperties && node.shapeProperties.borderDashes) || false;
-  node.shapeProperties = Object.assign({}, node.shapeProperties, {
-    borderDashes: unplaced ? [2, 3] : ownDashes,
-  });
-  node.borderWidth = (node.borderWidth || 1) + (unplaced ? 1 : 0);
   return node;
 }
 
-/* Everything on screen right now, as the server stores it. */
-function currentPositions() {
-  if (!network) return {};
-  const positions = network.getPositions();
-  const out = {};
-  for (const id of Object.keys(positions)) {
-    out[id] = {
-      x: positions[id].x,
-      y: positions[id].y,
-      pinned: !!(savedLayout[id] && savedLayout[id].pinned),
-    };
-  }
-  return out;
-}
+/* Records where the nodes nobody has placed yet have ended up.
 
-async function saveLayout() {
+   There is no "save layout" button any more, and there should not be
+   one: a button that has to be pressed for the picture to survive is
+   a button somebody will forget, and then the map they arranged is
+   gone. A node that has no saved position gets one as soon as the
+   layout settles; a node that already has one is never touched here,
+   or every open browser would rewrite the shared picture on every
+   refresh.
+
+   `autoSaved` keeps one client from sending the same node twice while
+   the answer is still in flight. */
+const autoSaved = new Set();
+let autoSaveTimer = null;
+
+async function saveNewPositions() {
   if (!network) return;
-  const nodes = currentPositions();
+  const positions = network.getPositions();
+  const fresh = {};
+  for (const id of Object.keys(positions)) {
+    if (savedLayout[id] || autoSaved.has(id)) continue;
+    fresh[id] = { x: positions[id].x, y: positions[id].y, pinned: false };
+  }
+  const ids = Object.keys(fresh);
+  if (!ids.length) return;
+  for (const id of ids) autoSaved.add(id);
   try {
     await fetch("/api/layout", {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ nodes: nodes }),
+      body: JSON.stringify({ nodes: fresh }),
     });
   } catch (e) {
+    for (const id of ids) autoSaved.delete(id);
     serviceLost("saving the layout");
     return;
   }
   serviceBack();
-  await loadLayout();
-  renderGraph();
+  for (const id of ids) savedLayout[id] = fresh[id];
+  if (!layoutSavedAt) layoutSavedAt = Date.now() / 1000;
   updateScanStatus();
+}
+
+/* The physics engine emits `stabilized` when it settles, which is the
+   right moment — but with the simulation running continuously it may
+   not come for a while, and a node added by a scan should not have to
+   wait for it. So a short timer as well, and one idempotent function
+   behind both. */
+function scheduleAutoSave() {
+  clearTimeout(autoSaveTimer);
+  autoSaveTimer = setTimeout(saveNewPositions, AUTOSAVE_SETTLE_MS);
 }
 
 /* Pins one or more nodes where they are, and remembers it.
@@ -355,9 +362,9 @@ async function resetLayout() {
   }
   serviceBack();
   savedLayout = {};
-  layoutMissing = [];
   layoutSavedAt = 0;
   placed.clear();
+  autoSaved.clear();
   // Forgetting the positions on the server is only half of it. vis
   // keeps x and y on the node it has already built, and nothing in
   // the update path can take them away again — `setOptions` assigns a
@@ -468,6 +475,7 @@ function rebuildGraph() {
   edgesDs.clear();
   nodesDs.add(nodes);
   edgesDs.add(edges);
+  scheduleAutoSave();
 }
 
 /* ---------- arrange mode ----------
@@ -690,21 +698,23 @@ function updateScanStatus() {
   updateLayoutStatus();
 }
 
-/* How far the picture on screen has drifted from the saved one. The
-   same discipline as "N switches ran out of time": a difference
-   between what was recorded and what is there now has to be visible,
-   not discovered when somebody prints the map. */
+/* How much of this map was arranged by a person.
+
+   Until v0.7.1 this counted nodes the saved picture did not contain,
+   which made sense while saving was something you pressed a button
+   for. Now a position is recorded as soon as the layout settles, so
+   "not saved" is a state no node stays in — and a count of it would
+   be a number that is always zero, or worse, briefly not. What is
+   worth knowing is how much of the picture is somebody's decision
+   rather than the engine's. */
 function updateLayoutStatus() {
-  const missing = layoutSavedAt ? layoutMissing.length : 0;
-  els.layoutStatus.classList.toggle("hidden", missing === 0);
-  if (!missing) return;
-  els.layoutStatus.textContent = fmt("layoutMissingMark", { n: missing });
-  els.layoutStatus.title =
-    t("layoutMissingHint") + "\n\n" +
-    layoutMissing.slice(0, 12).map(nodeTitle).join(", ") +
-    (layoutMissing.length > 12
-      ? " " + fmt("andMore", { n: layoutMissing.length - 12 })
-      : "");
+  const pinned = Object.keys(savedLayout).filter((id) =>
+    savedLayout[id].pinned
+  ).length;
+  els.layoutStatus.classList.toggle("hidden", pinned === 0);
+  if (!pinned) return;
+  els.layoutStatus.textContent = fmt("layoutPinnedMark", { n: pinned });
+  els.layoutStatus.title = t("layoutPinnedHint");
 }
 
 /* The service can go away — restarted, redeployed, or the machine this
@@ -1320,6 +1330,9 @@ function renderGraph() {
     network.on("dragStart", (params) => {
       draggedNode = params.nodes.length ? params.nodes[0] : null;
     });
+    // A new node's position is worth writing down once the layout has
+    // settled around it — not while it is still being pushed about
+    network.on("stabilized", saveNewPositions);
     network.on("dragEnd", (params) => {
       if (!params.nodes.length) return;
       // In arrange mode a drag places the node. Outside it, a drag is
@@ -1378,6 +1391,9 @@ function renderGraph() {
       network.redraw();
     });
     applyFreeze();  // a freeze chosen earlier survives a reload
+    // The very first map is exactly the one most likely to hold nodes
+    // nobody has a position for
+    scheduleAutoSave();
     return;
   }
 
@@ -1389,6 +1405,7 @@ function renderGraph() {
   edgesDs.remove(edgesDs.getIds().filter((id) => !edgeIds.has(id)));
   nodesDs.update(nodes);
   edgesDs.update(edges);
+  scheduleAutoSave();
 }
 
 function focusNode(id) {
@@ -2696,7 +2713,6 @@ for (const th of document.querySelectorAll("#ports th[data-sort]")) {
 }
 els.freezeBtn.addEventListener("click", toggleFreeze);
 els.arrangeBtn.addEventListener("click", toggleArrangeMode);
-els.saveLayoutBtn.addEventListener("click", saveLayout);
 els.resetLayoutBtn.addEventListener("click", resetLayout);
 els.alarmsBtn.addEventListener("click", toggleAlarms);
 els.alarmsClose.addEventListener("click", () =>
