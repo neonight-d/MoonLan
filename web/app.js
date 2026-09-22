@@ -397,6 +397,37 @@ function anchorMap(edges) {
   return anchors;
 }
 
+/* The same map, kept from the last render: the selection needs to
+   know what hangs off a container, and re-deriving it from the
+   topology would be a second set of rules that can disagree with the
+   edges actually drawn. */
+let lastAnchors = new Map();
+
+/* Everything hanging off one container — a switch, a switch without
+   SNMP, a "beyond the trunk" or "offline" group — following the
+   chain down through further containers.
+
+   Switches are left out on purpose: this is "take what is on this
+   box", not "take this branch". Selecting a switch's whole subtree
+   would move half the map on the first drag.  */
+function devicesUnder(id) {
+  const children = new Map();
+  for (const [child, anchor] of lastAnchors) {
+    if (!children.has(anchor)) children.set(anchor, []);
+    children.get(anchor).push(child);
+  }
+  const found = new Set();
+  const stack = [id];
+  while (stack.length) {
+    for (const child of children.get(stack.pop()) || []) {
+      if (found.has(child) || child.startsWith("sw:")) continue;
+      found.add(child);
+      stack.push(child);
+    }
+  }
+  return [...found];
+}
+
 /* A number from a string, so a node's offset is the same in every
    browser and does not jump between renders. Math.random() would put
    the same device in a different spot for each person looking. */
@@ -417,6 +448,7 @@ function idHash(id) {
    physics engine can take it from there. */
 function seedPositions(nodes, edges) {
   const anchors = anchorMap(edges);
+  lastAnchors = anchors;
   const known = new Map();
   const existing = network ? network.getPositions() : {};
   for (const node of nodes) {
@@ -1059,7 +1091,10 @@ function buildGraphData() {
       color: {
         background: colors.panel,
         border: border,
-        highlight: { background: "#1c2739", border: border },
+        // A selected node has to look selected. The highlight border
+        // used to repeat the normal one, so with several nodes chosen
+        // nothing on the map said which.
+        highlight: { background: "#1c2739", border: colors.link },
       },
       font: nodeFont("sw:" + sw.ip),
       borderWidth: switchHasAlarm(sw.ip) || sw.stp_root || looping ? 3 : 2,
@@ -1394,7 +1429,11 @@ function renderGraph() {
         forceAtlas2Based: { gravitationalConstant: -60, springLength: 90 },
         stabilization: { iterations: 200 },
       },
-      interaction: { hover: true },
+      // Ctrl+click adds and removes a node, and dragging one of
+      // several selected nodes moves the whole selection — both of
+      // them vis's own behaviour, which is better than a reimplementation
+      interaction: { hover: true, multiselect: true },
+      nodes: { borderWidthSelected: 4 },
     };
     network = new vis.Network(
       els.network,
@@ -1411,6 +1450,17 @@ function renderGraph() {
     // A new node's position is worth writing down once the layout has
     // settled around it — not while it is still being pushed about
     network.on("stabilized", saveNewPositions);
+    // Double click on a container takes everything on it: the cloud of
+    // devices behind one switch is the thing people want to move out
+    // of the way in one go.
+    network.on("doubleClick", (params) => {
+      if (!params.nodes.length) return;
+      const ids = devicesUnder(params.nodes[0]);
+      if (!ids.length) return;
+      network.selectNodes(ids, false);
+      setSelectedNode(null);
+      hideDetails();
+    });
     network.on("dragEnd", (params) => {
       if (!params.nodes.length) return;
       // In arrange mode a drag places the node. Outside it, a drag is
@@ -1454,6 +1504,8 @@ function renderGraph() {
         draggedNode = null;
         return;
       }
+      // Ctrl+click is "add to the selection", not "look at this one"
+      if (params.event && (params.event.srcEvent || {}).ctrlKey) return;
       if (params.nodes.length) {
         setSelectedNode(params.nodes[0]);
         showDetails(params.nodes[0]);
@@ -2831,6 +2883,10 @@ document.addEventListener("keydown", (event) => {
   if (typing) return;
   if (event.key === "p" || event.key === "P") {
     togglePinOnSelection();
+  } else if (event.key === "Escape") {
+    if (network) network.unselectAll();
+    setSelectedNode(null);
+    closeNodeMenu();
   }
 });
 
