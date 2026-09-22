@@ -487,6 +487,9 @@ main { flex: 1; display: flex; min-height: 0; }
    alarm — but the map below stopped being refreshed, and that
    must not look like a quiet network. */
 #scan-status.offline { color: #d9b26b; cursor: help; font-weight: 600; }
+/* Nodes the saved layout does not cover. Amber like everything
+   else that says "this differs from what was recorded". */
+#layout-status { color: #d9b26b; cursor: help; }
 
 /* Links inside the panels. Until v0.6.3 there was no rule for `a` at
    all, so every address in a card was rendered in the browser's

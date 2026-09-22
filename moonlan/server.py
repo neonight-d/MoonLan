@@ -2332,6 +2332,11 @@ async def api_layout() -> dict:
     return {
         "nodes": saved,
         "saved_at": await asyncio.to_thread(db.layout_saved_at),
+        # Nodes on the map that the saved layout does not cover. A
+        # switch added yesterday has no place in a picture drawn the
+        # day before, and that gap has to be visible rather than found
+        # at printing time.
+        "missing": sorted(present - set(saved)),
     }
 
 

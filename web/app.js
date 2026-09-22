@@ -35,6 +35,7 @@ const els = {
   stpClose: document.getElementById("stp-close"),
   emptyState: document.getElementById("empty-state"),
   freezeBtn: document.getElementById("freeze-btn"),
+  layoutStatus: document.getElementById("layout-status"),
   saveLayoutBtn: document.getElementById("save-layout-btn"),
   langRu: document.getElementById("lang-ru"),
   langEn: document.getElementById("lang-en"),
@@ -168,6 +169,7 @@ let layoutFrozen = localStorage.getItem(FREEZE_KEY) === "1";
    left to the physics engine — re-applying the coordinates on every
    thirty-second refresh would drag it back and fight the layout. */
 let savedLayout = {};
+let layoutMissing = [];
 let layoutSavedAt = 0;
 const placed = new Set();
 
@@ -175,10 +177,12 @@ async function loadLayout() {
   try {
     const data = await (await fetch("/api/layout")).json();
     savedLayout = data.nodes || {};
+    layoutMissing = data.missing || [];
     layoutSavedAt = data.saved_at || 0;
   } catch (e) {
     // no saved layout is not an error: the map lays itself out
     savedLayout = {};
+    layoutMissing = [];
     layoutSavedAt = 0;
   }
 }
@@ -202,6 +206,10 @@ function layoutFor(id) {
    newer than the picture I saved". */
 function applyLayout(node) {
   const pinned = !!(savedLayout[node.id] && savedLayout[node.id].pinned);
+  // A node the saved picture does not contain. Marked only when there
+  // IS a saved picture — on a fresh install every node would be
+  // marked, which says nothing at all.
+  const unplaced = !!layoutSavedAt && !savedLayout[node.id];
   const pos = layoutFor(node.id);
   if (pos) Object.assign(node, pos);
   // Both marks are set on EVERY render, including to their off state.
@@ -210,6 +218,12 @@ function applyLayout(node) {
   // on wearing its old outline.
   node.fixed = pinned ? { x: true, y: true } : { x: false, y: false };
   if (pinned) node.label = (node.label || "") + " " + t("pinnedMark");
+  const ownDashes =
+    (node.shapeProperties && node.shapeProperties.borderDashes) || false;
+  node.shapeProperties = Object.assign({}, node.shapeProperties, {
+    borderDashes: unplaced ? [2, 3] : ownDashes,
+  });
+  node.borderWidth = (node.borderWidth || 1) + (unplaced ? 1 : 0);
   return node;
 }
 
@@ -244,6 +258,7 @@ async function saveLayout() {
   serviceBack();
   await loadLayout();
   renderGraph();
+  updateScanStatus();
 }
 
 /* A node dragged by hand is pinned where it was dropped. Nobody has to
@@ -252,6 +267,7 @@ async function saveLayout() {
    physics engine does. */
 async function pinNode(id, x, y) {
   savedLayout[id] = { x: x, y: y, pinned: true };
+  layoutMissing = layoutMissing.filter((node) => node !== id);
   try {
     await fetch("/api/layout/" + layoutPath(id), {
       method: "PATCH",
@@ -265,6 +281,7 @@ async function pinNode(id, x, y) {
   serviceBack();
   if (!layoutSavedAt) layoutSavedAt = Date.now() / 1000;
   renderGraph();
+  updateScanStatus();
 }
 
 async function unpinNode(id) {
@@ -279,6 +296,7 @@ async function unpinNode(id) {
   serviceBack();
   await loadLayout();
   renderGraph();
+  updateScanStatus();
 }
 
 /* Node ids carry colons and, in four of the seven kinds, a port name
@@ -465,6 +483,54 @@ function updateScanStatus() {
       switches: late.map(switchName).join(", "),
     });
   }
+  updateLayoutStatus();
+}
+
+/* How far the picture on screen has drifted from the saved one. The
+   same discipline as "N switches ran out of time": a difference
+   between what was recorded and what is there now has to be visible,
+   not discovered when somebody prints the map. */
+function updateLayoutStatus() {
+  const missing = layoutSavedAt ? layoutMissing.length : 0;
+  els.layoutStatus.classList.toggle("hidden", missing === 0);
+  if (!missing) return;
+  els.layoutStatus.textContent = fmt("layoutMissingMark", { n: missing });
+  els.layoutStatus.title =
+    t("layoutMissingHint") + "\n\n" +
+    layoutMissing.slice(0, 12).map(nodeTitle).join(", ") +
+    (layoutMissing.length > 12
+      ? " " + fmt("andMore", { n: layoutMissing.length - 12 })
+      : "");
+}
+
+/* The service can go away — restarted, redeployed, or the machine this
+   page is open from lost the route to it. Every periodic request has
+   to survive that: an unhandled rejection every thirty seconds is not
+   information, and a map that simply stops changing looks exactly like
+   a quiet network where nothing is happening.
+
+   So: the last good picture stays on screen, the header says the data
+   is no longer arriving and how old it is, and the console gets one
+   line when the connection is lost and one when it comes back. */
+let serviceReachable = true;
+
+function serviceLost(what) {
+  if (serviceReachable) {
+    serviceReachable = false;
+    console.warn(
+      "MoonLan: the service is not answering (" + what + "). The map " +
+      "below is the last picture that arrived; polling continues."
+    );
+    updateScanStatus();
+  }
+}
+
+function serviceBack() {
+  if (!serviceReachable) {
+    serviceReachable = true;
+    console.info("MoonLan: the service is answering again.");
+    updateScanStatus();
+  }
 }
 
 /* While a scan runs the header counts switches off. The map itself is
@@ -520,6 +586,7 @@ async function loadTopology() {
   renderBadge();
   renderSidebar();
   renderGraph();
+  updateScanStatus();
   // A scan the operator did not start is worth counting off too: the
   // periodic one is when they are most likely to wonder why nothing
   // has moved for ten minutes.

@@ -17,6 +17,13 @@ const I18N = {
       + "restarts.",
     unpinBtn: "Release this node",
     unpinConfirm: "Release \u201c{node}\u201d back to the layout engine?",
+    layoutMissingMark: "not in the saved layout: {n}",
+    layoutMissingHint:
+      "These nodes appeared after the layout was saved, so the saved "
+      + "picture has no place for them and the engine put them where it "
+      + "could. They are drawn with a dashed outline. Move them where "
+      + "they belong, or press \u201cSave layout\u201d to record the "
+      + "map as it is now.",
     unfreezeBtn: "Unfreeze",
     rescanBtn: "Rescan network",
     searchPlaceholder: "Search: name, IP or MAC…",
@@ -449,6 +456,13 @@ const I18N = {
       + "перезагрузки страницы, и после перезапуска сервиса.",
     unpinBtn: "Открепить узел",
     unpinConfirm: "Открепить «{node}» и вернуть его под раскладку?",
+    layoutMissingMark: "не в сохранённой раскладке: {n}",
+    layoutMissingHint:
+      "Эти узлы появились после того, как раскладку сохранили, поэтому "
+      + "в сохранённой картинке для них места нет и движок положил их "
+      + "куда смог. Они нарисованы пунктирным контуром. Поставьте их "
+      + "куда следует или нажмите «Сохранить раскладку», чтобы "
+      + "запомнить карту в нынешнем виде.",
     unfreezeBtn: "Разморозить",
     rescanBtn: "Опросить сеть",
     searchPlaceholder: "Поиск: имя, IP или MAC…",
