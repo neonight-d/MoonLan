@@ -26,7 +26,12 @@ the canvas as well as the button — a mode you can forget you are in is
 a mode that edits the map by accident — and it is deliberately not
 remembered between sessions. `P` does the same from the keyboard. A
 pinned node stays draggable in either mode: pinning says "the physics
-engine does not get to move this", not "nobody does". The confirmation
+engine does not get to move this", not "nobody does". *(Correction,
+v0.7.2: this was not true. Pinning was vis's `fixed`, which refuses the
+mouse as firmly as the physics engine, so a pinned node could not be
+dragged in either mode — the drag was reported and the same
+coordinates were saved again. It was checked by calling the page's
+functions rather than with the mouse. Fixed in v0.7.2.)* The confirmation
 dialog in front of releasing a node is gone; pinning cost one gesture
 and undoing it cost a dialog.
 

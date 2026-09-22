@@ -174,6 +174,8 @@ let layoutFrozen = localStorage.getItem(FREEZE_KEY) === "1";
 let savedLayout = {};
 let layoutSavedAt = 0;
 const placed = new Set();
+// Nodes the mouse is holding right now, from dragStart to dragEnd
+const dragging = new Set();
 // How long to let the layout settle before writing down where a new
 // node ended up
 const AUTOSAVE_SETTLE_MS = 4000;
@@ -209,6 +211,14 @@ function layoutFor(id) {
    there. */
 function applyLayout(node) {
   const pinned = isPinned(node.id);
+  // A node under the mouse belongs to the drag until it is dropped. A
+  // refresh landing mid-drag would otherwise pull a pinned node back
+  // to its saved spot, or hand a loose one to the physics engine while
+  // somebody is still holding it.
+  if (dragging.has(node.id)) {
+    if (pinned) node.label = (node.label || "") + " " + t("pinnedMark");
+    return node;
+  }
   const pos = layoutFor(node.id);
   if (pos) Object.assign(node, pos);
   // Set on EVERY render, including to its off state. vis merges an
@@ -343,6 +353,39 @@ function unpinNode(id) {
 
 function isPinned(id) {
   return !!(savedLayout[id] && savedLayout[id].pinned);
+}
+
+/* Lets the mouse move pinned nodes.
+
+   Pinning is vis's `fixed`, and `fixed` refuses the hand as firmly as
+   it refuses the physics engine: at the start of a drag vis records
+   each selected node's `fixed`, and while dragging moves only the
+   nodes it recorded as loose. v0.7.1 said a pinned node stays
+   draggable and it did not — the drag was reported, the same
+   coordinates were saved again, and the box stayed where it was.
+
+   vis emits `dragStart` BEFORE it takes that record, so the pinned
+   nodes of the selection are loosened here and it records them as
+   free. For the length of the drag vis holds every dragged node itself,
+   so nothing else moves them; dragEnd pins them again. */
+function loosenForDrag(ids) {
+  for (const id of ids) dragging.add(id);
+  const held = ids.filter(isPinned);
+  if (!held.length) return;
+  nodesDs.update(held.map((id) => ({ id: id, fixed: { x: false, y: false } })));
+  // The record is taken the moment this handler returns, so the
+  // update has to have reached the node by then, not merely been
+  // queued. A DataSet delivers synchronously today; if that ever
+  // changes, the drag would silently go back to doing nothing — so
+  // check, and set it on the node directly if it did not arrive.
+  for (const id of held) {
+    const body = network.body.nodes[id];
+    if (body && (body.options.fixed.x || body.options.fixed.y)) {
+      console.warn("MoonLan: pinned node not loosened by the data update; setting it directly", id);
+      body.options.fixed.x = false;
+      body.options.fixed.y = false;
+    }
+  }
 }
 
 /* Node ids carry colons and, in four of the seven kinds, a port name
@@ -1440,13 +1483,12 @@ function renderGraph() {
       { nodes: nodesDs, edges: edgesDs },
       options
     );
-    // A drag ends with a click event too. Without this, dropping a
-    // node would also open its card — and the card covers the part of
-    // the map somebody has just been arranging.
-    let draggedNode = null;
-    network.on("dragStart", (params) => {
-      draggedNode = params.nodes.length ? params.nodes[0] : null;
-    });
+    // No guard against "the click that ends a drag": there is no such
+    // click. vis takes a gesture as a tap or as a pan, never both, and
+    // v0.7.1's guard waited for a click that never came — so it
+    // swallowed the next real one, and after moving a node the first
+    // click on anything opened nothing.
+    network.on("dragStart", (params) => loosenForDrag(params.nodes));
     // A new node's position is worth writing down once the layout has
     // settled around it — not while it is still being pushed about
     network.on("stabilized", saveNewPositions);
@@ -1462,6 +1504,7 @@ function renderGraph() {
       hideDetails();
     });
     network.on("dragEnd", (params) => {
+      dragging.clear();
       if (!params.nodes.length) return;
       // In arrange mode a drag places the node. Outside it, a drag is
       // somebody looking at the map — unless the node was already
@@ -1473,7 +1516,16 @@ function renderGraph() {
         if (!at[id]) continue;
         if (arrangeMode || isPinned(id)) moved[id] = at[id];
       }
-      if (Object.keys(moved).length) pinNodes(moved);
+      const ids = Object.keys(moved);
+      if (!ids.length) return;
+      // vis has just put back the `fixed` it recorded at dragStart —
+      // which for a pinned node is the `false` loosenForDrag gave it.
+      // Hold the nodes again here and now: saving is a round trip, and
+      // the physics engine would carry them off while it is under way.
+      nodesDs.update(ids.map((id) => ({
+        id: id, x: moved[id].x, y: moved[id].y, fixed: { x: true, y: true },
+      })));
+      pinNodes(moved);
     });
     network.on("oncontext", (params) => {
       params.event.preventDefault();
@@ -1500,10 +1552,6 @@ function renderGraph() {
     });
     network.on("click", (params) => {
       closeNodeMenu();
-      if (draggedNode) {
-        draggedNode = null;
-        return;
-      }
       // Ctrl+click is "add to the selection", not "look at this one"
       if (params.event && (params.event.srcEvent || {}).ctrlKey) return;
       if (params.nodes.length) {
@@ -1520,6 +1568,7 @@ function renderGraph() {
         hideDetails();
       }
     });
+    holdIsAPress();
     network.on("beforeDrawing", (ctx) => {
       if (hoveredNodeId && hoveredNodeId !== selectedNodeId) {
         drawLabelBackdrop(ctx, hoveredNodeId, false);
@@ -1550,6 +1599,33 @@ function renderGraph() {
   nodesDs.update(nodes);
   edgesDs.update(edges);
   scheduleAutoSave();
+}
+
+/* A long press is a press.
+
+   With `multiselect` on — v0.7.1 turned it on for Ctrl+click — vis
+   reads a press held for a quarter of a second as "add this node to
+   the selection", Ctrl or not, and on a node already selected as "take
+   it out". People rarely move the mouse the instant the button goes
+   down. So pressing a switch unhurriedly and dragging it carried along
+   whatever had been selected before — a pinned router included, saved
+   in its new place — and pressing unhurriedly on one node of a group
+   dropped it from the group just before the group was to be dragged.
+
+   Nothing needs to happen at the moment of holding. If a drag follows,
+   vis picks the node under the pointer itself, or the whole selection
+   when that node is part of it. If the button comes up where it went
+   down, it was a click, and vis's own tap handling does the rest —
+   Ctrl included.
+
+   Two internals, both of vis-network 9.1.9, which index.html pins:
+   the canvas looks `onHold` up in body.eventListeners on every press,
+   and the Hammer instance is canvas.hammer. */
+function holdIsAPress() {
+  network.body.eventListeners.onHold = () => {};
+  network.canvas.hammer.on("pressup", (event) =>
+    network.body.eventListeners.onTap(event)
+  );
 }
 
 function focusNode(id) {
