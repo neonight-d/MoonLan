@@ -96,6 +96,10 @@ class LoopDetectionConfig:
 class ContextMenuConfig:
     """The node menu: its diagnostic actions."""
 
+    # Nodes one action may name. Double-clicking a switch selects a
+    # hundred hosts; a hundred processes from one click is not a
+    # diagnostic, it is a load test.
+    max_targets: int = 64
     # Diagnostic requests running on the server at once; one more is
     # refused with a reason rather than queued without end
     max_running: int = 4
@@ -641,6 +645,7 @@ def load_config(path: Path | None = None) -> Config:
 
     m = d.context_menu
     cfg.context_menu = ContextMenuConfig(
+        max_targets=r.get("context_menu.max_targets", m.max_targets, int),
         max_running=r.get("context_menu.max_running", m.max_running, int),
     )
 

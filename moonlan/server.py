@@ -2462,6 +2462,7 @@ def _tool_state() -> dict:
         "ping": bool(tools.get("ping")),
         "traceroute": trace[0] if trace else None,
         "simulated": config.demo,
+        "max_targets": config.context_menu.max_targets,
     }
 
 
@@ -2508,6 +2509,13 @@ async def api_start_action(body: ActionBody, request: Request):
     ids = list(dict.fromkeys(body.nodes))
     if not ids:
         return _refuse("no_targets", 400)
+    limit = config.context_menu.max_targets
+    if len(ids) > limit:
+        # refused, not trimmed: a silently shortened list reads as
+        # "these are all of them"
+        return _refuse("too_many_targets", 400, limit=limit, count=len(ids))
+    if body.action == "traceroute" and len(ids) > 1:
+        return _refuse("traceroute_one", 400)
     if body.action == "ping" and not tools.get("ping"):
         return _refuse("tool_missing", 503, tool="ping")
     if body.action == "traceroute" and not tools.get("traceroute"):

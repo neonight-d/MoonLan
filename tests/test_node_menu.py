@@ -5,7 +5,9 @@ anybody who opens the page can make it do. The rules pinned down here:
 
 - the server pings and traces only nodes it knows, at addresses it
   found itself: an unknown node id is refused, and so is an address
-  sent in place of an id.
+  sent in place of an id;
+- one action names at most max_targets nodes — more is refused with
+  the ceiling, not trimmed in silence.
 
 Run with:  python -m unittest discover -s tests
 """
@@ -187,6 +189,15 @@ class ServiceTest(unittest.TestCase):
         self.assertIn(b'"addresses":["10.0.0.50"]', response.body)
         self.assertEqual(self.calls, [])
 
+    def test_over_the_ceiling_is_refused_not_trimmed(self):
+        ids = [f"host:aa:00:00:00:{n // 256:02x}:{n % 256:02x}"
+               for n in range(100)]
+        response = self._start("ping", ids)
+        self.assertEqual(response.status_code, 400)
+        self.assertIn(b'"limit":64', response.body)
+        self.assertIn(b'"count":100', response.body)
+        self.assertEqual(self.calls, [])
+
     def test_a_ping_runs_against_the_address_moonlan_knows(self):
         job = self._start("ping", ["host:" + HOST_MAC])
         self.assertEqual(self.calls, [probes.ping_argv("10.0.0.50")])
@@ -195,6 +206,17 @@ class ServiceTest(unittest.TestCase):
         self.assertEqual(target["result"]["avg"], 2.0)
         # …with what the continuous ping knows, as a separate source
         self.assertTrue(target["monitor"]["ping_up"])
+
+    def test_a_node_without_an_address_is_a_row_not_a_process(self):
+        job = self._start("ping", ["host:" + HOST_MAC, "host:" + QUIET_MAC,
+                                   "sw:10.0.0.1"])
+        statuses = {t["node"]: t["status"] for t in job["targets"]}
+        self.assertEqual(statuses["host:" + QUIET_MAC], "no_ip")
+        self.assertEqual(len(self.calls), 2)
+
+    def test_traceroute_is_for_one_node(self):
+        response = self._start("traceroute", ["sw:10.0.0.1", "sw:10.0.0.2"])
+        self.assertEqual(response.status_code, 400)
 
     def test_a_missing_tool_is_said_so(self):
         server.tools = {"ping": "/bin/ping", "traceroute": None}

@@ -642,6 +642,17 @@ main { flex: 1; display: flex; min-height: 0; }
   white-space: pre-wrap;
   word-break: break-all;
 }
+#actions table { width: 100%; border-collapse: collapse; font-size: 0.82rem; }
+#actions th {
+  text-align: left;
+  color: var(--text-dim);
+  font-weight: normal;
+  border-bottom: 1px solid var(--line);
+  padding: 3px 6px;
+}
+#actions td { padding: 3px 6px; border-bottom: 1px solid var(--line); }
+#actions td.num { text-align: right; font-family: ui-monospace, monospace; }
+#actions td.mono { font-family: ui-monospace, monospace; }
 .verdict-ok { color: var(--ok); }
 .verdict-partial { color: var(--warn); }
 .verdict-none { color: #d96b6b; }

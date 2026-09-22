@@ -27,7 +27,8 @@ from typing import Awaitable, Callable
 PING_COUNT = 4
 PING_TIMEOUT = 10.0
 TRACE_TIMEOUT = 60.0
-# Pings of one request running side by side, when it names several
+# Pings of one "ping the selection" request running side by side. The
+# ceiling on how many nodes one request may name is max_targets.
 PARALLEL_PINGS = 8
 # How long a finished job can still be asked about
 KEEP_FINISHED_SECONDS = 600

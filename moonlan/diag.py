@@ -939,7 +939,10 @@ def _print_node_menu(cfg) -> None:
            "NOT FOUND (neither traceroute nor tracepath) — Traceroute "
            "is disabled in the menu")
     )
-    print(f"  at most {menu_cfg.max_running} action(s) running at once")
+    print(
+        f"  at most {menu_cfg.max_targets} node(s) per action, "
+        f"{menu_cfg.max_running} action(s) running at once"
+    )
 
 
 def _ask_service(cfg, path: str) -> dict | None:

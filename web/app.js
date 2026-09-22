@@ -678,11 +678,17 @@ function rebuildGraph() {
 const MENU_GROUPS = ["actions", "layout"];
 
 // Nodes that stand for a place rather than a device: they have no
-// address of their own
+// address of their own, and pinging one means pinging what is on it
 const GROUP_PREFIXES = ["pseudo:", "trunk:", "offline:", "external:"];
 
 function isGroupNode(id) {
   return GROUP_PREFIXES.some((prefix) => id.startsWith(prefix));
+}
+
+/* What a ping can be sent to: devices and switches, never the groups
+   standing in for places. */
+function addressable(ids) {
+  return ids.filter((id) => !isGroupNode(id));
 }
 
 /* The reason a link or an action cannot run for want of a value. */
@@ -697,6 +703,10 @@ function menuItemsFor(ids, info, tools) {
   // The service did not answer: the actions are shown, and say why
   // they cannot run
   const offline = tools ? null : t("reasonNoService");
+  const tooMany = (n) =>
+    tools && n > tools.max_targets
+      ? fmt("reasonTooMany", { n: n, limit: tools.max_targets })
+      : null;
   const noPing = tools && !tools.ping ? t("reasonNoPing") : null;
 
   if (single && !isGroupNode(single)) {
@@ -712,6 +722,30 @@ function menuItemsFor(ids, info, tools) {
         offline || (tools && !tools.traceroute ? t("reasonNoTraceroute") : null) || noIp,
       run: () => startAction("traceroute", [single]),
     });
+  } else if (single) {
+    const devices = addressable(devicesUnder(single));
+    items.push({
+      key: "pingGroup", group: "actions",
+      label: fmt("menuPingGroup", { n: devices.length }),
+      disabled:
+        offline || noPing ||
+        (devices.length ? null : t("reasonNoDevices")) ||
+        tooMany(devices.length),
+      run: () => startAction("ping", devices, nodeTitle(single)),
+    });
+  } else {
+    const targets = addressable(ids);
+    items.push({
+      key: "pingSelection", group: "actions",
+      label: fmt("menuPingSelection", { n: targets.length }),
+      disabled:
+        offline || noPing ||
+        (targets.length ? null : t("reasonNoDevices")) ||
+        tooMany(targets.length),
+      run: () => startAction("ping", targets),
+    });
+    // No traceroute for a crowd: its output means something only for
+    // one destination at a time
   }
 
   const loose = ids.filter((id) => !isPinned(id));
@@ -911,6 +945,8 @@ function closeActions() {
 
 function refusalText(answer) {
   switch (answer.error) {
+    case "too_many_targets":
+      return fmt("refuseTooMany", { n: answer.count, limit: answer.limit });
     case "busy":
       return fmt("refuseBusy", { limit: answer.limit });
     case "tool_missing":
@@ -919,6 +955,10 @@ function refusalText(answer) {
       return (answer.addresses || []).length
         ? fmt("refuseAddress", { list: answer.addresses.join(", ") })
         : fmt("refuseUnknown", { list: (answer.nodes || []).join(", ") });
+    case "traceroute_one":
+      return t("refuseTraceOne");
+    case "no_targets":
+      return t("reasonNoDevices");
     case "unknown_job":
       return t("refuseJobGone");
     case "no_service":
@@ -960,7 +1000,7 @@ function renderAction() {
   els.actionsTitle.textContent = actionTitle
     ? t(actionTitle.action === "ping" ? "menuPing" : "menuTraceroute") +
       " · " +
-      actionTitle.name
+      (actionTitle.name || fmt("actionsNodes", { n: actionTitle.n }))
     : "";
   const body = [];
   const esc = (text) =>
@@ -986,7 +1026,33 @@ function renderAction() {
   if (lastTools && lastTools.simulated) {
     body.push(`<p class="hint">${t("actionSimulated")}</p>`);
   }
-  {
+  if (job.action === "ping" && job.targets.length > 1) {
+    const answered = job.targets.filter(
+      (target) => target.result && target.result.received > 0
+    ).length;
+    body.push(
+      `<p class="hint">${fmt("pingSummary", {
+        n: answered, total: job.targets.length,
+      })}</p>`
+    );
+    const rows = job.targets.map((target) => {
+      const [cls, verdict] = pingVerdict(target);
+      const result = target.result || {};
+      return (
+        `<tr><td>${esc(target.name)}</td>` +
+        `<td class="mono">${esc(target.ip || "—")}</td>` +
+        `<td class="num">${result.loss == null ? "—" : result.loss + "%"}</td>` +
+        `<td class="num">${esc(fmtMs(result.avg))}</td>` +
+        `<td class="${cls}">${esc(verdict)}</td></tr>`
+      );
+    });
+    body.push(
+      `<table><thead><tr><th>${t("colNode")}</th><th>IP</th>` +
+        `<th>${t("colLoss")}</th><th>${t("colRtt")}</th>` +
+        `<th>${t("colVerdict")}</th></tr></thead>` +
+        `<tbody>${rows.join("")}</tbody></table>`
+    );
+  } else {
     const target = job.targets[0];
     body.push(`<dl><dt>${t("actionTarget")}</dt><dd>${esc(target.name)} · ${esc(target.ip || "—")}</dd>`);
     if (job.action === "ping") {
