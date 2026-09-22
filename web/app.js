@@ -35,6 +35,7 @@ const els = {
   stpClose: document.getElementById("stp-close"),
   emptyState: document.getElementById("empty-state"),
   freezeBtn: document.getElementById("freeze-btn"),
+  saveLayoutBtn: document.getElementById("save-layout-btn"),
   langRu: document.getElementById("lang-ru"),
   langEn: document.getElementById("lang-en"),
 };
@@ -196,11 +197,96 @@ function layoutFor(id) {
   return first ? { x: pos.x, y: pos.y } : null;
 }
 
-/* Applied to every node as it is built. */
+/* Applied to every node as it is built. Two marks, and they answer
+   two different questions: "did I put this here" and "is this node
+   newer than the picture I saved". */
 function applyLayout(node) {
+  const pinned = !!(savedLayout[node.id] && savedLayout[node.id].pinned);
   const pos = layoutFor(node.id);
   if (pos) Object.assign(node, pos);
+  // Both marks are set on EVERY render, including to their off state.
+  // vis merges an update field by field, so a property left out keeps
+  // whatever it had — and a node unpinned or a layout reset would go
+  // on wearing its old outline.
+  node.fixed = pinned ? { x: true, y: true } : { x: false, y: false };
+  if (pinned) node.label = (node.label || "") + " " + t("pinnedMark");
   return node;
+}
+
+/* Everything on screen right now, as the server stores it. */
+function currentPositions() {
+  if (!network) return {};
+  const positions = network.getPositions();
+  const out = {};
+  for (const id of Object.keys(positions)) {
+    out[id] = {
+      x: positions[id].x,
+      y: positions[id].y,
+      pinned: !!(savedLayout[id] && savedLayout[id].pinned),
+    };
+  }
+  return out;
+}
+
+async function saveLayout() {
+  if (!network) return;
+  const nodes = currentPositions();
+  try {
+    await fetch("/api/layout", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ nodes: nodes }),
+    });
+  } catch (e) {
+    serviceLost("saving the layout");
+    return;
+  }
+  serviceBack();
+  await loadLayout();
+  renderGraph();
+}
+
+/* A node dragged by hand is pinned where it was dropped. Nobody has to
+   press anything: moving a box on the screen is the statement, and the
+   person doing it knows where that switch stands better than the
+   physics engine does. */
+async function pinNode(id, x, y) {
+  savedLayout[id] = { x: x, y: y, pinned: true };
+  try {
+    await fetch("/api/layout/" + layoutPath(id), {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ x: x, y: y, pinned: true }),
+    });
+  } catch (e) {
+    serviceLost("pinning a node");
+    return;
+  }
+  serviceBack();
+  if (!layoutSavedAt) layoutSavedAt = Date.now() / 1000;
+  renderGraph();
+}
+
+async function unpinNode(id) {
+  delete savedLayout[id];
+  placed.delete(id);
+  try {
+    await fetch("/api/layout/" + layoutPath(id), { method: "DELETE" });
+  } catch (e) {
+    serviceLost("releasing a node");
+    return;
+  }
+  serviceBack();
+  await loadLayout();
+  renderGraph();
+}
+
+/* Node ids carry colons and, in four of the seven kinds, a port name
+   with a slash in it ("pseudo:10.0.0.21:Gi0/3"). The slash is part of
+   the id and the route reads it with a path converter, so it must
+   survive encoding; everything else must not. */
+function layoutPath(id) {
+  return encodeURIComponent(id).replace(/%2F/g, "/");
 }
 
 /* ---------- helpers ---------- */
@@ -953,7 +1039,33 @@ function renderGraph() {
       { nodes: nodesDs, edges: edgesDs },
       options
     );
+    // A drag ends with a click event too. Without this, dropping a
+    // node would also open its card — and the card covers the part of
+    // the map somebody has just been arranging.
+    let draggedNode = null;
+    network.on("dragStart", (params) => {
+      draggedNode = params.nodes.length ? params.nodes[0] : null;
+    });
+    network.on("dragEnd", (params) => {
+      if (!params.nodes.length) return;
+      const id = params.nodes[0];
+      const at = network.getPositions([id])[id];
+      if (at) pinNode(id, at.x, at.y);
+    });
+    // Right-click on a pinned node offers to let it go again
+    network.on("oncontext", (params) => {
+      params.event.preventDefault();
+      const id = network.getNodeAt(params.pointer.DOM);
+      if (!id || !(savedLayout[id] && savedLayout[id].pinned)) return;
+      if (window.confirm(fmt("unpinConfirm", { node: nodeTitle(id) }))) {
+        unpinNode(id);
+      }
+    });
     network.on("click", (params) => {
+      if (draggedNode) {
+        draggedNode = null;
+        return;
+      }
       if (params.nodes.length) {
         setSelectedNode(params.nodes[0]);
         showDetails(params.nodes[0]);
@@ -1061,6 +1173,14 @@ function loopCardTitle(loop) {
 }
 
 /* A switch's name for a card, falling back to its address */
+/* What to call a node in a confirmation dialog: its caption if the
+   graph has one, its id otherwise. */
+function nodeTitle(id) {
+  const node = nodesDs && nodesDs.get(id);
+  const label = node && node.label ? String(node.label).split("\n")[0] : "";
+  return label.trim() || id;
+}
+
 function switchName(ip) {
   const sw = (topology.switches || []).find((s) => s.ip === ip);
   return sw ? sw.name : ip;
@@ -1373,6 +1493,14 @@ function showDetails(nodeId) {
       <button id="monitor-btn" class="panel-btn${host.monitored ? " active" : ""}">
         ${host.monitored ? "★" : "☆"} ${t("monitorBtn")}</button>`;
   }
+  // Placed by hand: say so, and offer to hand it back to the physics
+  // engine. The map must answer "did MoonLan arrange this or did I"
+  // without anyone having to guess.
+  if (savedLayout[nodeId] && savedLayout[nodeId].pinned) {
+    html +=
+      `<p class="hint">${t("pinnedHint")}</p>` +
+      `<button id="unpin-btn" class="panel-btn">${t("unpinBtn")}</button>`;
+  }
   shownDetails = { type: "node", id: nodeId };
   setDetails(html);
   els.details.classList.remove("hidden");
@@ -1380,6 +1508,10 @@ function showDetails(nodeId) {
   els.alarms.classList.add("hidden");
   els.stp.classList.add("hidden");
   closePorts();
+  const unpinBtn = document.getElementById("unpin-btn");
+  if (unpinBtn) {
+    unpinBtn.addEventListener("click", () => unpinNode(nodeId));
+  }
   const portsBtn = document.getElementById("ports-btn");
   if (portsBtn) {
     portsBtn.addEventListener("click", () =>
@@ -2280,6 +2412,7 @@ for (const th of document.querySelectorAll("#ports th[data-sort]")) {
   th.addEventListener("click", () => setPortsSort(th.dataset.sort));
 }
 els.freezeBtn.addEventListener("click", toggleFreeze);
+els.saveLayoutBtn.addEventListener("click", saveLayout);
 els.alarmsBtn.addEventListener("click", toggleAlarms);
 els.alarmsClose.addEventListener("click", () =>
   els.alarms.classList.add("hidden")

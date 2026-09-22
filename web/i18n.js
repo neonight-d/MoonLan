@@ -8,6 +8,15 @@ const I18N = {
     tagline: "local network map",
     journalBtn: "Journal",
     freezeBtn: "Freeze layout",
+    saveLayoutBtn: "Save layout",
+    pinnedMark: "\ud83d\udccc",
+    pinnedHint:
+      "This node is where somebody put it, not where the layout "
+      + "engine would have put it. It is out of the physics and stays "
+      + "here for everyone looking at this map, through reloads and "
+      + "restarts.",
+    unpinBtn: "Release this node",
+    unpinConfirm: "Release \u201c{node}\u201d back to the layout engine?",
     unfreezeBtn: "Unfreeze",
     rescanBtn: "Rescan network",
     searchPlaceholder: "Search: name, IP or MAC…",
@@ -431,6 +440,15 @@ const I18N = {
     tagline: "карта локальной сети",
     journalBtn: "Журнал",
     freezeBtn: "Заморозить раскладку",
+    saveLayoutBtn: "Сохранить раскладку",
+    pinnedMark: "\ud83d\udccc",
+    pinnedHint:
+      "Этот узел стоит там, куда его поставил человек, а не там, куда "
+      + "его положил бы алгоритм раскладки. Он выведен из-под физики и "
+      + "остаётся здесь для всех, кто смотрит на эту карту, — и после "
+      + "перезагрузки страницы, и после перезапуска сервиса.",
+    unpinBtn: "Открепить узел",
+    unpinConfirm: "Открепить «{node}» и вернуть его под раскладку?",
     unfreezeBtn: "Разморозить",
     rescanBtn: "Опросить сеть",
     searchPlaceholder: "Поиск: имя, IP или MAC…",
