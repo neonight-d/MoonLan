@@ -37,6 +37,10 @@ const els = {
   freezeBtn: document.getElementById("freeze-btn"),
   arrangeBtn: document.getElementById("arrange-btn"),
   nodeMenu: document.getElementById("node-menu"),
+  actions: document.getElementById("actions"),
+  actionsTitle: document.getElementById("actions-title"),
+  actionsBody: document.getElementById("actions-body"),
+  actionsClose: document.getElementById("actions-close"),
   layoutStatus: document.getElementById("layout-status"),
   resetLayoutBtn: document.getElementById("reset-layout-btn"),
   langRu: document.getElementById("lang-ru"),
@@ -150,6 +154,7 @@ function setLang(newLang) {
   if (!els.stp.classList.contains("hidden") && lastStp) {
     renderStp();
   }
+  if (!els.actions.classList.contains("hidden")) renderAction();
 }
 
 /* ---------- layout freeze ---------- */
@@ -655,70 +660,165 @@ function rebuildGraph() {
 
 /* ---------- context menu ----------
 
-   The items are data, not markup. This version has three of them; the
-   next one adds diagnostic actions (ping, traceroute, a link to the
-   device's own web interface) and whatever commands the operator puts
-   in config.yaml, and none of that should mean rewriting the menu.
+   The items are data, not markup: each one says what it is called,
+   which group it belongs to, whether it can run and why not, and what
+   it does. v0.7.1 built this frame for exactly what goes in it now —
+   diagnostic actions, links, the operator's own items from
+   config.yaml — each of them more of the same data.
 
-   Every item says what it is called, when it applies, and what it
-   does — and it is handed the whole selection, because a menu that
-   works on one node when three are chosen is a menu that surprises
-   people. */
-function menuItemsFor(ids) {
+   Every item is handed the whole selection, because a menu that works
+   on one node when three are chosen is a menu that surprises people.
+
+   An item that cannot run is shown greyed out with the reason — "IP
+   unknown", "no traceroute on the server" — rather than left out. The
+   same discipline as "no answer is not zero": what is missing has to
+   be visible as missing. */
+
+// In the order the menu shows them, a separator between each
+const MENU_GROUPS = ["actions", "layout"];
+
+// Nodes that stand for a place rather than a device: they have no
+// address of their own
+const GROUP_PREFIXES = ["pseudo:", "trunk:", "offline:", "external:"];
+
+function isGroupNode(id) {
+  return GROUP_PREFIXES.some((prefix) => id.startsWith(prefix));
+}
+
+/* The reason a link or an action cannot run for want of a value. */
+function missingReason(field) {
+  return t("reasonNo_" + field);
+}
+
+function menuItemsFor(ids, info, tools) {
+  const single = ids.length === 1 ? ids[0] : null;
+  const node = info ? info.node : null;
+  const items = [];
+  // The service did not answer: the actions are shown, and say why
+  // they cannot run
+  const offline = tools ? null : t("reasonNoService");
+  const noPing = tools && !tools.ping ? t("reasonNoPing") : null;
+
+  if (single && !isGroupNode(single)) {
+    const noIp = node && !node.ip ? missingReason("ip") : null;
+    items.push({
+      key: "ping", group: "actions", label: t("menuPing"),
+      disabled: offline || noPing || noIp,
+      run: () => startAction("ping", [single]),
+    });
+    items.push({
+      key: "traceroute", group: "actions", label: t("menuTraceroute"),
+      disabled:
+        offline || (tools && !tools.traceroute ? t("reasonNoTraceroute") : null) || noIp,
+      run: () => startAction("traceroute", [single]),
+    });
+  }
+
   const loose = ids.filter((id) => !isPinned(id));
-  return [
-    {
-      key: "pin",
-      label: loose.length ? t("menuPin") : t("menuUnpin"),
-      applies: () => ids.length > 0,
-      run: () => togglePinOnSelection(),
-    },
-    {
-      key: "card",
-      label: t("menuOpenCard"),
-      // one node, one card: there is nothing to show for a crowd
-      applies: () => ids.length === 1,
+  items.push({
+    key: "pin", group: "layout",
+    label: loose.length ? t("menuPin") : t("menuUnpin"),
+    run: () => togglePinOnSelection(),
+  });
+  // one node, one card: there is nothing to show for a crowd
+  if (single) {
+    items.push({
+      key: "card", group: "layout", label: t("menuOpenCard"),
       run: () => {
-        setSelectedNode(ids[0]);
-        showDetails(ids[0]);
+        setSelectedNode(single);
+        showDetails(single);
       },
-    },
-    {
-      key: "ports",
-      label: t("menuOpenPorts"),
-      applies: () => ids.length === 1 && ids[0].startsWith("sw:"),
-      run: () => openPorts(ids[0].slice("sw:".length)),
-    },
-  ];
+    });
+  }
+  if (single && single.startsWith("sw:")) {
+    items.push({
+      key: "ports", group: "layout", label: t("menuOpenPorts"),
+      run: () => openPorts(single.slice("sw:".length)),
+    });
+  }
+  return items;
 }
 
 function closeNodeMenu() {
+  menuSerial++;
   els.nodeMenu.classList.add("hidden");
   els.nodeMenu.replaceChildren();
 }
 
-function openNodeMenu(ids, at) {
-  const items = menuItemsFor(ids).filter((item) => item.applies());
-  if (!items.length) {
-    closeNodeMenu();
-    return;
+/* Opens the menu once the server has said what the node offers. Every
+   open gets a number, so an answer arriving after the menu was closed
+   or opened somewhere else is dropped rather than drawn. */
+let menuSerial = 0;
+// What the server last said it can run: tools, the ceiling, demo mode
+let lastTools = null;
+
+async function openNodeMenu(ids, at) {
+  const serial = ++menuSerial;
+  let info = null;
+  let tools = null;
+  try {
+    if (ids.length === 1) {
+      const response = await fetch(
+        "/api/node-menu?id=" + encodeURIComponent(ids[0])
+      );
+      if (response.ok) {
+        info = await response.json();
+        tools = info.tools;
+      } else {
+        // a node the service no longer has: the map is older than the
+        // service's picture of it; the layout items still work
+        tools = (await (await fetch("/api/actions")).json());
+      }
+    } else {
+      tools = await (await fetch("/api/actions")).json();
+    }
+  } catch (e) {
+    serviceLost("the node menu");
   }
+  if (serial !== menuSerial) return;
+  if (tools) lastTools = tools;
+  renderNodeMenu(ids, menuItemsFor(ids, info, tools), at);
+}
+
+function renderNodeMenu(ids, items, at) {
   const parts = [];
   const head = document.createElement("div");
   head.className = "context-menu-head";
   head.textContent =
     ids.length === 1 ? nodeTitle(ids[0]) : fmt("menuSelected", { n: ids.length });
   parts.push(head);
-  for (const item of items) {
-    const button = document.createElement("button");
-    button.type = "button";
-    button.dataset.key = item.key;
-    button.textContent = item.label;
-    button.addEventListener("click", () => {
-      closeNodeMenu();
-      item.run();
-    });
-    parts.push(button);
+  let drawn = 0;
+  for (const group of MENU_GROUPS) {
+    const members = items.filter((item) => item.group === group);
+    if (!members.length) continue;
+    if (drawn++) {
+      const sep = document.createElement("div");
+      sep.className = "context-menu-sep";
+      parts.push(sep);
+    }
+    for (const item of members) {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.dataset.key = item.key;
+      button.textContent = item.label;
+      if (item.disabled) {
+        // not the `disabled` attribute: a disabled button shows no
+        // tooltip in some browsers, and the reason is the point
+        button.classList.add("off");
+        button.setAttribute("aria-disabled", "true");
+        button.title = item.disabled;
+        const why = document.createElement("span");
+        why.className = "why";
+        why.textContent = item.disabled;
+        button.append(why);
+      }
+      button.addEventListener("click", () => {
+        if (item.disabled) return;
+        closeNodeMenu();
+        item.run();
+      });
+      parts.push(button);
+    }
   }
   els.nodeMenu.replaceChildren(...parts);
   els.nodeMenu.classList.remove("hidden");
@@ -728,6 +828,189 @@ function openNodeMenu(ids, at) {
   const y = Math.min(at.y, window.innerHeight - box.height - 8);
   els.nodeMenu.style.left = Math.max(4, x) + "px";
   els.nodeMenu.style.top = Math.max(4, y) + "px";
+}
+
+/* ---------- ping and traceroute ----------
+
+   Run on the MoonLan machine: a browser cannot ping, and the point is
+   to see the network from where MoonLan sees it. The page asks by node
+   id; the server finds the address itself, refuses what it does not
+   know, and runs the tool in the background. The page asks how it is
+   going once a second — the map is never held up waiting. */
+
+let actionJob = null;      // the job the panel shows
+let actionRefusal = null;  // …or why the server would not start it
+let actionTitle = null;   // {action, name, n} for the panel head
+let actionTimer = null;
+
+async function startAction(action, ids, title) {
+  clearTimeout(actionTimer);
+  actionJob = null;
+  actionRefusal = null;
+  // kept in parts, so the head can be worded again in another language
+  actionTitle = {
+    action: action,
+    name: title || (ids.length === 1 ? nodeTitle(ids[0]) : ""),
+    n: ids.length,
+  };
+  els.actions.classList.remove("hidden");
+  renderAction();
+  let answer;
+  try {
+    const response = await fetch("/api/actions", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ action: action, nodes: ids }),
+    });
+    answer = await response.json();
+  } catch (e) {
+    serviceLost("starting " + action);
+    answer = { error: "no_service" };
+  }
+  if (answer.error) {
+    actionRefusal = answer;
+  } else {
+    actionJob = answer;
+    followAction();
+  }
+  renderAction();
+}
+
+function followAction() {
+  clearTimeout(actionTimer);
+  if (!actionJob || actionJob.done) return;
+  const id = actionJob.id;
+  actionTimer = setTimeout(async () => {
+    let job;
+    try {
+      job = await (await fetch("/api/actions/" + id)).json();
+    } catch (e) {
+      serviceLost("the result of a ping");
+      followAction();
+      return;
+    }
+    // closed, or replaced by another run, while this was on its way
+    if (!actionJob || actionJob.id !== id) return;
+    if (job.error) {
+      actionRefusal = job;
+      actionJob = null;
+    } else {
+      actionJob = job;
+      followAction();
+    }
+    renderAction();
+  }, 1000);
+}
+
+function closeActions() {
+  clearTimeout(actionTimer);
+  actionJob = null;
+  actionRefusal = null;
+  els.actions.classList.add("hidden");
+}
+
+function refusalText(answer) {
+  switch (answer.error) {
+    case "busy":
+      return fmt("refuseBusy", { limit: answer.limit });
+    case "tool_missing":
+      return fmt("refuseNoTool", { tool: answer.tool });
+    case "unknown_nodes":
+      return (answer.addresses || []).length
+        ? fmt("refuseAddress", { list: answer.addresses.join(", ") })
+        : fmt("refuseUnknown", { list: (answer.nodes || []).join(", ") });
+    case "unknown_job":
+      return t("refuseJobGone");
+    case "no_service":
+      return t("reasonNoService");
+    default:
+      return fmt("refuseOther", { error: answer.error });
+  }
+}
+
+/* What the continuous monitoring knows about the same address — shown
+   as the second source it is, not merged into the one-off result. */
+function monitorText(monitor) {
+  if (!monitor || monitor.ping_up == null) return t("monitorNone");
+  if (monitor.ping_up) {
+    return fmt("monitorUp", { time: fmtTime(monitor.last_ping_ok) });
+  }
+  return monitor.last_ping_ok
+    ? fmt("monitorDown", { time: fmtTime(monitor.last_ping_ok) })
+    : t("monitorNever");
+}
+
+function pingVerdict(target) {
+  if (target.status === "no_ip") return ["verdict-other", t("verdictNoIp")];
+  if (target.status === "queued" || target.status === "running") {
+    return ["verdict-other", "…"];
+  }
+  if (target.status === "timeout") return ["verdict-none", t("verdictTimeout")];
+  if (!target.result) return ["verdict-other", t("verdictFailed")];
+  if (target.result.received === 0) return ["verdict-none", t("verdictNoReply")];
+  if (target.result.loss > 0) return ["verdict-partial", t("verdictPartial")];
+  return ["verdict-ok", t("verdictOk")];
+}
+
+function fmtMs(value) {
+  return value == null ? "—" : value + " " + t("ms");
+}
+
+function renderAction() {
+  els.actionsTitle.textContent = actionTitle
+    ? t(actionTitle.action === "ping" ? "menuPing" : "menuTraceroute") +
+      " · " +
+      actionTitle.name
+    : "";
+  const body = [];
+  const esc = (text) =>
+    String(text == null ? "" : text).replace(/[&<>"]/g, (c) => ({
+      "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;",
+    })[c]);
+  if (actionRefusal) {
+    body.push(`<p class="action-status refused">${esc(refusalText(actionRefusal))}</p>`);
+    els.actionsBody.innerHTML = body.join("");
+    return;
+  }
+  const job = actionJob;
+  if (!job) {
+    body.push(`<p class="action-status running">${t("actionStarting")}</p>`);
+    els.actionsBody.innerHTML = body.join("");
+    return;
+  }
+  body.push(
+    `<p class="action-status ${job.done ? "" : "running"}">${
+      job.done ? t("actionDone") : t("actionRunning")
+    }</p>`
+  );
+  if (lastTools && lastTools.simulated) {
+    body.push(`<p class="hint">${t("actionSimulated")}</p>`);
+  }
+  {
+    const target = job.targets[0];
+    body.push(`<dl><dt>${t("actionTarget")}</dt><dd>${esc(target.name)} · ${esc(target.ip || "—")}</dd>`);
+    if (job.action === "ping") {
+      const result = target.result;
+      const [cls, verdict] = pingVerdict(target);
+      body.push(
+        `<dt>${t("actionThisRun")}</dt><dd><span class="${cls}">${esc(verdict)}</span>` +
+          (result
+            ? ` · ${fmt("pingLoss", {
+                loss: result.loss, received: result.received, sent: result.sent,
+              })} · ${t("pingRtt")} ${esc(fmtMs(result.min))} / ${esc(
+                fmtMs(result.avg)
+              )} / ${esc(fmtMs(result.max))}`
+            : "") +
+          `</dd>`
+      );
+      body.push(`<dt>${t("actionMonitor")}</dt><dd>${esc(monitorText(target.monitor))}</dd>`);
+    } else {
+      body.push(`<dt>${t("actionTool")}</dt><dd>${esc(job.tool)}</dd>`);
+    }
+    body.push("</dl>");
+    if (target.output) body.push(`<pre>${esc(target.output)}</pre>`);
+  }
+  els.actionsBody.innerHTML = body.join("");
 }
 
 /* ---------- arrange mode ----------
@@ -3066,6 +3349,7 @@ document.addEventListener("click", (event) => {
   if (!els.nodeMenu.contains(event.target)) closeNodeMenu();
 });
 els.resetLayoutBtn.addEventListener("click", resetLayout);
+els.actionsClose.addEventListener("click", closeActions);
 els.alarmsBtn.addEventListener("click", toggleAlarms);
 els.alarmsClose.addEventListener("click", () =>
   els.alarms.classList.add("hidden")

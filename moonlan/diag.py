@@ -53,7 +53,7 @@ import time
 import urllib.request
 from collections import Counter
 
-from . import counters, loopdetect, pinger, stp
+from . import counters, loopdetect, pinger, probes, stp
 from .anonymize import Anonymizer, AnonymizingWriter
 from .config import (
     SECRET_KEYS,
@@ -886,6 +886,8 @@ def run_config_audit(cfg) -> None:
         for problem in report.problems:
             print(f"  {problem}")
 
+    _print_node_menu(cfg)
+
     # The settings each switch is actually polled with. The global
     # section is only half the answer once a switch may carry keys of
     # its own, and "which timeout is this device on" is the first
@@ -913,6 +915,31 @@ def run_config_audit(cfg) -> None:
         print(f"  {ip:<18}" + "".join(cells))
 
     _print_poll_times(cfg)
+
+
+def _print_node_menu(cfg) -> None:
+    """Part of `--config`: what the right-click menu can do here.
+
+    Ping and traceroute run on this machine, so whether they exist is a
+    fact about this machine, not about the config — and a menu item
+    greyed out as "no traceroute on the server" should be explainable
+    from here.
+    """
+    menu_cfg = cfg.context_menu
+    found = probes.find_tools()
+    trace = found["traceroute"]
+    print("\nnode menu (context_menu):")
+    print(
+        "  ping:        "
+        + (found["ping"] or "NOT FOUND — Ping is disabled in the menu")
+    )
+    print(
+        "  traceroute:  "
+        + (f"{trace[0]} at {trace[1]}" if trace else
+           "NOT FOUND (neither traceroute nor tracepath) — Traceroute "
+           "is disabled in the menu")
+    )
+    print(f"  at most {menu_cfg.max_running} action(s) running at once")
 
 
 def _ask_service(cfg, path: str) -> dict | None:

@@ -587,3 +587,62 @@ main { flex: 1; display: flex; min-height: 0; }
 .ports-table th.no-answer::before { content: "\26A0 "; }
 .ports-table th.partial { color: var(--warn); cursor: help; }
 .ports-table th.partial::before { content: "\2248 "; }
+
+/* ---------- node menu: groups and items that cannot run ---------- */
+
+.context-menu-sep {
+  height: 1px;
+  margin: 4px 2px;
+  background: var(--line);
+}
+
+/* Greyed out, not removed: an item that is missing says nothing about
+   why, and "no IP known" is information in its own right */
+.context-menu button.off {
+  color: var(--text-dim);
+  cursor: default;
+}
+.context-menu button.off:hover { background: none; }
+.context-menu .why {
+  display: block;
+  font-size: 0.72rem;
+  color: var(--text-dim);
+  opacity: 0.85;
+}
+
+/* ---------- diagnostics panel ----------
+
+   Bottom left, not top right with the others: a ping result has to
+   survive a click on a node, which opens that node's card up there. */
+#actions {
+  top: auto;
+  right: auto;
+  bottom: 14px;
+  left: 14px;
+  width: min(500px, calc(100vw - 28px));
+  max-height: calc(60% - 28px);
+}
+#actions .hint { margin: 0 0 8px; font-size: 0.8rem; color: var(--text-dim); }
+#actions .action-status { font-size: 0.85rem; margin: 0 0 8px; }
+#actions .action-status.running { color: var(--warn); }
+#actions .action-status.refused { color: #d96b6b; }
+#actions dl { margin: 0; font-size: 0.85rem; }
+#actions dt { color: var(--text-dim); margin-top: 8px; }
+#actions dd { margin: 2px 0 0; font-family: ui-monospace, monospace; }
+#actions pre {
+  margin: 10px 0 0;
+  padding: 8px;
+  max-height: 260px;
+  overflow: auto;
+  background: var(--bg);
+  border-radius: 4px;
+  color: var(--text-dim);
+  font-family: ui-monospace, monospace;
+  font-size: 0.76rem;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+.verdict-ok { color: var(--ok); }
+.verdict-partial { color: var(--warn); }
+.verdict-none { color: #d96b6b; }
+.verdict-other { color: var(--text-dim); }

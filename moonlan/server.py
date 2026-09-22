@@ -13,13 +13,14 @@ from collections import Counter
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import FastAPI, Query
+from fastapi import FastAPI, Query, Request
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from . import (
-    __version__, corruption, counters, demo, loopdetect, pinger, stp,
+    __version__, corruption, counters, demo, loopdetect, pinger, probes,
+    stp,
 )
 from .alarms import AlarmEngine
 from .config import Config, load_config, parse_uplink_ports
@@ -51,6 +52,29 @@ db = Database(":memory:" if config.demo else config.db_path)
 
 # Ping state of switches (they are not in the hosts table): ip -> {ping_up, last_ping_ok}
 switch_ping: dict[str, dict] = {}
+
+
+async def _demo_probe(argv: list[str], timeout: float):
+    """The menu's ping and traceroute in demo mode: nothing is sent.
+    A device answers when the demo's own monitoring says it does."""
+    ip = argv[-1]
+    rows = await asyncio.to_thread(db.hosts_by_mac)
+    answers = any(
+        row["ip"] == ip and row["ping_up"] for row in rows.values()
+    ) or any(
+        sw_ip == ip and ping.get("ping_up")
+        for sw_ip, ping in switch_ping.items()
+    )
+    return await demo.fake_probe(argv, answers)
+
+
+# The node menu's ping and traceroute: which tools this machine has,
+# and the requests running or recently finished
+tools = (
+    {"ping": "simulated", "traceroute": ("traceroute", "simulated")}
+    if config.demo else probes.find_tools()
+)
+jobs = probes.Jobs(tools, _demo_probe if config.demo else probes.run)
 
 # FDB merged with previous polls: protects links from MAC table aging
 fdb_stability = FdbStability()
@@ -1820,6 +1844,18 @@ def _log_config() -> None:
         log.info("%s", summary)
     for problem in report.problems:
         log.warning("config.yaml switches: %s", problem)
+    if config.demo:
+        log.info("Node menu: ping and traceroute are simulated in demo mode")
+    else:
+        trace = tools.get("traceroute")
+        log.info(
+            "Node menu: ping %s, traceroute %s",
+            f"at {tools['ping']}" if tools.get("ping")
+            else "NOT FOUND — the Ping item is disabled",
+            f"({trace[0]}) at {trace[1]}" if trace
+            else "NOT FOUND (neither traceroute nor tracepath) — the "
+                 "Traceroute item is disabled",
+        )
     starved = config.starved_counters()
     if starved:
         log.warning(
@@ -2360,6 +2396,165 @@ def _layout_node_ids() -> set[str]:
                 "offline_groups", "trunk_groups"):
         ids |= {node["id"] for node in topo.get(key) or () if node.get("id")}
     return ids
+
+
+def _node_directory() -> dict[str, dict]:
+    """Every node on the map with what the node menu needs to know.
+
+    The page names a node by its id and nothing else. The address a
+    ping goes to, the MAC a link is filled with, all come from here —
+    MoonLan's own topology and database — and never from the request.
+    `switch` is the address of the switch the node hangs off (a
+    switch's own, for a switch), `port` the port there.
+    """
+    topo = state.as_dict()
+    db_hosts = db.hosts_by_mac()
+    nodes: dict[str, dict] = {}
+
+    def entry(kind, ip="", mac="", name="", switch="", port="", row=None):
+        row = row or {}
+        return {
+            "kind": kind, "ip": ip or "", "mac": mac or "",
+            "name": name or "", "switch": switch or "", "port": port or "",
+            # what the continuous ping knows, shown beside a one-off
+            # ping as the second source it is
+            "ping_up": bool(row["ping_up"]) if "ping_up" in row else None,
+            "last_ping_ok": row.get("last_ping_ok", 0) or 0,
+        }
+
+    for sw in topo["switches"]:
+        nodes["sw:" + sw["ip"]] = entry(
+            "switch", sw["ip"], sw.get("mac"), sw.get("name"), sw["ip"],
+            row=switch_ping.get(sw["ip"]),
+        )
+    for host in topo["hosts"]:
+        if host.get("merged_into"):
+            continue  # drawn as its bridge node
+        row = db_hosts.get(host["mac"], {})
+        nodes["host:" + host["mac"]] = entry(
+            "host",
+            row.get("ip") or host.get("router_ip"),
+            host["mac"],
+            row.get("name") or (host.get("lldp") or {}).get("sys_name"),
+            host.get("switch"), host.get("port"), row,
+        )
+    for bridge in topo.get("bridges") or ():
+        row = db_hosts.get(bridge.get("chassis_id", ""), {})
+        nodes[bridge["id"]] = entry(
+            "switch",
+            bridge.get("router_ip") or row.get("ip") or bridge.get("mgmt_ip"),
+            bridge.get("chassis_id"), bridge.get("name"),
+            bridge.get("switch"), bridge.get("port"), row,
+        )
+    for key in ("pseudo_switches", "trunk_groups", "offline_groups",
+                "external_networks"):
+        for group in topo.get(key) or ():
+            nodes[group["id"]] = entry(
+                "group", switch=group.get("switch"), port=group.get("port"),
+            )
+    return nodes
+
+
+def _tool_state() -> dict:
+    """What the menu can run, for greying out what it cannot."""
+    trace = tools.get("traceroute")
+    return {
+        "ping": bool(tools.get("ping")),
+        "traceroute": trace[0] if trace else None,
+        "simulated": config.demo,
+    }
+
+
+@app.get("/api/node-menu")
+async def api_node_menu(id: str = Query(...)):
+    """What the right-click menu of one node can offer."""
+    nodes = await asyncio.to_thread(_node_directory)
+    facts = nodes.get(id)
+    if facts is None:
+        return JSONResponse(
+            {"error": "unknown_node", "node": id}, status_code=404
+        )
+    return {
+        "node": {"id": id, **facts},
+        "tools": _tool_state(),
+    }
+
+
+class ActionBody(BaseModel):
+    action: str
+    nodes: list[str]
+
+
+def _refuse(error: str, status: int, **extra) -> JSONResponse:
+    return JSONResponse({"error": error, **extra}, status_code=status)
+
+
+@app.get("/api/actions")
+async def api_actions_state() -> dict:
+    return {**_tool_state(), "running": jobs.running(),
+            "max_running": config.context_menu.max_running}
+
+
+@app.post("/api/actions")
+async def api_start_action(body: ActionBody, request: Request):
+    """Starts ping or traceroute from this machine; returns the job.
+
+    Node ids in, never addresses: an id MoonLan does not know is
+    refused, and so is an address sent in place of one. Whatever the
+    tool is run against was found by MoonLan itself.
+    """
+    if body.action not in probes.ACTIONS:
+        return _refuse("unknown_action", 400, action=body.action)
+    ids = list(dict.fromkeys(body.nodes))
+    if not ids:
+        return _refuse("no_targets", 400)
+    if body.action == "ping" and not tools.get("ping"):
+        return _refuse("tool_missing", 503, tool="ping")
+    if body.action == "traceroute" and not tools.get("traceroute"):
+        return _refuse("tool_missing", 503, tool="traceroute")
+    nodes = await asyncio.to_thread(_node_directory)
+    unknown = [node_id for node_id in ids if node_id not in nodes]
+    if unknown:
+        return _refuse(
+            "unknown_nodes", 404, nodes=unknown[:10],
+            # the one mistake worth naming: an address is not a node id
+            addresses=[n for n in unknown if probes.checked_address(n)],
+        )
+    targets = [
+        probes.Target(
+            node=node_id, kind=nodes[node_id]["kind"],
+            name=nodes[node_id]["name"] or nodes[node_id]["ip"] or node_id,
+            ip=nodes[node_id]["ip"],
+            monitor={
+                "ping_up": nodes[node_id]["ping_up"],
+                "last_ping_ok": nodes[node_id]["last_ping_ok"],
+            },
+        )
+        for node_id in ids
+    ]
+    try:
+        job = jobs.start(
+            body.action, targets, config.context_menu.max_running
+        )
+    except probes.Busy:
+        return _refuse("busy", 429, limit=config.context_menu.max_running)
+    client = request.client.host if request.client else "?"
+    shown = ", ".join(
+        f"{t.node} ({t.ip or 'no address'})" for t in targets[:5]
+    ) + (f" and {len(targets) - 5} more" if len(targets) > 5 else "")
+    log.info(
+        "Menu: %s of %s requested from %s (job %s)",
+        body.action, shown, client, job.id,
+    )
+    return job.as_dict()
+
+
+@app.get("/api/actions/{job_id}")
+async def api_action_state(job_id: str):
+    job = jobs.get(job_id)
+    if job is None:
+        return _refuse("unknown_job", 404)
+    return job.as_dict()
 
 
 @app.get("/api/layout")

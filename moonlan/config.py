@@ -93,6 +93,15 @@ class LoopDetectionConfig:
 
 
 @dataclass
+class ContextMenuConfig:
+    """The node menu: its diagnostic actions."""
+
+    # Diagnostic requests running on the server at once; one more is
+    # refused with a reason rather than queued without end
+    max_running: int = 4
+
+
+@dataclass
 class EmailConfig:
     enabled: bool = False
     smtp_host: str = ""
@@ -235,6 +244,7 @@ class Config:
     loop_detection: LoopDetectionConfig = field(
         default_factory=LoopDetectionConfig
     )
+    context_menu: ContextMenuConfig = field(default_factory=ContextMenuConfig)
     thresholds: Thresholds = field(default_factory=Thresholds)
     notifications: NotificationsConfig = field(default_factory=NotificationsConfig)
     alarm_notify: dict[str, list[str]] = field(
@@ -627,6 +637,11 @@ def load_config(path: Path | None = None) -> Config:
             "loop_detection.enabled", d.loop_detection.enabled, bool
         ),
         profiles=r.get("loop_detection.profiles", [], list),
+    )
+
+    m = d.context_menu
+    cfg.context_menu = ContextMenuConfig(
+        max_running=r.get("context_menu.max_running", m.max_running, int),
     )
 
     t = d.thresholds

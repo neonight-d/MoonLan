@@ -31,9 +31,8 @@
   </header>
 
   <!-- Right-click menu. Its items are built from data (see
-       menuItemsFor in app.js): the next version puts diagnostic
-       actions and the operator's own commands in here, and that must
-       not mean rewriting the menu. -->
+       menuItemsFor in app.js): diagnostic actions, links, the
+       operator's own items from config.yaml, the layout. -->
   <div id="node-menu" class="context-menu hidden" role="menu"></div>
 
   <main>
@@ -105,6 +104,16 @@
           <button id="stp-close">×</button>
         </div>
         <div class="panel-scroll"><div id="stp-body"></div></div>
+      </div>
+      <!-- Ping and traceroute from the MoonLan machine, started from
+           the node menu. Bottom left on purpose: a result has to
+           survive a click on a node, which opens its card top right. -->
+      <div id="actions" class="panel hidden">
+        <div class="panel-head">
+          <h3 id="actions-title"></h3>
+          <button id="actions-close">×</button>
+        </div>
+        <div class="panel-scroll"><div id="actions-body"></div></div>
       </div>
       <div id="empty-state" class="hidden">
         <p data-i18n="emptyLine1"></p>

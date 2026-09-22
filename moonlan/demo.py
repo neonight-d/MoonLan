@@ -113,6 +113,7 @@ v0.5.3 scenarios:
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import random
 import time
@@ -1340,3 +1341,48 @@ class DemoCounters:
                 gaps_filled=4, filled_by="1.3.6.1.2.1.2.2.1.10",
             )
         return report
+
+
+# ---------- the node menu's ping and traceroute ----------
+
+async def fake_probe(argv: list[str], answers: bool) -> tuple[int, str, bool]:
+    """What ping or traceroute would print, for an address that does
+    not exist.
+
+    The demo's addresses are invented, and 10.0.0.x is exactly what a
+    real network next to the demo may be using: running the real tools
+    would probe somebody's actual devices. A device answers here when
+    the demo's own monitoring says it does, so the panel's two sources
+    — this probe and the continuous ping — agree the way they would on
+    a real network.
+    """
+    ip = argv[-1]
+    rng = random.Random(ip)
+    if argv[0] == "ping":
+        await asyncio.sleep(1.5 + rng.random())
+        head = f"PING {ip} ({ip}) 56(84) bytes of data.\n"
+        if not answers:
+            return 1, head + (
+                f"\n--- {ip} ping statistics ---\n"
+                "4 packets transmitted, 0 received, 100% packet loss, "
+                "time 3066ms\n"
+            ), False
+        times = [round(0.3 + rng.random() * 1.5, 3) for _ in range(4)]
+        lines = "".join(
+            f"64 bytes from {ip}: icmp_seq={n + 1} ttl=64 time={t} ms\n"
+            for n, t in enumerate(times)
+        )
+        return 0, head + lines + (
+            f"\n--- {ip} ping statistics ---\n"
+            "4 packets transmitted, 4 received, 0% packet loss, time 3004ms\n"
+            f"rtt min/avg/max/mdev = {min(times)}/"
+            f"{round(sum(times) / 4, 3)}/{max(times)}/0.210 ms\n"
+        ), False
+    await asyncio.sleep(3 + rng.random() * 2)
+    hops = [f"traceroute to {ip} ({ip}), 20 hops max, 60 byte packets"]
+    hops.append(f" 1  10.0.0.10  {round(0.4 + rng.random(), 3)} ms")
+    hops.append(
+        f" 2  {ip}  {round(0.8 + rng.random(), 3)} ms" if answers
+        else " 2  *\n 3  *\n 4  *"
+    )
+    return 0, "\n".join(hops) + "\n", False
