@@ -16,7 +16,7 @@ An open-source alternative to LanTopoLog. MIT license.
 
 *Alarm panel: port errors, discards and host outages with one-click access to the switch port table.*
 
-## Features (v0.6.15)
+## Features (v0.7)
 
 - SNMP v2c polling of switches: device name, ports, speeds, statuses.
   Each switch has a time budget for its whole poll
@@ -88,6 +88,20 @@ An open-source alternative to LanTopoLog. MIT license.
 - The interface says when it has stopped hearing from the service: the
   last picture stays on screen and the header says how old it is,
   instead of a map that quietly never changes again.
+- A layout that does not rearrange itself. Node positions live on the
+  server, not in one browser: a map of a network is a shared object,
+  and two people looking at it have to see the same picture. Drag a
+  node and it is pinned where it was dropped and saved, marked so the
+  map can answer "did MoonLan arrange this or did I"; release it from
+  its card or with a right-click. "Save layout" records where
+  everything is and makes the picture reproducible. A node the saved
+  layout does not cover is drawn dashed and counted in the header, so
+  the drift is visible rather than found when the map is printed. A
+  node that vanished from the network keeps its place — a device
+  switched off for the night was not taken away — and a position is
+  forgotten only when it is both older than `layout_keep_days` and has
+  no node on the map. `python -m moonlan.diag --layout` reports all of
+  it.
 - A readable map at any size: offline devices sharing a port hang off
   one "Offline · N" node instead of surrounding every switch with a
   cloud of grey dots (`offline_group_threshold`); the devices stay
@@ -245,7 +259,7 @@ Version history: [CHANGELOG.md](CHANGELOG.md)
 | Version | Functionality |
 |---------|---------------|
 | v0.1    | SNMP polling, MAC tables, basic topology, web UI |
-| v0.2    | Manual map editing, context menus, layout export/import *(postponed)* |
+| v0.2 ~  | Manual map editing, context menus, layout export/import *(layout and manual placement done in v0.7; manual LINKS deliberately not)* |
 | v0.3 ✓  | Ping monitoring, journal of new MAC addresses, last-reply time, host IPs and names (ARP/DNS) |
 | v0.4 ✓  | Accurate link inference, LACP, VLAN, unmanaged switches |
 | v0.5 ✓  | Alerts and notifications: email, Telegram, Syslog; traffic thresholds; port error counters (ifInErrors etc.) |
@@ -265,7 +279,8 @@ Version history: [CHANGELOG.md](CHANGELOG.md)
 | v0.6.13 ✓| A dash means never measured; an unknown root is not a root |
 | v0.6.14 ✓| LLDP builds the tree; rings are resolved or explained |
 | v0.6.15 ✓| A reading nobody took is not an observation; the map says when it stopped |
-| v0.7    | Export to PDF and Draw.io, MAC address info import |
+| v0.7 ✓  | A layout that does not rearrange itself: positions on the server, manual placement, drift made visible |
+| v0.7.1  | Export to PDF and Draw.io, MAC address info import |
 | v0.8    | Windows computer inventory (WMI/WinRM) |
 
 ## Requirements
@@ -534,6 +549,15 @@ after every scan and its rates visibly age. MoonLan says so at startup
 and in `diag --config`, per device. It is not forbidden — a genuinely
 slow agent may need the budget — but it should be a decision rather
 than a surprise.
+
+**`layout_keep_days`** (default 90). How long a saved node position
+outlives the node itself. A device switched off for the night was not
+taken away: coming back, it belongs where it was, so nothing is
+forgotten for being absent. A position goes only when it is BOTH older
+than this and has no node on the current map — and that housekeeping
+runs once, at the first scan after a restart, because before that scan
+there is no map to compare against and every position would look
+orphaned.
 
 ### When SNMP says nothing at all
 

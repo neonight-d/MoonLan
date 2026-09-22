@@ -6,6 +6,61 @@ for before the next one started.
 
 Русская версия — [CHANGELOG_RU.md](CHANGELOG_RU.md).
 
+## v0.7 — 2026-09-22
+
+A layout that does not rearrange itself.
+
+The map has never remembered where anything is. "Freeze layout" turns
+the physics engine off and nothing more; inside one session the nodes
+stay put only because vis.Network is updated rather than rebuilt. Press
+F5 and the map lays itself out again, and the administrator in the next
+room has it arranged differently. The export to PDF and Draw.io that
+stands next in the roadmap was waiting on this: a diagram in a cabinet
+is useful because it matches what somebody remembers, and a PDF with a
+different picture every time does not do that job.
+
+Positions now live in the database, not in one browser. A map of a
+network is a shared object: two people looking at one network have to
+see one picture, or "the switch at the bottom left" stops meaning
+anything. The language and the freeze toggle are personal and stay
+where they are; coordinates are not. The keys were already there and
+already stable — the node ids the topology builds out of what a device
+IS.
+
+Dragging a node is a statement: the person doing it knows where that
+switch stands better than a force-directed layout does. So a dragged
+node is pinned where it was dropped and saved, with nothing to press.
+It is marked, because the map has to answer "did MoonLan arrange this
+or did I" without anyone guessing, and it can be released from its card
+or with a right-click. "Save layout" records where everything is, not
+only what was pinned, and does not un-place what was put by hand.
+
+A node the saved picture does not contain is drawn with a dashed
+outline and counted in the header — the same discipline as "N switches
+ran out of time": a difference between what was recorded and what is
+there now has to be visible, not discovered when the map is printed.
+
+A node that vanished from the network keeps its place. A device
+switched off for the night was not taken away, so nothing is forgotten
+for being absent; only age forgets a position, and only for a node the
+map no longer has. That housekeeping runs at the first scan after a
+restart rather than at startup proper — before that scan there is no
+map to compare against, and a restart would throw the whole layout
+away. Saving and clearing the layout go into the journal: somebody
+changed the picture everybody else is looking at.
+
+`diag --layout` reports what is stored, what was placed by hand, what
+has no saved position and what has no node.
+
+Deliberately not in this version: manual links and manual nodes. A link
+drawn by hand is indistinguishable on the map from one that was
+inferred, and there is nothing to check it against — it will not go
+stale, will not disappear when a cable moves, and will go on asserting
+something that stopped being true years ago. That is the opposite of
+the line this project has held since v0.6.4. If it is ever wanted, a
+hand-drawn object has to look different, be dated and be checkable, and
+that is its own piece of work.
+
 ## v0.6.15 — 2026-09-21
 
 A reading nobody took is not an observation. Two defects, neither of
