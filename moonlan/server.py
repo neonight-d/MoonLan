@@ -2293,6 +2293,91 @@ async def api_patch_host(mac: str, body: HostPatch):
     return {"mac": mac, "monitored": body.monitored}
 
 
+class NodePosition(BaseModel):
+    x: float
+    y: float
+    pinned: bool | None = None
+
+
+class LayoutBody(BaseModel):
+    nodes: dict[str, NodePosition]
+
+
+def _layout_node_ids() -> set[str]:
+    """Every node id the current map draws.
+
+    The same ids the front end uses, built here so the housekeeping and
+    the diagnostics do not have to ask the browser what exists.
+    """
+    topo = state.as_dict()
+    ids = {"sw:" + sw["ip"] for sw in topo["switches"]}
+    # A device drawn AS another node — a bridge that answers LLDP and
+    # is also in somebody's MAC table — has no node of its own, so it
+    # has no position of its own either. Counting it would put two
+    # nodes in "not in the saved layout" that nobody can place.
+    ids |= {
+        "host:" + h["mac"] for h in topo["hosts"] if not h.get("merged_into")
+    }
+    for key in ("pseudo_switches", "bridges", "external_networks",
+                "offline_groups", "trunk_groups"):
+        ids |= {node["id"] for node in topo.get(key) or () if node.get("id")}
+    return ids
+
+
+@app.get("/api/layout")
+async def api_layout() -> dict:
+    """Saved node positions, and which of the current nodes lack one."""
+    saved = await asyncio.to_thread(db.layout)
+    present = _layout_node_ids()
+    return {
+        "nodes": saved,
+        "saved_at": await asyncio.to_thread(db.layout_saved_at),
+    }
+
+
+@app.put("/api/layout")
+async def api_put_layout(body: LayoutBody) -> dict:
+    """Stores the whole picture as it is on screen right now."""
+    positions = {
+        node_id: pos.model_dump(exclude_none=True)
+        for node_id, pos in body.nodes.items()
+    }
+    stored = await asyncio.to_thread(db.save_layout, positions)
+    log.info("Map layout saved: %d node(s)", stored)
+    return {"saved": stored, "saved_at": await asyncio.to_thread(
+        db.layout_saved_at
+    )}
+
+
+@app.patch("/api/layout/{node_id:path}")
+async def api_patch_node_position(node_id: str, body: NodePosition) -> dict:
+    """One node, moved by hand — pinned unless told otherwise."""
+    pinned = True if body.pinned is None else body.pinned
+    await asyncio.to_thread(
+        db.set_node_position, node_id, body.x, body.y, pinned
+    )
+    return {"node_id": node_id, "x": body.x, "y": body.y, "pinned": pinned}
+
+
+@app.delete("/api/layout/{node_id:path}")
+async def api_delete_node_position(node_id: str):
+    """Forgets one node: it goes back under the physics engine."""
+    removed = await asyncio.to_thread(db.forget_node_position, node_id)
+    if not removed:
+        return JSONResponse(
+            {"error": "no saved position for this node"}, status_code=404
+        )
+    return {"node_id": node_id, "removed": True}
+
+
+@app.delete("/api/layout")
+async def api_clear_layout() -> dict:
+    """Forgets the whole layout. The map is laid out from scratch."""
+    removed = await asyncio.to_thread(db.clear_layout)
+    log.info("Map layout cleared: %d node(s) forgotten", removed)
+    return {"removed": removed}
+
+
 async def _scan_once() -> None:
     """A manual scan, recording a failure the same way the loop does."""
     try:

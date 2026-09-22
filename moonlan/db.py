@@ -68,6 +68,23 @@ CREATE TABLE IF NOT EXISTS bridges (
     first_seen REAL NOT NULL,
     last_seen  REAL NOT NULL
 );
+CREATE TABLE IF NOT EXISTS layout (
+    -- Where a node sits on the map. The key is the node id the
+    -- topology already builds out of what the device IS — sw:<ip>,
+    -- host:<mac>, bridge:<chassis id> — and not out of anything a
+    -- person typed.
+    --
+    -- Four of those ids carry a port NAME (pseudo:, trunk:, offline:,
+    -- external:), so renaming a port in the switch's firmware orphans
+    -- that row. It breaks safely: the node simply comes back without a
+    -- saved position, and the old row is cleaned up by age. Worth
+    -- knowing before somebody goes looking for the bug.
+    node_id    TEXT PRIMARY KEY,
+    x          REAL NOT NULL,
+    y          REAL NOT NULL,
+    pinned     INTEGER DEFAULT 0,          -- 1 = placed by hand, physics off
+    updated_at REAL NOT NULL
+);
 CREATE TABLE IF NOT EXISTS alarms (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     type TEXT NOT NULL,        -- host_down|switch_down|port_errors|port_util|new_mac
@@ -448,6 +465,81 @@ class Database:
             self._conn.execute(
                 "UPDATE hosts SET name = ? WHERE mac = ?", (name, mac)
             )
+
+    # ---------- map layout ----------
+
+    def layout(self) -> dict[str, dict]:
+        """node id -> {x, y, pinned, updated_at}.
+
+        The map is a shared object, not a personal setting. Two people
+        looking at one network have to see one picture, or "the switch
+        at the bottom left" stops meaning anything — which is why this
+        lives here and not in somebody's localStorage.
+        """
+        with self._lock:
+            rows = self._conn.execute("SELECT * FROM layout").fetchall()
+        return {
+            row["node_id"]: {
+                "x": row["x"], "y": row["y"],
+                "pinned": bool(row["pinned"]),
+                "updated_at": row["updated_at"],
+            }
+            for row in rows
+        }
+
+    def save_layout(self, positions: dict[str, dict]) -> int:
+        """Writes a whole snapshot; returns how many nodes were stored.
+
+        A node already pinned stays pinned unless the caller says
+        otherwise: a full save records where everything is, and does
+        not quietly un-place what somebody put by hand.
+        """
+        now = time.time()
+        with self._lock, self._conn:
+            for node_id, pos in positions.items():
+                pinned = pos.get("pinned")
+                if pinned is None:
+                    row = self._conn.execute(
+                        "SELECT pinned FROM layout WHERE node_id = ?",
+                        (node_id,),
+                    ).fetchone()
+                    pinned = row["pinned"] if row else 0
+                self._conn.execute(
+                    "INSERT INTO layout (node_id, x, y, pinned, updated_at) "
+                    "VALUES (?, ?, ?, ?, ?) "
+                    "ON CONFLICT(node_id) DO UPDATE SET "
+                    "x = excluded.x, y = excluded.y, "
+                    "pinned = excluded.pinned, "
+                    "updated_at = excluded.updated_at",
+                    (node_id, float(pos["x"]), float(pos["y"]),
+                     int(bool(pinned)), now),
+                )
+        return len(positions)
+
+    def set_node_position(
+        self, node_id: str, x: float, y: float, pinned: bool = True
+    ) -> None:
+        """One node, moved by hand."""
+        self.save_layout({node_id: {"x": x, "y": y, "pinned": pinned}})
+
+    def forget_node_position(self, node_id: str) -> bool:
+        with self._lock, self._conn:
+            cur = self._conn.execute(
+                "DELETE FROM layout WHERE node_id = ?", (node_id,)
+            )
+        return cur.rowcount > 0
+
+    def clear_layout(self) -> int:
+        with self._lock, self._conn:
+            cur = self._conn.execute("DELETE FROM layout")
+        return cur.rowcount
+
+    def layout_saved_at(self) -> float:
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT MAX(updated_at) AS ts FROM layout"
+            ).fetchone()
+        return row["ts"] or 0.0
 
     def hosts_by_mac(self) -> dict[str, dict]:
         with self._lock:

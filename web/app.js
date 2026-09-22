@@ -154,16 +154,53 @@ function setLang(newLang) {
 const FREEZE_KEY = "moonlan-freeze-layout";
 let layoutFrozen = localStorage.getItem(FREEZE_KEY) === "1";
 
-function applyFreeze() {
-  if (network) network.setOptions({ physics: !layoutFrozen });
-  els.freezeBtn.textContent = layoutFrozen ? t("unfreezeBtn") : t("freezeBtn");
-  els.freezeBtn.classList.toggle("active", layoutFrozen);
+/* ---------- saved layout ----------
+
+   Where the nodes sit is kept on the server, not in this browser. A
+   map of a network is a shared object: two people looking at one
+   network have to see one picture, or "the switch at the bottom left"
+   stops meaning anything. The language and the freeze toggle are
+   personal settings and stay in localStorage; coordinates are not.
+
+   `placed` remembers which nodes have already been given their saved
+   position in this session. An unpinned node is started there and then
+   left to the physics engine — re-applying the coordinates on every
+   thirty-second refresh would drag it back and fight the layout. */
+let savedLayout = {};
+let layoutSavedAt = 0;
+const placed = new Set();
+
+async function loadLayout() {
+  try {
+    const data = await (await fetch("/api/layout")).json();
+    savedLayout = data.nodes || {};
+    layoutSavedAt = data.saved_at || 0;
+  } catch (e) {
+    // no saved layout is not an error: the map lays itself out
+    savedLayout = {};
+    layoutSavedAt = 0;
+  }
 }
 
-function toggleFreeze() {
-  layoutFrozen = !layoutFrozen;
-  localStorage.setItem(FREEZE_KEY, layoutFrozen ? "1" : "0");
-  applyFreeze();
+/* The saved position of a node, if it has one and has not been given
+   it already. A pinned node keeps being told where it is: it is out of
+   the physics engine, so nothing else would hold it there. */
+function layoutFor(id) {
+  const pos = savedLayout[id];
+  if (!pos) return null;
+  const first = !placed.has(id);
+  placed.add(id);
+  if (pos.pinned) {
+    return { x: pos.x, y: pos.y, fixed: { x: true, y: true } };
+  }
+  return first ? { x: pos.x, y: pos.y } : null;
+}
+
+/* Applied to every node as it is built. */
+function applyLayout(node) {
+  const pos = layoutFor(node.id);
+  if (pos) Object.assign(node, pos);
+  return node;
 }
 
 /* ---------- helpers ---------- */
@@ -344,36 +381,6 @@ function updateScanStatus() {
   }
 }
 
-/* The service can go away — restarted, redeployed, or the machine this
-   page is open from lost the route to it. Every periodic request has
-   to survive that: an unhandled rejection every thirty seconds is not
-   information, and a map that simply stops changing looks exactly like
-   a quiet network where nothing is happening.
-
-   So: the last good picture stays on screen, the header says the data
-   is no longer arriving and how old it is, and the console gets one
-   line when the connection is lost and one when it comes back. */
-let serviceReachable = true;
-
-function serviceLost(what) {
-  if (serviceReachable) {
-    serviceReachable = false;
-    console.warn(
-      "MoonLan: the service is not answering (" + what + "). The map " +
-      "below is the last picture that arrived; polling continues."
-    );
-    updateScanStatus();
-  }
-}
-
-function serviceBack() {
-  if (!serviceReachable) {
-    serviceReachable = true;
-    console.info("MoonLan: the service is answering again.");
-    updateScanStatus();
-  }
-}
-
 /* While a scan runs the header counts switches off. The map itself is
    only refreshed every REFRESH_MS, which is no use to somebody
    watching a scan that may last minutes. */
@@ -427,7 +434,6 @@ async function loadTopology() {
   renderBadge();
   renderSidebar();
   renderGraph();
-  updateScanStatus();
   // A scan the operator did not start is worth counting off too: the
   // periodic one is when they are most likely to wonder why nothing
   // has moved for ten minutes.
@@ -598,7 +604,7 @@ function buildGraphData() {
     // repeating the address underneath tells nobody anything. The
     // model out of sysDescr goes there instead, or nothing at all.
     const second = sw.named === false ? sw.model || "" : sw.ip;
-    nodes.push({
+    nodes.push(applyLayout({
       id: "sw:" + sw.ip,
       label:
         sw.name + (second ? "\n" + second : "") +
@@ -613,7 +619,7 @@ function buildGraphData() {
       font: nodeFont("sw:" + sw.ip),
       borderWidth: switchHasAlarm(sw.ip) || sw.stp_root || looping ? 3 : 2,
       margin: 10,
-    });
+    }));
   }
 
   for (const link of topology.links) {
@@ -661,7 +667,7 @@ function buildGraphData() {
   }
 
   for (const ps of topology.pseudo_switches || []) {
-    nodes.push({
+    nodes.push(applyLayout({
       id: ps.id,
       label: t("pseudoTitle"),
       shape: "square",
@@ -674,7 +680,7 @@ function buildGraphData() {
       shapeProperties: { borderDashes: [4, 4] },
       borderWidth: 2,
       font: nodeFont(ps.id),
-    });
+    }));
     edges.push(markLoop({
       id: "psedge:" + ps.id,
       from: "sw:" + ps.switch,
@@ -698,7 +704,7 @@ function buildGraphData() {
     // the address under the name is the one the operator uses, not
     // whichever of the announced ones came back first
     const bridgeAddress = bridge.router_ip || bridge.ip || bridge.mgmt_ip;
-    nodes.push({
+    nodes.push(applyLayout({
       id: bridge.id,
       label: bridge.name + (bridgeAddress ? "\n" + bridgeAddress : ""),
       shape: "box",
@@ -711,7 +717,7 @@ function buildGraphData() {
       borderWidth: 2,
       margin: 8,
       font: { color: colors.dim, size: 12 },
-    });
+    }));
     edges.push(markLoop({
       id: "bredge:" + bridge.id,
       from: "sw:" + bridge.switch,
@@ -725,7 +731,7 @@ function buildGraphData() {
   // one node per port that leaves the network: what is behind the
   // provider's handover is not ours to draw device by device
   for (const external of topology.external_networks || []) {
-    nodes.push({
+    nodes.push(applyLayout({
       id: external.id,
       label: t("externalNetwork") + " · " + external.count,
       shape: "hexagon",
@@ -737,7 +743,7 @@ function buildGraphData() {
       },
       borderWidth: 2,
       font: nodeFont(external.id),
-    });
+    }));
     edges.push(markLoop({
       id: "extedge:" + external.id,
       // the provider's switch is on the cable and everything else is
@@ -755,7 +761,7 @@ function buildGraphData() {
   // own. Deliberately not shaped like a switch: nobody knows whether
   // there is one, only that these addresses come through this cable
   for (const group of topology.trunk_groups || []) {
-    nodes.push({
+    nodes.push(applyLayout({
       id: group.id,
       label: t("trunkGroup") + " · " + group.count,
       shape: "ellipse",
@@ -768,7 +774,7 @@ function buildGraphData() {
       borderWidth: 2,
       margin: 6,
       font: { color: colors.dim, size: 11 },
-    });
+    }));
     edges.push(markLoop({
       id: "trunkedge:" + group.id,
       // off whatever stands on that cable, if anything does
@@ -781,7 +787,7 @@ function buildGraphData() {
   }
 
   for (const group of topology.offline_groups || []) {
-    nodes.push({
+    nodes.push(applyLayout({
       id: group.id,
       label: t("offlineGroup") + " · " + group.count,
       shape: "square",
@@ -794,7 +800,7 @@ function buildGraphData() {
       shapeProperties: { borderDashes: [2, 3] },
       borderWidth: 2,
       font: nodeFont(group.id),
-    });
+    }));
     edges.push(markLoop({
       id: "offedge:" + group.id,
       // the live devices of this port hang off the bridge or the
@@ -821,7 +827,7 @@ function buildGraphData() {
     const caption = hostLabel(host);
     const second =
       host.router_ip && host.router_ip !== caption ? "\n" + host.router_ip : "";
-    nodes.push({
+    nodes.push(applyLayout({
       id: "host:" + host.mac,
       label: caption + second,
       shape: isRouter ? "diamond" : "dot",
@@ -834,7 +840,7 @@ function buildGraphData() {
       },
       borderWidth: isRouter ? 2 : 1,
       font: nodeFont("host:" + host.mac),
-    });
+    }));
     edges.push(markLoop({
       id: "hostedge:" + host.mac,
       from: host.via || "sw:" + host.switch,
@@ -2284,5 +2290,8 @@ els.langRu.addEventListener("click", () => setLang("ru"));
 els.langEn.addEventListener("click", () => setLang("en"));
 
 applyStatic();
-loadTopology();
+// The layout is fetched before the first map is drawn, so nodes start
+// where they were left rather than where the physics engine throws
+// them and then get yanked into place a moment later.
+loadLayout().then(loadTopology);
 setInterval(loadTopology, REFRESH_MS);
