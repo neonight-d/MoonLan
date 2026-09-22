@@ -447,6 +447,10 @@ const I18N = {
     ev_link_dropped: "Link withdrawn",
     ev_layout_saved: "Layout saved",
     ev_layout_cleared: "Layout reset",
+    ev_layout_pinned: "Placed by hand",
+    ev_layout_released: "Released",
+    evNodes: "{n}: {names}",
+    evNodesMore: "{n}: {names} and {more} more",
     offlineGroup: "Offline",
     offlineGroupTitle: "Offline devices · {n}",
     offlineGroupHint:
@@ -900,6 +904,10 @@ const I18N = {
     ev_link_dropped: "Связь снята",
     ev_layout_saved: "Раскладка сохранена",
     ev_layout_cleared: "Раскладка сброшена",
+    ev_layout_pinned: "Поставлено руками",
+    ev_layout_released: "Отпущено",
+    evNodes: "{n}: {names}",
+    evNodesMore: "{n}: {names} и ещё {more}",
     offlineGroup: "Офлайн",
     offlineGroupTitle: "Офлайн-устройства · {n}",
     offlineGroupHint:

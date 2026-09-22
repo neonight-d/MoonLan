@@ -384,36 +384,7 @@ function scheduleAutoSave() {
    release a switch before nudging it a centimetre would be a rule
    about our bookkeeping, not about their map. */
 async function pinNodes(positions) {
-  const ids = Object.keys(positions);
-  if (!ids.length) return;
-  for (const id of ids) {
-    savedLayout[id] = {
-      x: positions[id].x, y: positions[id].y, pinned: true,
-    };
-  }
-  writing(ids);
-  try {
-    await Promise.all(
-      ids.map((id) =>
-        fetch("/api/layout/" + layoutPath(id), {
-          method: "PATCH",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            x: positions[id].x, y: positions[id].y, pinned: true,
-          }),
-        })
-      )
-    );
-  } catch (e) {
-    written(ids);
-    serviceLost("pinning a node");
-    return;
-  }
-  written(ids);
-  serviceBack();
-  if (!layoutSavedAt) layoutSavedAt = Date.now() / 1000;
-  renderGraph();
-  updateScanStatus();
+  await storeByHand(positions, true, "pinning a node");
 }
 
 function pinNode(id, x, y) {
@@ -422,31 +393,47 @@ function pinNode(id, x, y) {
 
 /* Releases nodes back to the physics engine. No confirmation: this is
    cheap and reversible in one gesture, and a dialog in front of it
-   only makes the cheap thing feel expensive. */
+   only makes the cheap thing feel expensive.
+
+   Released is not forgotten. The node keeps its row, with the
+   coordinates it has and the pin cleared: deleting the row, as v0.7.1
+   did, left a node with no saved position that this page would never
+   save again, and after F5 it went back to its anchor instead of
+   staying where the physics had it. */
 async function unpinNodes(ids) {
+  const at = network ? network.getPositions(ids) : {};
+  const positions = {};
+  for (const id of ids) if (at[id]) positions[id] = at[id];
+  await storeByHand(positions, false, "releasing a node");
+}
+
+/* One action of the hand — a drop, `P`, a menu item — whatever the
+   number of nodes: one request, and one line in the journal. */
+async function storeByHand(positions, pinned, what) {
+  const ids = Object.keys(positions);
   if (!ids.length) return;
+  const nodes = {};
   for (const id of ids) {
-    delete savedLayout[id];
-    placed.delete(id);
+    nodes[id] = { x: positions[id].x, y: positions[id].y, pinned: pinned };
+    savedLayout[id] = nodes[id];
+    // a released node stays where it stands
+    if (!pinned) placed.add(id);
   }
   writing(ids);
   try {
-    await Promise.all(
-      ids.map((id) =>
-        fetch("/api/layout/" + layoutPath(id), { method: "DELETE" })
-      )
-    );
+    await fetch("/api/layout", {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ nodes: nodes }),
+    });
   } catch (e) {
     written(ids);
-    serviceLost("releasing a node");
+    serviceLost(what);
     return;
   }
   written(ids);
   serviceBack();
-  // No re-reading of the whole layout here any more. It used to pull
-  // in every pin other pages had set since this one opened, all at
-  // once and in response to something unrelated; the regular refresh
-  // does that now, a node at a time.
+  if (!layoutSavedAt) layoutSavedAt = Date.now() / 1000;
   renderGraph();
   updateScanStatus();
 }
@@ -490,14 +477,6 @@ function loosenForDrag(ids) {
       body.options.fixed.y = false;
     }
   }
-}
-
-/* Node ids carry colons and, in four of the seven kinds, a port name
-   with a slash in it ("pseudo:10.0.0.21:Gi0/3"). The slash is part of
-   the id and the route reads it with a path converter, so it must
-   survive encoding; everything else must not. */
-function layoutPath(id) {
-  return encodeURIComponent(id).replace(/%2F/g, "/");
 }
 
 async function resetLayout() {
@@ -1827,7 +1806,8 @@ function loopCardTitle(loop) {
 function nodeTitle(id) {
   const node = nodesDs && nodesDs.get(id);
   const label = node && node.label ? String(node.label).split("\n")[0] : "";
-  return label.trim() || id;
+  // the pin mark is a state of the node, not a part of its name
+  return label.replace(" " + t("pinnedMark"), "").trim() || id;
 }
 
 function switchName(ip) {
@@ -3001,7 +2981,7 @@ function renderJournal(events) {
       type.textContent = translated === "ev_" + ev.event ? ev.event : translated;
       const host = document.createElement("span");
       host.className = "ev-host";
-      host.textContent = ev.name || ev.ip || ev.mac;
+      host.textContent = ev.name || ev.ip || ev.mac || layoutEventText(ev);
       item.append(time, type, host);
       return item;
     })
@@ -3011,6 +2991,26 @@ function renderJournal(events) {
     empty.textContent = t("noEvents");
     els.journalList.append(empty);
   }
+}
+
+/* "3 nodes: access-sw-1, access-sw-2, gw" for a pin or a release.
+   The server records ids and a count, not a sentence, so the entry
+   reads in the page's language and by the captions on the map. */
+function layoutEventText(ev) {
+  if (ev.event !== "layout_pinned" && ev.event !== "layout_released") {
+    return "";
+  }
+  let data;
+  try {
+    data = JSON.parse(ev.details);
+  } catch (e) {
+    return ev.details || "";
+  }
+  const names = (data.ids || []).map(nodeTitle);
+  const more = data.n - names.length;
+  return fmt(more > 0 ? "evNodesMore" : "evNodes", {
+    n: data.n, names: names.join(", "), more: more,
+  });
 }
 
 async function toggleJournal() {

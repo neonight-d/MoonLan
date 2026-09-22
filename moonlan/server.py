@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import os
 import socket
@@ -2417,24 +2418,80 @@ async def api_put_layout(body: LayoutBody) -> dict:
     }
 
 
+# How many node ids a journal entry about a layout action names; the
+# count is always there, the list only while it is short enough to read
+LAYOUT_EVENT_IDS = 5
+
+
+async def _journal_layout_action(event: str, node_ids: list[str]) -> None:
+    """One journal entry per action, however many nodes it touched.
+
+    Pinning and releasing were not in the journal at all, which is why
+    a pin wiped out by another page's save was visible to nobody. The
+    details are data, not a sentence — the page words them in its own
+    language and by the nodes' captions. When sign-in arrives (v0.7.3)
+    this is the entry that gets the user's name.
+    """
+    if not node_ids:
+        return
+    details = json.dumps({
+        "n": len(node_ids), "ids": node_ids[:LAYOUT_EVENT_IDS],
+    })
+    await asyncio.to_thread(db.add_event, time.time(), event, "", details)
+
+
+async def _store_hand_placed(positions: dict[str, NodePosition]) -> dict:
+    """Stores nodes placed or released by hand, journalled per kind.
+
+    A node sent without `pinned` is pinned: this is the hand putting it
+    somewhere. Released means `pinned: false` with the coordinates it
+    has — the row stays, so the node keeps a saved position and the map
+    never has a node that is neither placed nor saved.
+    """
+    rows = {
+        node_id: {
+            "x": pos.x, "y": pos.y,
+            "pinned": True if pos.pinned is None else pos.pinned,
+        }
+        for node_id, pos in positions.items()
+    }
+    await asyncio.to_thread(db.save_layout, rows)
+    pinned = [node_id for node_id, row in rows.items() if row["pinned"]]
+    released = [node_id for node_id, row in rows.items() if not row["pinned"]]
+    await _journal_layout_action("layout_pinned", pinned)
+    await _journal_layout_action("layout_released", released)
+    return {"pinned": pinned, "released": released}
+
+
+@app.patch("/api/layout")
+async def api_patch_positions(body: LayoutBody) -> dict:
+    """Several nodes placed or released in one action — a dragged
+    selection, `P` on a selection, one item of the menu."""
+    return await _store_hand_placed(body.nodes)
+
+
 @app.patch("/api/layout/{node_id:path}")
 async def api_patch_node_position(node_id: str, body: NodePosition) -> dict:
     """One node, moved by hand — pinned unless told otherwise."""
+    await _store_hand_placed({node_id: body})
     pinned = True if body.pinned is None else body.pinned
-    await asyncio.to_thread(
-        db.set_node_position, node_id, body.x, body.y, pinned
-    )
     return {"node_id": node_id, "x": body.x, "y": body.y, "pinned": pinned}
 
 
 @app.delete("/api/layout/{node_id:path}")
 async def api_delete_node_position(node_id: str):
-    """Forgets one node: it goes back under the physics engine."""
+    """Forgets one node: it goes back under the physics engine.
+
+    The page no longer releases a node this way — it keeps the row and
+    clears the pin — but a page still running an older script does, so
+    it is journalled as the release it means.
+    """
     removed = await asyncio.to_thread(db.forget_node_position, node_id)
     if not removed:
         return JSONResponse(
             {"error": "no saved position for this node"}, status_code=404
         )
+    await _journal_layout_action("layout_released", [node_id])
     return {"node_id": node_id, "removed": True}
 
 

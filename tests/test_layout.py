@@ -20,6 +20,7 @@ Run with:  python -m unittest discover -s tests
 """
 
 import asyncio
+import json
 import sqlite3
 import sys
 import tempfile
@@ -287,6 +288,78 @@ class OnlyNewApiTest(unittest.TestCase):
         self.assertEqual((saved["x"], saved["y"]), (7.0, 8.0))
         # …and still does not un-place what was put by hand
         self.assertTrue(saved["pinned"])
+
+
+class HandPlacedTest(unittest.TestCase):
+    """Pinning and releasing: one action, one journal line, no lost row."""
+
+    def setUp(self):
+        server.db.clear_layout()
+        self._switches = server.state.switches
+        server.state.switches = [{"ip": "10.0.0.10"}, {"ip": "10.0.0.21"}]
+
+    def tearDown(self):
+        server.db.clear_layout()
+        server.state.switches = self._switches
+
+    def _patch(self, nodes):
+        body = server.LayoutBody(
+            nodes={k: server.NodePosition(**v) for k, v in nodes.items()}
+        )
+        return asyncio.run(server.api_patch_positions(body))
+
+    def _entries(self, event, since):
+        return [
+            e for e in server.db.journal(1000)
+            if e["event"] == event and e["id"] > since
+        ]
+
+    def _last_id(self):
+        rows = server.db.journal(1)
+        return rows[0]["id"] if rows else 0
+
+    def test_a_selection_pinned_at_once_is_one_entry(self):
+        since = self._last_id()
+        self._patch({
+            CORE: {"x": 1, "y": 1},
+            "sw:10.0.0.21": {"x": 2, "y": 2},
+            HOST: {"x": 3, "y": 3},
+        })
+        entries = self._entries("layout_pinned", since)
+        self.assertEqual(len(entries), 1)
+        details = json.loads(entries[0]["details"])
+        self.assertEqual(details["n"], 3)
+        self.assertEqual(set(details["ids"]), {CORE, "sw:10.0.0.21", HOST})
+
+    def test_a_long_list_is_counted_not_spelled_out(self):
+        since = self._last_id()
+        self._patch({f"host:aa:00:00:00:00:{n:02x}": {"x": n, "y": n}
+                     for n in range(12)})
+        details = json.loads(
+            self._entries("layout_pinned", since)[0]["details"]
+        )
+        self.assertEqual(details["n"], 12)
+        self.assertEqual(len(details["ids"]), server.LAYOUT_EVENT_IDS)
+
+    def test_released_is_not_forgotten(self):
+        """The row stays with the pin cleared: the node keeps a saved
+        position, and "missing" never lists a node somebody released."""
+        self._patch({CORE: {"x": 1, "y": 1}})
+        since = self._last_id()
+        self._patch({CORE: {"x": 40, "y": 50, "pinned": False}})
+        saved = server.db.layout()[CORE]
+        self.assertEqual(
+            (saved["x"], saved["y"], saved["pinned"]), (40.0, 50.0, False)
+        )
+        self.assertEqual(len(self._entries("layout_released", since)), 1)
+        self.assertEqual(self._entries("layout_pinned", since), [])
+        self.assertNotIn(CORE, asyncio.run(server.api_layout())["missing"])
+
+    def test_an_older_page_releasing_by_delete_is_journalled_too(self):
+        self._patch({CORE: {"x": 1, "y": 1}})
+        since = self._last_id()
+        asyncio.run(server.api_delete_node_position(CORE))
+        self.assertEqual(len(self._entries("layout_released", since)), 1)
 
 
 if __name__ == "__main__":
