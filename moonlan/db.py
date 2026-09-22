@@ -516,6 +516,45 @@ class Database:
                 )
         return len(positions)
 
+    def add_new_positions(
+        self, positions: dict[str, dict]
+    ) -> tuple[list[str], dict[str, dict]]:
+        """Stores positions only for nodes that have none yet.
+
+        Returns (the ids stored, the rows that were already there). A
+        page that has just drawn a node for the first time writes where
+        it ended up — but "for the first time" is that page's view,
+        taken when it was opened. Another page may have placed and
+        pinned the same node since, and an ordinary save would put the
+        pin back to false and the node back where this page's physics
+        left it. Deciding "is there a row?" here, inside one
+        transaction, closes that race instead of narrowing it.
+        """
+        now = time.time()
+        stored: list[str] = []
+        existing: dict[str, dict] = {}
+        with self._lock, self._conn:
+            for node_id, pos in positions.items():
+                cur = self._conn.execute(
+                    "INSERT INTO layout (node_id, x, y, pinned, updated_at) "
+                    "VALUES (?, ?, ?, ?, ?) "
+                    "ON CONFLICT(node_id) DO NOTHING",
+                    (node_id, float(pos["x"]), float(pos["y"]),
+                     int(bool(pos.get("pinned"))), now),
+                )
+                if cur.rowcount:
+                    stored.append(node_id)
+                    continue
+                row = self._conn.execute(
+                    "SELECT * FROM layout WHERE node_id = ?", (node_id,)
+                ).fetchone()
+                existing[node_id] = {
+                    "x": row["x"], "y": row["y"],
+                    "pinned": bool(row["pinned"]),
+                    "updated_at": row["updated_at"],
+                }
+        return stored, existing
+
     def set_node_position(
         self, node_id: str, x: float, y: float, pinned: bool = True
     ) -> None:

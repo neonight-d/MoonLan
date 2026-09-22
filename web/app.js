@@ -255,21 +255,59 @@ async function saveNewPositions() {
   const ids = Object.keys(fresh);
   if (!ids.length) return;
   for (const id of ids) autoSaved.add(id);
+  let answer;
   try {
-    await fetch("/api/layout", {
+    // "New" is this page's opinion, and it is as old as the page.
+    // Another page may have placed and pinned the node since; the
+    // server decides, in one transaction, and says what it kept.
+    const response = await fetch("/api/layout", {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ nodes: fresh }),
+      body: JSON.stringify({ nodes: fresh, only_new: true }),
     });
+    answer = await response.json();
   } catch (e) {
     for (const id of ids) autoSaved.delete(id);
     serviceLost("saving the layout");
     return;
   }
   serviceBack();
-  for (const id of ids) savedLayout[id] = fresh[id];
-  if (!layoutSavedAt) layoutSavedAt = Date.now() / 1000;
+  for (const id of answer.stored || []) {
+    savedLayout[id] = fresh[id];
+    placed.add(id);
+  }
+  if (adoptLayout(answer.existing || {})) renderGraph();
+  if (!layoutSavedAt) layoutSavedAt = answer.saved_at || Date.now() / 1000;
   updateScanStatus();
+}
+
+/* Takes positions somebody else decided on.
+
+   A pinned one is somebody's decision about where a node goes, and is
+   applied: the node moves there and is held. An unpinned one is only
+   where another page's physics happened to leave the node; this
+   page's own physics has already placed it next to what it is plugged
+   into, and pulling it across the map to match would be two engines
+   fighting over one box. So it is recorded — it is what the next page
+   to open will start from — and not applied.
+
+   Returns whether anything on screen has to change. */
+function adoptLayout(entries) {
+  let changed = false;
+  for (const [id, pos] of Object.entries(entries)) {
+    if (dragging.has(id)) continue;
+    const was = savedLayout[id];
+    savedLayout[id] = { x: pos.x, y: pos.y, pinned: !!pos.pinned };
+    if (pos.pinned) {
+      if (!was || !was.pinned || was.x !== pos.x || was.y !== pos.y) {
+        changed = true;
+      }
+    } else {
+      placed.add(id);
+      if (was && was.pinned) changed = true;
+    }
+  }
+  return changed;
 }
 
 /* The physics engine emits `stabilized` when it settles, which is the

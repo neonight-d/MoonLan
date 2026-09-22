@@ -19,6 +19,7 @@ Three rules this pins down, all of them easy to get backwards:
 Run with:  python -m unittest discover -s tests
 """
 
+import asyncio
 import sqlite3
 import sys
 import tempfile
@@ -73,6 +74,40 @@ class LayoutStoreTest(unittest.TestCase):
         self.assertNotIn(CORE, self.db.layout())
         # …and saying so when there was nothing to forget
         self.assertFalse(self.db.forget_node_position(CORE))
+
+    def test_only_new_leaves_a_pinned_node_alone(self):
+        """The race from the v0.7.1 addendum, closed in the database.
+
+        A page opened before a node appeared thinks the node is new and
+        sends it with pinned: false. Somebody else has pinned it in the
+        meantime. Neither the pin nor the place may change.
+        """
+        self.db.set_node_position(HOST, 1234, -567, pinned=True)
+        stored, existing = self.db.add_new_positions(
+            {HOST: {"x": 125, "y": -27, "pinned": False}}
+        )
+        self.assertEqual(stored, [])
+        saved = self.db.layout()[HOST]
+        self.assertEqual((saved["x"], saved["y"]), (1234.0, -567.0))
+        self.assertTrue(saved["pinned"])
+        # …and the caller is told what is there instead
+        self.assertEqual(
+            (existing[HOST]["x"], existing[HOST]["y"],
+             existing[HOST]["pinned"]),
+            (1234.0, -567.0, True),
+        )
+
+    def test_only_new_stores_what_is_really_new(self):
+        self.db.set_node_position(CORE, 5, 5, pinned=False)
+        stored, existing = self.db.add_new_positions({
+            CORE: {"x": 9, "y": 9, "pinned": False},
+            HOST: {"x": 1, "y": 2, "pinned": False},
+        })
+        self.assertEqual(stored, [HOST])
+        self.assertEqual(list(existing), [CORE])
+        # an unpinned row is somebody's position too: not overwritten
+        self.assertEqual(self.db.layout()[CORE]["x"], 5.0)
+        self.assertEqual(self.db.layout()[HOST]["y"], 2.0)
 
     def test_clearing_everything(self):
         self.db.save_layout({CORE: {"x": 1, "y": 1}, HOST: {"x": 2, "y": 2}})
@@ -181,6 +216,51 @@ class NodeIdTest(unittest.TestCase):
         self.assertIn("host:aa:bb:cc:00:00:01", ids)
         self.assertIn("bridge:aa:bb:cc:00:00:02", ids)
         self.assertNotIn("host:aa:bb:cc:00:00:02", ids)
+
+
+class OnlyNewApiTest(unittest.TestCase):
+    """PUT /api/layout with only_new, through the handler itself."""
+
+    def setUp(self):
+        server.db.clear_layout()
+
+    def tearDown(self):
+        server.db.clear_layout()
+
+    def _put(self, nodes, only_new):
+        body = server.LayoutBody(
+            nodes={k: server.NodePosition(**v) for k, v in nodes.items()},
+            only_new=only_new,
+        )
+        return asyncio.run(server.api_put_layout(body))
+
+    def test_the_automatic_save_cannot_unpin(self):
+        server.db.set_node_position(HOST, 1234, -567, pinned=True)
+        answer = self._put(
+            {HOST: {"x": 125, "y": -27, "pinned": False}}, only_new=True
+        )
+        self.assertEqual(answer["stored"], [])
+        self.assertTrue(answer["existing"][HOST]["pinned"])
+        saved = server.db.layout()[HOST]
+        self.assertEqual(
+            (saved["x"], saved["y"], saved["pinned"]), (1234.0, -567.0, True)
+        )
+
+    def test_nothing_stored_is_not_a_journal_entry(self):
+        server.db.set_node_position(HOST, 1, 1, pinned=True)
+        before = len(server.db.journal(1000))
+        self._put({HOST: {"x": 2, "y": 2, "pinned": False}}, only_new=True)
+        self.assertEqual(len(server.db.journal(1000)), before)
+
+    def test_a_plain_save_still_writes_everything(self):
+        """The old form stays for compatibility and for diag."""
+        server.db.set_node_position(CORE, 1, 1, pinned=True)
+        answer = self._put({CORE: {"x": 7, "y": 8}}, only_new=False)
+        self.assertEqual(answer["stored"], [CORE])
+        saved = server.db.layout()[CORE]
+        self.assertEqual((saved["x"], saved["y"]), (7.0, 8.0))
+        # …and still does not un-place what was put by hand
+        self.assertTrue(saved["pinned"])
 
 
 if __name__ == "__main__":

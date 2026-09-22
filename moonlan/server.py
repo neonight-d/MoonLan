@@ -2333,6 +2333,10 @@ class NodePosition(BaseModel):
 
 class LayoutBody(BaseModel):
     nodes: dict[str, NodePosition]
+    # Store only nodes that have no position yet, and say what the
+    # others already have. What the page's automatic save uses: its
+    # idea of "new" is as old as the page.
+    only_new: bool = False
 
 
 def _layout_node_ids() -> set[str]:
@@ -2378,20 +2382,35 @@ async def api_layout() -> dict:
 
 @app.put("/api/layout")
 async def api_put_layout(body: LayoutBody) -> dict:
-    """Stores the whole picture as it is on screen right now."""
+    """Stores the whole picture as it is on screen right now.
+
+    With `only_new`, only nodes nobody has placed yet: the rest keep
+    what they have, and the answer says what that is, so the page can
+    take it instead of believing its own copy.
+    """
     positions = {
         node_id: pos.model_dump(exclude_none=True)
         for node_id, pos in body.nodes.items()
     }
-    stored = await asyncio.to_thread(db.save_layout, positions)
-    await asyncio.to_thread(
-        db.add_event, time.time(), "layout_saved", "",
-        f"{stored} node(s)",
-    )
-    log.info("Map layout saved: %d node(s)", stored)
-    return {"saved": stored, "saved_at": await asyncio.to_thread(
-        db.layout_saved_at
-    )}
+    if body.only_new:
+        stored, existing = await asyncio.to_thread(
+            db.add_new_positions, positions
+        )
+    else:
+        await asyncio.to_thread(db.save_layout, positions)
+        stored, existing = list(positions), {}
+    if stored:
+        await asyncio.to_thread(
+            db.add_event, time.time(), "layout_saved", "",
+            f"{len(stored)} node(s)",
+        )
+        log.info("Map layout saved: %d node(s)", len(stored))
+    return {
+        "saved": len(stored),
+        "stored": stored,
+        "existing": existing,
+        "saved_at": await asyncio.to_thread(db.layout_saved_at),
+    }
 
 
 @app.patch("/api/layout/{node_id:path}")
