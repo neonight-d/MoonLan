@@ -583,11 +583,22 @@ function devicesUnder(id) {
    browser and does not jump between renders. Math.random() would put
    the same device in a different spot for each person looking. */
 function idHash(id) {
-  let hash = 0;
+  // FNV-1a, then the murmur3 finaliser. The plain `hash * 31 + c` this
+  // replaces kept the last character in the lowest bits almost as it
+  // was, so sw:10.0.0.21 … sw:10.0.0.24 — ids that differ only there —
+  // got angles a degree apart and radii a unit apart, and four
+  // switches started on one spot.
+  let hash = 0x811c9dc5;
   for (let i = 0; i < id.length; i++) {
-    hash = (hash * 31 + id.charCodeAt(i)) | 0;
+    hash ^= id.charCodeAt(i);
+    hash = Math.imul(hash, 0x01000193);
   }
-  return Math.abs(hash);
+  hash ^= hash >>> 16;
+  hash = Math.imul(hash, 0x85ebca6b);
+  hash ^= hash >>> 13;
+  hash = Math.imul(hash, 0xc2b2ae35);
+  hash ^= hash >>> 16;
+  return hash >>> 0;
 }
 
 /* Gives a position to every node that has none.
@@ -617,7 +628,7 @@ function seedPositions(nodes, edges) {
     if (known.has(node.id) || anchors.has(node.id)) continue;
     const hash = idHash(node.id);
     node.x = (hash % 400) - 200;
-    node.y = ((hash >> 9) % 400) - 200;
+    node.y = ((hash >>> 16) % 400) - 200;
     known.set(node.id, { x: node.x, y: node.y });
   }
   // A chain — switch, then the group on it, then the hosts in the
@@ -630,8 +641,9 @@ function seedPositions(nodes, edges) {
       const at = known.get(anchors.get(node.id));
       if (!at) continue;
       const hash = idHash(node.id);
+      // angle and radius from different bits, or they move together
       const angle = ((hash % 360) * Math.PI) / 180;
-      const radius = 70 + (hash % 50);
+      const radius = 70 + ((hash >>> 16) % 50);
       node.x = at.x + Math.cos(angle) * radius;
       node.y = at.y + Math.sin(angle) * radius;
       known.set(node.id, { x: node.x, y: node.y });
