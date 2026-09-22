@@ -79,9 +79,10 @@ const I18N = {
     arrangeBtn: "Arrange",
     arrangeOnBtn: "Arranging",
     arrangeHint:
-      "Arrange mode is on: dragging a node places it and keeps it "
-      + "there, and the right button lets it go again. Outside this "
-      + "mode dragging only moves the view of the map.",
+      "In arrange mode dragging a node places it and keeps it there, "
+      + "and the right button lets it go again. Outside it a dragged "
+      + "node goes back to the layout engine \u2014 except one already "
+      + "placed by hand, which keeps its pin at the new spot.",
     resetLayoutBtn: "Reset layout",
     pinnedMark: "\ud83d\udccc",
     pinnedHint:
@@ -595,9 +596,10 @@ const I18N = {
     arrangeBtn: "Расстановка",
     arrangeOnBtn: "Расставляю",
     arrangeHint:
-      "Режим расстановки включён: перетаскивание ставит узел и "
-      + "оставляет его там, правая кнопка отпускает обратно. Вне "
-      + "режима перетаскивание только двигает вид карты.",
+      "В режиме расстановки перетаскивание ставит узел и оставляет его "
+      + "там, а правая кнопка отпускает обратно. Вне режима "
+      + "перетащенный узел возвращается под физику \u2014 кроме уже "
+      + "поставленного руками: тот остаётся закреплённым на новом месте.",
     resetLayoutBtn: "Сбросить раскладку",
     pinnedMark: "\ud83d\udccc",
     pinnedHint:

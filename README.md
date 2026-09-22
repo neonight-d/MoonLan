@@ -16,7 +16,7 @@ An open-source alternative to LanTopoLog. MIT license.
 
 *Alarm panel: port errors, discards and host outages with one-click access to the switch port table.*
 
-## Features (v0.7.1)
+## Features (v0.7.2)
 
 - SNMP v2c polling of switches: device name, ports, speeds, statuses.
   Each switch has a time budget for its whole poll
@@ -94,18 +94,33 @@ An open-source alternative to LanTopoLog. MIT license.
   node ends up is recorded on its own once the layout settles — there
   is nothing to save by hand and nothing to forget to press. A node
   with no position yet starts next to the thing it is plugged into
-  rather than wherever the engine drops it.
-- Placing a node is a separate act from looking at one. Dragging moves
-  the view; in **Arrange** mode a drag places a node and keeps it
-  there, out of reach of the layout engine, and the right button lets
-  it go again. `P` does the same from the keyboard. A pinned node is
-  still draggable — pinning says "the physics engine does not get to
-  move this", not "nobody does" — and the header counts how much of
-  the map is somebody's decision rather than the engine's.
+  rather than wherever the engine drops it. A page that has been open
+  for a week follows what other pages do — a pin, a release, a reset —
+  at its next refresh, and its own automatic save only ever adds what
+  the server does not have yet, so it cannot overwrite a pin set
+  somewhere else a minute ago.
+- Placing a node is a separate act from looking at one. Outside
+  **Arrange** mode a dragged node goes back to the layout engine; in
+  it, a drag places a node and keeps it there, and the right button
+  lets it go again. `P` does the same from the keyboard. A pinned node
+  can be dragged in either mode and keeps its pin at the new spot —
+  pinning says "the physics engine does not get to move this", not
+  "nobody does" — and the header counts how much of the map is
+  somebody's decision rather than the engine's. Placing and releasing
+  are entries in the journal, one per action.
 - Double-click a switch (or any group node) to select the devices on
   it, Ctrl+click to add and remove, drag the selection to move it all
-  at once. A right-click menu acts on the whole selection: place,
-  release, open the card, open the ports.
+  at once.
+- A right-click menu on every node, acting on the whole selection.
+  Ping and Traceroute run from the MoonLan machine, against the address
+  MoonLan itself knows for that node, and the result opens in a panel
+  beside what the continuous monitoring says; a selection or a group
+  is pinged at once, into a table that fills as the answers come in.
+  The web interface, SSH, remote desktop (a `.rdp` file), copy IP and
+  MAC, and links of your own from `config.yaml`. An item that cannot
+  run is greyed out with the reason — "IP unknown", "no traceroute on
+  the server" — rather than missing. See
+  [The node menu](#the-node-menu).
 - A node that vanished from the network keeps its place — a device
   switched off for the night was not taken away — and a position is
   forgotten only when it is both older than `layout_keep_days` and has
@@ -291,8 +306,8 @@ Version history: [CHANGELOG.md](CHANGELOG.md)
 | v0.6.15 ✓| A reading nobody took is not an observation; the map says when it stopped |
 | v0.7 ✓  | A layout that does not rearrange itself: positions on the server |
 | v0.7.1 ✓| Dragging a node is not a decision: arrange mode, context menu, multi-selection |
-| v0.7.2  | Node context menu with diagnostic actions and the operator's own commands |
-| v0.7.3  | Authentication |
+| v0.7.2 ✓| A pinned node moves, an open page sees, and the menu does something: ping, traceroute, links |
+| v0.7.3  | Authentication; commands on the server from the config, for administrators |
 | v0.8    | Export to PDF and Draw.io, MAC address info import |
 | v0.9    | Windows computer inventory (WMI/WinRM) |
 
@@ -571,6 +586,82 @@ than this and has no node on the current map — and that housekeeping
 runs once, at the first scan after a restart, because before that scan
 there is no map to compare against and every position would look
 orphaned.
+
+### The node menu
+
+Right-click a node. What the menu offers, in this order: diagnostic
+actions, links, your own items, the layout.
+
+**Where the line is.** There is no sign-in yet (v0.7.3), so anything
+the menu can make the server do, anybody who opens the page can make it
+do. Two rules follow from that, and nothing in the config loosens them:
+
+- the server runs only its own built-in actions — ping and traceroute
+  — and only at addresses it found itself. The page sends a node id,
+  never an address; an id the service does not know is refused, and so
+  is an address sent in place of one. The tool runs from an argument
+  list with no shell, the address checked before it gets that far;
+- what `config.yaml` can add to the menu is **links**, opened on the
+  machine of whoever is looking at the map. A command run on the server
+  from a template would be remote execution for the whole LAN without
+  sign-in; that waits for sign-in, and will be for administrators.
+
+**Ping and traceroute** run on the MoonLan machine — the point is to see
+the network from where MoonLan sees it. Ping sends four packets and
+stops at ten seconds; traceroute (`tracepath` if there is no
+`traceroute`) stops at sixty. The result is a panel with loss, round
+trip times and the raw output, and next to them what the continuous
+monitoring knows about the same address — two sources, shown as two.
+Selecting several nodes (or right-clicking a group) pings them all into
+a table. Every run is a line in the service log: what, on which node,
+from which client address. Which tools this machine has is in the
+startup log and in `diag --config`; a missing one greys its item out
+with the reason. In demo mode nothing is sent to the network.
+
+**Keys** (all optional, section `context_menu`):
+
+- `max_targets` (64): nodes one action may name. More is refused with
+  the ceiling in the reason — never trimmed in silence. Double-clicking
+  a switch can select a hundred hosts, and a hundred processes from one
+  click is a load test rather than a diagnostic.
+- `max_running` (4): diagnostic runs at once on the server; one more is
+  refused with a reason instead of waiting in a queue without end.
+- `web_scheme` (`http`): how a switch's web interface is opened. A
+  switch that serves https only says so in its own `switches:` entry:
+  `- ip: 10.3.7.15` / `web_scheme: https`.
+- `allowed_schemes` (`[]`): link schemes beyond `http`, `https`, `ssh`
+  and `telnet` — `winbox`, say. `javascript:` and `data:` are refused
+  even if listed: a link with either would run code in the browser of
+  everybody looking at the map.
+- `links`: your own items —
+
+  ```yaml
+  context_menu:
+    allowed_schemes: [winbox]
+    links:
+      - label: "Winbox"
+        url: "winbox://{ip}"
+        applies_to: [switch]
+      - label: "Inventory card"
+        url: "https://inventory.local/find?mac={mac}"
+        applies_to: [host]
+  ```
+
+  `{ip}`, `{mac}`, `{name}`, `{switch}` (the switch the node hangs off;
+  its own address, for a switch) and `{port}` are filled in by the
+  server, each value URL-encoded — a MAC arrives as
+  `aa%3Abb%3A…`. An item whose value is unknown is greyed out with the
+  reason. `applies_to` takes `switch` (a polled switch or a bridge found
+  by LLDP), `host` and `group` (a switch without SNMP, "beyond the
+  trunk", "offline"); without it the item is on every node. An item
+  that cannot be used — a scheme that is not allowed, a placeholder
+  nobody fills in — is left out of the menu and the service starts;
+  the startup log and `diag --config` say why.
+
+Copying uses `navigator.clipboard` where the page is a secure one
+(https, or localhost) and the older way everywhere else — MoonLan is
+usually opened over plain http by address, where the clipboard API does
+not exist at all. A short note says whether the copy happened.
 
 ### When SNMP says nothing at all
 
@@ -1332,6 +1423,8 @@ MoonLan/
 │   ├── notify.py           # email/Telegram/Syslog notifications
 │   ├── db.py               # SQLite: hosts, event journal, alarms
 │   ├── pinger.py           # ping monitoring (system ping)
+│   ├── probes.py           # ping and traceroute on request, from the node menu
+│   ├── menu.py             # node menu links: scheme whitelist, filling in
 │   ├── diag.py             # SNMP diagnostic tool
 │   ├── demo.py             # demo network generator
 │   └── server.py           # FastAPI application and REST API
@@ -1354,6 +1447,13 @@ MoonLan/
 | POST   | `/api/scan`       | Start a new switch poll |
 | GET    | `/api/search?q=…` | Search by name, IP or MAC |
 | GET    | `/api/journal?limit=100` | Event journal, newest first |
+| GET    | `/api/layout`     | Saved node positions, `cleared_at` (the last reset), nodes missing from the layout and positions with no node |
+| PUT    | `/api/layout`     | Store positions: `{"nodes": {id: {x, y, pinned}}}`; with `"only_new": true` only nodes that have none, and the answer says what the others already have |
+| PATCH  | `/api/layout`     | Place or release several nodes in one action (one journal entry) |
+| DELETE | `/api/layout`     | Reset the whole layout |
+| GET    | `/api/node-menu?id=…` | What one node's menu offers: the node's address, MAC and name as MoonLan knows them, links filled in, which tools the server has |
+| POST   | `/api/actions`    | Start `{"action": "ping"\|"traceroute", "nodes": [node ids]}`; answers with a job, or refuses with the reason |
+| GET    | `/api/actions/{id}` | How a job is going, target by target |
 | GET    | `/api/status`     | Service status and last poll time |
 
 ## Acknowledgments

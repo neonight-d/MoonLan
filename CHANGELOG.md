@@ -6,6 +6,101 @@ for before the next one started.
 
 Русская версия — [CHANGELOG_RU.md](CHANGELOG_RU.md).
 
+## v0.7.2 — 2026-09-22
+
+A pinned node moves, an open page sees, and the menu does something.
+
+v0.7.1 went out with two known faults in the very feature it announced
+as done, and a third that nobody had noticed. They come first.
+
+**A pinned node could not be dragged.** Pinning is vis's `fixed`, and
+`fixed` refuses the mouse as firmly as the physics engine: at the
+start of a drag vis records each node's `fixed` and moves only those
+it recorded as loose. The drag was reported, the same coordinates were
+saved again, and the box stayed put — in arrange mode and out of it.
+v0.7.1 said otherwise because it was checked by calling the page's
+functions, which tests the handler and not the drag; that sentence is
+now marked as wrong in its own entry below. vis emits `dragStart`
+before it takes the record, so the pinned nodes of the selection are
+loosened there — checked, not assumed — and held again at `dragEnd`.
+Everything about the drag in this version was checked with the mouse.
+
+Doing it with the mouse found two more. A press held for a quarter of
+a second before moving — which is how most people press — was read by
+vis as "add this node to the selection", Ctrl or not, and on a node
+already selected as "take it out": dragging a switch unhurriedly
+carried off whatever had been selected before, a pinned router
+included, and a group fell apart just before it was dragged. A long
+press is now just a press. And after any drag the next click on the
+map was swallowed, by a guard waiting for "the click that ends a
+drag" that vis never sends.
+
+**The automatic save could unpin somebody else's node.** A page opened
+before a node appeared took it for new — its copy of the layout was as
+old as the page — and saved it with `pinned: false` over a pin set
+elsewhere in the meantime. `PUT /api/layout` now takes
+`"only_new": true`, and the database decides in one transaction:
+`INSERT … ON CONFLICT DO NOTHING`. The answer says what the other
+nodes already have, and a pinned one is applied.
+
+**An open page did not see what other pages did.** The layout was read
+once, when the page opened; the wall monitor that stays open for weeks
+never learnt about a pin set on another screen. It is now read with
+every refresh and applied by rule: pinned by anybody — moved there and
+held; released — let go where it stands; a new position of an unpinned
+node — not applied, since that is only where another page's physics
+left it. A reset done elsewhere is recognised by the reset itself
+(`/api/layout` now says when the last one was), not by rows going
+missing, and the page starts again from what the server holds without
+pushing its old picture back.
+
+**Releasing a node erased its position**, leaving a node that no page
+would save again. Release is now `pinned: false` with the coordinates
+the node has. Placing and releasing are journal entries, one per
+action however many nodes it touched — which is why a pin wiped out by
+another page used to be visible to nobody.
+
+Found on the way:
+
+- The web UI files went out without a Cache-Control header, so after
+  an upgrade a browser could go on running the previous app.js for
+  days. They are now `no-cache`, and index.html names app.js, i18n.js
+  and style.css by a hash of their content, which also covers the one
+  upgrade where a copy cached before the header existed is still
+  around.
+- A new node's offset from its anchor came from a hash that kept the
+  last character of the id almost as it was, so sw:10.0.0.21 …
+  sw:10.0.0.24 started on one spot. FNV-1a with a proper finaliser now.
+- The Arrange button's tooltip said a drag outside the mode "only moves
+  the view", and began "Arrange mode is on" even when it was off.
+
+**The node menu does something.** There is no sign-in yet, so anything
+the menu can make the server do, anybody who opens the page can. The
+line: the server runs only its own actions — ping and traceroute — and
+only at addresses it found itself; the page sends a node id, never an
+address, and an unknown id or an address in its place is refused. What
+config.yaml adds is links, opened on the viewer's machine; commands on
+the server wait for sign-in.
+
+- Ping and Traceroute run on the MoonLan machine, from an argument list
+  with no shell, under a timeout, at most `max_running` (4) at once.
+  The request returns a job at once and the page follows it; the
+  result panel shows loss, round trips and the raw output next to what
+  the continuous monitoring knows. Each run is a line in the service
+  log.
+- A selection or a group is pinged at once into a table that fills as
+  answers arrive, at most `max_targets` (64) nodes — more is refused
+  with the ceiling in the reason, never trimmed.
+- Web interface (`web_scheme`, per switch too), SSH, remote desktop as
+  a downloaded `.rdp` file, copy IP and MAC with a fallback for plain
+  http pages.
+- `context_menu.links`: your own items, with `{ip}`, `{mac}`, `{name}`,
+  `{switch}`, `{port}` filled in and URL-encoded. Schemes are
+  whitelisted; `javascript:` and `data:` never, even if listed. An
+  unusable item is left out with the reason in the startup log and
+  `diag --config`.
+- An item that cannot run is greyed out with the reason, never missing.
+
 ## v0.7.1 — 2026-09-22
 
 Dragging a node is not a decision.
