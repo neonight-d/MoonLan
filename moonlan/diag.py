@@ -979,6 +979,72 @@ def _print_poll_times(cfg) -> None:
     )
 
 
+def run_layout_view(cfg) -> None:
+    """Section 13: the saved map layout, and how far it has drifted.
+
+    The layout lives in the database, but which nodes exist right now
+    lives in the running service — so this asks it, the same way
+    `--skipped` does.
+    """
+    _section("13. Saved map layout")
+    data = _ask_service(cfg, "/api/layout")
+    if data is None:
+        print(
+            "The saved layout is in the database, but which nodes are on "
+            "the map right now is in the running service. Start MoonLan, "
+            "or point listen.host / listen.port at the instance you mean."
+        )
+        return
+    nodes = data.get("nodes") or {}
+    missing = data.get("missing") or []
+    pinned = [node for node, pos in nodes.items() if pos.get("pinned")]
+    saved_at = data.get("saved_at") or 0
+    print(
+        f"saved positions: {len(nodes)}"
+        + (
+            f", last written {time.strftime('%Y-%m-%d %H:%M', time.localtime(saved_at))}"
+            if saved_at else " (nothing saved yet)"
+        )
+    )
+    print(f"placed by hand (pinned): {len(pinned)}")
+    for node_id in sorted(pinned)[:20]:
+        pos = nodes[node_id]
+        print(f"  {node_id:<40} {pos['x']:>9.1f} {pos['y']:>9.1f}")
+    if len(pinned) > 20:
+        print(f"  … and {len(pinned) - 20} more")
+
+    print(f"\non the map but not in the saved layout: {len(missing)}")
+    for node_id in missing[:20]:
+        print(f"  {node_id}")
+    if len(missing) > 20:
+        print(f"  … and {len(missing) - 20} more")
+    if missing:
+        print(
+            "  ^ they appeared after the layout was saved. Place them and\n"
+            "    save again, or save to record the map as it is now."
+        )
+
+    # The other direction: a saved position whose node is gone. Kept on
+    # purpose — a device switched off for the night comes back to its
+    # place — and cleaned up by age at the first scan after a restart.
+    orphans = data.get("orphans") or []
+    print(f"\nsaved positions with no node on the map: {len(orphans)}")
+    for node_id in orphans[:20]:
+        pos = nodes[node_id]
+        when = time.strftime(
+            "%Y-%m-%d %H:%M", time.localtime(pos.get("updated_at", 0))
+        )
+        print(f"  {node_id:<40} placed {when}")
+    if len(orphans) > 20:
+        print(f"  … and {len(orphans) - 20} more")
+    if orphans:
+        print(
+            f"  ^ kept on purpose: a device switched off comes back to its\n"
+            f"    place. Forgotten after layout_keep_days "
+            f"({cfg.layout_keep_days:.0f}), at the first scan after a restart."
+        )
+
+
 def run_skipped_view(cfg) -> None:
     """Section 12: OIDs the service has stopped asking for.
 
@@ -1857,6 +1923,12 @@ def main() -> None:
              "an issue",
     )
     parser.add_argument(
+        "--layout", action="store_true",
+        help="ask the running service about the saved map layout: how "
+             "many nodes it holds, how many were placed by hand, and "
+             "how far it has drifted from the map as it is now",
+    )
+    parser.add_argument(
         "--skipped", action="store_true",
         help="ask the running service which OIDs it has stopped "
              "polling on which hosts, and for how many more scans",
@@ -1883,12 +1955,13 @@ def main() -> None:
     modes = (
         args.topology or args.hosts or args.port or args.config
         or args.host or args.fdb or args.stp or args.walk or args.loop
-        or args.skipped
+        or args.skipped or args.layout
     )
     if not modes and not args.ip:
         parser.error(
             "an ip is required unless --topology, --hosts, --host, --fdb, "
-            "--stp, --loop, --walk, --port, --skipped or --config is given"
+            "--stp, --loop, --walk, --port, --skipped, --layout or "
+            "--config is given"
         )
     cfg = load_config()
     community = args.community or cfg.snmp.community
@@ -1907,6 +1980,8 @@ def main() -> None:
         run_config_audit(cfg)
     elif args.skipped:
         run_skipped_view(cfg)
+    elif args.layout:
+        run_layout_view(cfg)
     elif args.walk:
         asyncio.run(
             run_walk(args.walk[0], args.walk[1], args.limit, community, timeout)

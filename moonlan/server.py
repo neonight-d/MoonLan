@@ -2509,6 +2509,7 @@ async def api_status() -> dict:
         "last_error": state.last_error,
         "last_error_ts": state.last_error_ts,
         **state.scan_progress(),
+        "layout_saved_at": await asyncio.to_thread(db.layout_saved_at),
         "uptime_hint": time.time(),
         "open_fds": open_fds,
         "rss_kb": rss_kb,
