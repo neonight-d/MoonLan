@@ -30,6 +30,12 @@
     </div>
   </header>
 
+  <!-- Right-click menu. Its items are built from data (see
+       menuItemsFor in app.js): the next version puts diagnostic
+       actions and the operator's own commands in here, and that must
+       not mean rewriting the menu. -->
+  <div id="node-menu" class="context-menu hidden" role="menu"></div>
+
   <main>
     <aside id="sidebar">
       <input id="search" type="search" autocomplete="off">

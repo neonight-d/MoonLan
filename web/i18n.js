@@ -15,6 +15,11 @@ const I18N = {
       + "where it ends up is recorded on its own \u2014 there is nothing "
       + "to save by hand. Turn on Arrange to place a node, or press P "
       + "with it selected; the same releases it again.",
+    menuPin: "Place here",
+    menuUnpin: "Release",
+    menuOpenCard: "Open card",
+    menuOpenPorts: "Ports",
+    menuSelected: "{n} nodes selected",
     arrangeBtn: "Arrange",
     arrangeOnBtn: "Arranging",
     arrangeHint:
@@ -466,6 +471,11 @@ const I18N = {
       + "куда оно встало — запоминается само же: сохранять руками "
       + "нечего. Чтобы поставить узел, включите «Расстановку» или "
       + "нажмите P на выделенном; тем же способом он и отпускается.",
+    menuPin: "Поставить здесь",
+    menuUnpin: "Отпустить",
+    menuOpenCard: "Открыть карточку",
+    menuOpenPorts: "Порты",
+    menuSelected: "Выбрано узлов: {n}",
     arrangeBtn: "Расстановка",
     arrangeOnBtn: "Расставляю",
     arrangeHint:

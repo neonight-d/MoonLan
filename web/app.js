@@ -36,6 +36,7 @@ const els = {
   emptyState: document.getElementById("empty-state"),
   freezeBtn: document.getElementById("freeze-btn"),
   arrangeBtn: document.getElementById("arrange-btn"),
+  nodeMenu: document.getElementById("node-menu"),
   layoutStatus: document.getElementById("layout-status"),
   resetLayoutBtn: document.getElementById("reset-layout-btn"),
   langRu: document.getElementById("lang-ru"),
@@ -476,6 +477,83 @@ function rebuildGraph() {
   nodesDs.add(nodes);
   edgesDs.add(edges);
   scheduleAutoSave();
+}
+
+/* ---------- context menu ----------
+
+   The items are data, not markup. This version has three of them; the
+   next one adds diagnostic actions (ping, traceroute, a link to the
+   device's own web interface) and whatever commands the operator puts
+   in config.yaml, and none of that should mean rewriting the menu.
+
+   Every item says what it is called, when it applies, and what it
+   does — and it is handed the whole selection, because a menu that
+   works on one node when three are chosen is a menu that surprises
+   people. */
+function menuItemsFor(ids) {
+  const loose = ids.filter((id) => !isPinned(id));
+  return [
+    {
+      key: "pin",
+      label: loose.length ? t("menuPin") : t("menuUnpin"),
+      applies: () => ids.length > 0,
+      run: () => togglePinOnSelection(),
+    },
+    {
+      key: "card",
+      label: t("menuOpenCard"),
+      // one node, one card: there is nothing to show for a crowd
+      applies: () => ids.length === 1,
+      run: () => {
+        setSelectedNode(ids[0]);
+        showDetails(ids[0]);
+      },
+    },
+    {
+      key: "ports",
+      label: t("menuOpenPorts"),
+      applies: () => ids.length === 1 && ids[0].startsWith("sw:"),
+      run: () => openPorts(ids[0].slice("sw:".length)),
+    },
+  ];
+}
+
+function closeNodeMenu() {
+  els.nodeMenu.classList.add("hidden");
+  els.nodeMenu.replaceChildren();
+}
+
+function openNodeMenu(ids, at) {
+  const items = menuItemsFor(ids).filter((item) => item.applies());
+  if (!items.length) {
+    closeNodeMenu();
+    return;
+  }
+  const parts = [];
+  const head = document.createElement("div");
+  head.className = "context-menu-head";
+  head.textContent =
+    ids.length === 1 ? nodeTitle(ids[0]) : fmt("menuSelected", { n: ids.length });
+  parts.push(head);
+  for (const item of items) {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.dataset.key = item.key;
+    button.textContent = item.label;
+    button.addEventListener("click", () => {
+      closeNodeMenu();
+      item.run();
+    });
+    parts.push(button);
+  }
+  els.nodeMenu.replaceChildren(...parts);
+  els.nodeMenu.classList.remove("hidden");
+  // Keep it on screen: near the bottom or the right edge it flips
+  const box = els.nodeMenu.getBoundingClientRect();
+  const x = Math.min(at.x, window.innerWidth - box.width - 8);
+  const y = Math.min(at.y, window.innerHeight - box.height - 8);
+  els.nodeMenu.style.left = Math.max(4, x) + "px";
+  els.nodeMenu.style.top = Math.max(4, y) + "px";
 }
 
 /* ---------- arrange mode ----------
@@ -1356,8 +1434,22 @@ function renderGraph() {
         unpinNode(id);
         return;
       }
+      if (!id) {
+        closeNodeMenu();
+        return;
+      }
+      // Right-clicking inside the selection works on all of it;
+      // right-clicking outside it means that node instead
+      const selected = network.getSelectedNodes();
+      const ids = selected.includes(id) ? selected : [id];
+      if (!selected.includes(id)) network.selectNodes([id], false);
+      openNodeMenu(ids, {
+        x: params.event.clientX,
+        y: params.event.clientY,
+      });
     });
     network.on("click", (params) => {
+      closeNodeMenu();
       if (draggedNode) {
         draggedNode = null;
         return;
@@ -2713,6 +2805,9 @@ for (const th of document.querySelectorAll("#ports th[data-sort]")) {
 }
 els.freezeBtn.addEventListener("click", toggleFreeze);
 els.arrangeBtn.addEventListener("click", toggleArrangeMode);
+document.addEventListener("click", (event) => {
+  if (!els.nodeMenu.contains(event.target)) closeNodeMenu();
+});
 els.resetLayoutBtn.addEventListener("click", resetLayout);
 els.alarmsBtn.addEventListener("click", toggleAlarms);
 els.alarmsClose.addEventListener("click", () =>
