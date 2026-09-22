@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import logging
 import os
@@ -13,7 +14,7 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI, Query
-from fastapi.responses import JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
@@ -2597,6 +2598,37 @@ async def api_status() -> dict:
         "open_fds": open_fds,
         "rss_kb": rss_kb,
     }
+
+
+# The page's own files, addressed in index.html by what is in them
+VERSIONED_ASSETS = ("app.js", "i18n.js", "style.css")
+
+
+def _index_html() -> str:
+    """index.html with each of the page's files named by its content.
+
+    `no-cache` below only helps a browser that has been told it: a
+    copy cached before this header existed carries no such instruction
+    and is still "fresh" by the browser's own reckoning. After the
+    upgrade that introduced the header, a page went on running with a
+    new app.js and an old i18n.js — and showed translation keys where
+    the journal should have said "Placed by hand". A file whose content
+    changes gets a new address, and no cache has a copy of that.
+    """
+    html = (WEB_DIR / "index.html").read_text(encoding="utf-8")
+    for name in VERSIONED_ASSETS:
+        digest = hashlib.sha1((WEB_DIR / name).read_bytes()).hexdigest()[:12]
+        html = html.replace(f'"{name}"', f'"{name}?v={digest}"')
+    return html
+
+
+@app.get("/", include_in_schema=False)
+@app.get("/index.html", include_in_schema=False)
+async def index_page() -> HTMLResponse:
+    return HTMLResponse(
+        await asyncio.to_thread(_index_html),
+        headers={"Cache-Control": "no-cache"},
+    )
 
 
 class RevalidatedStaticFiles(StaticFiles):
