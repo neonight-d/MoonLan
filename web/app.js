@@ -35,6 +35,7 @@ const els = {
   stpClose: document.getElementById("stp-close"),
   emptyState: document.getElementById("empty-state"),
   freezeBtn: document.getElementById("freeze-btn"),
+  arrangeBtn: document.getElementById("arrange-btn"),
   layoutStatus: document.getElementById("layout-status"),
   saveLayoutBtn: document.getElementById("save-layout-btn"),
   resetLayoutBtn: document.getElementById("reset-layout-btn"),
@@ -128,6 +129,7 @@ function setLang(newLang) {
   lang = newLang;
   localStorage.setItem(LANG_KEY, lang);
   applyStatic();
+  applyArrangeMode();
   updateScanStatus();
   renderSidebar();
   renderGraph();
@@ -262,19 +264,32 @@ async function saveLayout() {
   updateScanStatus();
 }
 
-/* A node dragged by hand is pinned where it was dropped. Nobody has to
-   press anything: moving a box on the screen is the statement, and the
-   person doing it knows where that switch stands better than the
-   physics engine does. */
-async function pinNode(id, x, y) {
-  savedLayout[id] = { x: x, y: y, pinned: true };
-  layoutMissing = layoutMissing.filter((node) => node !== id);
+/* Pins one or more nodes where they are, and remembers it.
+
+   Pinning says "the physics engine does not get to move this", and
+   nothing more. A pinned node is still draggable: asking somebody to
+   release a switch before nudging it a centimetre would be a rule
+   about our bookkeeping, not about their map. */
+async function pinNodes(positions) {
+  const ids = Object.keys(positions);
+  if (!ids.length) return;
+  for (const id of ids) {
+    savedLayout[id] = {
+      x: positions[id].x, y: positions[id].y, pinned: true,
+    };
+  }
   try {
-    await fetch("/api/layout/" + layoutPath(id), {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ x: x, y: y, pinned: true }),
-    });
+    await Promise.all(
+      ids.map((id) =>
+        fetch("/api/layout/" + layoutPath(id), {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            x: positions[id].x, y: positions[id].y, pinned: true,
+          }),
+        })
+      )
+    );
   } catch (e) {
     serviceLost("pinning a node");
     return;
@@ -285,11 +300,25 @@ async function pinNode(id, x, y) {
   updateScanStatus();
 }
 
-async function unpinNode(id) {
-  delete savedLayout[id];
-  placed.delete(id);
+function pinNode(id, x, y) {
+  return pinNodes({ [id]: { x: x, y: y } });
+}
+
+/* Releases nodes back to the physics engine. No confirmation: this is
+   cheap and reversible in one gesture, and a dialog in front of it
+   only makes the cheap thing feel expensive. */
+async function unpinNodes(ids) {
+  if (!ids.length) return;
+  for (const id of ids) {
+    delete savedLayout[id];
+    placed.delete(id);
+  }
   try {
-    await fetch("/api/layout/" + layoutPath(id), { method: "DELETE" });
+    await Promise.all(
+      ids.map((id) =>
+        fetch("/api/layout/" + layoutPath(id), { method: "DELETE" })
+      )
+    );
   } catch (e) {
     serviceLost("releasing a node");
     return;
@@ -298,6 +327,14 @@ async function unpinNode(id) {
   await loadLayout();
   renderGraph();
   updateScanStatus();
+}
+
+function unpinNode(id) {
+  return unpinNodes([id]);
+}
+
+function isPinned(id) {
+  return !!(savedLayout[id] && savedLayout[id].pinned);
 }
 
 /* Node ids carry colons and, in four of the seven kinds, a port name
@@ -324,6 +361,35 @@ async function resetLayout() {
   renderGraph();
   updateScanStatus();
   if (network) network.stabilize();
+}
+
+/* ---------- arrange mode ----------
+
+   Dragging a node is how people look at a map: pull the cloud of hosts
+   aside, lift a switch out of the tangle, see what is behind it. v0.7
+   read every one of those as a decision and pinned the node for good,
+   so the map slowly set like concrete without anyone choosing it.
+
+   Placing a node is a different act from looking at one, and it now
+   has a mode of its own. Deliberately not remembered between
+   sessions: a mode that comes back on its own after a reload is the
+   same trap in another shape. */
+let arrangeMode = false;
+
+function applyArrangeMode() {
+  els.arrangeBtn.classList.toggle("active", arrangeMode);
+  els.arrangeBtn.textContent = arrangeMode
+    ? t("arrangeOnBtn")
+    : t("arrangeBtn");
+  els.arrangeBtn.title = t("arrangeHint");
+  // The map itself changes, not only the button: a mode you can
+  // forget you are in is a mode that edits the map by accident.
+  els.network.classList.toggle("arranging", arrangeMode);
+}
+
+function toggleArrangeMode() {
+  arrangeMode = !arrangeMode;
+  applyArrangeMode();
 }
 
 function applyFreeze() {
@@ -1146,17 +1212,26 @@ function renderGraph() {
     });
     network.on("dragEnd", (params) => {
       if (!params.nodes.length) return;
-      const id = params.nodes[0];
-      const at = network.getPositions([id])[id];
-      if (at) pinNode(id, at.x, at.y);
+      // In arrange mode a drag places the node. Outside it, a drag is
+      // somebody looking at the map — unless the node was already
+      // pinned, in which case it keeps its pin and takes its new
+      // coordinates with it.
+      const at = network.getPositions(params.nodes);
+      const moved = {};
+      for (const id of params.nodes) {
+        if (!at[id]) continue;
+        if (arrangeMode || isPinned(id)) moved[id] = at[id];
+      }
+      if (Object.keys(moved).length) pinNodes(moved);
     });
-    // Right-click on a pinned node offers to let it go again
     network.on("oncontext", (params) => {
       params.event.preventDefault();
       const id = network.getNodeAt(params.pointer.DOM);
-      if (!id || !(savedLayout[id] && savedLayout[id].pinned)) return;
-      if (window.confirm(fmt("unpinConfirm", { node: nodeTitle(id) }))) {
+      // In arrange mode the right button is the undo of the left one:
+      // it releases the node, and asks nothing.
+      if (arrangeMode && id && isPinned(id)) {
         unpinNode(id);
+        return;
       }
     });
     network.on("click", (params) => {
@@ -2510,6 +2585,7 @@ for (const th of document.querySelectorAll("#ports th[data-sort]")) {
   th.addEventListener("click", () => setPortsSort(th.dataset.sort));
 }
 els.freezeBtn.addEventListener("click", toggleFreeze);
+els.arrangeBtn.addEventListener("click", toggleArrangeMode);
 els.saveLayoutBtn.addEventListener("click", saveLayout);
 els.resetLayoutBtn.addEventListener("click", resetLayout);
 els.alarmsBtn.addEventListener("click", toggleAlarms);
@@ -2521,7 +2597,42 @@ els.stpClose.addEventListener("click", () => els.stp.classList.add("hidden"));
 els.langRu.addEventListener("click", () => setLang("ru"));
 els.langEn.addEventListener("click", () => setLang("en"));
 
+/* Keyboard. `P` pins or releases whatever is selected — but only when
+   the focus is not in a field, or it would fire while somebody types
+   a MAC into the search box. */
+document.addEventListener("keydown", (event) => {
+  const target = event.target;
+  const typing =
+    target &&
+    (target.tagName === "INPUT" ||
+      target.tagName === "TEXTAREA" ||
+      target.isContentEditable);
+  if (typing) return;
+  if (event.key === "p" || event.key === "P") {
+    togglePinOnSelection();
+  }
+});
+
+/* `P` on the selection: if anything in it is loose, pin the lot;
+   otherwise release the lot. One key, and its effect is predictable
+   from what is on screen. */
+function togglePinOnSelection() {
+  if (!network) return;
+  const ids = network.getSelectedNodes();
+  if (!ids.length) return;
+  const loose = ids.filter((id) => !isPinned(id));
+  if (loose.length) {
+    const at = network.getPositions(loose);
+    const moved = {};
+    for (const id of loose) if (at[id]) moved[id] = at[id];
+    pinNodes(moved);
+  } else {
+    unpinNodes(ids);
+  }
+}
+
 applyStatic();
+applyArrangeMode();
 // The layout is fetched before the first map is drawn, so nodes start
 // where they were left rather than where the physics engine throws
 // them and then get yanked into place a moment later.

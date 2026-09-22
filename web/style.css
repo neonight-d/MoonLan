@@ -490,6 +490,12 @@ main { flex: 1; display: flex; min-height: 0; }
 /* Nodes the saved layout does not cover. Amber like everything
    else that says "this differs from what was recorded". */
 #layout-status { color: #d9b26b; cursor: help; }
+/* Arrange mode. The whole canvas says so — a mode you can forget
+   you are in is a mode that rearranges the map by accident. */
+#network.arranging {
+  box-shadow: inset 0 0 0 2px #d9b26b;
+  cursor: move;
+}
 
 /* Links inside the panels. Until v0.6.3 there was no rule for `a` at
    all, so every address in a card was rendered in the browser's

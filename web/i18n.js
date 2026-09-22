@@ -8,6 +8,12 @@ const I18N = {
     tagline: "local network map",
     journalBtn: "Journal",
     freezeBtn: "Freeze layout",
+    arrangeBtn: "Arrange",
+    arrangeOnBtn: "Arranging",
+    arrangeHint:
+      "Arrange mode is on: dragging a node places it and keeps it "
+      + "there, and the right button lets it go again. Outside this "
+      + "mode dragging only moves the view of the map.",
     saveLayoutBtn: "Save layout",
     resetLayoutBtn: "Reset layout",
     pinnedMark: "\ud83d\udccc",
@@ -454,6 +460,12 @@ const I18N = {
     tagline: "карта локальной сети",
     journalBtn: "Журнал",
     freezeBtn: "Заморозить раскладку",
+    arrangeBtn: "Расстановка",
+    arrangeOnBtn: "Расставляю",
+    arrangeHint:
+      "Режим расстановки включён: перетаскивание ставит узел и "
+      + "оставляет его там, правая кнопка отпускает обратно. Вне "
+      + "режима перетаскивание только двигает вид карты.",
     saveLayoutBtn: "Сохранить раскладку",
     resetLayoutBtn: "Сбросить раскладку",
     pinnedMark: "\ud83d\udccc",
