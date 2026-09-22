@@ -6,6 +6,62 @@ for before the next one started.
 
 Русская версия — [CHANGELOG_RU.md](CHANGELOG_RU.md).
 
+## v0.7.1 — 2026-09-22
+
+Dragging a node is not a decision.
+
+v0.7 pinned a node on every drag, and I argued for it in the spec:
+"moving a box on the screen is a statement". It is a convincing
+sentence about the wrong activity. People drag nodes to look — pull the
+cloud of hosts aside, lift a switch out of the tangle, see what is
+behind it — and turning each of those into a commitment meant the map
+set like concrete without anyone ever choosing it. No tag was put on
+v0.7, which was right: a version that gets in the way of using the map
+is not a release, however carefully its server half was built.
+
+Placing a node is a different act from looking at one, and it now has a
+mode of its own. In **Arrange** mode a drag places a node and the right
+button releases it; outside, a drag is just a drag. The mode shows on
+the canvas as well as the button — a mode you can forget you are in is
+a mode that edits the map by accident — and it is deliberately not
+remembered between sessions. `P` does the same from the keyboard. A
+pinned node stays draggable in either mode: pinning says "the physics
+engine does not get to move this", not "nobody does". The confirmation
+dialog in front of releasing a node is gone; pinning cost one gesture
+and undoing it cost a dialog.
+
+A full reset did nothing visible until the page was reloaded. vis keeps
+x and y on the node it has already built, and nothing in the update
+path can take them away again — `setOptions` assigns a coordinate only
+when one is given. The nodes went on standing where they were, the
+physics restarted from the same points, and the reset looked inert. The
+node set is now rebuilt for that one case, while the thirty-second
+refresh keeps updating in place so the camera survives.
+
+A node with no saved position had nowhere in particular to be, so it
+appeared wherever vis felt like putting it — the other half of the same
+complaint. It now starts next to the thing it is plugged into, taken
+from the edges that were just drawn, with an offset derived from its id
+so the same device lands in the same place for everyone.
+
+And there is no "save layout" button any more. A button that has to be
+pressed for the picture to survive is a button somebody will forget,
+and then the map they spent ten minutes arranging is gone. A node with
+no saved position gets one as soon as the layout settles; a node that
+already has one is never touched by it, or every open browser would
+rewrite the shared picture on every refresh. The header counter changes
+with it: counting nodes the saved picture did not contain made sense
+while saving was a decision, and now it counts pinned nodes instead —
+how much of this map is somebody's choice rather than the engine's.
+
+Double-clicking a switch or a group node selects the devices on it,
+Ctrl+click adds and removes, and dragging the selection moves it all at
+once. The right button opens a menu built from data rather than markup,
+acting on the whole selection: place, release, open the card, open the
+ports. The next version fills that menu with diagnostic actions and the
+operator's own commands, and it should not have to be rewritten to do
+it.
+
 ## v0.7 — 2026-09-22
 
 A layout that does not rearrange itself.

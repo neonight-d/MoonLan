@@ -16,7 +16,7 @@ An open-source alternative to LanTopoLog. MIT license.
 
 *Alarm panel: port errors, discards and host outages with one-click access to the switch port table.*
 
-## Features (v0.7)
+## Features (v0.7.1)
 
 - SNMP v2c polling of switches: device name, ports, speeds, statuses.
   Each switch has a time budget for its whole poll
@@ -90,18 +90,28 @@ An open-source alternative to LanTopoLog. MIT license.
   instead of a map that quietly never changes again.
 - A layout that does not rearrange itself. Node positions live on the
   server, not in one browser: a map of a network is a shared object,
-  and two people looking at it have to see the same picture. Drag a
-  node and it is pinned where it was dropped and saved, marked so the
-  map can answer "did MoonLan arrange this or did I"; release it from
-  its card or with a right-click. "Save layout" records where
-  everything is and makes the picture reproducible. A node the saved
-  layout does not cover is drawn dashed and counted in the header, so
-  the drift is visible rather than found when the map is printed. A
-  node that vanished from the network keeps its place — a device
+  and two people looking at it have to see the same picture. Where a
+  node ends up is recorded on its own once the layout settles — there
+  is nothing to save by hand and nothing to forget to press. A node
+  with no position yet starts next to the thing it is plugged into
+  rather than wherever the engine drops it.
+- Placing a node is a separate act from looking at one. Dragging moves
+  the view; in **Arrange** mode a drag places a node and keeps it
+  there, out of reach of the layout engine, and the right button lets
+  it go again. `P` does the same from the keyboard. A pinned node is
+  still draggable — pinning says "the physics engine does not get to
+  move this", not "nobody does" — and the header counts how much of
+  the map is somebody's decision rather than the engine's.
+- Double-click a switch (or any group node) to select the devices on
+  it, Ctrl+click to add and remove, drag the selection to move it all
+  at once. A right-click menu acts on the whole selection: place,
+  release, open the card, open the ports.
+- A node that vanished from the network keeps its place — a device
   switched off for the night was not taken away — and a position is
   forgotten only when it is both older than `layout_keep_days` and has
-  no node on the map. `python -m moonlan.diag --layout` reports all of
-  it.
+  no node on the map. "Reset layout" asks once and then lays the map
+  out afresh, without a reload. `python -m moonlan.diag --layout`
+  reports all of it.
 - A readable map at any size: offline devices sharing a port hang off
   one "Offline · N" node instead of surrounding every switch with a
   cloud of grey dots (`offline_group_threshold`); the devices stay
@@ -279,9 +289,12 @@ Version history: [CHANGELOG.md](CHANGELOG.md)
 | v0.6.13 ✓| A dash means never measured; an unknown root is not a root |
 | v0.6.14 ✓| LLDP builds the tree; rings are resolved or explained |
 | v0.6.15 ✓| A reading nobody took is not an observation; the map says when it stopped |
-| v0.7 ✓  | A layout that does not rearrange itself: positions on the server, manual placement, drift made visible |
-| v0.7.1  | Export to PDF and Draw.io, MAC address info import |
-| v0.8    | Windows computer inventory (WMI/WinRM) |
+| v0.7 ✓  | A layout that does not rearrange itself: positions on the server |
+| v0.7.1 ✓| Dragging a node is not a decision: arrange mode, context menu, multi-selection |
+| v0.7.2  | Node context menu with diagnostic actions and the operator's own commands |
+| v0.7.3  | Authentication |
+| v0.8    | Export to PDF and Draw.io, MAC address info import |
+| v0.9    | Windows computer inventory (WMI/WinRM) |
 
 ## Requirements
 
