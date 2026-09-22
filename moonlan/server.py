@@ -2516,5 +2516,25 @@ async def api_status() -> dict:
     }
 
 
+class RevalidatedStaticFiles(StaticFiles):
+    """The web UI, which the browser must re-check on every load.
+
+    Served without a Cache-Control header, a file last modified weeks
+    ago is "fresh" by the browser's own reckoning for days: after an
+    upgrade the page went on running the previous app.js, and a fix to
+    the map reached nobody until their cache happened to expire.
+    `no-cache` is not "do not cache" — the browser keeps its copy and
+    asks each time, and an unchanged file costs a 304.
+    """
+
+    async def get_response(self, path: str, scope):
+        response = await super().get_response(path, scope)
+        response.headers["Cache-Control"] = "no-cache"
+        return response
+
+
 # The static web UI comes last so it does not shadow /api/*
-app.mount("/", StaticFiles(directory=str(WEB_DIR), html=True), name="web")
+app.mount(
+    "/", RevalidatedStaticFiles(directory=str(WEB_DIR), html=True),
+    name="web",
+)
