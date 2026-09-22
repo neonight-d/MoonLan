@@ -8,6 +8,8 @@ from pathlib import Path
 
 import yaml
 
+from moonlan import menu
+
 DEFAULT_CONFIG_PATH = Path("config.yaml")
 # Point a second instance at its own file: the service runs out of the
 # project directory, so anything started there for a quick check would
@@ -94,7 +96,11 @@ class LoopDetectionConfig:
 
 @dataclass
 class ContextMenuConfig:
-    """The node menu: its diagnostic actions and links."""
+    """The node menu: its diagnostic actions and the operator's links.
+
+    Parsed links only — an entry that could not be used is dropped by
+    menu.parse_links with a reason in ConfigReport.menu_problems.
+    """
 
     # Nodes one action may name. Double-clicking a switch selects a
     # hundred hosts; a hundred processes from one click is not a
@@ -106,6 +112,10 @@ class ContextMenuConfig:
     # How a switch's own web interface is opened, unless the switch
     # says otherwise with web_scheme: in its switches: entry
     web_scheme: str = "http"
+    # Link schemes beyond http, https, ssh and telnet — winbox, say.
+    # javascript: and data: are refused whatever is written here.
+    allowed_schemes: list = field(default_factory=list)
+    links: list = field(default_factory=list)  # list[menu.MenuLink]
 
 
 @dataclass
@@ -507,8 +517,9 @@ class ConfigReport:
     # is not a number. Silently dropping any of those leaves an
     # operator convinced a setting is in force when it is not.
     problems: list[str] = field(default_factory=list)
-    # The same for context_menu: a web_scheme that is neither http nor
-    # https. The service starts; this is where it says why.
+    # The same for context_menu: a link with a scheme that is not
+    # allowed, a placeholder nobody fills in. The item is left out of
+    # the menu and the service starts; this is where it says why.
     menu_problems: list[str] = field(default_factory=list)
 
     @property
@@ -700,10 +711,19 @@ def load_config(path: Path | None = None) -> Config:
             f"{', '.join(WEB_SCHEMES)} — http is used"
         )
         web_scheme = "http"
+    allowed, scheme_problems = menu.allowed_schemes(
+        r.get("context_menu.allowed_schemes", m.allowed_schemes)
+    )
+    links, link_problems = menu.parse_links(
+        r.get("context_menu.links", m.links), allowed
+    )
+    menu_problems += scheme_problems + link_problems
     cfg.context_menu = ContextMenuConfig(
         max_targets=r.get("context_menu.max_targets", m.max_targets, int),
         max_running=r.get("context_menu.max_running", m.max_running, int),
         web_scheme=web_scheme,
+        allowed_schemes=sorted(allowed),
+        links=links,
     )
 
     t = d.thresholds

@@ -675,7 +675,7 @@ function rebuildGraph() {
    be visible as missing. */
 
 // In the order the menu shows them, a separator between each
-const MENU_GROUPS = ["actions", "links", "layout"];
+const MENU_GROUPS = ["actions", "links", "custom", "layout"];
 
 // Nodes that stand for a place rather than a device: they have no
 // address of their own, and pinging one means pinging what is on it
@@ -774,6 +774,16 @@ function menuItemsFor(ids, info, tools) {
       disabled: node.mac ? null : missingReason("mac"),
       run: () => copyText(node.mac),
     });
+  }
+
+  if (single && info) {
+    for (const link of info.custom) {
+      items.push({
+        key: "custom", group: "custom", label: link.label,
+        disabled: link.missing ? missingReason(link.missing) : null,
+        run: () => openLink(link.url),
+      });
+    }
   }
 
   const loose = ids.filter((id) => !isPinned(id));
@@ -896,8 +906,8 @@ function renderNodeMenu(ids, items, at) {
 
 /* A web interface opens in a new tab; ssh://, winbox:// and the rest
    are handed to whatever program the system has for them, without
-   leaving an empty tab behind. The address was filled in by the
-   server. */
+   leaving an empty tab behind. The address was checked against the
+   scheme whitelist and filled in by the server. */
 function openLink(url) {
   const a = document.createElement("a");
   a.href = url;

@@ -8,6 +8,8 @@ anybody who opens the page can make it do. The rules pinned down here:
   sent in place of an id;
 - one action names at most max_targets nodes — more is refused with
   the ceiling, not trimmed in silence;
+- a link from config.yaml may use only whitelisted schemes, and never
+  javascript: or data:, whatever the whitelist says;
 - every value put into a link is URL-encoded.
 
 Run with:  python -m unittest discover -s tests
@@ -19,6 +21,68 @@ import unittest
 from pathlib import Path
 
 from moonlan import menu, probes
+
+ALLOWED, _ = menu.allowed_schemes(["winbox"])
+
+
+class SchemeTest(unittest.TestCase):
+    def test_the_base_schemes_need_no_permission(self):
+        for url in ("http://{ip}", "https://{ip}/", "ssh://admin@{ip}",
+                    "telnet://{ip}"):
+            self.assertIsNone(menu.check_url(url, menu.allowed_schemes([])[0]))
+
+    def test_an_unlisted_scheme_is_refused_until_allowed(self):
+        plain, _ = menu.allowed_schemes([])
+        self.assertIn("not allowed", menu.check_url("winbox://{ip}", plain))
+        self.assertIsNone(menu.check_url("winbox://{ip}", ALLOWED))
+
+    def test_javascript_and_data_never_whatever_the_whitelist_says(self):
+        allowed, problems = menu.allowed_schemes(["javascript", "data"])
+        self.assertNotIn("javascript", allowed)
+        self.assertNotIn("data", allowed)
+        self.assertEqual(len(problems), 2)
+        for url in ("javascript:alert(1)", "JavaScript:alert(1)",
+                    "data:text/html,<script>alert(1)</script>"):
+            self.assertIn("never allowed", menu.check_url(url, allowed))
+
+    def test_a_scheme_hidden_by_a_tab_is_still_refused(self):
+        """Browsers drop tabs and newlines before reading the scheme."""
+        for url in ("java\tscript:alert(1)", "java\nscript:alert(1)",
+                    " javascript:alert(1)"):
+            self.assertIsNotNone(menu.check_url(url, ALLOWED))
+
+    def test_the_scheme_cannot_come_from_a_value(self):
+        self.assertIn("scheme", menu.check_url("{name}://x", ALLOWED))
+
+    def test_an_unknown_placeholder_is_named(self):
+        reason = menu.check_url("http://x/?q={adress}", ALLOWED)
+        self.assertIn("{adress}", reason)
+
+
+class ParseLinksTest(unittest.TestCase):
+    def test_a_broken_item_is_left_out_with_a_reason(self):
+        links, problems = menu.parse_links([
+            {"label": "Winbox", "url": "winbox://{ip}",
+             "applies_to": ["switch"]},
+            {"label": "Evil", "url": "javascript:alert(1)"},
+            {"label": "", "url": "http://x"},
+            {"label": "No url"},
+            {"label": "Where", "url": "http://x", "applies_to": ["router"]},
+            "just a string",
+        ], ALLOWED)
+        self.assertEqual([link.label for link in links], ["Winbox"])
+        self.assertEqual(len(problems), 5)
+        self.assertTrue(any("Evil" in p and "javascript" in p
+                            for p in problems))
+
+    def test_applies_to(self):
+        (everywhere, hosts), _ = menu.parse_links([
+            {"label": "A", "url": "http://{ip}"},
+            {"label": "B", "url": "http://{ip}", "applies_to": "host"},
+        ], ALLOWED)
+        self.assertTrue(everywhere.applies("group"))
+        self.assertTrue(hosts.applies("host"))
+        self.assertFalse(hosts.applies("switch"))
 
 
 class ExpandTest(unittest.TestCase):
@@ -135,6 +199,7 @@ class ServiceTest(unittest.TestCase):
         self._saved = (
             server.state.switches, server.state.hosts, server.state.bridges,
             server.state.pseudo_switches, server.tools, server.jobs,
+            server.config.context_menu.links,
             dict(server.config.switch_web_scheme),
         )
         server.state.switches = [
@@ -175,11 +240,17 @@ class ServiceTest(unittest.TestCase):
                         "traceroute": ("traceroute", "/bin/traceroute")}
         server.jobs = probes.Jobs(server.tools, fake_runner)
         server.config.switch_web_scheme["10.0.0.2"] = "https"
+        server.config.context_menu.links, _ = menu.parse_links([
+            {"label": "Inventory", "url": "https://inv.local/?mac={mac}",
+             "applies_to": ["host"]},
+            {"label": "Winbox", "url": "winbox://{ip}",
+             "applies_to": ["switch"]},
+        ], ALLOWED)
 
     def tearDown(self):
         (server.state.switches, server.state.hosts, server.state.bridges,
          server.state.pseudo_switches, server.tools, server.jobs,
-         web) = self._saved
+         server.config.context_menu.links, web) = self._saved
         server.config.switch_web_scheme.clear()
         server.config.switch_web_scheme.update(web)
         with server.db._lock, server.db._conn:
@@ -199,8 +270,12 @@ class ServiceTest(unittest.TestCase):
         response = asyncio.run(server.api_node_menu(id="host:de:ad:be:ef:00:00"))
         self.assertEqual(response.status_code, 404)
 
-    def test_links_are_filled_in(self):
+    def test_links_are_filled_in_and_encoded(self):
         answer = asyncio.run(server.api_node_menu(id="host:" + HOST_MAC))
+        self.assertEqual(
+            [c["url"] for c in answer["custom"]],
+            ["https://inv.local/?mac=aa%3Abb%3Acc%3A00%3A00%3A01"],
+        )
         web = next(link for link in answer["links"] if link["key"] == "web")
         self.assertEqual(web["url"], "http://10.0.0.50")
 
@@ -208,6 +283,7 @@ class ServiceTest(unittest.TestCase):
         answer = asyncio.run(server.api_node_menu(id="sw:10.0.0.2"))
         web = next(link for link in answer["links"] if link["key"] == "web")
         self.assertEqual(web["url"], "https://10.0.0.2")
+        self.assertEqual([c["label"] for c in answer["custom"]], ["Winbox"])
 
     def test_a_link_without_its_value_says_which(self):
         answer = asyncio.run(server.api_node_menu(id="host:" + QUIET_MAC))

@@ -946,6 +946,14 @@ def _print_node_menu(cfg) -> None:
     print(f"  switch web interface: {menu_cfg.web_scheme}://"
           + "".join(f", {ip} {scheme}://"
                     for ip, scheme in sorted(cfg.switch_web_scheme.items())))
+    print(f"  link schemes allowed: {', '.join(menu_cfg.allowed_schemes)}")
+    if menu_cfg.links:
+        print("  links of your own:")
+        for link in menu_cfg.links:
+            kinds = ", ".join(link.applies_to) or "every node"
+            print(f"    {link.label}: {link.url}  ({kinds})")
+    else:
+        print("  links of your own: none")
     if cfg.report and cfg.report.menu_problems:
         print("  items left out of the menu:")
         for problem in cfg.report.menu_problems:

@@ -1846,6 +1846,12 @@ def _log_config() -> None:
         log.warning("config.yaml switches: %s", problem)
     for problem in report.menu_problems:
         log.warning("config.yaml context_menu: %s", problem)
+    links = config.context_menu.links
+    if links:
+        log.info(
+            "Node menu: %d link(s) of your own: %s", len(links),
+            ", ".join(link.label for link in links),
+        )
     if config.demo:
         log.info("Node menu: ping and traceroute are simulated in demo mode")
     else:
@@ -2468,8 +2474,8 @@ def _tool_state() -> dict:
     }
 
 
-def _menu_links(node_id: str, facts: dict) -> list[dict]:
-    """The built-in links of one node, filled in.
+def _menu_links(node_id: str, facts: dict) -> tuple[list[dict], list[dict]]:
+    """(built-in links, the operator's links) for one node, filled in.
 
     A link that lacks a value is still listed, with the field it lacks:
     the page shows it greyed out with the reason, the way "no answer"
@@ -2488,7 +2494,13 @@ def _menu_links(node_id: str, facts: dict) -> list[dict]:
                               ("ssh", "ssh://{ip}")):
             url, missing = menu.expand(template, facts)
             builtin.append({"key": key, "url": url, "missing": missing})
-    return builtin
+    custom: list[dict] = []
+    for link in config.context_menu.links:
+        if not link.applies(kind):
+            continue
+        url, missing = menu.expand(link.url, facts)
+        custom.append({"label": link.label, "url": url, "missing": missing})
+    return builtin, custom
 
 
 @app.get("/api/node-menu")
@@ -2500,10 +2512,11 @@ async def api_node_menu(id: str = Query(...)):
         return JSONResponse(
             {"error": "unknown_node", "node": id}, status_code=404
         )
-    builtin = _menu_links(id, facts)
+    builtin, custom = _menu_links(id, facts)
     return {
         "node": {"id": id, **facts},
         "links": builtin,
+        "custom": custom,
         "tools": _tool_state(),
     }
 
