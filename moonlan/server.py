@@ -2368,6 +2368,10 @@ async def api_layout() -> dict:
     return {
         "nodes": saved,
         "saved_at": await asyncio.to_thread(db.layout_saved_at),
+        # When somebody last reset the whole layout. An open page that
+        # sees this move treats it as a reset of its own; the rows alone
+        # could not tell it that.
+        "cleared_at": await asyncio.to_thread(db.layout_cleared_at),
         # Nodes on the map that the saved layout does not cover. A
         # switch added yesterday has no place in a picture drawn the
         # day before, and that gap has to be visible rather than found
@@ -2438,12 +2442,15 @@ async def api_delete_node_position(node_id: str):
 async def api_clear_layout() -> dict:
     """Forgets the whole layout. The map is laid out from scratch."""
     removed = await asyncio.to_thread(db.clear_layout)
+    cleared_at = time.time()
     await asyncio.to_thread(
-        db.add_event, time.time(), "layout_cleared", "",
+        db.add_event, cleared_at, "layout_cleared", "",
         f"{removed} node(s)",
     )
     log.info("Map layout cleared: %d node(s) forgotten", removed)
-    return {"removed": removed}
+    # the page that asked for it must not mistake its own reset for
+    # somebody else's on the next refresh
+    return {"removed": removed, "cleared_at": cleared_at}
 
 
 async def _scan_once() -> None:

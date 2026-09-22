@@ -114,6 +114,13 @@ class LayoutStoreTest(unittest.TestCase):
         self.assertEqual(self.db.clear_layout(), 2)
         self.assertEqual(self.db.layout(), {})
 
+    def test_the_last_reset_comes_from_the_journal(self):
+        self.assertEqual(self.db.layout_cleared_at(), 0.0)
+        self.db.add_event(100.0, "layout_cleared", "", "3 node(s)")
+        self.db.add_event(200.0, "layout_saved", "", "3 node(s)")
+        self.db.add_event(150.0, "layout_cleared", "", "3 node(s)")
+        self.assertEqual(self.db.layout_cleared_at(), 150.0)
+
 
 class PurgeTest(unittest.TestCase):
     """What forgets a position, and what must not."""
@@ -251,6 +258,25 @@ class OnlyNewApiTest(unittest.TestCase):
         before = len(server.db.journal(1000))
         self._put({HOST: {"x": 2, "y": 2, "pinned": False}}, only_new=True)
         self.assertEqual(len(server.db.journal(1000)), before)
+
+    def test_an_open_page_is_told_about_a_reset(self):
+        """A reset is announced, not inferred from rows going missing:
+        a node released by an older page or forgotten by age takes its
+        row with it just the same."""
+        server.db.set_node_position(CORE, 1, 1, pinned=True)
+        before = asyncio.run(server.api_layout())["cleared_at"]
+        answer = asyncio.run(server.api_clear_layout())
+        after = asyncio.run(server.api_layout())["cleared_at"]
+        self.assertGreater(after, before)
+        # the page that reset it gets the same moment, so it does not
+        # take its own reset for somebody else's
+        self.assertEqual(answer["cleared_at"], after)
+
+    def test_forgetting_one_node_is_not_a_reset(self):
+        server.db.set_node_position(CORE, 1, 1, pinned=True)
+        before = asyncio.run(server.api_layout())["cleared_at"]
+        asyncio.run(server.api_delete_node_position(CORE))
+        self.assertEqual(asyncio.run(server.api_layout())["cleared_at"], before)
 
     def test_a_plain_save_still_writes_everything(self):
         """The old form stays for compatibility and for diag."""

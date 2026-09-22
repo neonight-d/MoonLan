@@ -180,16 +180,70 @@ const dragging = new Set();
 // node ended up
 const AUTOSAVE_SETTLE_MS = 4000;
 
-async function loadLayout() {
-  try {
-    const data = await (await fetch("/api/layout")).json();
-    savedLayout = data.nodes || {};
-    layoutSavedAt = data.saved_at || 0;
-  } catch (e) {
-    // no saved layout is not an error: the map lays itself out
-    savedLayout = {};
-    layoutSavedAt = 0;
+/* The layout is read with every refresh of the map, not once.
+
+   v0.7 put the layout on the server so that everybody looking at the
+   network sees one picture — and then read it once, when the page
+   opened. A pin set on one screen never reached a page already open
+   on another, and the wall monitor that stays open for weeks is the
+   very screen that shared layout was for. */
+let layoutLoaded = false;
+// The last reset of the whole layout this page knows about
+let knownClearedAt = 0;
+// Node id -> when this page's own write about it was answered, or
+// Infinity while it is still on its way. A refresh asked before that
+// moment may carry the state from before the write, and must not
+// "correct" the page back to it.
+const settledAt = new Map();
+
+function writing(ids) {
+  for (const id of ids) settledAt.set(id, Infinity);
+}
+
+function written(ids) {
+  const now = performance.now();
+  for (const id of ids) settledAt.set(id, now);
+}
+
+/* Brings the page's copy of the layout up to what the server holds.
+   `askedAt` is when the request for `data` was sent. Returns "rebuild"
+   when somebody reset the whole layout, "render" otherwise. */
+function takeServerLayout(data, askedAt) {
+  const server = data.nodes || {};
+  layoutSavedAt = data.saved_at || 0;
+  const clearedAt = data.cleared_at || 0;
+  if (!layoutLoaded) {
+    layoutLoaded = true;
+    knownClearedAt = clearedAt;
+    savedLayout = server;
+    return "render";
   }
+  if (clearedAt > knownClearedAt) {
+    // Somebody reset the layout. Recognised by the reset itself, not
+    // by rows going missing — a node released by an older page or
+    // forgotten by age takes its row with it just the same. The page
+    // starts again from what the server has now, which is usually the
+    // picture the resetting page has already saved.
+    knownClearedAt = clearedAt;
+    savedLayout = server;
+    placed.clear();
+    autoSaved.clear();
+    return "rebuild";
+  }
+  const stale = (id) =>
+    dragging.has(id) || (settledAt.get(id) || 0) > askedAt;
+  adoptLayout(server, stale);
+  for (const id of Object.keys(savedLayout)) {
+    if (id in server || stale(id)) continue;
+    // Gone from the server without a reset: released by a page that
+    // still deletes, or forgotten by age. The node stays where it is,
+    // goes back to the physics engine, and gets a position again with
+    // the next automatic save.
+    delete savedLayout[id];
+    placed.add(id);
+    autoSaved.delete(id);
+  }
+  return "render";
 }
 
 /* The saved position of a node, if it has one and has not been given
@@ -291,11 +345,14 @@ async function saveNewPositions() {
    fighting over one box. So it is recorded — it is what the next page
    to open will start from — and not applied.
 
+   A node not on screen yet is not "already placed": when it appears
+   it starts from the recorded position, as it would on a fresh page.
+
    Returns whether anything on screen has to change. */
-function adoptLayout(entries) {
+function adoptLayout(entries, skip) {
   let changed = false;
   for (const [id, pos] of Object.entries(entries)) {
-    if (dragging.has(id)) continue;
+    if (dragging.has(id) || (skip && skip(id))) continue;
     const was = savedLayout[id];
     savedLayout[id] = { x: pos.x, y: pos.y, pinned: !!pos.pinned };
     if (pos.pinned) {
@@ -303,7 +360,7 @@ function adoptLayout(entries) {
         changed = true;
       }
     } else {
-      placed.add(id);
+      if (nodesDs && nodesDs.get(id)) placed.add(id);
       if (was && was.pinned) changed = true;
     }
   }
@@ -334,6 +391,7 @@ async function pinNodes(positions) {
       x: positions[id].x, y: positions[id].y, pinned: true,
     };
   }
+  writing(ids);
   try {
     await Promise.all(
       ids.map((id) =>
@@ -347,9 +405,11 @@ async function pinNodes(positions) {
       )
     );
   } catch (e) {
+    written(ids);
     serviceLost("pinning a node");
     return;
   }
+  written(ids);
   serviceBack();
   if (!layoutSavedAt) layoutSavedAt = Date.now() / 1000;
   renderGraph();
@@ -369,6 +429,7 @@ async function unpinNodes(ids) {
     delete savedLayout[id];
     placed.delete(id);
   }
+  writing(ids);
   try {
     await Promise.all(
       ids.map((id) =>
@@ -376,11 +437,16 @@ async function unpinNodes(ids) {
       )
     );
   } catch (e) {
+    written(ids);
     serviceLost("releasing a node");
     return;
   }
+  written(ids);
   serviceBack();
-  await loadLayout();
+  // No re-reading of the whole layout here any more. It used to pull
+  // in every pin other pages had set since this one opened, all at
+  // once and in response to something unrelated; the regular refresh
+  // does that now, a node at a time.
   renderGraph();
   updateScanStatus();
 }
@@ -436,13 +502,17 @@ function layoutPath(id) {
 
 async function resetLayout() {
   if (!window.confirm(t("resetLayoutConfirm"))) return;
+  let answer;
   try {
-    await fetch("/api/layout", { method: "DELETE" });
+    answer = await (await fetch("/api/layout", { method: "DELETE" })).json();
   } catch (e) {
     serviceLost("clearing the layout");
     return;
   }
   serviceBack();
+  // our own reset, not somebody else's: the next refresh must not
+  // start the map over a second time
+  knownClearedAt = Math.max(knownClearedAt, answer.cleared_at || 0);
   savedLayout = {};
   layoutSavedAt = 0;
   placed.clear();
@@ -974,10 +1044,13 @@ function watchScan() {
 async function loadTopology() {
   let topo;
   let alarms;
+  let layout;
+  const askedAt = performance.now();
   try {
-    [topo, alarms] = await Promise.all([
+    [topo, alarms, layout] = await Promise.all([
       fetch("/api/topology").then((r) => r.json()),
       fetchAlarms("active=1"),
+      fetch("/api/layout").then((r) => r.json()),
     ]);
   } catch (e) {
     // Whatever is on screen stays there. This is the moment somebody
@@ -990,7 +1063,13 @@ async function loadTopology() {
   activeAlarms = alarms;
   renderBadge();
   renderSidebar();
-  renderGraph();
+  if (takeServerLayout(layout, askedAt) === "rebuild" && network) {
+    rebuildGraph();
+    // Started over from nothing, the same as a reset done here
+    if (!Object.keys(savedLayout).length) network.stabilize();
+  } else {
+    renderGraph();
+  }
   updateScanStatus();
   // A scan the operator did not start is worth counting off too: the
   // periodic one is when they are most likely to wonder why nothing
@@ -3024,8 +3103,8 @@ function togglePinOnSelection() {
 
 applyStatic();
 applyArrangeMode();
-// The layout is fetched before the first map is drawn, so nodes start
-// where they were left rather than where the physics engine throws
-// them and then get yanked into place a moment later.
-loadLayout().then(loadTopology);
+// The layout arrives with the first map, so nodes start where they
+// were left rather than where the physics engine throws them and then
+// get yanked into place a moment later.
+loadTopology();
 setInterval(loadTopology, REFRESH_MS);

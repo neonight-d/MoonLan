@@ -95,6 +95,9 @@ CREATE TABLE IF NOT EXISTS alarms (
     ts_cleared REAL DEFAULT 0, -- 0 = active
     notified INTEGER DEFAULT 0
 );
+-- Every open map asks "when was the layout last reset?" every thirty
+-- seconds, and the journal only grows
+CREATE INDEX IF NOT EXISTS journal_event_ts ON journal (event, ts);
 """
 
 
@@ -577,6 +580,21 @@ class Database:
         with self._lock:
             row = self._conn.execute(
                 "SELECT MAX(updated_at) AS ts FROM layout"
+            ).fetchone()
+        return row["ts"] or 0.0
+
+    def layout_cleared_at(self) -> float:
+        """When the whole layout was last reset; 0.0 if it never was.
+
+        Read from the journal, which already records every reset. An
+        open page cannot tell a reset from the rows it sees — rows also
+        go when a node is released by an older page or forgotten by
+        age — so it is told outright.
+        """
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT MAX(ts) AS ts FROM journal "
+                "WHERE event = 'layout_cleared'"
             ).fetchone()
         return row["ts"] or 0.0
 
