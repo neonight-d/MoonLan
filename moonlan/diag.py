@@ -46,12 +46,14 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import json
 import sqlite3
 import sys
 import time
+import urllib.request
 from collections import Counter
 
-from . import counters, loopdetect, pinger, stp
+from . import counters, loopdetect, pinger, probes, stp
 from .anonymize import Anonymizer, AnonymizingWriter
 from .config import (
     SECRET_KEYS,
@@ -64,11 +66,14 @@ from .corruption import find_suspects, sample_mac
 from .counters import CounterStore, Sample
 from .topology import (
     detect_bridges,
+    drop_impossible_links,
     suspect_uplink_ports,
     infer_tree,
     lldp_link_candidates,
+    mark_stp_blocking,
     merge_lldp_links,
     normalized_fdb,
+    resolve_cycles,
     switch_sightings,
     trunk_ports,
 )
@@ -92,6 +97,7 @@ from .snmp_collector import (
     SnmpCollector,
     SwitchData,
     _fmt_mac,
+    diagnose_silence,
     infer_lag_groups,
     is_random_mac,
     parse_fdb_entry,
@@ -104,7 +110,13 @@ MAX_IF_ROWS = 40
 # uses them. A CLI run must retry exactly the way the service does, or
 # it diagnoses a different machine than the one that is running.
 _SNMP = {"retries": SnmpConfig.retries,
-         "retries_on_break": SnmpConfig.retries_on_break}
+         "retries_on_break": SnmpConfig.retries_on_break,
+         # Per-switch settings from config.yaml, so a device with its
+         # own timeout is diagnosed on that timeout. Emptied when
+         # --community or --timeout is given: an explicit value on the
+         # command line is an instruction, not a suggestion, and it
+         # applies to every address in the run.
+         "per_host": {}}
 
 # Set by --anonymize. Every collector built here then registers the
 # names it learns, and stdout rewrites them on the way out.
@@ -143,6 +155,7 @@ def _make_collector(community: str, timeout: int) -> SnmpCollector:
         timeout=timeout,
         retries=_SNMP["retries"],
         retries_on_break=_SNMP["retries_on_break"],
+        per_host=_SNMP["per_host"],
     )
 
 
@@ -195,10 +208,8 @@ async def run_diag(
 
     sys_name = await collector._get(ip, OID_SYS_NAME)
     if sys_name is None:
-        sys.exit(
-            f"{ip} does not respond to SNMP. Check the community, "
-            f"the timeout and device availability."
-        )
+        _verdict, why = await diagnose_silence(collector, ip, OID_SYS_NAME)
+        sys.exit(f"{ip} does not respond to SNMP: {why}")
 
     # 1. General information
     _section("1. General information")
@@ -344,6 +355,36 @@ async def run_diag(
             )
 
 
+async def _collect_all(collector, cfg) -> tuple[list, list[tuple[str, int]]]:
+    """Polls every configured switch under the same budget as the service.
+
+    v0.6.12 gave each host a time budget so one slow agent could not
+    hold the whole scan. The diagnostics kept a bare `asyncio.gather`,
+    so `diag --topology` on this network waited eight minutes for a
+    RouterOS box while the service it is meant to explain had long
+    since moved on. A tool that behaves differently from the thing it
+    diagnoses is diagnosing something else.
+    """
+
+    async def one(ip: str):
+        try:
+            return await asyncio.wait_for(
+                collector.collect(ip), cfg.host_budget(ip)
+            )
+        except asyncio.TimeoutError:
+            return None
+
+    results = await asyncio.gather(*(one(ip) for ip in cfg.switches))
+    collected = []
+    over_budget: list[tuple[str, int]] = []
+    for ip, data in zip(cfg.switches, results):
+        if data is None:
+            over_budget.append((ip, cfg.host_budget(ip)))
+            continue
+        collected.append(data)
+    return collected, over_budget
+
+
 async def run_topology_view(community: str, timeout: int, cfg) -> None:
     """Section 8: poll every configured switch and print the inferred tree."""
     _section("8. Topology view")
@@ -351,9 +392,12 @@ async def run_topology_view(community: str, timeout: int, cfg) -> None:
         sys.exit("no switches in config.yaml")
     collector = _make_collector(community, timeout)
     print(f"polling {len(cfg.switches)} switches from config.yaml…")
-    collected = list(
-        await asyncio.gather(*(collector.collect(ip) for ip in cfg.switches))
-    )
+    collected, over_budget = await _collect_all(collector, cfg)
+    for ip, budget in over_budget:
+        print(
+            f"{ip}: did not finish inside its {budget} s poll budget — "
+            f"excluded from this view"
+        )
     # Like the server: add the management-IP MAC from the routers' ARP
     arp_by_mac: dict[str, str] = {}
     if cfg.routers:
@@ -377,9 +421,20 @@ async def run_topology_view(community: str, timeout: int, cfg) -> None:
     by_ip = {sw.ip: sw for sw in switches}
     fdb = normalized_fdb(switches)
     switches_on_port, sees = switch_sightings(switches, fdb)
-    links, uplinks, info = infer_tree(switches, switches_on_port, sees)
     lldp_pairs = lldp_link_candidates(switches)
+    links, uplinks, info = infer_tree(
+        switches, switches_on_port, sees, lldp_pairs
+    )
     mismatches = merge_lldp_links(links, lldp_pairs, by_ip)
+    # The same two passes the service runs, in the same order, or this
+    # view would explain a map nobody is looking at
+    info["dropped_links"] = drop_impossible_links(
+        links, lldp_pairs, uplinks, info.get("root")
+    )
+    mark_stp_blocking(switches, links)
+    info["dropped_links"] += resolve_cycles(
+        links, lldp_pairs, uplinks, info.get("root")
+    )
 
     def label(ip: str) -> str:
         sw = by_ip.get(ip)
@@ -424,6 +479,23 @@ async def run_topology_view(community: str, timeout: int, cfg) -> None:
                   f"{_lag_group_line(bridge_port, members, speeds)}")
     if not any_groups:
         print("  none")
+    # Every line the map would draw, with what is known about it: a
+    # link whose ports are down, or whose source is a guess, or that
+    # only exists because nothing better was available, reads very
+    # differently from one both devices confirmed.
+    oper = {
+        sw.ip: {
+            (p.name or str(p.if_index)): p.oper_up for p in sw.ports.values()
+        }
+        for sw in switches
+    }
+
+    def port_state(ip: str, name: str) -> str:
+        if name in ("?", ""):
+            return "?"
+        up = oper.get(ip, {}).get(name)
+        return "?" if up is None else ("up" if up else "DOWN")
+
     print("links:")
     if not links:
         print("  none")
@@ -434,10 +506,54 @@ async def run_topology_view(community: str, timeout: int, cfg) -> None:
             if link["lag"] and link["lag"].get("count", 0) > 1
             else ""
         )
+        speed = (
+            f"{link['speed_mbps'] / 1000:g} Gbit/s"
+            if link["speed_mbps"] >= 1000
+            else f"{link['speed_mbps']} Mbit/s" if link["speed_mbps"]
+            else "speed unknown"
+        )
+        flags = "".join(
+            mark for mark, on in (
+                ("  [STP BLOCKING]", link.get("stp_blocking")),
+                ("  [branch order unknown]", link.get("order_unknown")),
+                ("  [in an unresolved ring]", link.get("cycle_unresolved")),
+            ) if on
+        )
+        print(
+            f"  {label(link['a'])} [{link['a_port']} "
+            f"{port_state(link['a'], link['a_port'])}] — "
+            f"{label(link['b'])} [{link['b_port']} "
+            f"{port_state(link['b'], link['b_port'])}]"
+            f"  {speed}  source: {link.get('source', 'fdb')}"
+            f"{trunk}{lacp}{flags}"
+        )
+
+    # What the inference took back, and what it could not settle. Both
+    # change the picture, and neither is visible in the picture itself.
+    print("\nlinks withdrawn by the inference:")
+    dropped = info.get("dropped_links") or []
+    if not dropped:
+        print("  none")
+    for entry in dropped:
+        why = (
+            f"LLDP puts {entry['b']} behind {entry['behind']}"
+            if entry.get("reason") == "behind"
+            else f"closes a ring with no blocked port: {entry.get('cycle', '')}"
+        )
+        print(
+            f"  {label(entry['a'])} [{entry['a_port']}] — "
+            f"{label(entry['b'])} [{entry['b_port']}] "
+            f"({entry.get('source', 'fdb')}): {why}"
+        )
+    unresolved = [link for link in links if link.get("cycle_unresolved")]
+    print("rings left standing (no blocked port, nothing to choose by):")
+    if not unresolved:
+        print("  none")
+    for link in unresolved:
         print(
             f"  {label(link['a'])} [{link['a_port']}] — "
-            f"{label(link['b'])} [{link['b_port']}]"
-            f"  source: {link.get('source', 'fdb')}{trunk}{lacp}"
+            f"{label(link['b'])} [{link['b_port']}] "
+            f"({link.get('source', 'fdb')})"
         )
     if info["unplaced"]:
         print("unplaced (not visible from the root):")
@@ -612,9 +728,14 @@ async def run_host_inventory(community: str, timeout: int, cfg) -> None:
     if not cfg.switches:
         sys.exit("no switches in config.yaml")
     collector = _make_collector(community, timeout)
-    collected = list(
-        await asyncio.gather(*(collector.collect(ip) for ip in cfg.switches))
-    )
+    collected, over_budget = await _collect_all(collector, cfg)
+    for ip, budget in over_budget:
+        print(
+            f"{ip}: did not finish inside its {budget} s poll budget — its "
+            f"MAC table is missing from every comparison below, so the "
+            f"devices behind it will read as \"known but not in any FDB\". "
+            f"That is this poll giving up, not the devices going away."
+        )
     switch_macs = {mac for sw in collected for mac in sw.own_macs}
 
     print("MAC addresses in the FDB (switch MACs excluded):")
@@ -744,6 +865,268 @@ def run_config_audit(cfg) -> None:
             print(f"  {key} = {_mask(key, value)}")
     else:
         print("  none")
+
+    starved = cfg.starved_counters()
+    if starved:
+        print(
+            f"\npoll budget at or above twice counters_interval_seconds "
+            f"({cfg.counters_interval_seconds} s):"
+        )
+        for ip, budget in starved:
+            print(f"  {ip}: host_budget_seconds = {budget}")
+        print(
+            "  ^ while a scan holds one of these, its counters cycle is\n"
+            "    skipped, so its rates age visibly between scans. Not an\n"
+            "    error — the panel shows them with their age — but lower\n"
+            "    the budget for those devices if you can."
+        )
+
+    if report.problems:
+        print("\nentries in switches: that could not be used:")
+        for problem in report.problems:
+            print(f"  {problem}")
+
+    _print_node_menu(cfg)
+
+    # The settings each switch is actually polled with. The global
+    # section is only half the answer once a switch may carry keys of
+    # its own, and "which timeout is this device on" is the first
+    # question asked of a device that polls slowly.
+    print("\nSNMP settings per switch (* = set for this switch, "
+          "the rest inherited from snmp:):")
+    if not cfg.switches:
+        print("  no switches configured")
+        return
+    columns = ("timeout", "retries", "retries_on_break",
+               "host_budget_seconds", "community")
+    header = f"  {'switch':<18}" + "".join(
+        f"{name:>21}" for name in columns
+    )
+    print(header)
+    for ip in cfg.switches:
+        settings = cfg.host_snmp(ip)
+        cells = []
+        for name in columns:
+            value = getattr(settings, name)
+            if name in SECRET_KEYS:
+                value = _mask(name, value)
+            mark = "*" if name in settings.explicit else " "
+            cells.append(f"{str(value) + mark:>21}")
+        print(f"  {ip:<18}" + "".join(cells))
+
+    _print_poll_times(cfg)
+
+
+def _print_node_menu(cfg) -> None:
+    """Part of `--config`: what the right-click menu can do here.
+
+    Ping and traceroute run on this machine, so whether they exist is a
+    fact about this machine, not about the config — and a menu item
+    greyed out as "no traceroute on the server" should be explainable
+    from here.
+    """
+    menu_cfg = cfg.context_menu
+    found = probes.find_tools()
+    trace = found["traceroute"]
+    print("\nnode menu (context_menu):")
+    print(
+        "  ping:        "
+        + (found["ping"] or "NOT FOUND — Ping is disabled in the menu")
+    )
+    print(
+        "  traceroute:  "
+        + (f"{trace[0]} at {trace[1]}" if trace else
+           "NOT FOUND (neither traceroute nor tracepath) — Traceroute "
+           "is disabled in the menu")
+    )
+    print(
+        f"  at most {menu_cfg.max_targets} node(s) per action, "
+        f"{menu_cfg.max_running} action(s) running at once"
+    )
+    print(f"  switch web interface: {menu_cfg.web_scheme}://"
+          + "".join(f", {ip} {scheme}://"
+                    for ip, scheme in sorted(cfg.switch_web_scheme.items())))
+    print(f"  link schemes allowed: {', '.join(menu_cfg.allowed_schemes)}")
+    if menu_cfg.links:
+        print("  links of your own:")
+        for link in menu_cfg.links:
+            kinds = ", ".join(link.applies_to) or "every node"
+            print(f"    {link.label}: {link.url}  ({kinds})")
+    else:
+        print("  links of your own: none")
+    if cfg.report and cfg.report.menu_problems:
+        print("  items left out of the menu:")
+        for problem in cfg.report.menu_problems:
+            print(f"    {problem}")
+
+
+def _ask_service(cfg, path: str) -> dict | None:
+    """One GET against the running service, or None with a reason.
+
+    Several reports need state that lives in the service process and
+    nowhere else — which OIDs are on pause, how long each poll took.
+    Guessing at it would be worse than saying it is not available.
+    """
+    host = cfg.listen_host
+    if host in ("0.0.0.0", "::", ""):
+        host = "127.0.0.1"
+    url = f"http://{host}:{cfg.listen_port}{path}"
+    try:
+        with urllib.request.urlopen(url, timeout=5) as response:
+            return json.loads(response.read().decode("utf-8"))
+    except Exception as exc:
+        print(f"could not ask the service at {url}: {exc}")
+        return None
+
+
+def _print_poll_times(cfg) -> None:
+    """Section of `--config`: what each poll actually costs.
+
+    `host_budget_seconds` is guesswork until somebody measures the
+    poll. This is the measurement, per switch, from the service that
+    took it.
+    """
+    print("\nlast complete poll of each switch (from the running service):")
+    data = _ask_service(cfg, "/api/polling")
+    if data is None:
+        print(
+            "  the durations live in the service process. Start MoonLan, "
+            "or point listen.host / listen.port at the instance you mean."
+        )
+        return
+    rows = data.get("switches") or []
+    if not rows:
+        print("  no switches configured")
+        return
+    print(
+        f"  {'switch':<18} {'budget':>8} {'took':>9} {'when':>18}  state"
+    )
+    for row in rows:
+        when = (
+            time.strftime("%Y-%m-%d %H:%M", time.localtime(row["polled_at"]))
+            if row["polled_at"] else "never"
+        )
+        took = f"{row['poll_seconds']:.1f} s" if row["poll_seconds"] else "—"
+        if row["over_budget_scans"]:
+            state = f"{row['over_budget_scans']} scan(s) over budget"
+        elif not row["reachable"]:
+            state = "no answer"
+        else:
+            state = "ok"
+        print(
+            f"  {row['ip']:<18} {str(row['budget_seconds']) + ' s':>8} "
+            f"{took:>9} {when:>18}  {state}"
+        )
+    print(
+        "  ^ set host_budget_seconds from the 'took' column, not by eye. "
+        "A switch\n    listed as over budget has not been read in full "
+        "since the time shown."
+    )
+
+
+def run_layout_view(cfg) -> None:
+    """Section 13: the saved map layout, and how far it has drifted.
+
+    The layout lives in the database, but which nodes exist right now
+    lives in the running service — so this asks it, the same way
+    `--skipped` does.
+    """
+    _section("13. Saved map layout")
+    data = _ask_service(cfg, "/api/layout")
+    if data is None:
+        print(
+            "The saved layout is in the database, but which nodes are on "
+            "the map right now is in the running service. Start MoonLan, "
+            "or point listen.host / listen.port at the instance you mean."
+        )
+        return
+    nodes = data.get("nodes") or {}
+    missing = data.get("missing") or []
+    pinned = [node for node, pos in nodes.items() if pos.get("pinned")]
+    saved_at = data.get("saved_at") or 0
+    print(
+        f"saved positions: {len(nodes)}"
+        + (
+            f", last written {time.strftime('%Y-%m-%d %H:%M', time.localtime(saved_at))}"
+            if saved_at else " (nothing saved yet)"
+        )
+    )
+    print(f"placed by hand (pinned): {len(pinned)}")
+    for node_id in sorted(pinned)[:20]:
+        pos = nodes[node_id]
+        print(f"  {node_id:<40} {pos['x']:>9.1f} {pos['y']:>9.1f}")
+    if len(pinned) > 20:
+        print(f"  … and {len(pinned) - 20} more")
+
+    print(f"\non the map but not in the saved layout: {len(missing)}")
+    for node_id in missing[:20]:
+        print(f"  {node_id}")
+    if len(missing) > 20:
+        print(f"  … and {len(missing) - 20} more")
+    if missing:
+        print(
+            "  ^ they appeared after the layout was saved. Place them and\n"
+            "    save again, or save to record the map as it is now."
+        )
+
+    # The other direction: a saved position whose node is gone. Kept on
+    # purpose — a device switched off for the night comes back to its
+    # place — and cleaned up by age at the first scan after a restart.
+    orphans = data.get("orphans") or []
+    print(f"\nsaved positions with no node on the map: {len(orphans)}")
+    for node_id in orphans[:20]:
+        pos = nodes[node_id]
+        when = time.strftime(
+            "%Y-%m-%d %H:%M", time.localtime(pos.get("updated_at", 0))
+        )
+        print(f"  {node_id:<40} placed {when}")
+    if len(orphans) > 20:
+        print(f"  … and {len(orphans) - 20} more")
+    if orphans:
+        print(
+            f"  ^ kept on purpose: a device switched off comes back to its\n"
+            f"    place. Forgotten after layout_keep_days "
+            f"({cfg.layout_keep_days:.0f}), at the first scan after a restart."
+        )
+
+
+def run_skipped_view(cfg) -> None:
+    """Section 12: OIDs the service has stopped asking for.
+
+    The pause is state of the running process — a CLI run builds its
+    own collector and has seen nothing — so this asks the service over
+    its own API rather than inventing an answer.
+    """
+    _section("12. OIDs currently not asked for")
+    data = _ask_service(cfg, "/api/skipped-oids")
+    if data is None:
+        print(
+            "This list lives in the running process. Start MoonLan, or "
+            "point listen.host / listen.port at the instance you mean."
+        )
+        return
+    print(
+        f"rule: pause an OID after {data['strikes']} walk(s) with no rows "
+        f"and a timeout, for {data['cooldown_scans']} scan(s)"
+    )
+    if not data.get("polled"):
+        print("\nthe service has not polled anything yet")
+        return
+    paused = data.get("paused") or []
+    if not paused:
+        print("\nnothing is on pause: every OID is being asked for")
+        return
+    print(f"\n{'switch':<18} {'OID':<34} {'strikes':>8} {'scans left':>11}")
+    for entry in paused:
+        print(
+            f"{entry['host']:<18} {entry['oid']:<34} "
+            f"{entry['strikes']:>8} {entry['cycles_left']:>11}"
+        )
+    print(
+        "\nThese are not missing because the devices deny having them. "
+        "They are missing because MoonLan stopped asking, and it will "
+        "ask again when the count above runs out."
+    )
 
 
 FDB_TABLES = ((OID_FDB_PORT, 6, "dot1dTpFdbPort"),
@@ -1509,7 +1892,12 @@ async def run_walk(
                         or not text.isprintable()):
                 print(f"      hex: {raw.hex(' ')}")
     if count == 0:
-        print("  the subtree is empty, or the agent does not implement it")
+        # "The subtree is empty, or the agent does not implement it"
+        # was the old answer, and on a switch whose community string
+        # had been changed back to `public` both halves of it were
+        # wrong — and pointed away from the cause. Ask before deciding.
+        _verdict, why = await diagnose_silence(collector, host, oid)
+        print(f"  nothing came back: {why}")
     else:
         print(f"\n{min(count, limit)} row(s)")
 
@@ -1521,10 +1909,14 @@ def main() -> None:
     )
     parser.add_argument("ip", nargs="?", help="switch IP address")
     parser.add_argument(
-        "--community", help="SNMP community (defaults to config.yaml)"
+        "--community",
+        help="SNMP community for every address in this run (by default "
+             "each switch uses the one config.yaml gives it)",
     )
     parser.add_argument(
-        "--timeout", type=int, help="SNMP timeout in seconds (defaults to config.yaml)"
+        "--timeout", type=int,
+        help="SNMP timeout in seconds for every address in this run (by "
+             "default each switch uses the one config.yaml gives it)",
     )
     parser.add_argument(
         "--topology", action="store_true",
@@ -1576,6 +1968,17 @@ def main() -> None:
              "an issue",
     )
     parser.add_argument(
+        "--layout", action="store_true",
+        help="ask the running service about the saved map layout: how "
+             "many nodes it holds, how many were placed by hand, and "
+             "how far it has drifted from the map as it is now",
+    )
+    parser.add_argument(
+        "--skipped", action="store_true",
+        help="ask the running service which OIDs it has stopped "
+             "polling on which hosts, and for how many more scans",
+    )
+    parser.add_argument(
         "--config", action="store_true",
         help="print the effective configuration: every setting, its "
              "value and whether it comes from config.yaml or a default",
@@ -1597,17 +2000,21 @@ def main() -> None:
     modes = (
         args.topology or args.hosts or args.port or args.config
         or args.host or args.fdb or args.stp or args.walk or args.loop
+        or args.skipped or args.layout
     )
     if not modes and not args.ip:
         parser.error(
             "an ip is required unless --topology, --hosts, --host, --fdb, "
-            "--stp, --loop, --walk, --port or --config is given"
+            "--stp, --loop, --walk, --port, --skipped, --layout or "
+            "--config is given"
         )
     cfg = load_config()
     community = args.community or cfg.snmp.community
     timeout = args.timeout or cfg.snmp.timeout
     _SNMP["retries"] = cfg.snmp.retries
     _SNMP["retries_on_break"] = cfg.snmp.retries_on_break
+    if not args.community and not args.timeout:
+        _SNMP["per_host"] = cfg.switch_snmp
     if args.anonymize:
         global _ANON
         _ANON = Anonymizer()
@@ -1616,6 +2023,10 @@ def main() -> None:
         sys.stdout = AnonymizingWriter(sys.stdout, _ANON)
     if args.config:
         run_config_audit(cfg)
+    elif args.skipped:
+        run_skipped_view(cfg)
+    elif args.layout:
+        run_layout_view(cfg)
     elif args.walk:
         asyncio.run(
             run_walk(args.walk[0], args.walk[1], args.limit, community, timeout)

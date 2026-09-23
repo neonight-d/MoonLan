@@ -35,6 +35,14 @@ const els = {
   stpClose: document.getElementById("stp-close"),
   emptyState: document.getElementById("empty-state"),
   freezeBtn: document.getElementById("freeze-btn"),
+  arrangeBtn: document.getElementById("arrange-btn"),
+  nodeMenu: document.getElementById("node-menu"),
+  actions: document.getElementById("actions"),
+  actionsTitle: document.getElementById("actions-title"),
+  actionsBody: document.getElementById("actions-body"),
+  actionsClose: document.getElementById("actions-close"),
+  layoutStatus: document.getElementById("layout-status"),
+  resetLayoutBtn: document.getElementById("reset-layout-btn"),
   langRu: document.getElementById("lang-ru"),
   langEn: document.getElementById("lang-en"),
 };
@@ -125,6 +133,7 @@ function setLang(newLang) {
   lang = newLang;
   localStorage.setItem(LANG_KEY, lang);
   applyStatic();
+  applyArrangeMode();
   updateScanStatus();
   renderSidebar();
   renderGraph();
@@ -145,6 +154,7 @@ function setLang(newLang) {
   if (!els.stp.classList.contains("hidden") && lastStp) {
     renderStp();
   }
+  if (!els.actions.classList.contains("hidden")) renderAction();
 }
 
 /* ---------- layout freeze ---------- */
@@ -153,6 +163,1063 @@ function setLang(newLang) {
    who prefers it still can stop it by hand. Dragging works either way. */
 const FREEZE_KEY = "moonlan-freeze-layout";
 let layoutFrozen = localStorage.getItem(FREEZE_KEY) === "1";
+
+/* ---------- saved layout ----------
+
+   Where the nodes sit is kept on the server, not in this browser. A
+   map of a network is a shared object: two people looking at one
+   network have to see one picture, or "the switch at the bottom left"
+   stops meaning anything. The language and the freeze toggle are
+   personal settings and stay in localStorage; coordinates are not.
+
+   `placed` remembers which nodes have already been given their saved
+   position in this session. An unpinned node is started there and then
+   left to the physics engine — re-applying the coordinates on every
+   thirty-second refresh would drag it back and fight the layout. */
+let savedLayout = {};
+let layoutSavedAt = 0;
+const placed = new Set();
+// Nodes the mouse is holding right now, from dragStart to dragEnd
+const dragging = new Set();
+// How long to let the layout settle before writing down where a new
+// node ended up
+const AUTOSAVE_SETTLE_MS = 4000;
+
+/* The layout is read with every refresh of the map, not once.
+
+   v0.7 put the layout on the server so that everybody looking at the
+   network sees one picture — and then read it once, when the page
+   opened. A pin set on one screen never reached a page already open
+   on another, and the wall monitor that stays open for weeks is the
+   very screen that shared layout was for. */
+let layoutLoaded = false;
+// The last reset of the whole layout this page knows about
+let knownClearedAt = 0;
+// Node id -> when this page's own write about it was answered, or
+// Infinity while it is still on its way. A refresh asked before that
+// moment may carry the state from before the write, and must not
+// "correct" the page back to it.
+const settledAt = new Map();
+
+function writing(ids) {
+  for (const id of ids) settledAt.set(id, Infinity);
+}
+
+function written(ids) {
+  const now = performance.now();
+  for (const id of ids) settledAt.set(id, now);
+}
+
+/* Brings the page's copy of the layout up to what the server holds.
+   `askedAt` is when the request for `data` was sent. Returns "rebuild"
+   when somebody reset the whole layout, "render" otherwise. */
+function takeServerLayout(data, askedAt) {
+  const server = data.nodes || {};
+  layoutSavedAt = data.saved_at || 0;
+  const clearedAt = data.cleared_at || 0;
+  if (!layoutLoaded) {
+    layoutLoaded = true;
+    knownClearedAt = clearedAt;
+    savedLayout = server;
+    return "render";
+  }
+  if (clearedAt > knownClearedAt) {
+    // Somebody reset the layout. Recognised by the reset itself, not
+    // by rows going missing — a node released by an older page or
+    // forgotten by age takes its row with it just the same. The page
+    // starts again from what the server has now, which is usually the
+    // picture the resetting page has already saved.
+    knownClearedAt = clearedAt;
+    savedLayout = server;
+    placed.clear();
+    autoSaved.clear();
+    return "rebuild";
+  }
+  const stale = (id) =>
+    dragging.has(id) || (settledAt.get(id) || 0) > askedAt;
+  adoptLayout(server, stale);
+  for (const id of Object.keys(savedLayout)) {
+    if (id in server || stale(id)) continue;
+    // Gone from the server without a reset: released by a page that
+    // still deletes, or forgotten by age. The node stays where it is,
+    // goes back to the physics engine, and gets a position again with
+    // the next automatic save.
+    delete savedLayout[id];
+    placed.add(id);
+    autoSaved.delete(id);
+  }
+  return "render";
+}
+
+/* The saved position of a node, if it has one and has not been given
+   it already. A pinned node keeps being told where it is: it is out of
+   the physics engine, so nothing else would hold it there. */
+function layoutFor(id) {
+  const pos = savedLayout[id];
+  if (!pos) return null;
+  const first = !placed.has(id);
+  placed.add(id);
+  if (pos.pinned) {
+    return { x: pos.x, y: pos.y, fixed: { x: true, y: true } };
+  }
+  return first ? { x: pos.x, y: pos.y } : null;
+}
+
+/* Applied to every node as it is built: where it goes, whether the
+   physics engine may move it, and whether to say a person put it
+   there. */
+function applyLayout(node) {
+  const pinned = isPinned(node.id);
+  // A node under the mouse belongs to the drag until it is dropped. A
+  // refresh landing mid-drag would otherwise pull a pinned node back
+  // to its saved spot, or hand a loose one to the physics engine while
+  // somebody is still holding it.
+  if (dragging.has(node.id)) {
+    if (pinned) node.label = (node.label || "") + " " + t("pinnedMark");
+    return node;
+  }
+  const pos = layoutFor(node.id);
+  if (pos) Object.assign(node, pos);
+  // Set on EVERY render, including to its off state. vis merges an
+  // update field by field, so a property left out keeps whatever it
+  // had — and a node just released would go on being held.
+  node.fixed = pinned ? { x: true, y: true } : { x: false, y: false };
+  if (pinned) node.label = (node.label || "") + " " + t("pinnedMark");
+  return node;
+}
+
+/* Records where the nodes nobody has placed yet have ended up.
+
+   There is no "save layout" button any more, and there should not be
+   one: a button that has to be pressed for the picture to survive is
+   a button somebody will forget, and then the map they arranged is
+   gone. A node that has no saved position gets one as soon as the
+   layout settles; a node that already has one is never touched here,
+   or every open browser would rewrite the shared picture on every
+   refresh.
+
+   `autoSaved` keeps one client from sending the same node twice while
+   the answer is still in flight. */
+const autoSaved = new Set();
+let autoSaveTimer = null;
+
+async function saveNewPositions() {
+  if (!network) return;
+  const positions = network.getPositions();
+  const fresh = {};
+  for (const id of Object.keys(positions)) {
+    if (savedLayout[id] || autoSaved.has(id)) continue;
+    fresh[id] = { x: positions[id].x, y: positions[id].y, pinned: false };
+  }
+  const ids = Object.keys(fresh);
+  if (!ids.length) return;
+  for (const id of ids) autoSaved.add(id);
+  let answer;
+  try {
+    // "New" is this page's opinion, and it is as old as the page.
+    // Another page may have placed and pinned the node since; the
+    // server decides, in one transaction, and says what it kept.
+    const response = await fetch("/api/layout", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ nodes: fresh, only_new: true }),
+    });
+    answer = await response.json();
+  } catch (e) {
+    for (const id of ids) autoSaved.delete(id);
+    serviceLost("saving the layout");
+    return;
+  }
+  serviceBack();
+  for (const id of answer.stored || []) {
+    savedLayout[id] = fresh[id];
+    placed.add(id);
+  }
+  if (adoptLayout(answer.existing || {})) renderGraph();
+  if (!layoutSavedAt) layoutSavedAt = answer.saved_at || Date.now() / 1000;
+  updateScanStatus();
+}
+
+/* Takes positions somebody else decided on.
+
+   A pinned one is somebody's decision about where a node goes, and is
+   applied: the node moves there and is held. An unpinned one is only
+   where another page's physics happened to leave the node; this
+   page's own physics has already placed it next to what it is plugged
+   into, and pulling it across the map to match would be two engines
+   fighting over one box. So it is recorded — it is what the next page
+   to open will start from — and not applied.
+
+   A node not on screen yet is not "already placed": when it appears
+   it starts from the recorded position, as it would on a fresh page.
+
+   Returns whether anything on screen has to change. */
+function adoptLayout(entries, skip) {
+  let changed = false;
+  for (const [id, pos] of Object.entries(entries)) {
+    if (dragging.has(id) || (skip && skip(id))) continue;
+    const was = savedLayout[id];
+    savedLayout[id] = { x: pos.x, y: pos.y, pinned: !!pos.pinned };
+    if (pos.pinned) {
+      if (!was || !was.pinned || was.x !== pos.x || was.y !== pos.y) {
+        changed = true;
+      }
+    } else {
+      if (nodesDs && nodesDs.get(id)) placed.add(id);
+      if (was && was.pinned) changed = true;
+    }
+  }
+  return changed;
+}
+
+/* The physics engine emits `stabilized` when it settles, which is the
+   right moment — but with the simulation running continuously it may
+   not come for a while, and a node added by a scan should not have to
+   wait for it. So a short timer as well, and one idempotent function
+   behind both. */
+function scheduleAutoSave() {
+  clearTimeout(autoSaveTimer);
+  autoSaveTimer = setTimeout(saveNewPositions, AUTOSAVE_SETTLE_MS);
+}
+
+/* Pins one or more nodes where they are, and remembers it.
+
+   Pinning says "the physics engine does not get to move this", and
+   nothing more. A pinned node is still draggable: asking somebody to
+   release a switch before nudging it a centimetre would be a rule
+   about our bookkeeping, not about their map. */
+async function pinNodes(positions) {
+  await storeByHand(positions, true, "pinning a node");
+}
+
+function pinNode(id, x, y) {
+  return pinNodes({ [id]: { x: x, y: y } });
+}
+
+/* Releases nodes back to the physics engine. No confirmation: this is
+   cheap and reversible in one gesture, and a dialog in front of it
+   only makes the cheap thing feel expensive.
+
+   Released is not forgotten. The node keeps its row, with the
+   coordinates it has and the pin cleared: deleting the row, as v0.7.1
+   did, left a node with no saved position that this page would never
+   save again, and after F5 it went back to its anchor instead of
+   staying where the physics had it. */
+async function unpinNodes(ids) {
+  const at = network ? network.getPositions(ids) : {};
+  const positions = {};
+  for (const id of ids) if (at[id]) positions[id] = at[id];
+  await storeByHand(positions, false, "releasing a node");
+}
+
+/* One action of the hand — a drop, `P`, a menu item — whatever the
+   number of nodes: one request, and one line in the journal. */
+async function storeByHand(positions, pinned, what) {
+  const ids = Object.keys(positions);
+  if (!ids.length) return;
+  const nodes = {};
+  for (const id of ids) {
+    nodes[id] = { x: positions[id].x, y: positions[id].y, pinned: pinned };
+    savedLayout[id] = nodes[id];
+    // a released node stays where it stands
+    if (!pinned) placed.add(id);
+  }
+  writing(ids);
+  try {
+    await fetch("/api/layout", {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ nodes: nodes }),
+    });
+  } catch (e) {
+    written(ids);
+    serviceLost(what);
+    return;
+  }
+  written(ids);
+  serviceBack();
+  if (!layoutSavedAt) layoutSavedAt = Date.now() / 1000;
+  renderGraph();
+  updateScanStatus();
+}
+
+function unpinNode(id) {
+  return unpinNodes([id]);
+}
+
+function isPinned(id) {
+  return !!(savedLayout[id] && savedLayout[id].pinned);
+}
+
+/* Lets the mouse move pinned nodes.
+
+   Pinning is vis's `fixed`, and `fixed` refuses the hand as firmly as
+   it refuses the physics engine: at the start of a drag vis records
+   each selected node's `fixed`, and while dragging moves only the
+   nodes it recorded as loose. v0.7.1 said a pinned node stays
+   draggable and it did not — the drag was reported, the same
+   coordinates were saved again, and the box stayed where it was.
+
+   vis emits `dragStart` BEFORE it takes that record, so the pinned
+   nodes of the selection are loosened here and it records them as
+   free. For the length of the drag vis holds every dragged node itself,
+   so nothing else moves them; dragEnd pins them again. */
+function loosenForDrag(ids) {
+  for (const id of ids) dragging.add(id);
+  const held = ids.filter(isPinned);
+  if (!held.length) return;
+  nodesDs.update(held.map((id) => ({ id: id, fixed: { x: false, y: false } })));
+  // The record is taken the moment this handler returns, so the
+  // update has to have reached the node by then, not merely been
+  // queued. A DataSet delivers synchronously today; if that ever
+  // changes, the drag would silently go back to doing nothing — so
+  // check, and set it on the node directly if it did not arrive.
+  for (const id of held) {
+    const body = network.body.nodes[id];
+    if (body && (body.options.fixed.x || body.options.fixed.y)) {
+      console.warn("MoonLan: pinned node not loosened by the data update; setting it directly", id);
+      body.options.fixed.x = false;
+      body.options.fixed.y = false;
+    }
+  }
+}
+
+async function resetLayout() {
+  if (!window.confirm(t("resetLayoutConfirm"))) return;
+  let answer;
+  try {
+    answer = await (await fetch("/api/layout", { method: "DELETE" })).json();
+  } catch (e) {
+    serviceLost("clearing the layout");
+    return;
+  }
+  serviceBack();
+  // our own reset, not somebody else's: the next refresh must not
+  // start the map over a second time
+  knownClearedAt = Math.max(knownClearedAt, answer.cleared_at || 0);
+  savedLayout = {};
+  layoutSavedAt = 0;
+  placed.clear();
+  autoSaved.clear();
+  // Forgetting the positions on the server is only half of it. vis
+  // keeps x and y on the node it has already built, and nothing in
+  // the update path can take them away again — `setOptions` assigns a
+  // coordinate only when one is given, so leaving it out means "keep
+  // what you have". The nodes went on standing exactly where they
+  // were, `stabilize()` restarted the physics from those same points,
+  // and the reset looked like it had done nothing at all until the
+  // page was reloaded.
+  //
+  // So the node set is rebuilt rather than updated: that is what
+  // makes vis drop the old bodies and lay the map out afresh.
+  rebuildGraph();
+  updateScanStatus();
+  if (network) network.stabilize();
+}
+
+/* Who a node hangs off, taken from the edges that were just built.
+
+   Every node but the root has exactly one edge coming into it from
+   the thing it belongs to — a host from its switch or from the group
+   node standing in for one, a group from its switch, a switch from
+   its parent in the tree. Reading it off the edges rather than
+   re-deriving it per node kind means the two can never disagree.  */
+function anchorMap(edges) {
+  const anchors = new Map();
+  for (const edge of edges) {
+    if (!anchors.has(edge.to)) anchors.set(edge.to, edge.from);
+  }
+  return anchors;
+}
+
+/* The same map, kept from the last render: the selection needs to
+   know what hangs off a container, and re-deriving it from the
+   topology would be a second set of rules that can disagree with the
+   edges actually drawn. */
+let lastAnchors = new Map();
+
+/* Everything hanging off one container — a switch, a switch without
+   SNMP, a "beyond the trunk" or "offline" group — following the
+   chain down through further containers.
+
+   Switches are left out on purpose: this is "take what is on this
+   box", not "take this branch". Selecting a switch's whole subtree
+   would move half the map on the first drag.  */
+function devicesUnder(id) {
+  const children = new Map();
+  for (const [child, anchor] of lastAnchors) {
+    if (!children.has(anchor)) children.set(anchor, []);
+    children.get(anchor).push(child);
+  }
+  const found = new Set();
+  const stack = [id];
+  while (stack.length) {
+    for (const child of children.get(stack.pop()) || []) {
+      if (found.has(child) || child.startsWith("sw:")) continue;
+      found.add(child);
+      stack.push(child);
+    }
+  }
+  return [...found];
+}
+
+/* A number from a string, so a node's offset is the same in every
+   browser and does not jump between renders. Math.random() would put
+   the same device in a different spot for each person looking. */
+function idHash(id) {
+  // FNV-1a, then the murmur3 finaliser. The plain `hash * 31 + c` this
+  // replaces kept the last character in the lowest bits almost as it
+  // was, so sw:10.0.0.21 … sw:10.0.0.24 — ids that differ only there —
+  // got angles a degree apart and radii a unit apart, and four
+  // switches started on one spot.
+  let hash = 0x811c9dc5;
+  for (let i = 0; i < id.length; i++) {
+    hash ^= id.charCodeAt(i);
+    hash = Math.imul(hash, 0x01000193);
+  }
+  hash ^= hash >>> 16;
+  hash = Math.imul(hash, 0x85ebca6b);
+  hash ^= hash >>> 13;
+  hash = Math.imul(hash, 0xc2b2ae35);
+  hash ^= hash >>> 16;
+  return hash >>> 0;
+}
+
+/* Gives a position to every node that has none.
+
+   A node nobody has placed yet used to be dropped wherever vis felt
+   like putting it, which on a fresh map or straight after a reset
+   means a scattering of boxes with no relation to the network. A new
+   device belongs next to the thing it is plugged into, and the
+   physics engine can take it from there. */
+function seedPositions(nodes, edges) {
+  const anchors = anchorMap(edges);
+  lastAnchors = anchors;
+  const known = new Map();
+  const existing = network ? network.getPositions() : {};
+  for (const node of nodes) {
+    if (node.x != null && node.y != null) {
+      known.set(node.id, { x: node.x, y: node.y });
+    } else if (existing[node.id]) {
+      known.set(node.id, existing[node.id]);
+    }
+  }
+  // A node that hangs off nothing — the root of the tree, or a
+  // switch nobody could link — anchors the rest. Without it a first
+  // load has no starting point at all and every chain below stays
+  // unplaced.
+  for (const node of nodes) {
+    if (known.has(node.id) || anchors.has(node.id)) continue;
+    const hash = idHash(node.id);
+    node.x = (hash % 400) - 200;
+    node.y = ((hash >>> 16) % 400) - 200;
+    known.set(node.id, { x: node.x, y: node.y });
+  }
+  // A chain — switch, then the group on it, then the hosts in the
+  // group — needs a pass per level. Four covers every shape the map
+  // draws, and the loop stops as soon as a pass places nothing.
+  for (let pass = 0; pass < 6; pass++) {
+    let placedAny = false;
+    for (const node of nodes) {
+      if (known.has(node.id)) continue;
+      const at = known.get(anchors.get(node.id));
+      if (!at) continue;
+      const hash = idHash(node.id);
+      // angle and radius from different bits, or they move together
+      const angle = ((hash % 360) * Math.PI) / 180;
+      const radius = 70 + ((hash >>> 16) % 50);
+      node.x = at.x + Math.cos(angle) * radius;
+      node.y = at.y + Math.sin(angle) * radius;
+      known.set(node.id, { x: node.x, y: node.y });
+      placedAny = true;
+    }
+    if (!placedAny) break;
+  }
+  return nodes;
+}
+
+/* Throws the drawn nodes away and builds them again from the data.
+
+   `renderGraph` updates in place on purpose — it runs every thirty
+   seconds and must not disturb the camera or the positions. This is
+   the opposite operation, and it exists for the one case that needs
+   it. */
+function rebuildGraph() {
+  if (!network) {
+    renderGraph();
+    return;
+  }
+  const { nodes, edges } = buildGraphData();
+  seedPositions(nodes, edges);
+  nodesDs.clear();
+  edgesDs.clear();
+  nodesDs.add(nodes);
+  edgesDs.add(edges);
+  scheduleAutoSave();
+}
+
+/* ---------- context menu ----------
+
+   The items are data, not markup: each one says what it is called,
+   which group it belongs to, whether it can run and why not, and what
+   it does. v0.7.1 built this frame for exactly what goes in it now —
+   diagnostic actions, links, the operator's own items from
+   config.yaml — each of them more of the same data.
+
+   Every item is handed the whole selection, because a menu that works
+   on one node when three are chosen is a menu that surprises people.
+
+   An item that cannot run is shown greyed out with the reason — "IP
+   unknown", "no traceroute on the server" — rather than left out. The
+   same discipline as "no answer is not zero": what is missing has to
+   be visible as missing. */
+
+// In the order the menu shows them, a separator between each
+const MENU_GROUPS = ["actions", "links", "custom", "layout"];
+
+// Nodes that stand for a place rather than a device: they have no
+// address of their own, and pinging one means pinging what is on it
+const GROUP_PREFIXES = ["pseudo:", "trunk:", "offline:", "external:"];
+
+function isGroupNode(id) {
+  return GROUP_PREFIXES.some((prefix) => id.startsWith(prefix));
+}
+
+/* What a ping can be sent to: devices and switches, never the groups
+   standing in for places. */
+function addressable(ids) {
+  return ids.filter((id) => !isGroupNode(id));
+}
+
+/* The reason a link or an action cannot run for want of a value. */
+function missingReason(field) {
+  return t("reasonNo_" + field);
+}
+
+function menuItemsFor(ids, info, tools) {
+  const single = ids.length === 1 ? ids[0] : null;
+  const node = info ? info.node : null;
+  const items = [];
+  // The service did not answer: the actions are shown, and say why
+  // they cannot run. Links need the node's data and are left out.
+  const offline = tools ? null : t("reasonNoService");
+  const tooMany = (n) =>
+    tools && n > tools.max_targets
+      ? fmt("reasonTooMany", { n: n, limit: tools.max_targets })
+      : null;
+  const noPing = tools && !tools.ping ? t("reasonNoPing") : null;
+
+  if (single && !isGroupNode(single)) {
+    const noIp = node && !node.ip ? missingReason("ip") : null;
+    items.push({
+      key: "ping", group: "actions", label: t("menuPing"),
+      disabled: offline || noPing || noIp,
+      run: () => startAction("ping", [single]),
+    });
+    items.push({
+      key: "traceroute", group: "actions", label: t("menuTraceroute"),
+      disabled:
+        offline || (tools && !tools.traceroute ? t("reasonNoTraceroute") : null) || noIp,
+      run: () => startAction("traceroute", [single]),
+    });
+  } else if (single) {
+    const devices = addressable(devicesUnder(single));
+    items.push({
+      key: "pingGroup", group: "actions",
+      label: fmt("menuPingGroup", { n: devices.length }),
+      disabled:
+        offline || noPing ||
+        (devices.length ? null : t("reasonNoDevices")) ||
+        tooMany(devices.length),
+      run: () => startAction("ping", devices, nodeTitle(single)),
+    });
+  } else {
+    const targets = addressable(ids);
+    items.push({
+      key: "pingSelection", group: "actions",
+      label: fmt("menuPingSelection", { n: targets.length }),
+      disabled:
+        offline || noPing ||
+        (targets.length ? null : t("reasonNoDevices")) ||
+        tooMany(targets.length),
+      run: () => startAction("ping", targets),
+    });
+    // No traceroute for a crowd: its output means something only for
+    // one destination at a time
+  }
+
+  if (single && node && node.kind !== "group") {
+    for (const link of info.links) {
+      items.push({
+        key: link.key, group: "links", label: t("menu_" + link.key),
+        disabled: link.missing ? missingReason(link.missing) : null,
+        run: () => openLink(link.url),
+      });
+    }
+    // Remote desktop is for computers, not for network boxes
+    if (node.kind === "host") {
+      items.push({
+        key: "rdp", group: "links", label: t("menu_rdp"),
+        disabled: node.ip ? null : missingReason("ip"),
+        run: () => downloadRdp(node),
+      });
+    }
+    items.push({
+      key: "copyIp", group: "links", label: t("menuCopyIp"),
+      disabled: node.ip ? null : missingReason("ip"),
+      run: () => copyText(node.ip),
+    });
+    items.push({
+      key: "copyMac", group: "links", label: t("menuCopyMac"),
+      disabled: node.mac ? null : missingReason("mac"),
+      run: () => copyText(node.mac),
+    });
+  }
+
+  if (single && info) {
+    for (const link of info.custom) {
+      items.push({
+        key: "custom", group: "custom", label: link.label,
+        disabled: link.missing ? missingReason(link.missing) : null,
+        run: () => openLink(link.url),
+      });
+    }
+  }
+
+  const loose = ids.filter((id) => !isPinned(id));
+  items.push({
+    key: "pin", group: "layout",
+    label: loose.length ? t("menuPin") : t("menuUnpin"),
+    run: () => togglePinOnSelection(),
+  });
+  // one node, one card: there is nothing to show for a crowd
+  if (single) {
+    items.push({
+      key: "card", group: "layout", label: t("menuOpenCard"),
+      run: () => {
+        setSelectedNode(single);
+        showDetails(single);
+      },
+    });
+  }
+  if (single && single.startsWith("sw:")) {
+    items.push({
+      key: "ports", group: "layout", label: t("menuOpenPorts"),
+      run: () => openPorts(single.slice("sw:".length)),
+    });
+  }
+  return items;
+}
+
+function closeNodeMenu() {
+  menuSerial++;
+  els.nodeMenu.classList.add("hidden");
+  els.nodeMenu.replaceChildren();
+}
+
+/* Opens the menu once the server has said what the node offers. Every
+   open gets a number, so an answer arriving after the menu was closed
+   or opened somewhere else is dropped rather than drawn. */
+let menuSerial = 0;
+// What the server last said it can run: tools, the ceiling, demo mode
+let lastTools = null;
+
+async function openNodeMenu(ids, at) {
+  const serial = ++menuSerial;
+  let info = null;
+  let tools = null;
+  try {
+    if (ids.length === 1) {
+      const response = await fetch(
+        "/api/node-menu?id=" + encodeURIComponent(ids[0])
+      );
+      if (response.ok) {
+        info = await response.json();
+        tools = info.tools;
+      } else {
+        // a node the service no longer has: the map is older than the
+        // service's picture of it; the layout items still work
+        tools = (await (await fetch("/api/actions")).json());
+      }
+    } else {
+      tools = await (await fetch("/api/actions")).json();
+    }
+  } catch (e) {
+    serviceLost("the node menu");
+  }
+  if (serial !== menuSerial) return;
+  if (tools) lastTools = tools;
+  renderNodeMenu(ids, menuItemsFor(ids, info, tools), at);
+}
+
+function renderNodeMenu(ids, items, at) {
+  const parts = [];
+  const head = document.createElement("div");
+  head.className = "context-menu-head";
+  head.textContent =
+    ids.length === 1 ? nodeTitle(ids[0]) : fmt("menuSelected", { n: ids.length });
+  parts.push(head);
+  let drawn = 0;
+  for (const group of MENU_GROUPS) {
+    const members = items.filter((item) => item.group === group);
+    if (!members.length) continue;
+    if (drawn++) {
+      const sep = document.createElement("div");
+      sep.className = "context-menu-sep";
+      parts.push(sep);
+    }
+    for (const item of members) {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.dataset.key = item.key;
+      button.textContent = item.label;
+      if (item.disabled) {
+        // not the `disabled` attribute: a disabled button shows no
+        // tooltip in some browsers, and the reason is the point
+        button.classList.add("off");
+        button.setAttribute("aria-disabled", "true");
+        button.title = item.disabled;
+        const why = document.createElement("span");
+        why.className = "why";
+        why.textContent = item.disabled;
+        button.append(why);
+      }
+      button.addEventListener("click", () => {
+        if (item.disabled) return;
+        closeNodeMenu();
+        item.run();
+      });
+      parts.push(button);
+    }
+  }
+  els.nodeMenu.replaceChildren(...parts);
+  els.nodeMenu.classList.remove("hidden");
+  // Keep it on screen: near the bottom or the right edge it flips
+  const box = els.nodeMenu.getBoundingClientRect();
+  const x = Math.min(at.x, window.innerWidth - box.width - 8);
+  const y = Math.min(at.y, window.innerHeight - box.height - 8);
+  els.nodeMenu.style.left = Math.max(4, x) + "px";
+  els.nodeMenu.style.top = Math.max(4, y) + "px";
+}
+
+/* ---------- links, remote desktop, clipboard ---------- */
+
+/* A web interface opens in a new tab; ssh://, winbox:// and the rest
+   are handed to whatever program the system has for them, without
+   leaving an empty tab behind. The address was checked against the
+   scheme whitelist and filled in by the server. */
+function openLink(url) {
+  const a = document.createElement("a");
+  a.href = url;
+  if (/^https?:/i.test(url)) {
+    a.target = "_blank";
+    a.rel = "noopener noreferrer";
+  }
+  document.body.append(a);
+  a.click();
+  a.remove();
+}
+
+/* Browsers do not agree on rdp:// at all. A .rdp file is the standard
+   way, and it opens wherever there is a remote desktop client. Built
+   here: it holds nothing but the address. */
+function downloadRdp(node) {
+  const blob = new Blob(["full address:s:" + node.ip + "\r\n"], {
+    type: "application/x-rdp",
+  });
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = (node.name || node.ip).replace(/[^A-Za-z0-9._-]+/g, "_") + ".rdp";
+  document.body.append(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+}
+
+/* navigator.clipboard exists only on a secure page — https, or
+   localhost. MoonLan is usually opened over plain http by address,
+   where it is simply undefined, so the old way stays as the fallback. */
+async function copyText(text) {
+  let done = false;
+  if (navigator.clipboard && window.isSecureContext) {
+    try {
+      await navigator.clipboard.writeText(text);
+      done = true;
+    } catch (e) {
+      done = false;
+    }
+  }
+  if (!done) {
+    const area = document.createElement("textarea");
+    area.value = text;
+    area.setAttribute("readonly", "");
+    area.style.position = "fixed";
+    area.style.opacity = "0";
+    document.body.append(area);
+    area.select();
+    try {
+      done = document.execCommand("copy");
+    } catch (e) {
+      done = false;
+    }
+    area.remove();
+  }
+  showToast(done ? fmt("copied", { text: text }) : fmt("copyFailed", { text: text }));
+}
+
+let toastTimer = null;
+
+function showToast(text) {
+  const toast = document.getElementById("toast");
+  toast.textContent = text;
+  toast.classList.add("shown");
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => toast.classList.remove("shown"), 2500);
+}
+
+/* ---------- ping and traceroute ----------
+
+   Run on the MoonLan machine: a browser cannot ping, and the point is
+   to see the network from where MoonLan sees it. The page asks by node
+   id; the server finds the address itself, refuses what it does not
+   know, and runs the tool in the background. The page asks how it is
+   going once a second — the map is never held up waiting. */
+
+let actionJob = null;      // the job the panel shows
+let actionRefusal = null;  // …or why the server would not start it
+let actionTitle = null;   // {action, name, n} for the panel head
+let actionTimer = null;
+
+async function startAction(action, ids, title) {
+  clearTimeout(actionTimer);
+  actionJob = null;
+  actionRefusal = null;
+  // kept in parts, so the head can be worded again in another language
+  actionTitle = {
+    action: action,
+    name: title || (ids.length === 1 ? nodeTitle(ids[0]) : ""),
+    n: ids.length,
+  };
+  els.actions.classList.remove("hidden");
+  renderAction();
+  let answer;
+  try {
+    const response = await fetch("/api/actions", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ action: action, nodes: ids }),
+    });
+    answer = await response.json();
+  } catch (e) {
+    serviceLost("starting " + action);
+    answer = { error: "no_service" };
+  }
+  if (answer.error) {
+    actionRefusal = answer;
+  } else {
+    actionJob = answer;
+    followAction();
+  }
+  renderAction();
+}
+
+function followAction() {
+  clearTimeout(actionTimer);
+  if (!actionJob || actionJob.done) return;
+  const id = actionJob.id;
+  actionTimer = setTimeout(async () => {
+    let job;
+    try {
+      job = await (await fetch("/api/actions/" + id)).json();
+    } catch (e) {
+      serviceLost("the result of a ping");
+      followAction();
+      return;
+    }
+    // closed, or replaced by another run, while this was on its way
+    if (!actionJob || actionJob.id !== id) return;
+    if (job.error) {
+      actionRefusal = job;
+      actionJob = null;
+    } else {
+      actionJob = job;
+      followAction();
+    }
+    renderAction();
+  }, 1000);
+}
+
+function closeActions() {
+  clearTimeout(actionTimer);
+  actionJob = null;
+  actionRefusal = null;
+  els.actions.classList.add("hidden");
+}
+
+function refusalText(answer) {
+  switch (answer.error) {
+    case "too_many_targets":
+      return fmt("refuseTooMany", { n: answer.count, limit: answer.limit });
+    case "busy":
+      return fmt("refuseBusy", { limit: answer.limit });
+    case "tool_missing":
+      return fmt("refuseNoTool", { tool: answer.tool });
+    case "unknown_nodes":
+      return (answer.addresses || []).length
+        ? fmt("refuseAddress", { list: answer.addresses.join(", ") })
+        : fmt("refuseUnknown", { list: (answer.nodes || []).join(", ") });
+    case "traceroute_one":
+      return t("refuseTraceOne");
+    case "no_targets":
+      return t("reasonNoDevices");
+    case "unknown_job":
+      return t("refuseJobGone");
+    case "no_service":
+      return t("reasonNoService");
+    default:
+      return fmt("refuseOther", { error: answer.error });
+  }
+}
+
+/* What the continuous monitoring knows about the same address — shown
+   as the second source it is, not merged into the one-off result. */
+function monitorText(monitor) {
+  if (!monitor || monitor.ping_up == null) return t("monitorNone");
+  if (monitor.ping_up) {
+    return fmt("monitorUp", { time: fmtTime(monitor.last_ping_ok) });
+  }
+  return monitor.last_ping_ok
+    ? fmt("monitorDown", { time: fmtTime(monitor.last_ping_ok) })
+    : t("monitorNever");
+}
+
+function pingVerdict(target) {
+  if (target.status === "no_ip") return ["verdict-other", t("verdictNoIp")];
+  if (target.status === "queued" || target.status === "running") {
+    return ["verdict-other", "…"];
+  }
+  if (target.status === "timeout") return ["verdict-none", t("verdictTimeout")];
+  if (!target.result) return ["verdict-other", t("verdictFailed")];
+  if (target.result.received === 0) return ["verdict-none", t("verdictNoReply")];
+  if (target.result.loss > 0) return ["verdict-partial", t("verdictPartial")];
+  return ["verdict-ok", t("verdictOk")];
+}
+
+function fmtMs(value) {
+  return value == null ? "—" : value + " " + t("ms");
+}
+
+function renderAction() {
+  els.actionsTitle.textContent = actionTitle
+    ? t(actionTitle.action === "ping" ? "menuPing" : "menuTraceroute") +
+      " · " +
+      (actionTitle.name || fmt("actionsNodes", { n: actionTitle.n }))
+    : "";
+  const body = [];
+  const esc = (text) =>
+    String(text == null ? "" : text).replace(/[&<>"]/g, (c) => ({
+      "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;",
+    })[c]);
+  if (actionRefusal) {
+    body.push(`<p class="action-status refused">${esc(refusalText(actionRefusal))}</p>`);
+    els.actionsBody.innerHTML = body.join("");
+    return;
+  }
+  const job = actionJob;
+  if (!job) {
+    body.push(`<p class="action-status running">${t("actionStarting")}</p>`);
+    els.actionsBody.innerHTML = body.join("");
+    return;
+  }
+  body.push(
+    `<p class="action-status ${job.done ? "" : "running"}">${
+      job.done ? t("actionDone") : t("actionRunning")
+    }</p>`
+  );
+  if (lastTools && lastTools.simulated) {
+    body.push(`<p class="hint">${t("actionSimulated")}</p>`);
+  }
+  if (job.action === "ping" && job.targets.length > 1) {
+    const answered = job.targets.filter(
+      (target) => target.result && target.result.received > 0
+    ).length;
+    body.push(
+      `<p class="hint">${fmt("pingSummary", {
+        n: answered, total: job.targets.length,
+      })}</p>`
+    );
+    const rows = job.targets.map((target) => {
+      const [cls, verdict] = pingVerdict(target);
+      const result = target.result || {};
+      return (
+        `<tr><td>${esc(target.name)}</td>` +
+        `<td class="mono">${esc(target.ip || "—")}</td>` +
+        `<td class="num">${result.loss == null ? "—" : result.loss + "%"}</td>` +
+        `<td class="num">${esc(fmtMs(result.avg))}</td>` +
+        `<td class="${cls}">${esc(verdict)}</td></tr>`
+      );
+    });
+    body.push(
+      `<table><thead><tr><th>${t("colNode")}</th><th>IP</th>` +
+        `<th>${t("colLoss")}</th><th>${t("colRtt")}</th>` +
+        `<th>${t("colVerdict")}</th></tr></thead>` +
+        `<tbody>${rows.join("")}</tbody></table>`
+    );
+  } else {
+    const target = job.targets[0];
+    body.push(`<dl><dt>${t("actionTarget")}</dt><dd>${esc(target.name)} · ${esc(target.ip || "—")}</dd>`);
+    if (job.action === "ping") {
+      const result = target.result;
+      const [cls, verdict] = pingVerdict(target);
+      body.push(
+        `<dt>${t("actionThisRun")}</dt><dd><span class="${cls}">${esc(verdict)}</span>` +
+          (result
+            ? ` · ${fmt("pingLoss", {
+                loss: result.loss, received: result.received, sent: result.sent,
+              })} · ${t("pingRtt")} ${esc(fmtMs(result.min))} / ${esc(
+                fmtMs(result.avg)
+              )} / ${esc(fmtMs(result.max))}`
+            : "") +
+          `</dd>`
+      );
+      body.push(`<dt>${t("actionMonitor")}</dt><dd>${esc(monitorText(target.monitor))}</dd>`);
+    } else {
+      body.push(`<dt>${t("actionTool")}</dt><dd>${esc(job.tool)}</dd>`);
+    }
+    body.push("</dl>");
+    if (target.output) body.push(`<pre>${esc(target.output)}</pre>`);
+  }
+  els.actionsBody.innerHTML = body.join("");
+}
+
+/* ---------- arrange mode ----------
+
+   Dragging a node is how people look at a map: pull the cloud of hosts
+   aside, lift a switch out of the tangle, see what is behind it. v0.7
+   read every one of those as a decision and pinned the node for good,
+   so the map slowly set like concrete without anyone choosing it.
+
+   Placing a node is a different act from looking at one, and it now
+   has a mode of its own. Deliberately not remembered between
+   sessions: a mode that comes back on its own after a reload is the
+   same trap in another shape. */
+let arrangeMode = false;
+
+function applyArrangeMode() {
+  els.arrangeBtn.classList.toggle("active", arrangeMode);
+  els.arrangeBtn.textContent = arrangeMode
+    ? t("arrangeOnBtn")
+    : t("arrangeBtn");
+  els.arrangeBtn.title = t("arrangeHint");
+  // The map itself changes, not only the button: a mode you can
+  // forget you are in is a mode that edits the map by accident.
+  els.network.classList.toggle("arranging", arrangeMode);
+}
+
+function toggleArrangeMode() {
+  arrangeMode = !arrangeMode;
+  applyArrangeMode();
+}
 
 function applyFreeze() {
   if (network) network.setOptions({ physics: !layoutFrozen });
@@ -275,11 +1342,46 @@ function fmtDate(ts) {
   return ts ? new Date(ts * 1000).toLocaleDateString(locale()) : "—";
 }
 
+/* "4 min", "2 h 10 min" — how long ago something was measured. */
+function fmtAge(seconds) {
+  if (seconds == null) return "—";
+  const minutes = Math.round(seconds / 60);
+  if (minutes < 1) return t("ageUnderMinute");
+  if (minutes < 60) return fmt("ageMinutes", { n: minutes });
+  const hours = Math.floor(minutes / 60);
+  const rest = minutes % 60;
+  return rest
+    ? fmt("ageHoursMinutes", { h: hours, n: rest })
+    : fmt("ageHours", { h: hours });
+}
+
 function updateScanStatus() {
   els.scanStatus.classList.remove("failed");
+  els.scanStatus.classList.remove("partial");
+  els.scanStatus.classList.remove("offline");
   els.scanStatus.title = "";
-  if (isScanning) {
-    els.scanStatus.textContent = t("scanning");
+  // Nothing below this line is arriving any more, so it goes first:
+  // everything else the header could say is about a picture that has
+  // stopped being refreshed.
+  if (!serviceReachable) {
+    els.scanStatus.classList.add("offline");
+    els.scanStatus.textContent = fmt("serviceOffline", {
+      time: topology.last_scan ? fmtTime(topology.last_scan) : t("noData"),
+    });
+    els.scanStatus.title = t("serviceOfflineHint");
+    return;
+  }
+  // A scan of eight switches took ten minutes and the interface said
+  // nothing at all about it — the only way to find out whether
+  // anything was happening was journalctl. One line settles it.
+  if (isScanning || topology.scanning) {
+    els.scanStatus.textContent =
+      topology.scan_total > 0
+        ? fmt("scanningProgress", {
+            done: topology.scan_done || 0,
+            total: topology.scan_total,
+          })
+        : t("scanning");
     return;
   }
   // A failed scan used to read exactly like a service that had just
@@ -295,21 +1397,137 @@ function updateScanStatus() {
   els.scanStatus.textContent = topology.last_scan
     ? t("scanPrefix") + new Date(topology.last_scan * 1000).toLocaleString(locale())
     : t("noData");
+  // Switches the last scan gave up waiting for. Worth seeing — their
+  // part of the map is older than the rest — but not an alarm: they
+  // answer, and nothing about them is being claimed.
+  const late = topology.scan_over_budget || [];
+  if (late.length) {
+    els.scanStatus.classList.add("partial");
+    els.scanStatus.textContent +=
+      "  " + fmt("scanOverBudgetMark", { n: late.length });
+    els.scanStatus.title = fmt("scanOverBudgetHint", {
+      switches: late.map(switchName).join(", "),
+    });
+  }
+  updateLayoutStatus();
+}
+
+/* How much of this map was arranged by a person.
+
+   Until v0.7.1 this counted nodes the saved picture did not contain,
+   which made sense while saving was something you pressed a button
+   for. Now a position is recorded as soon as the layout settles, so
+   "not saved" is a state no node stays in — and a count of it would
+   be a number that is always zero, or worse, briefly not. What is
+   worth knowing is how much of the picture is somebody's decision
+   rather than the engine's. */
+function updateLayoutStatus() {
+  const pinned = Object.keys(savedLayout).filter((id) =>
+    savedLayout[id].pinned
+  ).length;
+  els.layoutStatus.classList.toggle("hidden", pinned === 0);
+  if (!pinned) return;
+  els.layoutStatus.textContent = fmt("layoutPinnedMark", { n: pinned });
+  els.layoutStatus.title = t("layoutPinnedHint");
+}
+
+/* The service can go away — restarted, redeployed, or the machine this
+   page is open from lost the route to it. Every periodic request has
+   to survive that: an unhandled rejection every thirty seconds is not
+   information, and a map that simply stops changing looks exactly like
+   a quiet network where nothing is happening.
+
+   So: the last good picture stays on screen, the header says the data
+   is no longer arriving and how old it is, and the console gets one
+   line when the connection is lost and one when it comes back. */
+let serviceReachable = true;
+
+function serviceLost(what) {
+  if (serviceReachable) {
+    serviceReachable = false;
+    console.warn(
+      "MoonLan: the service is not answering (" + what + "). The map " +
+      "below is the last picture that arrived; polling continues."
+    );
+    updateScanStatus();
+  }
+}
+
+function serviceBack() {
+  if (!serviceReachable) {
+    serviceReachable = true;
+    console.info("MoonLan: the service is answering again.");
+    updateScanStatus();
+  }
+}
+
+/* While a scan runs the header counts switches off. The map itself is
+   only refreshed every REFRESH_MS, which is no use to somebody
+   watching a scan that may last minutes. */
+let scanWatcher = null;
+
+function watchScan() {
+  if (scanWatcher) return;
+  scanWatcher = setInterval(async () => {
+    let status;
+    try {
+      status = await (await fetch("/api/status")).json();
+      serviceBack();
+    } catch (e) {
+      serviceLost("scan progress");
+      return; // keep the timer: the next tick may well succeed
+    }
+    topology.scanning = status.scanning;
+    topology.scan_done = status.scan_done;
+    topology.scan_total = status.scan_total;
+    topology.scan_over_budget = status.scan_over_budget;
+    updateScanStatus();
+    if (!status.scanning) {
+      clearInterval(scanWatcher);
+      scanWatcher = null;
+      els.rescan.disabled = false;
+      isScanning = false;
+      await loadTopology();
+    }
+  }, 2000);
 }
 
 /* ---------- data loading and rendering ---------- */
 
 async function loadTopology() {
-  const [topo, alarms] = await Promise.all([
-    fetch("/api/topology").then((r) => r.json()),
-    fetchAlarms("active=1"),
-  ]);
+  let topo;
+  let alarms;
+  let layout;
+  const askedAt = performance.now();
+  try {
+    [topo, alarms, layout] = await Promise.all([
+      fetch("/api/topology").then((r) => r.json()),
+      fetchAlarms("active=1"),
+      fetch("/api/layout").then((r) => r.json()),
+    ]);
+  } catch (e) {
+    // Whatever is on screen stays there. This is the moment somebody
+    // is most likely to be looking at it.
+    serviceLost("the map");
+    return;
+  }
+  serviceBack();
   topology = topo;
   activeAlarms = alarms;
   renderBadge();
   renderSidebar();
-  renderGraph();
+  if (takeServerLayout(layout, askedAt) === "rebuild" && network) {
+    rebuildGraph();
+    // Started over from nothing, the same as a reset done here
+    if (!Object.keys(savedLayout).length) network.stabilize();
+  } else {
+    renderGraph();
+  }
   updateScanStatus();
+  // A scan the operator did not start is worth counting off too: the
+  // periodic one is when they are most likely to wonder why nothing
+  // has moved for ten minutes.
+  if (topology.scanning) watchScan();
   els.emptyState.classList.toggle("hidden", topology.switches.length > 0);
 }
 
@@ -328,8 +1546,9 @@ function switchHasAlarm(ip) {
   );
 }
 
-function li(main, sub, dotClass, onClick, searchText, cssClass) {
+function li(main, sub, dotClass, onClick, searchText, cssClass, title) {
   const item = document.createElement("li");
+  if (title) item.title = title;
   if (dotClass) {
     const dot = document.createElement("span");
     dot.className = "dot " + dotClass;
@@ -361,7 +1580,15 @@ function renderSidebar() {
         // same rule as the map caption: no address over the address
         sw.named === false ? sw.model || "" : sw.ip,
         sw.ping_up ? "up" : "down",
-        () => focusNode("sw:" + sw.ip)
+        () => focusNode("sw:" + sw.ip),
+        undefined,
+        // greyed the way an old host record is: the switch is there,
+        // its numbers are from the last poll that finished
+        sw.over_budget ? "stale" : "",
+        sw.over_budget_scans >= 2
+          ? fmt("staleSwitchScans", { n: sw.over_budget_scans }) +
+            " · " + t("dataFrom") + " " + fmtTime(sw.polled_at)
+          : ""
       )
     )
   );
@@ -467,7 +1694,7 @@ function buildGraphData() {
     // repeating the address underneath tells nobody anything. The
     // model out of sysDescr goes there instead, or nothing at all.
     const second = sw.named === false ? sw.model || "" : sw.ip;
-    nodes.push({
+    nodes.push(applyLayout({
       id: "sw:" + sw.ip,
       label:
         sw.name + (second ? "\n" + second : "") +
@@ -477,12 +1704,15 @@ function buildGraphData() {
       color: {
         background: colors.panel,
         border: border,
-        highlight: { background: "#1c2739", border: border },
+        // A selected node has to look selected. The highlight border
+        // used to repeat the normal one, so with several nodes chosen
+        // nothing on the map said which.
+        highlight: { background: "#1c2739", border: colors.link },
       },
       font: nodeFont("sw:" + sw.ip),
       borderWidth: switchHasAlarm(sw.ip) || sw.stp_root || looping ? 3 : 2,
       margin: 10,
-    });
+    }));
   }
 
   for (const link of topology.links) {
@@ -501,11 +1731,28 @@ function buildGraphData() {
       font: { color: colors.dim, size: 11, strokeWidth: 0 },
       dashes: false,
     };
+    // The MAC tables could not say which of several switches behind
+    // one port is on the cable, so they are all hung off it. A guess
+    // has no business looking like a measured cable: dashed, thinner,
+    // and the tooltip says what is unknown about it.
+    if (link.order_unknown) {
+      edge.dashes = [4, 6];
+      edge.color = { color: colors.moon, opacity: 0.55 };
+      edge.width = 2;
+      edge.title = t("linkOrderUnknown");
+    }
+    // …and a ring nothing could account for: not removed, not believed
+    if (link.cycle_unresolved) {
+      edge.dashes = [2, 4];
+      edge.color = { color: colors.dim, opacity: 0.7 };
+      edge.title = t("linkCycleUnresolved");
+    }
     // a port STP is holding in discarding carries no traffic at all
     if (link.stp_blocking) {
       edge.color = { color: colors.alarm, opacity: 1 };
       edge.dashes = [6, 4];
       edge.label = (edge.label ? edge.label + " · " : "") + t("stpBlocking");
+      edge.title = t("linkStpBlocking");
     }
     markLoop(edge, link.a, link.a_port);
     markLoop(edge, link.b, link.b_port);
@@ -513,7 +1760,7 @@ function buildGraphData() {
   }
 
   for (const ps of topology.pseudo_switches || []) {
-    nodes.push({
+    nodes.push(applyLayout({
       id: ps.id,
       label: t("pseudoTitle"),
       shape: "square",
@@ -526,7 +1773,7 @@ function buildGraphData() {
       shapeProperties: { borderDashes: [4, 4] },
       borderWidth: 2,
       font: nodeFont(ps.id),
-    });
+    }));
     edges.push(markLoop({
       id: "psedge:" + ps.id,
       from: "sw:" + ps.switch,
@@ -550,7 +1797,7 @@ function buildGraphData() {
     // the address under the name is the one the operator uses, not
     // whichever of the announced ones came back first
     const bridgeAddress = bridge.router_ip || bridge.ip || bridge.mgmt_ip;
-    nodes.push({
+    nodes.push(applyLayout({
       id: bridge.id,
       label: bridge.name + (bridgeAddress ? "\n" + bridgeAddress : ""),
       shape: "box",
@@ -563,7 +1810,7 @@ function buildGraphData() {
       borderWidth: 2,
       margin: 8,
       font: { color: colors.dim, size: 12 },
-    });
+    }));
     edges.push(markLoop({
       id: "bredge:" + bridge.id,
       from: "sw:" + bridge.switch,
@@ -577,7 +1824,7 @@ function buildGraphData() {
   // one node per port that leaves the network: what is behind the
   // provider's handover is not ours to draw device by device
   for (const external of topology.external_networks || []) {
-    nodes.push({
+    nodes.push(applyLayout({
       id: external.id,
       label: t("externalNetwork") + " · " + external.count,
       shape: "hexagon",
@@ -589,7 +1836,7 @@ function buildGraphData() {
       },
       borderWidth: 2,
       font: nodeFont(external.id),
-    });
+    }));
     edges.push(markLoop({
       id: "extedge:" + external.id,
       // the provider's switch is on the cable and everything else is
@@ -607,7 +1854,7 @@ function buildGraphData() {
   // own. Deliberately not shaped like a switch: nobody knows whether
   // there is one, only that these addresses come through this cable
   for (const group of topology.trunk_groups || []) {
-    nodes.push({
+    nodes.push(applyLayout({
       id: group.id,
       label: t("trunkGroup") + " · " + group.count,
       shape: "ellipse",
@@ -620,7 +1867,7 @@ function buildGraphData() {
       borderWidth: 2,
       margin: 6,
       font: { color: colors.dim, size: 11 },
-    });
+    }));
     edges.push(markLoop({
       id: "trunkedge:" + group.id,
       // off whatever stands on that cable, if anything does
@@ -633,7 +1880,7 @@ function buildGraphData() {
   }
 
   for (const group of topology.offline_groups || []) {
-    nodes.push({
+    nodes.push(applyLayout({
       id: group.id,
       label: t("offlineGroup") + " · " + group.count,
       shape: "square",
@@ -646,7 +1893,7 @@ function buildGraphData() {
       shapeProperties: { borderDashes: [2, 3] },
       borderWidth: 2,
       font: nodeFont(group.id),
-    });
+    }));
     edges.push(markLoop({
       id: "offedge:" + group.id,
       // the live devices of this port hang off the bridge or the
@@ -673,7 +1920,7 @@ function buildGraphData() {
     const caption = hostLabel(host);
     const second =
       host.router_ip && host.router_ip !== caption ? "\n" + host.router_ip : "";
-    nodes.push({
+    nodes.push(applyLayout({
       id: "host:" + host.mac,
       label: caption + second,
       shape: isRouter ? "diamond" : "dot",
@@ -686,7 +1933,7 @@ function buildGraphData() {
       },
       borderWidth: isRouter ? 2 : 1,
       font: nodeFont("host:" + host.mac),
-    });
+    }));
     edges.push(markLoop({
       id: "hostedge:" + host.mac,
       from: host.via || "sw:" + host.switch,
@@ -782,6 +2029,9 @@ function setSelectedNode(id) {
 
 function renderGraph() {
   const { nodes, edges } = buildGraphData();
+  // Anything without a saved position starts next to what it is
+  // plugged into, not wherever the engine drops it
+  seedPositions(nodes, edges);
 
   if (!network) {
     nodesDs = new vis.DataSet(nodes);
@@ -792,14 +2042,88 @@ function renderGraph() {
         forceAtlas2Based: { gravitationalConstant: -60, springLength: 90 },
         stabilization: { iterations: 200 },
       },
-      interaction: { hover: true },
+      // Ctrl+click adds and removes a node, and dragging one of
+      // several selected nodes moves the whole selection — both of
+      // them vis's own behaviour, which is better than a reimplementation
+      interaction: { hover: true, multiselect: true },
+      nodes: { borderWidthSelected: 4 },
     };
     network = new vis.Network(
       els.network,
       { nodes: nodesDs, edges: edgesDs },
       options
     );
+    // No guard against "the click that ends a drag": there is no such
+    // click. vis takes a gesture as a tap or as a pan, never both, and
+    // v0.7.1's guard waited for a click that never came — so it
+    // swallowed the next real one, and after moving a node the first
+    // click on anything opened nothing.
+    network.on("dragStart", (params) => loosenForDrag(params.nodes));
+    // A new node's position is worth writing down once the layout has
+    // settled around it — not while it is still being pushed about
+    network.on("stabilized", saveNewPositions);
+    // Double click on a container takes everything on it: the cloud of
+    // devices behind one switch is the thing people want to move out
+    // of the way in one go.
+    network.on("doubleClick", (params) => {
+      if (!params.nodes.length) return;
+      const ids = devicesUnder(params.nodes[0]);
+      if (!ids.length) return;
+      network.selectNodes(ids, false);
+      setSelectedNode(null);
+      hideDetails();
+    });
+    network.on("dragEnd", (params) => {
+      dragging.clear();
+      if (!params.nodes.length) return;
+      // In arrange mode a drag places the node. Outside it, a drag is
+      // somebody looking at the map — unless the node was already
+      // pinned, in which case it keeps its pin and takes its new
+      // coordinates with it.
+      const at = network.getPositions(params.nodes);
+      const moved = {};
+      for (const id of params.nodes) {
+        if (!at[id]) continue;
+        if (arrangeMode || isPinned(id)) moved[id] = at[id];
+      }
+      const ids = Object.keys(moved);
+      if (!ids.length) return;
+      // vis has just put back the `fixed` it recorded at dragStart —
+      // which for a pinned node is the `false` loosenForDrag gave it.
+      // Hold the nodes again here and now: saving is a round trip, and
+      // the physics engine would carry them off while it is under way.
+      nodesDs.update(ids.map((id) => ({
+        id: id, x: moved[id].x, y: moved[id].y, fixed: { x: true, y: true },
+      })));
+      pinNodes(moved);
+    });
+    network.on("oncontext", (params) => {
+      params.event.preventDefault();
+      const id = network.getNodeAt(params.pointer.DOM);
+      // In arrange mode the right button is the undo of the left one:
+      // it releases the node, and asks nothing.
+      if (arrangeMode && id && isPinned(id)) {
+        unpinNode(id);
+        return;
+      }
+      if (!id) {
+        closeNodeMenu();
+        return;
+      }
+      // Right-clicking inside the selection works on all of it;
+      // right-clicking outside it means that node instead
+      const selected = network.getSelectedNodes();
+      const ids = selected.includes(id) ? selected : [id];
+      if (!selected.includes(id)) network.selectNodes([id], false);
+      openNodeMenu(ids, {
+        x: params.event.clientX,
+        y: params.event.clientY,
+      });
+    });
     network.on("click", (params) => {
+      closeNodeMenu();
+      // Ctrl+click is "add to the selection", not "look at this one"
+      if (params.event && (params.event.srcEvent || {}).ctrlKey) return;
       if (params.nodes.length) {
         setSelectedNode(params.nodes[0]);
         showDetails(params.nodes[0]);
@@ -814,6 +2138,7 @@ function renderGraph() {
         hideDetails();
       }
     });
+    holdIsAPress();
     network.on("beforeDrawing", (ctx) => {
       if (hoveredNodeId && hoveredNodeId !== selectedNodeId) {
         drawLabelBackdrop(ctx, hoveredNodeId, false);
@@ -829,6 +2154,9 @@ function renderGraph() {
       network.redraw();
     });
     applyFreeze();  // a freeze chosen earlier survives a reload
+    // The very first map is exactly the one most likely to hold nodes
+    // nobody has a position for
+    scheduleAutoSave();
     return;
   }
 
@@ -840,6 +2168,34 @@ function renderGraph() {
   edgesDs.remove(edgesDs.getIds().filter((id) => !edgeIds.has(id)));
   nodesDs.update(nodes);
   edgesDs.update(edges);
+  scheduleAutoSave();
+}
+
+/* A long press is a press.
+
+   With `multiselect` on — v0.7.1 turned it on for Ctrl+click — vis
+   reads a press held for a quarter of a second as "add this node to
+   the selection", Ctrl or not, and on a node already selected as "take
+   it out". People rarely move the mouse the instant the button goes
+   down. So pressing a switch unhurriedly and dragging it carried along
+   whatever had been selected before — a pinned router included, saved
+   in its new place — and pressing unhurriedly on one node of a group
+   dropped it from the group just before the group was to be dragged.
+
+   Nothing needs to happen at the moment of holding. If a drag follows,
+   vis picks the node under the pointer itself, or the whole selection
+   when that node is part of it. If the button comes up where it went
+   down, it was a click, and vis's own tap handling does the rest —
+   Ctrl included.
+
+   Two internals, both of vis-network 9.1.9, which index.html pins:
+   the canvas looks `onHold` up in body.eventListeners on every press,
+   and the Hammer instance is canvas.hammer. */
+function holdIsAPress() {
+  network.body.eventListeners.onHold = () => {};
+  network.canvas.hammer.on("pressup", (event) =>
+    network.body.eventListeners.onTap(event)
+  );
 }
 
 function focusNode(id) {
@@ -907,6 +2263,15 @@ function loopCardTitle(loop) {
 }
 
 /* A switch's name for a card, falling back to its address */
+/* What to call a node in a confirmation dialog: its caption if the
+   graph has one, its id otherwise. */
+function nodeTitle(id) {
+  const node = nodesDs && nodesDs.get(id);
+  const label = node && node.label ? String(node.label).split("\n")[0] : "";
+  // the pin mark is a state of the node, not a part of its name
+  return label.replace(" " + t("pinnedMark"), "").trim() || id;
+}
+
 function switchName(ip) {
   const sw = (topology.switches || []).find((s) => s.ip === ip);
   return sw ? sw.name : ip;
@@ -925,6 +2290,51 @@ function setDetails(html) {
   if (heading) heading.remove();
 }
 
+/* Every line drawn from this switch: the neighbour, our port, whether
+   it is up, and where the link came from. The tooltip on an edge
+   answers that one edge at a time; "how many lines does this box have
+   and why" is a question about the box, and belongs on its card. */
+function switchLinksHtml(ip) {
+  const rows = [];
+  for (const link of topology.links) {
+    const side = link.a === ip ? "a" : link.b === ip ? "b" : null;
+    if (!side) continue;
+    const otherIp = link[side === "a" ? "b" : "a"];
+    const port = link[side + "_port"];
+    const source = link.source || "fdb";
+    const mark = link.cycle_unresolved
+      ? " ⚠"
+      : link.order_unknown
+      ? " ?"
+      : "";
+    const title = link.cycle_unresolved
+      ? t("linkCycleUnresolved")
+      : link.order_unknown
+      ? t("linkOrderUnknown")
+      : link.stp_blocking
+      ? t("linkStpBlocking")
+      : "";
+    rows.push(
+      `<li${title ? ` title="${title}"` : ""}>` +
+        `<span>${port}${mark} → ${switchName(otherIp)}</span>` +
+        `<span class="sub">${
+          source === "both"
+            ? t("srcBoth")
+            : source === "lldp"
+            ? t("srcLldp")
+            : t("srcFdb")
+        }${link.speed_mbps ? " · " + fmtSpeed(link.speed_mbps) : ""}${
+          link.stp_blocking ? " · " + t("stpBlocking") : ""
+        }</span></li>`
+    );
+  }
+  if (!rows.length) return "";
+  return (
+    `<h4 class="card-sub">${fmt("switchLinks", { n: rows.length })}</h4>` +
+    `<ul class="offline-list">${rows.join("")}</ul>`
+  );
+}
+
 function showDetails(nodeId) {
   let html = "";
   if (nodeId.startsWith("sw:")) {
@@ -932,7 +2342,12 @@ function showDetails(nodeId) {
     if (!sw) return;
     const loop = sw.loop || {};
     html = `<h3>${sw.name}</h3>
-      ${loop.supported === false
+      ${sw.over_budget
+        ? `<p class="hint">${fmt(
+            sw.over_budget_scans >= 2 ? "staleSwitchHint" : "overBudgetHint",
+            { time: fmtTime(sw.polled_at), n: sw.over_budget_scans }
+          )}</p>`
+        : ""}${loop.supported === false
         ? `<p class="hint">${fmt("loopUnsupportedHint", {
             oid: loop.sys_object_id || "—",
           })}</p>`
@@ -941,10 +2356,18 @@ function showDetails(nodeId) {
       <dt>${t("bridgeMac")}</dt><dd>${sw.mac || "—"}</dd>
       <dt>${t("portsUpTotal")}</dt><dd>${sw.ports_up} / ${sw.ports_total}</dd>
       <dt>${t("lastReply")}</dt><dd>${fmtTime(sw.last_ping_ok)}</dd>
+      ${sw.over_budget
+        ? `<dt>${t("dataFrom")}</dt><dd>${fmtTime(sw.polled_at)}${
+            sw.over_budget_scans >= 2
+              ? " · " + fmt("staleSwitchScans", { n: sw.over_budget_scans })
+              : ""
+          }</dd>`
+        : ""}
       <dt>${t("loopDetection")}</dt><dd${
         loop.status === "loop" ? ' class="loop-alarm"' : ""
       } title="${loopCardTitle(loop)}">${loopCardLine(loop)}</dd>
       <dt>${t("descr")}</dt><dd>${sw.descr || "—"}</dd></dl>
+      ${switchLinksHtml(sw.ip)}
       <button id="ports-btn" class="panel-btn">${t("portsBtn")}</button>`;
   } else if (nodeId.startsWith("offline:")) {
     const group = (topology.offline_groups || []).find((g) => g.id === nodeId);
@@ -1109,6 +2532,12 @@ function showDetails(nodeId) {
           })}</p>`
         : ""}
       ${host.remembered ? `<p class="hint">${t("rememberedHint")}</p>` : ""}
+      ${host.from_saved
+        ? `<p class="hint">${fmt("hostFromSavedHint", {
+            switch: switchName(host.switch),
+            time: fmtTime(host.reading_at),
+          })}</p>`
+        : ""}
       ${aliveByIp ? `<p class="hint">${t("staleButAliveHint")}</p>` : ""}
       ${hint ? `<p class="hint">${hint}</p>` : ""}<dl>
       <dt>${t("name")}</dt><dd>${host.name || "—"}</dd>
@@ -1129,6 +2558,13 @@ function showDetails(nodeId) {
         host.approximate ? ` <span class="chip">${t("approximate")}</span>` : ""
       }${
         host.remembered ? ` <span class="chip">${t("remembered")}</span>` : ""
+      }${
+        host.from_saved
+          ? ` <span class="chip" title="${fmt("hostFromSavedHint", {
+              switch: switchName(host.switch),
+              time: fmtTime(host.reading_at),
+            })}">${t("fromSaved")}</span>`
+          : ""
       }</dd>
       <dt>${t("vlan")}</dt><dd>${vlanLabel(host.vlan)}</dd>
       ${host.router_ip
@@ -1140,10 +2576,21 @@ function showDetails(nodeId) {
         : ""}
       <dt>${t("lastReply")}</dt><dd>${fmtTime(host.last_ping_ok)}</dd>
       <dt>${t("lastSeenLabel")}</dt><dd>${fmtTime(host.last_seen)}</dd>
+      ${host.from_saved
+        ? `<dt>${t("readingFrom")}</dt><dd>${fmtTime(host.reading_at)}</dd>`
+        : ""}
       ${offMap ? `<dt>${t("lastArpLabel")}</dt><dd>${fmtTime(host.last_arp)}</dd>` : ""}
       <dt>${t("firstSeen")}</dt><dd>${fmtDate(host.first_seen)}</dd></dl>
       <button id="monitor-btn" class="panel-btn${host.monitored ? " active" : ""}">
         ${host.monitored ? "★" : "☆"} ${t("monitorBtn")}</button>`;
+  }
+  // Placed by hand: say so, and offer to hand it back to the physics
+  // engine. The map must answer "did MoonLan arrange this or did I"
+  // without anyone having to guess.
+  if (savedLayout[nodeId] && savedLayout[nodeId].pinned) {
+    html +=
+      `<p class="hint">${t("pinnedHint")}</p>` +
+      `<button id="unpin-btn" class="panel-btn">${t("unpinBtn")}</button>`;
   }
   shownDetails = { type: "node", id: nodeId };
   setDetails(html);
@@ -1152,6 +2599,10 @@ function showDetails(nodeId) {
   els.alarms.classList.add("hidden");
   els.stp.classList.add("hidden");
   closePorts();
+  const unpinBtn = document.getElementById("unpin-btn");
+  if (unpinBtn) {
+    unpinBtn.addEventListener("click", () => unpinNode(nodeId));
+  }
   const portsBtn = document.getElementById("ports-btn");
   if (portsBtn) {
     portsBtn.addEventListener("click", () =>
@@ -1281,8 +2732,19 @@ function closePorts() {
 
 async function refreshPorts() {
   if (!portsIp) return;
-  const res = await fetch("/api/switch/" + encodeURIComponent(portsIp) + "/ports");
-  lastPorts = await res.json();
+  let data;
+  try {
+    const res = await fetch(
+      "/api/switch/" + encodeURIComponent(portsIp) + "/ports"
+    );
+    data = await res.json();
+  } catch (e) {
+    // the panel keeps the last table, the header says why
+    serviceLost("the ports panel");
+    return;
+  }
+  serviceBack();
+  lastPorts = data;
   renderPorts(lastPorts);
 }
 
@@ -1422,6 +2884,10 @@ function renderPorts(data) {
   });
   markSilentColumns(data.columns);
   const limits = data.thresholds || {};
+  // Past this age a rate is shown dimmed with its age beside it; past
+  // `hide_after_seconds` the server withholds the number itself. Both
+  // come from the service, which is where the intervals live.
+  const staleAfter = (data.rates || {}).stale_after_seconds ?? Infinity;
   let highlighted = null;
   // physical ports only; the server puts active ones first
   const rows = sortPorts(data.ports.filter((p) => p.is_physical)).map((p) => {
@@ -1436,6 +2902,36 @@ function renderPorts(data) {
         if (cls) cell.className = cls;
         cell.append(content);
         tr.append(cell);
+      };
+      // A rate cell carries its own age. The number is real but was
+      // measured a while ago — the counters cycle skipped this switch,
+      // or it is busy being scanned — and dropping it would draw the
+      // same "—" as a column the agent never answers. Those two say
+      // very different things about a switch.
+      const rateTd = (value, cls) => {
+        const stale =
+          p.rate_age_seconds != null && p.rate_age_seconds >= staleAfter;
+        // expired: a dash that has something to say, so it asks to be
+        // hovered — a dash with nothing behind it does not
+        const expired = value == null && p.rate_age_seconds != null;
+        td(
+          fmtRate(value),
+          (cls || "") +
+            (stale && value != null ? " stale-rate" : "") +
+            (expired ? " rate-expired" : "")
+        );
+        const cell = tr.lastChild;
+        if (expired) {
+          // measured once, too long ago to show: say when, do not
+          // leave a bare dash that reads as "never polled"
+          cell.title = fmt("rateTooOld", {
+            when: fmtAge(p.rate_age_seconds),
+          });
+        } else if (stale) {
+          cell.title = fmt("rateMeasured", {
+            when: fmtAge(p.rate_age_seconds),
+          });
+        }
       };
       let name = p.name;
       if (p.lag) name += " (" + p.lag + ")";
@@ -1535,14 +3031,14 @@ function renderPorts(data) {
       dot.className = "dot " + (p.oper_up ? "up" : "down");
       td(dot);
       td(p.oper_up && p.speed_mbps ? fmtSpeed(p.speed_mbps) : "—");
-      td(fmtRate(p.in_mbps), "num");
-      td(fmtRate(p.out_mbps), "num");
+      rateTd(p.in_mbps, "num");
+      rateTd(p.out_mbps, "num");
       // damaged frames are a fault, discards are usually filtering
       const overErr = p.errors_per_min > (limits.errors_per_minute ?? Infinity);
       const overDisc =
         p.discards_per_min > (limits.discards_per_minute ?? Infinity);
-      td(fmtRate(p.errors_per_min), "num" + (overErr ? " over-error" : ""));
-      td(fmtRate(p.discards_per_min), "num" + (overDisc ? " over-discard" : ""));
+      rateTd(p.errors_per_min, "num" + (overErr ? " over-error" : ""));
+      rateTd(p.discards_per_min, "num" + (overDisc ? " over-discard" : ""));
       loopCell(tr, p.loop, data.loop_detection);
       return tr;
     });
@@ -1585,6 +3081,14 @@ function showLinkDetails(edgeId) {
   html += "</dl>";
   if (link.stp_blocking) {
     html += `<p class="hint">${t("stpBlockingHint")}</p>`;
+  }
+  // What is uncertain about this line, said in the card and not only
+  // in a tooltip somebody has to know to hover
+  if (link.order_unknown) {
+    html += `<p class="hint">${t("linkOrderUnknown")}</p>`;
+  }
+  if (link.cycle_unresolved) {
+    html += `<p class="hint">${t("linkCycleUnresolved")}</p>`;
   }
   shownDetails = { type: "link", id: edgeId };
   setDetails(html);
@@ -1864,7 +3368,10 @@ function renderStp() {
       tr.append(td);
     });
     tbody.append(tr);
-    if (sw.blocking_ports && sw.blocking_ports.length) {
+    // Only for a switch whose tree we say is operating. "BLOCKING" is
+    // a statement about a spanning tree, and printing one under a row
+    // of dashes that says there is no tree contradicts it in place.
+    if (sw.operating && sw.blocking_ports && sw.blocking_ports.length) {
       const note = document.createElement("tr");
       const td = document.createElement("td");
       td.colSpan = 8;
@@ -1882,6 +3389,21 @@ function renderStp() {
   scroller.className = "table-scroll";
   scroller.append(table);
   body.append(scroller);
+  // Switches that answer dot1dStp* and name no root. They are not a
+  // tree of their own — counting them as one turned three RouterOS
+  // boxes into a second spanning tree called "unknown" — but they must
+  // not quietly disappear from the panel either.
+  const noRoot = (data.verdict || {}).rootless || [];
+  if (noRoot.length) {
+    const byIp = Object.fromEntries(data.switches.map((sw) => [sw.ip, sw]));
+    const line = document.createElement("p");
+    line.className = "hint";
+    line.textContent =
+      fmt("stpRootless", {
+        switches: noRoot.map((ip) => (byIp[ip] || {}).name || ip).join(", "),
+      });
+    body.append(line);
+  }
 }
 
 async function toggleStp() {
@@ -1921,7 +3443,7 @@ function renderJournal(events) {
       type.textContent = translated === "ev_" + ev.event ? ev.event : translated;
       const host = document.createElement("span");
       host.className = "ev-host";
-      host.textContent = ev.name || ev.ip || ev.mac;
+      host.textContent = ev.name || ev.ip || ev.mac || layoutEventText(ev);
       item.append(time, type, host);
       return item;
     })
@@ -1931,6 +3453,26 @@ function renderJournal(events) {
     empty.textContent = t("noEvents");
     els.journalList.append(empty);
   }
+}
+
+/* "3 nodes: access-sw-1, access-sw-2, gw" for a pin or a release.
+   The server records ids and a count, not a sentence, so the entry
+   reads in the page's language and by the captions on the map. */
+function layoutEventText(ev) {
+  if (ev.event !== "layout_pinned" && ev.event !== "layout_released") {
+    return "";
+  }
+  let data;
+  try {
+    data = JSON.parse(ev.details);
+  } catch (e) {
+    return ev.details || "";
+  }
+  const names = (data.ids || []).map(nodeTitle);
+  const more = data.n - names.length;
+  return fmt(more > 0 ? "evNodesMore" : "evNodes", {
+    n: data.n, names: names.join(", "), more: more,
+  });
 }
 
 async function toggleJournal() {
@@ -1966,16 +3508,7 @@ async function rescan() {
   isScanning = true;
   updateScanStatus();
   await fetch("/api/scan", { method: "POST" });
-  // poll the status until the scan finishes
-  const timer = setInterval(async () => {
-    const status = await (await fetch("/api/status")).json();
-    if (!status.scanning) {
-      clearInterval(timer);
-      els.rescan.disabled = false;
-      isScanning = false;
-      await loadTopology();
-    }
-  }, 1500);
+  watchScan();
 }
 
 els.search.addEventListener("input", applySearchFilter);
@@ -1990,6 +3523,12 @@ for (const th of document.querySelectorAll("#ports th[data-sort]")) {
   th.addEventListener("click", () => setPortsSort(th.dataset.sort));
 }
 els.freezeBtn.addEventListener("click", toggleFreeze);
+els.arrangeBtn.addEventListener("click", toggleArrangeMode);
+document.addEventListener("click", (event) => {
+  if (!els.nodeMenu.contains(event.target)) closeNodeMenu();
+});
+els.resetLayoutBtn.addEventListener("click", resetLayout);
+els.actionsClose.addEventListener("click", closeActions);
 els.alarmsBtn.addEventListener("click", toggleAlarms);
 els.alarmsClose.addEventListener("click", () =>
   els.alarms.classList.add("hidden")
@@ -1999,6 +3538,48 @@ els.stpClose.addEventListener("click", () => els.stp.classList.add("hidden"));
 els.langRu.addEventListener("click", () => setLang("ru"));
 els.langEn.addEventListener("click", () => setLang("en"));
 
+/* Keyboard. `P` pins or releases whatever is selected — but only when
+   the focus is not in a field, or it would fire while somebody types
+   a MAC into the search box. */
+document.addEventListener("keydown", (event) => {
+  const target = event.target;
+  const typing =
+    target &&
+    (target.tagName === "INPUT" ||
+      target.tagName === "TEXTAREA" ||
+      target.isContentEditable);
+  if (typing) return;
+  if (event.key === "p" || event.key === "P") {
+    togglePinOnSelection();
+  } else if (event.key === "Escape") {
+    if (network) network.unselectAll();
+    setSelectedNode(null);
+    closeNodeMenu();
+  }
+});
+
+/* `P` on the selection: if anything in it is loose, pin the lot;
+   otherwise release the lot. One key, and its effect is predictable
+   from what is on screen. */
+function togglePinOnSelection() {
+  if (!network) return;
+  const ids = network.getSelectedNodes();
+  if (!ids.length) return;
+  const loose = ids.filter((id) => !isPinned(id));
+  if (loose.length) {
+    const at = network.getPositions(loose);
+    const moved = {};
+    for (const id of loose) if (at[id]) moved[id] = at[id];
+    pinNodes(moved);
+  } else {
+    unpinNodes(ids);
+  }
+}
+
 applyStatic();
+applyArrangeMode();
+// The layout arrives with the first map, so nodes start where they
+// were left rather than where the physics engine throws them and then
+// get yanked into place a moment later.
 loadTopology();
 setInterval(loadTopology, REFRESH_MS);

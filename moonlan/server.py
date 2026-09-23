@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
+import json
 import logging
 import os
 import socket
@@ -11,13 +13,14 @@ from collections import Counter
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import FastAPI, Query
-from fastapi.responses import JSONResponse
+from fastapi import FastAPI, Query, Request
+from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from . import (
-    __version__, corruption, counters, demo, loopdetect, pinger, stp,
+    __version__, corruption, counters, demo, loopdetect, menu, pinger,
+    probes, stp,
 )
 from .alarms import AlarmEngine
 from .config import Config, load_config, parse_uplink_ports
@@ -49,6 +52,29 @@ db = Database(":memory:" if config.demo else config.db_path)
 
 # Ping state of switches (they are not in the hosts table): ip -> {ping_up, last_ping_ok}
 switch_ping: dict[str, dict] = {}
+
+
+async def _demo_probe(argv: list[str], timeout: float):
+    """The menu's ping and traceroute in demo mode: nothing is sent.
+    A device answers when the demo's own monitoring says it does."""
+    ip = argv[-1]
+    rows = await asyncio.to_thread(db.hosts_by_mac)
+    answers = any(
+        row["ip"] == ip and row["ping_up"] for row in rows.values()
+    ) or any(
+        sw_ip == ip and ping.get("ping_up")
+        for sw_ip, ping in switch_ping.items()
+    )
+    return await demo.fake_probe(argv, answers)
+
+
+# The node menu's ping and traceroute: which tools this machine has,
+# and the requests running or recently finished
+tools = (
+    {"ping": "simulated", "traceroute": ("traceroute", "simulated")}
+    if config.demo else probes.find_tools()
+)
+jobs = probes.Jobs(tools, _demo_probe if config.demo else probes.run)
 
 # FDB merged with previous polls: protects links from MAC table aging
 fdb_stability = FdbStability()
@@ -98,6 +124,12 @@ suspect_by_port: dict[tuple[str, str], list[dict]] = {}
 # (switch ip, port) -> why the port looks like a way out of the network
 # and might belong in config.uplink_ports
 uplink_suspects: dict[tuple[str, str], dict] = {}
+
+# Saved node positions are cleaned up once, after the first scan —
+# not at startup proper. The rule is "old AND no longer on the map",
+# and before the first scan there is no map: every position would look
+# orphaned and the whole layout would be thrown away on a restart.
+layout_purged = False
 
 # Loop-detection profiles: the built-in ones plus whatever
 # config.yaml adds or overrides by name (see loopdetect.py)
@@ -149,6 +181,9 @@ def get_collector() -> SnmpCollector:
             timeout=config.snmp.timeout,
             retries=config.snmp.retries,
             retries_on_break=config.snmp.retries_on_break,
+            per_host=config.switch_snmp,
+            dead_oid_strikes=config.snmp.dead_oid_strikes,
+            dead_oid_cooldown_scans=config.snmp.dead_oid_cooldown_scans,
         )
     return _collector
 
@@ -159,29 +194,85 @@ async def _collect_locked(collector: SnmpCollector, ip: str) -> SwitchData:
         return await collector.collect(ip)
 
 
-async def _counters_locked(collector: SnmpCollector, ip: str):
-    """A counters poll, but only if the switch is free right now.
+async def _collect_within_budget(
+    collector: SnmpCollector, ip: str, budget: float
+) -> SwitchData | None:
+    """A full poll, or None when it ran past its budget.
 
-    Waiting would pile cycles up behind a slow scan; a skipped cycle
-    costs one point of history and says so.
+    `snmp.timeout` bounds one request. A poll is a dozen walks of a
+    dozen requests each, so an agent that answers everything slowly
+    stays inside every single timeout and still takes eight minutes —
+    and `gather` waits for the last one. Nothing here makes that agent
+    faster; it only stops it from deciding when the rest of the
+    network gets its map.
+    """
+    started = time.monotonic()
+    try:
+        data = await asyncio.wait_for(
+            _collect_locked(collector, ip), budget
+        )
+        # How long a complete poll really takes, so budgets can be set
+        # from measurements instead of guesses
+        data.poll_seconds = time.monotonic() - started
+        return data
+    except asyncio.TimeoutError:
+        log.warning(
+            "%s did not finish its poll within the %.0f s budget (gave up "
+            "after %.0f s) — it is left out of this scan, which is not the "
+            "same as not answering: see snmp.host_budget_seconds",
+            ip, budget, time.monotonic() - started,
+        )
+        return None
+    finally:
+        state.host_polled()
+
+
+def _counters_wait_budget() -> float:
+    """How long a counters cycle waits for a switch the scan is holding.
+
+    Long enough to outlast a normal scan of one host, short enough that
+    cycles never pile up: half an interval, capped at twenty seconds.
+    """
+    return min(max(config.counters_interval_seconds, 2) / 2, 20)
+
+
+async def _counters_locked(collector: SnmpCollector, ip: str):
+    """A counters poll, waiting briefly if the scan holds this switch.
+
+    Giving up the moment the lock was taken had a consequence nobody
+    intended: a scan holds a host for as long as its budget allows, so
+    any budget of two intervals or more guaranteed that this host
+    missed cycles — and before v0.6.13 a missed cycle meant its whole
+    panel went to dashes. A short wait catches the common case where
+    the scan is nearly done with it.
+
+    Queueing indefinitely is still not an option: cycles would pile up
+    behind a slow host. Past the wait it is skipped, as before, and
+    says so.
     """
     lock = host_lock(ip)
-    if lock.locked():
+    wait = _counters_wait_budget()
+    try:
+        await asyncio.wait_for(lock.acquire(), wait)
+    except asyncio.TimeoutError:
         log.info(
-            "%s is busy with the topology scan — skipping this counters "
-            "cycle rather than queueing behind it", ip,
+            "%s is still busy with the topology scan after %.0f s — "
+            "skipping this counters cycle rather than queueing behind it. "
+            "Its rates stay on the panel with their age; a poll budget at "
+            "or above twice counters_interval_seconds makes this happen "
+            "after every scan.", ip, wait,
         )
         return {}, {}, {}, None
-    sw = switch_data.get(ip)
-    # The interface table from the last scan: without it a truncated
-    # column has no way of knowing which ports it failed to reach.
-    # Real interfaces only — a negative ifIndex is one of our own
-    # synthetic aggregates, which SNMP has never heard of.
-    expected = (
-        {p.if_index for p in sw.ports.values() if p.if_index > 0}
-        if sw else None
-    )
-    async with lock:
+    try:
+        sw = switch_data.get(ip)
+        # The interface table from the last scan: without it a truncated
+        # column has no way of knowing which ports it failed to reach.
+        # Real interfaces only — a negative ifIndex is one of our own
+        # synthetic aggregates, which SNMP has never heard of.
+        expected = (
+            {p.if_index for p in sw.ports.values() if p.if_index > 0}
+            if sw else None
+        )
         samples, oper, columns = await counters.collect_samples(
             collector, ip, expected
         )
@@ -195,6 +286,8 @@ async def _counters_locked(collector: SnmpCollector, ip: str):
                 sys_object_id=sw.sys_object_id,
             )
         return samples, oper, columns, loop
+    finally:
+        lock.release()
 
 
 async def run_scan() -> None:
@@ -202,15 +295,22 @@ async def run_scan() -> None:
     global first_scan_done, fdb_macs, prev_pseudo_ports
     if state.scanning:
         return
-    state.scanning = True
+    state.scan_started(len(config.switches))
+    over_budget: list[str] = []
     try:
         arp: dict[str, str] = {}
         if config.demo:
             collected = demo.demo_network()
         else:
             collector = get_collector()
+            collector.begin_scan_cycle()
             results = await asyncio.gather(
-                *(_collect_locked(collector, ip) for ip in config.switches),
+                *(
+                    _collect_within_budget(
+                        collector, ip, config.host_budget(ip)
+                    )
+                    for ip in config.switches
+                ),
                 return_exceptions=True,
             )
             collected = []
@@ -225,6 +325,29 @@ async def run_scan() -> None:
                     )
                     collected.append(SwitchData(ip=ip))
                     continue
+                if result is None:
+                    # Over budget. Not an answer, and not a silence
+                    # either: the last reading that did arrive is kept
+                    # and dated, so the branch behind this switch stays
+                    # on the map instead of vanishing every cycle.
+                    previous = switch_data.get(ip)
+                    streak = (
+                        previous.over_budget_scans + 1 if previous else 1
+                    )
+                    if previous is not None and previous.reachable:
+                        previous.over_budget = True
+                        previous.over_budget_scans = streak
+                        collected.append(previous)
+                    else:
+                        # Nothing to keep — this one has never been read
+                        # in full. The streak still counts: a switch
+                        # that has never finished a poll is further from
+                        # fine than one whose data is merely old.
+                        collected.append(
+                            SwitchData(ip=ip, over_budget=True,
+                                       over_budget_scans=streak)
+                        )
+                    continue
                 collected.append(result)
             if config.routers:
                 arp = await collect_arp(collector)
@@ -235,6 +358,9 @@ async def run_scan() -> None:
                 mac = ip_to_mac.get(sw.ip)
                 if mac:
                     sw.own_macs.add(mac)
+        # Demo mode marks a switch over budget too, so the list comes
+        # from the data rather than from the polling loop
+        over_budget = [sw.ip for sw in collected if sw.over_budget]
         for sw in collected:
             previous = switch_data.get(sw.ip)
             if previous is not None and sw.loop_detection is None:
@@ -246,6 +372,16 @@ async def run_scan() -> None:
                 # own bookkeeping.
                 sw.loop_detection = previous.loop_detection
             switch_data[sw.ip] = sw
+        # The cross-switch spanning-tree test comes BEFORE the map is
+        # built, because the map reads its results. A root recognised
+        # only because its neighbours follow its address (v0.6.11) has
+        # `operating` and `confirmed_root` set by judge_network — and
+        # judge_network used to run after build_topology, so the node
+        # was drawn with a plain border, no root caption and its
+        # blocking ports ignored, while the STP panel two panels away
+        # called it the root. One order of operations, three wrong
+        # fields.
+        _judge_stp(collected)
         # A MAC has to be seen more than once before it counts as a
         # device (unless ARP vouches for it); the verdict is needed
         # before the topology so that unconfirmed addresses stay out of
@@ -255,9 +391,18 @@ async def run_scan() -> None:
         # yet for a phantom to pollute, and waiting would only show the
         # operator an empty screen on the first poll
         confirm_scans = config.new_host_confirm_scans if db_rows else 1
+        # Only switches actually read this cycle. A switch that ran out
+        # of budget contributes the table it produced last time, and
+        # counting a MAC again out of a copy of one reading is how an
+        # address gets "seen in three polls" without anyone looking for
+        # it twice.
         unconfirmed = await asyncio.to_thread(
             db.projected_unconfirmed,
-            {mac for sw in collected if sw.reachable for mac in sw.fdb},
+            {
+                mac for sw in collected
+                if sw.reachable and not sw.over_budget
+                for mac in sw.fdb
+            },
             confirm_scans,
         )
         # What the database already knows about each port feeds the
@@ -278,6 +423,15 @@ async def run_scan() -> None:
             uplink_ports=_uplink_ports(),
             remembered_locations=_remembered_locations(db_rows),
         )
+        # Links the inference removed, and rings it could not resolve.
+        # The syslog line is for the moment it happens; the journal is
+        # so the history of these decisions can be read from the
+        # interface, where the map they changed is.
+        for dropped in topo_info.get("dropped_links", []):
+            await asyncio.to_thread(
+                db.add_event, time.time(), "link_dropped", "",
+                _dropped_link_text(dropped),
+            )
         prev_pseudo_ports = {
             (p["switch"], p["port"]) for p in pseudo_switches
         }
@@ -298,13 +452,35 @@ async def run_scan() -> None:
         # `approximate` is what stops the empty location from
         # overwriting whatever the database already holds.
         uplink_only = topo_info.get("uplink_only", {})
+        stale_switches = {
+            sw.ip for sw in collected if sw.reachable and sw.over_budget
+        }
         seen_nowhere = [
             {"mac": mac, "switch": "", "port": "", "vlan": 0,
              "approximate": True}
-            for mac in uplink_only
+            for mac, sightings in uplink_only.items()
+            # every sighting of it came out of a saved table: nobody
+            # saw this address either
+            if any(ip not in stale_switches for ip, _port in sightings)
         ]
+        # A device behind a switch that ran out of budget is drawn from
+        # the reading that did arrive, and that is right — the map must
+        # not lose a whole branch every cycle. Recording it as a
+        # sighting is a different matter: "last seen" is a moment in
+        # time, seen_count counts polls a MAC was found in, and a
+        # confirmation is the claim that several polls agree. None of
+        # the three survives being fed the same reading twice.
+        observed = [h for h in hosts if not h.get("from_saved")]
+        copied = len(hosts) - len(observed)
+        if copied:
+            log.info(
+                "%d device(s) behind %d switch(es) that ran out of budget "
+                "are drawn from saved readings: they stay on the map, and "
+                "none of it is recorded as a sighting",
+                copied, len(stale_switches),
+            )
         new_macs = await asyncio.to_thread(
-            db.upsert_hosts, hosts + seen_nowhere, confirm_scans,
+            db.upsert_hosts, observed + seen_nowhere, confirm_scans,
             suspect_macs if config.filter_suspect_macs else set(),
         )
         if config.demo:
@@ -436,10 +612,56 @@ async def run_scan() -> None:
         if config.demo:
             await run_ping()  # set the switches' ping state right away
 
+        # A switch that ran out of budget is not reported either way.
+        # "Missed an SNMP poll" is a statement about the switch; this
+        # one is a statement about us, and switch_down must not be
+        # raised on the strength of it — nor cleared, which would be
+        # just as much of an invention.
         await alarm_engine.on_scan(
-            {sw.ip: sw.reachable for sw in collected},
+            {sw.ip: sw.reachable for sw in collected if not sw.over_budget},
             {sw.ip: sw.sys_name or sw.ip for sw in collected},
         )
+        # Every single switch silent at once is not ten faults, it is
+        # one. The day `community: public` went back into the config,
+        # the map emptied and the log said "does not respond to SNMP"
+        # ten times over — true, unhelpful, and identical to what a
+        # power cut would have printed.
+        answered = [sw for sw in collected if sw.reachable]
+        if collected and not answered and not over_budget:
+            log.error(
+                "All %d configured switch(es) are unreachable at once. One "
+                "common cause is likelier than %d simultaneous faults: "
+                "snmp.community (SNMPv2c does not answer a wrong one at "
+                "all — silence is what a mismatch looks like), or the "
+                "network of this machine. `python -m moonlan.diag --walk "
+                "<switch> 1.3.6.1.2.1.1.5` says which.",
+                len(collected), len(collected),
+            )
+        # A switch that keeps answering and keeps not finishing. It is
+        # on the map, from a reading that may be hours old, and until
+        # now the only way to learn that was to read the journal.
+        stale_switches = {
+            sw.ip: {
+                "scans": sw.over_budget_scans,
+                "polled_at": sw.polled_at,
+            }
+            for sw in collected
+            if sw.over_budget
+            and sw.over_budget_scans >= max(config.stale_switch_scans, 1)
+        }
+        await alarm_engine.on_stale_switches(
+            stale_switches,
+            {sw.ip: sw.sys_name or sw.ip for sw in collected},
+        )
+        if over_budget:
+            log.warning(
+                "Scan finished without %d of %d switch(es): %s did not "
+                "answer in full inside the budget. The map below is "
+                "everything else, and their last readings are kept as "
+                "they were.",
+                len(over_budget), len(config.switches),
+                ", ".join(over_budget),
+            )
         await alarm_engine.clear_suppressed(
             _suppressed_bridges(bridges, bridge_rows)
         )
@@ -463,8 +685,50 @@ async def run_scan() -> None:
             "Scan finished: %d switches, %d links, %d hosts",
             len(switches), len(links), len(hosts),
         )
+        await _purge_layout_once()
     finally:
-        state.scanning = False
+        state.scan_ended(over_budget)
+
+
+def _dropped_link_text(dropped: dict) -> str:
+    """One journal line about a link the inference took back."""
+    a = f"{dropped['a']} [{dropped['a_port']}]"
+    b = f"{dropped['b']} [{dropped['b_port']}]"
+    if dropped.get("reason") == "behind":
+        return (
+            f"{a} — {b} ({dropped.get('source', 'fdb')}): LLDP puts "
+            f"{dropped['b']} behind {dropped['behind']}, so it cannot "
+            f"also hang off {dropped['a']}"
+        )
+    return (
+        f"{a} — {b} ({dropped.get('source', 'fdb')}): "
+        f"{dropped.get('reason', 'removed by the topology inference')}"
+    )
+
+
+async def _purge_layout_once() -> None:
+    """Forgets positions of nodes that are both old and gone.
+
+    Runs after the first scan of this process, because that is the
+    first moment anything knows which nodes exist. A device switched
+    off for the night keeps its place however long the night is; only
+    age decides, and only for something the map no longer has.
+    """
+    global layout_purged
+    if layout_purged:
+        return
+    layout_purged = True
+    gone = await asyncio.to_thread(
+        db.purge_layout, config.layout_keep_days, _layout_node_ids()
+    )
+    if gone:
+        log.info(
+            "Map layout: forgot the saved position of %d node(s) not seen "
+            "for over %.0f day(s) and no longer on the map: %s",
+            len(gone), config.layout_keep_days,
+            ", ".join(sorted(gone)[:10])
+            + (" and more" if len(gone) > 10 else ""),
+        )
 
 
 def _lldp_rows(collected: list[SwitchData]) -> list[dict]:
@@ -492,6 +756,25 @@ def _lldp_rows(collected: list[SwitchData]) -> list[dict]:
     return rows
 
 
+def _per_switch_stp(collected: list[SwitchData]) -> dict:
+    """ip -> StpData for every switch that answered."""
+    return {
+        sw.ip: sw.stp for sw in collected
+        if sw.reachable and sw.stp is not None
+    }
+
+
+def _judge_stp(collected: list[SwitchData]) -> None:
+    """The cross-switch test, run once the whole network is in hand.
+
+    A switch that names itself root is believed only when a neighbour
+    names it too (see stp.judge_network). It mutates the StpData
+    objects in place, so everything downstream — the map, the panel,
+    the alarms — sees the same verdict, provided it runs first.
+    """
+    stp.judge_network(_per_switch_stp(collected))
+
+
 def _stp_report(
     collected: list[SwitchData], trunk_names: dict[str, list[str]] | None = None
 ) -> dict:
@@ -503,13 +786,7 @@ def _stp_report(
     0 — believing that is how five disabled switches turn into five
     root bridges (see moonlan/stp.py).
     """
-    per_switch = {
-        sw.ip: sw.stp for sw in collected if sw.reachable and sw.stp is not None
-    }
-    # The cross-switch test runs once the whole network is in hand: a
-    # switch that names itself root is believed only when a neighbour
-    # names it too (see stp.judge_network).
-    stp.judge_network(per_switch)
+    per_switch = _per_switch_stp(collected)
     verdict = stp.network_verdict(per_switch)
     trunk_names = trunk_names or {}
     switches = []
@@ -559,6 +836,9 @@ def _stp_report(
                 p.name or str(p.bridge_port) for p in data.blocking_ports()
             ],
             "trunk_vlans": trunk_vlans,
+            # answers dot1dStp* and names no root: shown, but not
+            # counted as a tree of its own
+            "rootless": ip in verdict.get("rootless", ()),
         })
     return {"verdict": verdict, "switches": switches}
 
@@ -1441,8 +1721,16 @@ async def periodic_resource_log() -> None:
             pass  # not a Linux /proc — skip silently
 
 
-def _rates_max_age() -> float:
-    return max(config.counters_interval_seconds, 5) * 3
+def _rates_hide_age() -> float:
+    """Past this age a measured rate stops being shown at all.
+
+    It used to be three counters intervals, and anything older was
+    dropped from the answer — which drew the same "—" as a column the
+    agent never answered. Half an hour is the point at which a rate
+    really is a memory rather than a measurement; everything younger is
+    shown with its age next to it.
+    """
+    return max(config.stale_rate_hide_minutes, 0.0) * 60
 
 
 def _refresh_link_lag(link: dict) -> None:
@@ -1490,7 +1778,7 @@ def _link_load(link: dict) -> dict | None:
         sw = switch_data.get(link[side])
         if sw is None:
             continue
-        rates = counter_store.current(link[side], max_age=_rates_max_age())
+        rates = counter_store.current(link[side], max_age=_rates_hide_age())
         if not rates:
             continue
         names = lag.get(f"{side}_members") or [link[f"{side}_port"]]
@@ -1508,7 +1796,15 @@ def _link_load(link: dict) -> dict | None:
             continue  # this side knows nothing; try the other one
         if flip:  # B's in is A's out and vice versa
             in_mbps, out_mbps = out_mbps, in_mbps
-        return {"in_mbps": _round(in_mbps), "out_mbps": _round(out_mbps)}
+        # The oldest of the measurements this number is made of: an
+        # edge label is as fresh as its stalest member, and the tooltip
+        # has to be able to say so.
+        age = round(max(time.time() - r.ts for r in found))
+        return {
+            "in_mbps": _round(in_mbps),
+            "out_mbps": _round(out_mbps),
+            "age_seconds": age,
+        }
     return None
 
 
@@ -1546,6 +1842,54 @@ def _log_config() -> None:
         )
     else:
         log.info("%s", summary)
+    for problem in report.problems:
+        log.warning("config.yaml switches: %s", problem)
+    for problem in report.menu_problems:
+        log.warning("config.yaml context_menu: %s", problem)
+    links = config.context_menu.links
+    if links:
+        log.info(
+            "Node menu: %d link(s) of your own: %s", len(links),
+            ", ".join(link.label for link in links),
+        )
+    if config.demo:
+        log.info("Node menu: ping and traceroute are simulated in demo mode")
+    else:
+        trace = tools.get("traceroute")
+        log.info(
+            "Node menu: ping %s, traceroute %s",
+            f"at {tools['ping']}" if tools.get("ping")
+            else "NOT FOUND — the Ping item is disabled",
+            f"({trace[0]}) at {trace[1]}" if trace
+            else "NOT FOUND (neither traceroute nor tracepath) — the "
+                 "Traceroute item is disabled",
+        )
+    starved = config.starved_counters()
+    if starved:
+        log.warning(
+            "Poll budget at or above twice counters_interval_seconds "
+            "(%d s) on %d switch(es): %s. While a scan holds one of "
+            "these, its counters cycle is skipped, so its rates will "
+            "visibly age between scans — the panel shows them with their "
+            "age rather than hiding them. Lower host_budget_seconds for "
+            "those devices, or raise counters_interval_seconds.",
+            config.counters_interval_seconds, len(starved),
+            ", ".join(f"{ip} ({budget} s)" for ip, budget in starved),
+        )
+    custom = config.custom_switches()
+    if custom:
+        log.info(
+            "SNMP settings of their own on %d of %d switch(es): %s. "
+            "Everything else is inherited from the snmp: section; "
+            "python -m moonlan.diag --config prints which is which.",
+            len(custom), len(config.switches),
+            ", ".join(
+                f"{ip} ("
+                + ", ".join(sorted(config.switch_snmp[ip].explicit))
+                + ")"
+                for ip in custom
+            ),
+        )
 
 
 async def purge_invalid_macs() -> None:
@@ -1682,7 +2026,11 @@ async def api_switch_ports(ip: str) -> dict:
     sw = switch_data.get(ip)
     if sw is None:
         return {"switch": ip, "name": ip, "ports": []}
-    rates = counter_store.current(ip, max_age=_rates_max_age())
+    # Everything measured, however old. What is too old to show is
+    # decided below, once, and said out loud rather than by omission.
+    rates = counter_store.current(ip)
+    hide_age = _rates_hide_age()
+    now = time.time()
     db_hosts = await asyncio.to_thread(db.hosts_by_mac)
     host_counts: Counter = Counter()
     monitored_counts: Counter = Counter()
@@ -1710,7 +2058,9 @@ async def api_switch_ports(ip: str) -> dict:
         )
     ports = []
     for p in sw.ports.values():
-        r = rates.get(p.if_index)
+        r, age = counters.rate_for_display(
+            rates, p.if_index, now, hide_age
+        )
         name = p.name or str(p.if_index)
         ports.append({
             "if_index": p.if_index,
@@ -1724,6 +2074,11 @@ async def api_switch_ports(ip: str) -> dict:
             "out_mbps": _round(r.out_mbps if r else None),
             "errors_per_min": _round(r.errors_per_min if r else None),
             "discards_per_min": _round(r.discards_per_min if r else None),
+            # When the numbers above were measured, and how long ago.
+            # None in both means this port has never been measured at
+            # all — the one case "—" is allowed to mean.
+            "rate_ts": None if age is None else rates[p.if_index].ts,
+            "rate_age_seconds": None if age is None else round(age),
             "hosts": host_counts.get(name, 0),
             "monitored_hosts": monitored_counts.get(name, 0),
             # MACs that look like damaged copies of a real one here
@@ -1760,6 +2115,14 @@ async def api_switch_ports(ip: str) -> dict:
         # …and the same honesty about loop detection: which profile
         # answered, or that the model does not report it at all
         "loop_detection": _loop_report(sw),
+        # When a measured rate stops being fresh (shown dimmed, with
+        # its age) and when it stops being shown at all. The panel
+        # needs both to tell "stale" from "never measured"; neither
+        # belongs hardcoded in the front end.
+        "rates": {
+            "stale_after_seconds": max(config.counters_interval_seconds, 5) * 3,
+            "hide_after_seconds": hide_age,
+        },
         # so the panel can colour the values it shows
         "thresholds": {
             "errors_per_minute": config.thresholds.errors_per_minute,
@@ -2008,6 +2371,389 @@ async def api_patch_host(mac: str, body: HostPatch):
     return {"mac": mac, "monitored": body.monitored}
 
 
+class NodePosition(BaseModel):
+    x: float
+    y: float
+    pinned: bool | None = None
+
+
+class LayoutBody(BaseModel):
+    nodes: dict[str, NodePosition]
+    # Store only nodes that have no position yet, and say what the
+    # others already have. What the page's automatic save uses: its
+    # idea of "new" is as old as the page.
+    only_new: bool = False
+
+
+def _layout_node_ids() -> set[str]:
+    """Every node id the current map draws.
+
+    The same ids the front end uses, built here so the housekeeping and
+    the diagnostics do not have to ask the browser what exists.
+    """
+    topo = state.as_dict()
+    ids = {"sw:" + sw["ip"] for sw in topo["switches"]}
+    # A device drawn AS another node — a bridge that answers LLDP and
+    # is also in somebody's MAC table — has no node of its own, so it
+    # has no position of its own either. Counting it would put two
+    # nodes in "not in the saved layout" that nobody can place.
+    ids |= {
+        "host:" + h["mac"] for h in topo["hosts"] if not h.get("merged_into")
+    }
+    for key in ("pseudo_switches", "bridges", "external_networks",
+                "offline_groups", "trunk_groups"):
+        ids |= {node["id"] for node in topo.get(key) or () if node.get("id")}
+    return ids
+
+
+def _node_directory() -> dict[str, dict]:
+    """Every node on the map with what the node menu needs to know.
+
+    The page names a node by its id and nothing else. The address a
+    ping goes to, the MAC a link is filled with, all come from here —
+    MoonLan's own topology and database — and never from the request.
+    `switch` is the address of the switch the node hangs off (a
+    switch's own, for a switch), `port` the port there.
+    """
+    topo = state.as_dict()
+    db_hosts = db.hosts_by_mac()
+    nodes: dict[str, dict] = {}
+
+    def entry(kind, ip="", mac="", name="", switch="", port="", row=None):
+        row = row or {}
+        return {
+            "kind": kind, "ip": ip or "", "mac": mac or "",
+            "name": name or "", "switch": switch or "", "port": port or "",
+            # what the continuous ping knows, shown beside a one-off
+            # ping as the second source it is
+            "ping_up": bool(row["ping_up"]) if "ping_up" in row else None,
+            "last_ping_ok": row.get("last_ping_ok", 0) or 0,
+        }
+
+    for sw in topo["switches"]:
+        nodes["sw:" + sw["ip"]] = entry(
+            "switch", sw["ip"], sw.get("mac"), sw.get("name"), sw["ip"],
+            row=switch_ping.get(sw["ip"]),
+        )
+    for host in topo["hosts"]:
+        if host.get("merged_into"):
+            continue  # drawn as its bridge node
+        row = db_hosts.get(host["mac"], {})
+        nodes["host:" + host["mac"]] = entry(
+            "host",
+            row.get("ip") or host.get("router_ip"),
+            host["mac"],
+            row.get("name") or (host.get("lldp") or {}).get("sys_name"),
+            host.get("switch"), host.get("port"), row,
+        )
+    for bridge in topo.get("bridges") or ():
+        row = db_hosts.get(bridge.get("chassis_id", ""), {})
+        nodes[bridge["id"]] = entry(
+            "switch",
+            bridge.get("router_ip") or row.get("ip") or bridge.get("mgmt_ip"),
+            bridge.get("chassis_id"), bridge.get("name"),
+            bridge.get("switch"), bridge.get("port"), row,
+        )
+    for key in ("pseudo_switches", "trunk_groups", "offline_groups",
+                "external_networks"):
+        for group in topo.get(key) or ():
+            nodes[group["id"]] = entry(
+                "group", switch=group.get("switch"), port=group.get("port"),
+            )
+    return nodes
+
+
+def _tool_state() -> dict:
+    """What the menu can run, for greying out what it cannot."""
+    trace = tools.get("traceroute")
+    return {
+        "ping": bool(tools.get("ping")),
+        "traceroute": trace[0] if trace else None,
+        "simulated": config.demo,
+        "max_targets": config.context_menu.max_targets,
+    }
+
+
+def _menu_links(node_id: str, facts: dict) -> tuple[list[dict], list[dict]]:
+    """(built-in links, the operator's links) for one node, filled in.
+
+    A link that lacks a value is still listed, with the field it lacks:
+    the page shows it greyed out with the reason, the way "no answer"
+    is never shown as zero.
+    """
+    kind = facts["kind"]
+    builtin: list[dict] = []
+    if kind in ("switch", "host"):
+        if node_id.startswith("sw:"):
+            scheme = config.web_scheme(facts["ip"])
+        elif kind == "switch":
+            scheme = config.context_menu.web_scheme
+        else:
+            scheme = "http"
+        for key, template in (("web", scheme + "://{ip}"),
+                              ("ssh", "ssh://{ip}")):
+            url, missing = menu.expand(template, facts)
+            builtin.append({"key": key, "url": url, "missing": missing})
+    custom: list[dict] = []
+    for link in config.context_menu.links:
+        if not link.applies(kind):
+            continue
+        url, missing = menu.expand(link.url, facts)
+        custom.append({"label": link.label, "url": url, "missing": missing})
+    return builtin, custom
+
+
+@app.get("/api/node-menu")
+async def api_node_menu(id: str = Query(...)):
+    """What the right-click menu of one node can offer."""
+    nodes = await asyncio.to_thread(_node_directory)
+    facts = nodes.get(id)
+    if facts is None:
+        return JSONResponse(
+            {"error": "unknown_node", "node": id}, status_code=404
+        )
+    builtin, custom = _menu_links(id, facts)
+    return {
+        "node": {"id": id, **facts},
+        "links": builtin,
+        "custom": custom,
+        "tools": _tool_state(),
+    }
+
+
+class ActionBody(BaseModel):
+    action: str
+    nodes: list[str]
+
+
+def _refuse(error: str, status: int, **extra) -> JSONResponse:
+    return JSONResponse({"error": error, **extra}, status_code=status)
+
+
+@app.get("/api/actions")
+async def api_actions_state() -> dict:
+    return {**_tool_state(), "running": jobs.running(),
+            "max_running": config.context_menu.max_running}
+
+
+@app.post("/api/actions")
+async def api_start_action(body: ActionBody, request: Request):
+    """Starts ping or traceroute from this machine; returns the job.
+
+    Node ids in, never addresses: an id MoonLan does not know is
+    refused, and so is an address sent in place of one. Whatever the
+    tool is run against was found by MoonLan itself.
+    """
+    if body.action not in probes.ACTIONS:
+        return _refuse("unknown_action", 400, action=body.action)
+    ids = list(dict.fromkeys(body.nodes))
+    if not ids:
+        return _refuse("no_targets", 400)
+    limit = config.context_menu.max_targets
+    if len(ids) > limit:
+        # refused, not trimmed: a silently shortened list reads as
+        # "these are all of them"
+        return _refuse("too_many_targets", 400, limit=limit, count=len(ids))
+    if body.action == "traceroute" and len(ids) > 1:
+        return _refuse("traceroute_one", 400)
+    if body.action == "ping" and not tools.get("ping"):
+        return _refuse("tool_missing", 503, tool="ping")
+    if body.action == "traceroute" and not tools.get("traceroute"):
+        return _refuse("tool_missing", 503, tool="traceroute")
+    nodes = await asyncio.to_thread(_node_directory)
+    unknown = [node_id for node_id in ids if node_id not in nodes]
+    if unknown:
+        return _refuse(
+            "unknown_nodes", 404, nodes=unknown[:10],
+            # the one mistake worth naming: an address is not a node id
+            addresses=[n for n in unknown if probes.checked_address(n)],
+        )
+    targets = [
+        probes.Target(
+            node=node_id, kind=nodes[node_id]["kind"],
+            name=nodes[node_id]["name"] or nodes[node_id]["ip"] or node_id,
+            ip=nodes[node_id]["ip"],
+            monitor={
+                "ping_up": nodes[node_id]["ping_up"],
+                "last_ping_ok": nodes[node_id]["last_ping_ok"],
+            },
+        )
+        for node_id in ids
+    ]
+    try:
+        job = jobs.start(
+            body.action, targets, config.context_menu.max_running
+        )
+    except probes.Busy:
+        return _refuse("busy", 429, limit=config.context_menu.max_running)
+    client = request.client.host if request.client else "?"
+    shown = ", ".join(
+        f"{t.node} ({t.ip or 'no address'})" for t in targets[:5]
+    ) + (f" and {len(targets) - 5} more" if len(targets) > 5 else "")
+    log.info(
+        "Menu: %s of %s requested from %s (job %s)",
+        body.action, shown, client, job.id,
+    )
+    return job.as_dict()
+
+
+@app.get("/api/actions/{job_id}")
+async def api_action_state(job_id: str):
+    job = jobs.get(job_id)
+    if job is None:
+        return _refuse("unknown_job", 404)
+    return job.as_dict()
+
+
+@app.get("/api/layout")
+async def api_layout() -> dict:
+    """Saved node positions, and which of the current nodes lack one."""
+    saved = await asyncio.to_thread(db.layout)
+    present = _layout_node_ids()
+    return {
+        "nodes": saved,
+        "saved_at": await asyncio.to_thread(db.layout_saved_at),
+        # When somebody last reset the whole layout. An open page that
+        # sees this move treats it as a reset of its own; the rows alone
+        # could not tell it that.
+        "cleared_at": await asyncio.to_thread(db.layout_cleared_at),
+        # Nodes on the map that the saved layout does not cover. A
+        # switch added yesterday has no place in a picture drawn the
+        # day before, and that gap has to be visible rather than found
+        # at printing time.
+        "missing": sorted(present - set(saved)),
+        # …and the other direction: a saved position whose node is not
+        # on the map. Kept on purpose — a device switched off for the
+        # night comes back to its place — and only forgotten by age.
+        "orphans": sorted(set(saved) - present),
+    }
+
+
+@app.put("/api/layout")
+async def api_put_layout(body: LayoutBody) -> dict:
+    """Stores the whole picture as it is on screen right now.
+
+    With `only_new`, only nodes nobody has placed yet: the rest keep
+    what they have, and the answer says what that is, so the page can
+    take it instead of believing its own copy.
+    """
+    positions = {
+        node_id: pos.model_dump(exclude_none=True)
+        for node_id, pos in body.nodes.items()
+    }
+    if body.only_new:
+        stored, existing = await asyncio.to_thread(
+            db.add_new_positions, positions
+        )
+    else:
+        await asyncio.to_thread(db.save_layout, positions)
+        stored, existing = list(positions), {}
+    if stored:
+        await asyncio.to_thread(
+            db.add_event, time.time(), "layout_saved", "",
+            f"{len(stored)} node(s)",
+        )
+        log.info("Map layout saved: %d node(s)", len(stored))
+    return {
+        "saved": len(stored),
+        "stored": stored,
+        "existing": existing,
+        "saved_at": await asyncio.to_thread(db.layout_saved_at),
+    }
+
+
+# How many node ids a journal entry about a layout action names; the
+# count is always there, the list only while it is short enough to read
+LAYOUT_EVENT_IDS = 5
+
+
+async def _journal_layout_action(event: str, node_ids: list[str]) -> None:
+    """One journal entry per action, however many nodes it touched.
+
+    Pinning and releasing were not in the journal at all, which is why
+    a pin wiped out by another page's save was visible to nobody. The
+    details are data, not a sentence — the page words them in its own
+    language and by the nodes' captions. When sign-in arrives (v0.7.3)
+    this is the entry that gets the user's name.
+    """
+    if not node_ids:
+        return
+    details = json.dumps({
+        "n": len(node_ids), "ids": node_ids[:LAYOUT_EVENT_IDS],
+    })
+    await asyncio.to_thread(db.add_event, time.time(), event, "", details)
+
+
+async def _store_hand_placed(positions: dict[str, NodePosition]) -> dict:
+    """Stores nodes placed or released by hand, journalled per kind.
+
+    A node sent without `pinned` is pinned: this is the hand putting it
+    somewhere. Released means `pinned: false` with the coordinates it
+    has — the row stays, so the node keeps a saved position and the map
+    never has a node that is neither placed nor saved.
+    """
+    rows = {
+        node_id: {
+            "x": pos.x, "y": pos.y,
+            "pinned": True if pos.pinned is None else pos.pinned,
+        }
+        for node_id, pos in positions.items()
+    }
+    await asyncio.to_thread(db.save_layout, rows)
+    pinned = [node_id for node_id, row in rows.items() if row["pinned"]]
+    released = [node_id for node_id, row in rows.items() if not row["pinned"]]
+    await _journal_layout_action("layout_pinned", pinned)
+    await _journal_layout_action("layout_released", released)
+    return {"pinned": pinned, "released": released}
+
+
+@app.patch("/api/layout")
+async def api_patch_positions(body: LayoutBody) -> dict:
+    """Several nodes placed or released in one action — a dragged
+    selection, `P` on a selection, one item of the menu."""
+    return await _store_hand_placed(body.nodes)
+
+
+@app.patch("/api/layout/{node_id:path}")
+async def api_patch_node_position(node_id: str, body: NodePosition) -> dict:
+    """One node, moved by hand — pinned unless told otherwise."""
+    await _store_hand_placed({node_id: body})
+    pinned = True if body.pinned is None else body.pinned
+    return {"node_id": node_id, "x": body.x, "y": body.y, "pinned": pinned}
+
+
+@app.delete("/api/layout/{node_id:path}")
+async def api_delete_node_position(node_id: str):
+    """Forgets one node: it goes back under the physics engine.
+
+    The page no longer releases a node this way — it keeps the row and
+    clears the pin — but a page still running an older script does, so
+    it is journalled as the release it means.
+    """
+    removed = await asyncio.to_thread(db.forget_node_position, node_id)
+    if not removed:
+        return JSONResponse(
+            {"error": "no saved position for this node"}, status_code=404
+        )
+    await _journal_layout_action("layout_released", [node_id])
+    return {"node_id": node_id, "removed": True}
+
+
+@app.delete("/api/layout")
+async def api_clear_layout() -> dict:
+    """Forgets the whole layout. The map is laid out from scratch."""
+    removed = await asyncio.to_thread(db.clear_layout)
+    cleared_at = time.time()
+    await asyncio.to_thread(
+        db.add_event, cleared_at, "layout_cleared", "",
+        f"{removed} node(s)",
+    )
+    log.info("Map layout cleared: %d node(s) forgotten", removed)
+    # the page that asked for it must not mistake its own reset for
+    # somebody else's on the next refresh
+    return {"removed": removed, "cleared_at": cleared_at}
+
+
 async def _scan_once() -> None:
     """A manual scan, recording a failure the same way the loop does."""
     try:
@@ -2028,6 +2774,51 @@ async def api_search(q: str = Query(default="")) -> dict:
     return {"query": q, "results": state.search(q)}
 
 
+@app.get("/api/skipped-oids")
+async def api_skipped_oids() -> dict:
+    """OIDs MoonLan has stopped asking for, and for how much longer.
+
+    The pause lives in the running process, so `diag --skipped` asks
+    the service rather than guessing: a separate CLI run has its own
+    collector and has never seen any of this.
+    """
+    collector = _collector
+    paused = collector.paused_oids() if collector is not None else []
+    return {
+        "strikes": config.snmp.dead_oid_strikes,
+        "cooldown_scans": config.snmp.dead_oid_cooldown_scans,
+        "polled": collector is not None,
+        "paused": paused,
+    }
+
+
+@app.get("/api/polling")
+async def api_polling() -> dict:
+    """When each switch was last polled in full, and how long it took.
+
+    A poll budget set by eye is a budget set wrong. These are the
+    numbers to set it from, and they live in this process, so
+    `diag --config` asks for them rather than guessing.
+    """
+    return {
+        "counters_interval_seconds": config.counters_interval_seconds,
+        "switches": [
+            {
+                "ip": ip,
+                "name": (sw.sys_name or ip) if sw else "",
+                "budget_seconds": config.host_budget(ip),
+                "polled_at": sw.polled_at if sw else 0.0,
+                "poll_seconds": round(sw.poll_seconds, 1) if sw else 0.0,
+                "over_budget_scans": sw.over_budget_scans if sw else 0,
+                "reachable": bool(sw and sw.reachable),
+            }
+            for ip, sw in (
+                (ip, switch_data.get(ip)) for ip in config.switches
+            )
+        ],
+    }
+
+
 @app.get("/api/status")
 async def api_status() -> dict:
     try:
@@ -2044,12 +2835,64 @@ async def api_status() -> dict:
         "last_scan_ok": state.last_scan_ok,
         "last_error": state.last_error,
         "last_error_ts": state.last_error_ts,
-        "scanning": state.scanning,
+        **state.scan_progress(),
+        "layout_saved_at": await asyncio.to_thread(db.layout_saved_at),
         "uptime_hint": time.time(),
         "open_fds": open_fds,
         "rss_kb": rss_kb,
     }
 
 
+# The page's own files, addressed in index.html by what is in them
+VERSIONED_ASSETS = ("app.js", "i18n.js", "style.css")
+
+
+def _index_html() -> str:
+    """index.html with each of the page's files named by its content.
+
+    `no-cache` below only helps a browser that has been told it: a
+    copy cached before this header existed carries no such instruction
+    and is still "fresh" by the browser's own reckoning. After the
+    upgrade that introduced the header, a page went on running with a
+    new app.js and an old i18n.js — and showed translation keys where
+    the journal should have said "Placed by hand". A file whose content
+    changes gets a new address, and no cache has a copy of that.
+    """
+    html = (WEB_DIR / "index.html").read_text(encoding="utf-8")
+    for name in VERSIONED_ASSETS:
+        digest = hashlib.sha1((WEB_DIR / name).read_bytes()).hexdigest()[:12]
+        html = html.replace(f'"{name}"', f'"{name}?v={digest}"')
+    return html
+
+
+@app.get("/", include_in_schema=False)
+@app.get("/index.html", include_in_schema=False)
+async def index_page() -> HTMLResponse:
+    return HTMLResponse(
+        await asyncio.to_thread(_index_html),
+        headers={"Cache-Control": "no-cache"},
+    )
+
+
+class RevalidatedStaticFiles(StaticFiles):
+    """The web UI, which the browser must re-check on every load.
+
+    Served without a Cache-Control header, a file last modified weeks
+    ago is "fresh" by the browser's own reckoning for days: after an
+    upgrade the page went on running the previous app.js, and a fix to
+    the map reached nobody until their cache happened to expire.
+    `no-cache` is not "do not cache" — the browser keeps its copy and
+    asks each time, and an unchanged file costs a 304.
+    """
+
+    async def get_response(self, path: str, scope):
+        response = await super().get_response(path, scope)
+        response.headers["Cache-Control"] = "no-cache"
+        return response
+
+
 # The static web UI comes last so it does not shadow /api/*
-app.mount("/", StaticFiles(directory=str(WEB_DIR), html=True), name="web")
+app.mount(
+    "/", RevalidatedStaticFiles(directory=str(WEB_DIR), html=True),
+    name="web",
+)

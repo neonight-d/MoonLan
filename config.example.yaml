@@ -31,9 +31,84 @@ snmp:
   # большим числом интерфейсов таблицу приходится читать в несколько
   # приёмов.
   retries_on_break: 2
+  # The whole poll of one switch, start to finish. `timeout` bounds one
+  # request; this bounds the sum of them. A switch that runs past it is
+  # left out of that scan and keeps its previous data on the map — it
+  # is NOT reported as unreachable and raises no switch_down: it
+  # answers, only too slowly. Raise it for a genuinely slow agent;
+  # lower that device's own `timeout` instead if it is slow because it
+  # does not answer at all (see the per-switch settings below).
+  # Весь опрос одного коммутатора целиком. `timeout` ограничивает один
+  # запрос, а это — их сумму. Не уложившийся коммутатор выпадает из
+  # этого скана и остаётся на карте с прежними данными; недоступным он
+  # НЕ считается и switch_down по нему не поднимается: он отвечает,
+  # просто медленно. Медленному агенту бюджет поднимают; если же он
+  # медленный потому, что на часть запросов не отвечает вовсе, лучше
+  # уменьшить его собственный `timeout` (см. параметры на устройство).
+  host_budget_seconds: 120
+  # Some agents do not implement a table and cannot say so: instead of
+  # answering noSuchObject, which is cheap, they go quiet and the walk
+  # pays the whole retry budget for nothing — every cycle, forever.
+  # After this many walks in a row that returned no rows AND ended in a
+  # timeout, MoonLan stops asking that host for that OID for
+  # dead_oid_cooldown_scans scans, then tries again (firmware gets
+  # updated). Both the pause and the resumption are logged: data
+  # missing because MoonLan stopped asking must never look like data
+  # the device denies having. `python -m moonlan.diag --skipped` lists
+  # what is on pause right now. 0 in dead_oid_strikes disables it.
+  # Некоторые агенты не реализуют таблицу и не умеют об этом сказать:
+  # вместо дешёвого noSuchObject они молчат, и walk впустую тратит весь
+  # бюджет повторов — каждый цикл, всегда. После стольких walk-ов
+  # подряд, вернувших ноль строк И оборвавшихся по таймауту, MoonLan
+  # перестаёт спрашивать этот OID у этого хоста на
+  # dead_oid_cooldown_scans сканов, потом пробует снова (прошивки
+  # обновляют). И пауза, и возобновление пишутся в лог: данные,
+  # которых нет потому, что MoonLan перестал спрашивать, не должны
+  # выглядеть как данные, которых нет у устройства. Что сейчас на
+  # паузе, показывает `python -m moonlan.diag --skipped`. 0 в
+  # dead_oid_strikes выключает правило.
+  dead_oid_strikes: 3
+  dead_oid_cooldown_scans: 30
 
-# IP addresses of managed switches
-# IP-адреса управляемых коммутаторов
+# IP addresses of managed switches. An entry is either an address, as
+# below, or a mapping with `ip:` and any of the snmp: keys — community,
+# timeout, retries, retries_on_break, host_budget_seconds — which then
+# apply to that switch alone. Anything not written there is inherited
+# from the snmp: section above, and `python -m moonlan.diag --config`
+# prints which is which.
+#
+# Reach for this when one device is unlike the rest: a box that answers
+# slowly (give it a short timeout and one retry, so a request it will
+# never answer is given up on quickly), or a corner of the network that
+# was set up years apart from the rest and has its own community.
+#
+# IP-адреса управляемых коммутаторов. Элемент списка — либо адрес, как
+# ниже, либо отображение с `ip:` и любыми ключами из snmp: — community,
+# timeout, retries, retries_on_break, host_budget_seconds, — которые
+# тогда действуют только на этот коммутатор. Всё неуказанное
+# наследуется из секции snmp: выше; что задано явно, а что унаследовано,
+# печатает `python -m moonlan.diag --config`.
+#
+# Это нужно, когда одно устройство не похоже на остальные: коробка,
+# которая отвечает медленно (дайте ей короткий таймаут и один повтор —
+# запрос, на который она не ответит никогда, тогда бросают быстро), или
+# участок сети, собранный на годы раньше прочих и со своей строкой
+# сообщества.
+#
+# switches:
+#   - 10.0.0.10                    # as before: everything from snmp:
+#                                  # как раньше: всё из snmp:
+#   - ip: 10.3.6.2                 # a slow box: better to give up fast
+#     timeout: 2                   # медленная коробка: лучше быстро сдаться
+#     retries: 1
+#     host_budget_seconds: 90
+#   - ip: 10.3.7.15
+#     community: OtherString       # its own community
+#                                  # своя строка сообщества
+#     web_scheme: https            # its web interface is https only
+#                                  # (the node menu's "Web interface")
+#                                  # веб-интерфейс только по https
+#                                  # (пункт меню «Веб-интерфейс»)
 switches:
   - 192.168.1.2
   - 192.168.1.3
@@ -44,6 +119,108 @@ switches:
 # из них MoonLan узнаёт IP-адреса хостов по их MAC
 routers:
   - 192.168.1.1
+
+# A measured port rate is shown however old it is, dimmed and with its
+# age in the tooltip, until this many minutes have passed — past that
+# the cell goes empty, because a half-hour-old speed is a memory rather
+# than a measurement. "—" without a tooltip means the port has never
+# been measured at all, which is a different thing entirely: MoonLan
+# used to draw the same dash for both.
+# Измеренная скорость порта показывается независимо от возраста —
+# приглушённо и с возрастом в подсказке, — пока не пройдёт столько
+# минут; дальше ячейка пустеет, потому что получасовая скорость это
+# уже не измерение, а воспоминание. «—» без подсказки означает, что
+# порт не измеряли ни разу, а это совсем другое: раньше MoonLan рисовал
+# один и тот же прочерк в обоих случаях.
+stale_rate_hide_minutes: 30
+
+# Scans in a row a switch may fail to finish its poll before its card
+# says so and a switch_stale alarm is raised. It is answering — that is
+# never switch_down — but its data has stopped being refreshed, and on
+# the map it goes on looking alive. One deployment had a switch that
+# was not read in full once in six hours: thirty scans, thirty budget
+# failures, and nothing said so outside the journal.
+# Сколько сканов подряд коммутатор может не уложиться в опрос, прежде
+# чем об этом скажет карточка и поднимется тревога switch_stale. Он
+# отвечает — switch_down тут не при чём, — но его данные перестали
+# обновляться, а на карте он выглядит живым. В одном развёртывании
+# коммутатор не был опрошен целиком ни разу за шесть часов: 30 сканов,
+# 30 отказов по бюджету, и нигде, кроме журнала, об этом не говорилось.
+stale_switch_scans: 5
+
+# How long a saved node position outlives the node itself. A device
+# switched off for the night is not a device that was taken away:
+# coming back, it belongs where it was. Only a position that is BOTH
+# older than this and has no node on the current map is forgotten, and
+# only once, at the first scan after a restart — before that scan there
+# is no map to compare against.
+# Сколько сохранённая позиция узла живёт после того, как сам узел
+# пропал. Устройство, выключенное на ночь, — это не устройство, которое
+# разобрали: вернувшись, оно должно встать на своё место. Забывается
+# только позиция, которая И старше этого срока, И не имеет узла на
+# текущей карте, — и только один раз, при первом скане после
+# перезапуска: до этого скана сравнивать не с чем.
+layout_keep_days: 90
+
+# The right-click menu of a node. Ping and traceroute run on the MoonLan
+# machine, against the address MoonLan itself knows for that node —
+# the page sends a node id, never an address. There is no sign-in yet,
+# so anything the menu can make the server do, anybody who opens the
+# page can: which is why what you add here can only be LINKS, opened
+# on the machine of whoever is looking at the map. Commands run on the
+# server from a template will come with sign-in, for administrators.
+# Контекстное меню узла. Ping и traceroute выполняются на машине
+# MoonLan и по тому адресу, который MoonLan сам знает для этого узла —
+# страница присылает идентификатор, а не адрес. Авторизации пока нет,
+# поэтому всё, что меню умеет делать на сервере, может сделать любой,
+# кто открыл страницу: отсюда и правило — добавить сюда можно только
+# ССЫЛКИ, которые открываются на машине того, кто смотрит карту.
+# Команды на сервере по шаблону появятся вместе с авторизацией и только
+# для администратора.
+context_menu:
+  # Nodes one action may name. Double-clicking a switch selects its
+  # devices, sometimes a hundred; over this the action is refused with
+  # the ceiling in the reason, never trimmed in silence.
+  # Сколько узлов может назвать одно действие. Двойной клик по
+  # коммутатору выделяет его устройства, бывает и сотню; выше потолка
+  # действие отклоняется с объяснением, а не обрезается молча.
+  max_targets: 64
+  # Diagnostic runs on the server at once; one more is refused
+  # Сколько проверок одновременно на сервере; лишняя отклоняется
+  max_running: 4
+  # How a switch's web interface is opened, unless its own switches:
+  # entry says web_scheme (see above). http or https.
+  # Как открывать веб-интерфейс коммутатора, если его запись в
+  # switches: не говорит web_scheme (см. выше). http или https.
+  web_scheme: http
+  # Link schemes beyond http, https, ssh and telnet. javascript: and
+  # data: are refused whatever is written here: a link with either
+  # would run code in the browser of everybody looking at the map.
+  # Схемы ссылок сверх http, https, ssh и telnet. javascript: и data:
+  # не допускаются, даже если записаны здесь: такая ссылка выполнила бы
+  # код в браузере каждого, кто смотрит карту.
+  allowed_schemes: []
+  # Your own items. {ip}, {mac}, {name}, {switch} (the switch the node
+  # hangs off — its own address, for a switch) and {port} are filled
+  # in and URL-encoded; an item whose value is unknown is shown greyed
+  # out with the reason. applies_to: switch, host, group (a switch
+  # without SNMP, "beyond the trunk", "offline"); leave it out for
+  # every node. An item that cannot be used is left out of the menu,
+  # with the reason in the startup log and in diag --config.
+  # Свои пункты. {ip}, {mac}, {name}, {switch} (коммутатор, на котором
+  # висит узел; у коммутатора — его собственный адрес) и {port}
+  # подставляются и URL-кодируются; пункт, которому не хватает значения,
+  # показывается серым с причиной. applies_to: switch, host, group
+  # (коммутатор без SNMP, «За магистралью», «Офлайн»); без ключа — ко
+  # всем узлам. Пункт, который нельзя использовать, в меню не попадает,
+  # а причина — в логе старта и в diag --config.
+  links: []
+  #  - label: "Winbox"
+  #    url: "winbox://{ip}"         # needs allowed_schemes: [winbox]
+  #    applies_to: [switch]
+  #  - label: "Inventory card"
+  #    url: "https://inventory.local/find?mac={mac}"
+  #    applies_to: [host]
 
 # Periodic scan, minutes (0 — manual only via /api/scan)
 # Периодический автоопрос, минут (0 — только вручную через /api/scan)
@@ -312,6 +489,11 @@ notifications:
 alarm_notify:
   host_down: [email, telegram, syslog]
   switch_down: [email, telegram, syslog]
+  # It answers; it just never finishes. Nobody needs waking for that,
+  # but it must not go unsaid.
+  # Он отвечает, просто не успевает. Будить из-за этого никого не надо,
+  # но и молчать нельзя.
+  switch_stale: [syslog]
   port_errors: [syslog]
   port_discards: [syslog]
   port_util: [telegram, syslog]

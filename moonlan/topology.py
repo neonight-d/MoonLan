@@ -96,7 +96,42 @@ class TopologyState:
     last_error: str = ""
     last_error_ts: float = 0.0
     scanning: bool = False
+    # Progress of the scan running right now, and what the last one
+    # could not finish. Ten minutes of a map that did not move, with
+    # nothing in the interface saying so, sent the operator to
+    # journalctl to find out whether anything was happening at all.
+    scan_started_at: float = 0.0
+    scan_total: int = 0
+    scan_done: int = 0
+    scan_over_budget: list[str] = field(default_factory=list)
     _lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
+
+    def scan_started(self, total: int) -> None:
+        with self._lock:
+            self.scanning = True
+            self.scan_started_at = time.time()
+            self.scan_total = total
+            self.scan_done = 0
+
+    def host_polled(self) -> None:
+        """One more switch has answered, or run out of budget."""
+        with self._lock:
+            self.scan_done += 1
+
+    def scan_ended(self, over_budget: list[str]) -> None:
+        with self._lock:
+            self.scanning = False
+            self.scan_over_budget = list(over_budget)
+
+    def scan_progress(self) -> dict:
+        with self._lock:
+            return {
+                "scanning": self.scanning,
+                "scan_started_at": self.scan_started_at,
+                "scan_total": self.scan_total,
+                "scan_done": self.scan_done,
+                "scan_over_budget": list(self.scan_over_budget),
+            }
 
     def update(
         self,
@@ -156,6 +191,10 @@ class TopologyState:
                 "last_error": self.last_error,
                 "last_error_ts": self.last_error_ts,
                 "scanning": self.scanning,
+                "scan_started_at": self.scan_started_at,
+                "scan_total": self.scan_total,
+                "scan_done": self.scan_done,
+                "scan_over_budget": list(self.scan_over_budget),
             }
 
     def search(self, query: str) -> list[dict]:
@@ -192,12 +231,32 @@ class FdbStability:
         # ip -> mac -> [if_index, polls remaining]
         self._cache: dict[str, dict[str, list[int]]] = {}
 
-    def merge(self, sw_ip: str, fresh: dict[str, int]) -> dict[str, int]:
+    def merge(
+        self, sw_ip: str, fresh: dict[str, int], confirm: bool = True
+    ) -> dict[str, int]:
+        """Merges this poll's table with the smoothed one.
+
+        `confirm=False` says the table is not this poll's: it is the
+        last reading that did arrive, kept because the switch ran out
+        of its poll budget. Then the countdown still runs — a
+        three-poll smoothing that is refreshed from a copy of itself
+        never expires, and stops being smoothing and starts being
+        permanent memory — but the entries are not stamped fresh.
+
+        The links behind that switch are still drawn from the saved
+        reading: it is returned alongside the cache. Smoothing the
+        aging of a table and drawing what the table said are two
+        different things, and only the first must not be fed a copy.
+        """
         cache = self._cache.setdefault(sw_ip, {})
         for mac in list(cache):
             cache[mac][1] -= 1
             if cache[mac][1] < 0:  # survived ttl unconfirmed polls
                 del cache[mac]
+        if not confirm:
+            merged = {mac: entry[0] for mac, entry in cache.items()}
+            merged.update(fresh)
+            return merged
         for mac, if_index in fresh.items():
             cache[mac] = [if_index, self.ttl]
         return {mac: entry[0] for mac, entry in cache.items()}
@@ -328,11 +387,21 @@ def lldp_link_candidates(
     """Switch-to-switch links CONFIRMED by LLDP, keyed by the pair.
 
     A candidate needs one LLDP neighbour on the local port whose chassis
-    id belongs to another polled switch. Two kinds of port are skipped:
-    those `lldp.analyse_ports` found to carry forwarded frames (the
-    neighbour is not on the port it claims), and those with several
-    devices behind them (they are all real, but which of them is on the
-    cable is not knowable).
+    id belongs to another polled switch. Ports carrying forwarded
+    frames are skipped outright: `lldp.analyse_ports` has shown the
+    neighbour is not on the port it claims, so there is nothing to
+    build on.
+
+    Ports with several LLDP devices behind them are skipped too: they
+    are all real, but which of them is on the cable is not knowable.
+
+    Being named by both ends does NOT rescue such a port, tempting as
+    it looks. On the network this was written for, the RouterOS bridges
+    of one segment forward LLDP frames in both directions, so mb1 and
+    an Edge-Core two hops apart name each other, each on a port of its
+    own, as confidently as two devices sharing a cable. Forwarding is
+    symmetric; mutual agreement is therefore not evidence of adjacency,
+    and reading it as such drew the link straight back.
 
     Each side's own end comes from its own local port table, which is
     the reliable half of the exchange; the far end is resolved from
@@ -726,12 +795,71 @@ def switch_sightings(
     return switches_on_port, sees
 
 
+def lldp_adjacency(
+    lldp_pairs: dict[frozenset, dict] | None,
+) -> dict[str, dict[str, int]]:
+    """ip -> {neighbour ip: this switch's own ifIndex toward it}.
+
+    Only the half each switch reports about itself. The far end's
+    opinion of which port it is on is a separate, weaker statement and
+    lives in the pair entry, not here.
+    """
+    adjacency: dict[str, dict[str, int]] = {}
+    for key, sides in (lldp_pairs or {}).items():
+        for ip in key:
+            other = next(o for o in key if o != ip)
+            if_index = (sides.get(ip) or {}).get("if_index")
+            if if_index is not None:
+                adjacency.setdefault(ip, {})[other] = if_index
+    return adjacency
+
+
+def places_behind(
+    adjacency: dict[str, dict[str, int]],
+    uplinks: dict[str, int | None],
+    near: str,
+    far: str,
+    root: str | None = None,
+) -> bool:
+    """Does LLDP put `far` behind `near` rather than beside it?
+
+    A MAC table says a device is *reachable through* a port. LLDP says
+    a device is *on the cable*. The second is the stronger statement,
+    and this is where it is worth the most: if `near` names a port of
+    its own for `far`, and that port is not the one `near` reaches the
+    root through, then `far` sits further from the root than `near`
+    does — so `far` cannot also hang off whatever `near` hangs off.
+
+    An unknown uplink yields False rather than a guess. The root is the
+    one switch that has no uplink, and there every port leads away —
+    which is why it has to be named rather than inferred from a missing
+    dictionary entry.
+    """
+    port = adjacency.get(near, {}).get(far)
+    if port is None:
+        return False
+    if root is not None and near == root:
+        return True
+    uplink = uplinks.get(near)
+    if uplink is None:
+        return False  # no idea which way is up: claim nothing
+    return port != uplink
+
+
 def infer_tree(
     switches: list[SwitchData],
     switches_on_port: dict[str, dict[int, set[str]]],
     sees: dict[str, dict[str, int]],
+    lldp_pairs: dict[frozenset, dict] | None = None,
 ) -> tuple[list[dict], dict[str, int | None], dict]:
     """Root-based tree inference of switch-to-switch links.
+
+    LLDP takes part in this, it does not decorate the result. The MAC
+    tables place a switch in a branch; inside the branch, what the
+    devices say about each other decides the order. On a network where
+    three switches of nine barely fill their forwarding tables, the
+    other way round produced a bunch of boxes hanging off one port and
+    a false ring on top of it.
 
     Returns (links, uplinks, info). uplinks[ip] is the computed uplink
     port of every non-root switch (None if unknown). info holds the
@@ -788,14 +916,120 @@ def infer_tree(
     }
 
     links: list[dict] = []
+    adjacency = lldp_adjacency(lldp_pairs)
 
     def child_port(parent: SwitchData, child: SwitchData) -> int | None:
         """The child's port toward the parent: direct sighting, else uplink."""
         direct = sees[child.ip].get(parent.ip)
         return direct if direct is not None else uplinks.get(child.ip)
 
+    def branch_uplinks(
+        parent: SwitchData, members: list[SwitchData]
+    ) -> dict[str, int | None]:
+        """Which way is up, for the members of one branch.
+
+        `uplinks` is computed from sightings of switches outside the
+        branch, and a whole branch can fail that test: the three
+        RouterOS boxes behind mb1 1/28 see nothing but each other and
+        mb1, all of which are inside their own branch, so every one of
+        them came back with an unknown uplink — and "unknown uplink"
+        disarms every rule that needs to know which way the root is.
+
+        Inside a branch there is a better answer and it was already
+        being used to draw the far end of a link: the port a member
+        sees its parent on. That is the way out of the branch by
+        definition.
+        """
+        local = dict(uplinks)
+        for member in members:
+            toward_parent = sees[member.ip].get(parent.ip)
+            if toward_parent is not None:
+                local[member.ip] = toward_parent
+        return local
+
+    def lldp_chain(
+        parent: SwitchData,
+        members: list[SwitchData],
+        local_uplinks: dict[str, int | None],
+    ) -> tuple[dict[str, SwitchData], dict[str, list[SwitchData]]]:
+        """Which members LLDP puts behind which, inside one branch.
+
+        Returns (ip -> the member it sits behind, ip -> its members).
+        A mutual claim — each naming a non-uplink port for the other —
+        is two statements that cannot both be true, so both are dropped
+        rather than resolved by coin toss.
+        """
+        behind: dict[str, SwitchData] = {}
+        for near in members:
+            for far in members:
+                if far is near:
+                    continue
+                if not places_behind(
+                    adjacency, local_uplinks, near.ip, far.ip, root.ip
+                ):
+                    continue
+                if places_behind(
+                    adjacency, local_uplinks, far.ip, near.ip, root.ip
+                ):
+                    log.warning(
+                        "LLDP: %s and %s each report the other on a port "
+                        "that is not their uplink — they cannot both be "
+                        "the further one, so neither claim is used",
+                        near.ip, far.ip,
+                    )
+                    continue
+                behind[far.ip] = near
+        children: dict[str, list[SwitchData]] = {}
+        for ip, host in behind.items():
+            child = next(m for m in members if m.ip == ip)
+            children.setdefault(host.ip, []).append(child)
+        return behind, children
+
     def attach(parent: SwitchData, port: int, members: list[SwitchData]) -> None:
-        """Links members (one branch behind the parent's port) to the tree."""
+        """Links members (one branch behind the parent's port) to the tree.
+
+        LLDP goes first. Whatever it puts behind another member of this
+        branch is not on the parent's cable at all, so it is taken out
+        of the contest for "nearest" and hung off its own host
+        afterwards. What is left — the front of the branch — is ordered
+        by the MAC tables exactly as before.
+        """
+        if not members:
+            return
+        local_uplinks = branch_uplinks(parent, members)
+        behind, children = lldp_chain(parent, members, local_uplinks)
+        front = [m for m in members if m.ip not in behind]
+        if not front:
+            log.warning(
+                "LLDP puts every member of the branch behind %s port %s "
+                "behind another one; the chain has no head, so the "
+                "claims are set aside", parent.ip, port_name(parent, port),
+            )
+            behind, children, front = {}, {}, list(members)
+
+        def descend(host: SwitchData) -> None:
+            """Hangs everything LLDP puts behind `host` off `host`."""
+            for child in sorted(children.get(host.ip, []), key=lambda c: c.ip):
+                local = adjacency[host.ip][child.ip]
+                log.info(
+                    "LLDP: %s is behind %s (on its %s, which is not its "
+                    "uplink) — placed there rather than beside it",
+                    child.ip, host.ip, port_name(host, local),
+                )
+                links.append(
+                    _make_link(host, local, child, child_port(host, child))
+                )
+                descend(child)
+
+        _attach_front(parent, port, front, local_uplinks)
+        for member in front:
+            descend(member)
+
+    def _attach_front(
+        parent: SwitchData, port: int, members: list[SwitchData],
+        local_uplinks: dict[str, int | None],
+    ) -> None:
+        """The MAC-table ordering, over the members LLDP left in front."""
         if len(members) == 1:
             child = members[0]
             links.append(_make_link(parent, port, child, child_port(parent, child)))
@@ -803,7 +1037,7 @@ def infer_tree(
         # The member nearest to the parent sees all the other members
         # on ports different from its own uplink
         def is_nearest(c: SwitchData) -> bool:
-            up = uplinks.get(c.ip)
+            up = local_uplinks.get(c.ip)
             return all(
                 sees[c.ip].get(m.ip) is not None and sees[c.ip][m.ip] != up
                 for m in members
@@ -814,7 +1048,9 @@ def infer_tree(
         if len(candidates) > 1:
             # Symmetric sightings pass the test vacuously when uplinks are
             # unknown; trust only candidates with a known uplink
-            strong = [c for c in candidates if uplinks.get(c.ip) is not None]
+            strong = [
+                c for c in candidates if local_uplinks.get(c.ip) is not None
+            ]
             candidates = strong
         if not candidates:
             log.warning(
@@ -824,9 +1060,11 @@ def infer_tree(
                 ", ".join(m.ip for m in members), parent.ip,
             )
             for child in members:
-                links.append(
-                    _make_link(parent, port, child, child_port(parent, child))
-                )
+                link = _make_link(parent, port, child, child_port(parent, child))
+                # "I do not know the order" must not be drawn like a
+                # measured cable (see the dashed edges in the UI)
+                link["order_unknown"] = True
+                links.append(link)
             return
         nearest = max(candidates, key=lambda c: (len(sees[c.ip]), c.ip))
         links.append(_make_link(parent, port, nearest, child_port(parent, nearest)))
@@ -847,7 +1085,9 @@ def infer_tree(
                 "connecting to %s directly",
                 m.ip, nearest.ip, parent.ip,
             )
-            links.append(_make_link(parent, port, m, child_port(parent, m)))
+            link = _make_link(parent, port, m, child_port(parent, m))
+            link["order_unknown"] = True
+            links.append(link)
 
     for port, members in sorted(branches.items()):
         attach(root, port, members)
@@ -981,6 +1221,258 @@ def merge_lldp_links(
     return mismatches
 
 
+def mark_stp_blocking(
+    switches: list[SwitchData], links: list[dict]
+) -> None:
+    """Marks the links a spanning tree is holding in discarding.
+
+    A port STP blocks carries no traffic, and a reader deserves to see
+    that on the edge rather than work it out from the STP panel. Only
+    switches whose tree actually operates count — a disabled one still
+    answers dot1dStp* and names itself root.
+
+    It runs before the cycle check on purpose: a physical ring with a
+    blocked port is a correct picture of a correct network, and the one
+    thing that tells it apart from a ring MoonLan invented.
+    """
+    for sw in switches:
+        if sw.stp is None or not sw.stp.operating:
+            continue
+        blocking = {p.name for p in sw.stp.blocking_ports() if p.name}
+        if not blocking:
+            continue
+        for link in links:
+            for side in ("a", "b"):
+                if link[side] == sw.ip and link[f"{side}_port"] in blocking:
+                    link["stp_blocking"] = True
+                    link["stp_blocking_side"] = sw.ip
+
+
+# How much a link is worth when one of a ring has to go. A statement by
+# both devices beats a statement by one beats an inference from the
+# forwarding tables.
+LINK_STRENGTH = {"lldp": 3, "both": 2, "fdb": 1}
+
+
+def _link_key(link: dict) -> tuple:
+    return (link["a"], link["b"], link["a_port"], link["b_port"])
+
+
+def _path_between(forest: list[dict], a: str, b: str) -> list[dict] | None:
+    """The links joining a to b inside an acyclic link set."""
+    adjacency: dict[str, list[tuple[str, dict]]] = {}
+    for link in forest:
+        adjacency.setdefault(link["a"], []).append((link["b"], link))
+        adjacency.setdefault(link["b"], []).append((link["a"], link))
+    queue = [(a, [])]
+    seen = {a}
+    while queue:
+        node, path = queue.pop(0)
+        if node == b:
+            return path
+        for other, link in adjacency.get(node, ()):
+            if other in seen:
+                continue
+            seen.add(other)
+            queue.append((other, path + [link]))
+    return None
+
+
+def find_cycle(links: list[dict], skip: set | None = None) -> list[dict] | None:
+    """One cycle in the link graph, as the links that form it.
+
+    Cycles whose every edge is in `skip` are stepped over — those have
+    been looked at already and either accepted or given up on.
+    """
+    skip = skip or set()
+    parent: dict[str, str] = {}
+
+    def find(node: str) -> str:
+        parent.setdefault(node, node)
+        while parent[node] != node:
+            parent[node] = parent[parent[node]]
+            node = parent[node]
+        return node
+
+    forest: list[dict] = []
+    for link in links:
+        root_a, root_b = find(link["a"]), find(link["b"])
+        if root_a == root_b:
+            path = _path_between(forest, link["a"], link["b"])
+            if path is None:
+                continue
+            cycle = path + [link]
+            if all(_link_key(c) in skip for c in cycle):
+                continue  # already decided; look for another one
+            return cycle
+        parent[root_a] = root_b
+        forest.append(link)
+    return None
+
+
+def resolve_cycles(
+    links: list[dict],
+    lldp_pairs: dict[frozenset, dict] | None = None,
+    uplinks: dict[str, int | None] | None = None,
+    root: str | None = None,
+) -> list[dict]:
+    """The link graph over polled switches has to be acyclic, or explained.
+
+    A real ring is a fine thing to draw — as long as the spanning tree
+    is holding one of its ports in discarding, which is what a real
+    ring on a working network looks like. Those are left exactly as
+    they are, and the blocked edge says so.
+
+    A ring with no blocked port anywhere in it is an error of
+    inference, and one of its edges has to go: the weakest, where
+    weakest means a plain forwarding-table guess against a statement by
+    one device against a statement by both. Where several are equally
+    weak, the one "behind, not beside" calls impossible goes. Where
+    nothing tells them apart, nothing is removed — but every edge is
+    marked, so a ring nobody can account for does not get drawn as a
+    fact.
+
+    Returns the removals, and mutates `links` in place.
+    """
+    adjacency = lldp_adjacency(lldp_pairs)
+    uplinks = uplinks or {}
+    removed: list[dict] = []
+    skip: set = set()
+    while True:
+        cycle = find_cycle(links, skip)
+        if cycle is None:
+            return removed
+        names = ", ".join(
+            f"{link['a']} [{link['a_port']}] — {link['b']} [{link['b_port']}]"
+            for link in cycle
+        )
+        blocked = [link for link in cycle if link.get("stp_blocking")]
+        if blocked:
+            log.info(
+                "A ring among polled switches (%s) has a port the "
+                "spanning tree holds in discarding (%s) — it is a real "
+                "ring on a working network and is drawn as one",
+                names, blocked[0].get("stp_blocking_side", "?"),
+            )
+            for link in cycle:
+                skip.add(_link_key(link))
+            continue
+        weakest = min(
+            LINK_STRENGTH.get(link.get("source", "fdb"), 1) for link in cycle
+        )
+        weak = [
+            link for link in cycle
+            if LINK_STRENGTH.get(link.get("source", "fdb"), 1) == weakest
+        ]
+        victim = None
+        if len(weak) == 1:
+            victim = weak[0]
+        else:
+            impossible = [
+                link for link in weak
+                if any(
+                    near not in (link["a"], link["b"])
+                    and places_behind(
+                        adjacency, uplinks, near, link["b"], root
+                    )
+                    for near in adjacency
+                )
+            ]
+            if len(impossible) == 1:
+                victim = impossible[0]
+        if victim is None:
+            log.warning(
+                "A ring among polled switches (%s) has no port in "
+                "discarding and no weakest link — nothing is removed, and "
+                "every edge of it is marked as unaccounted for rather "
+                "than drawn as a measured cable", names,
+            )
+            for link in cycle:
+                link["cycle_unresolved"] = True
+                skip.add(_link_key(link))
+            continue
+        links.remove(victim)
+        removed.append({
+            "a": victim["a"], "b": victim["b"],
+            "a_port": victim["a_port"], "b_port": victim["b_port"],
+            "source": victim.get("source", "fdb"),
+            "reason": "cycle",
+            "cycle": names,
+        })
+        log.warning(
+            "Dropping the link %s [%s] — %s [%s] (%s): it closes a ring "
+            "among polled switches (%s) in which no port is held in "
+            "discarding, so the ring is an error of inference and this "
+            "is its weakest edge",
+            victim["a"], victim["a_port"], victim["b"], victim["b_port"],
+            victim.get("source", "fdb"), names,
+        )
+
+
+def drop_impossible_links(
+    links: list[dict],
+    lldp_pairs: dict[frozenset, dict] | None,
+    uplinks: dict[str, int | None],
+    root: str | None = None,
+) -> list[dict]:
+    """Removes links the "behind, not beside" rule forbids.
+
+    If LLDP says Y is behind X — X names a port of its own for Y, and
+    that port is not X's uplink — then Y is further from the root than
+    X. So Y cannot also hang off whatever X hangs off, and a MAC-table
+    link saying it does is an inference beaten by a statement.
+
+    Only links inferred from the MAC tables alone are candidates, only
+    where the link the rule prefers is actually present (removing the
+    one and not having the other would orphan the switch), and only
+    where the switch in question is the far end: a link from Y to
+    something further out is Y's own downlink and none of this rule's
+    business.
+
+    `infer_tree` already orders a branch this way, so on a healthy
+    network this finds nothing. It earns its keep where the two ends
+    landed in different branches of the root, which `attach` cannot
+    see, and on the paths that bypass `attach` entirely.
+
+    Returns the removals, and mutates `links` in place.
+    """
+    adjacency = lldp_adjacency(lldp_pairs)
+    if not adjacency:
+        return []
+    present = {frozenset({link["a"], link["b"]}) for link in links}
+    removed: list[dict] = []
+    for link in list(links):
+        if link.get("source") != "fdb":
+            continue
+        parent, child = link["a"], link["b"]
+        for near in adjacency:
+            if near == parent or near == child:
+                continue
+            if not places_behind(adjacency, uplinks, near, child, root):
+                continue
+            if frozenset({near, child}) not in present:
+                continue
+            links.remove(link)
+            present.discard(frozenset({parent, child}))
+            removed.append({
+                "a": parent, "b": child,
+                "a_port": link["a_port"], "b_port": link["b_port"],
+                "source": link.get("source", "fdb"),
+                "reason": "behind",
+                "behind": near,
+            })
+            log.warning(
+                "Dropping the link %s [%s] — %s [%s]: it was inferred from "
+                "the MAC tables, and LLDP puts %s behind %s, which is "
+                "somewhere else. A MAC table says a device is reachable "
+                "through a port; LLDP says it is on the cable, and that "
+                "is the stronger statement.",
+                parent, link["a_port"], child, link["b_port"], child, near,
+            )
+            break
+    return removed
+
+
 def trunk_ports(
     switches: list[SwitchData],
     switches_on_port: dict[str, dict[int, set[str]]],
@@ -1083,7 +1575,12 @@ def build_topology(
     # For links and uplinks — FDB merged with previous polls (protection
     # against aging); host binding below uses the fresh fdb
     if fdb_stability is not None:
-        link_fdb = {sw.ip: fdb_stability.merge(sw.ip, fdb[sw.ip]) for sw in switches}
+        link_fdb = {
+            sw.ip: fdb_stability.merge(
+                sw.ip, fdb[sw.ip], confirm=not getattr(sw, "over_budget", False)
+            )
+            for sw in switches
+        }
     else:
         link_fdb = fdb
 
@@ -1094,9 +1591,28 @@ def build_topology(
     #    corrected where LLDP has the two devices naming each other.
     #    LLDP is a statement, the FDB tree an inference — but the
     #    disagreements are reported, never quietly "fixed".
-    links, uplinks, info = infer_tree(switches, switches_on_port, sees)
+    # LLDP is read BEFORE the tree is inferred, not after it is drawn.
+    # It used to arrive as a correction pass that could add a link and
+    # refine ports but never remove anything — so a branch the MAC
+    # tables had spread into a star kept its star, and the LLDP edge
+    # laid on top closed a ring that does not exist.
     lldp_pairs = lldp_link_candidates(switches)
+    links, uplinks, info = infer_tree(
+        switches, switches_on_port, sees, lldp_pairs
+    )
     info["lldp_mismatches"] = merge_lldp_links(links, lldp_pairs, switch_by_ip)
+    # Anything the two passes above left that LLDP says cannot be. On a
+    # branch `attach` owns this finds nothing; it is for the pairs whose
+    # ends fell into different branches of the root.
+    dropped = drop_impossible_links(
+        links, lldp_pairs, uplinks, info.get("root")
+    )
+    # The blocked edges have to be known before the ring check: a ring
+    # with a port in discarding is a correct picture, and it is the one
+    # thing that tells it apart from a ring MoonLan invented.
+    mark_stp_blocking(switches, links)
+    dropped += resolve_cycles(links, lldp_pairs, uplinks, info.get("root"))
+    info["dropped_links"] = dropped
     info["lldp_forwarded"] = {
         sw.ip: sorted(port_name(sw, i) for i in sw.lldp_forwarded)
         for sw in switches if sw.lldp_forwarded
@@ -1261,6 +1777,14 @@ def build_topology(
             "vlan": sw.port_pvid.get(if_index, 0),
             "name": "",  # names and IPs are added from the DB (ARP/DNS)
         }
+        if getattr(sw, "over_budget", False):
+            # This switch ran out of its poll budget, so its table is
+            # the last one that did arrive rather than this poll's. The
+            # device is drawn where that table put it — cables do not
+            # move every ten minutes — but nobody looked for it just
+            # now, and the caller must not record a sighting.
+            host["from_saved"] = True
+            host["reading_at"] = float(getattr(sw, "polled_at", 0.0))
         if mac in approximate:
             host["approximate"] = True
         elif mac in remembered_at:
@@ -1514,22 +2038,6 @@ def build_topology(
     info["other_devices"] = other_devices
     info["unidentified"] = unidentified
 
-    # 6. Spanning tree on the map: a port STP holds in discarding
-    #    carries no traffic, and the root bridge is worth seeing at a
-    #    glance. Only switches whose tree actually operates count — a
-    #    disabled one still answers dot1dStp* and names itself root.
-    for sw in switches:
-        if sw.stp is None or not sw.stp.operating:
-            continue
-        blocking = {p.name for p in sw.stp.blocking_ports() if p.name}
-        if not blocking:
-            continue
-        for link in links:
-            for side in ("a", "b"):
-                if link[side] == sw.ip and link[f"{side}_port"] in blocking:
-                    link["stp_blocking"] = True
-                    link["stp_blocking_side"] = sw.ip
-
     switch_dicts = [{
         "ip": sw.ip,
         "name": sw.sys_name or sw.ip,
@@ -1543,6 +2051,18 @@ def build_topology(
         "descr": sw.sys_descr,
         "stp_operating": bool(sw.stp and sw.stp.operating),
         "stp_root": bool(sw.stp and sw.stp.is_root(sw.own_macs)),
+        # This switch did not finish its poll inside the budget, so
+        # everything above it is the last reading that did arrive, and
+        # `polled_at` says when that was. Drawn as an old reading, not
+        # as a switch that has gone quiet — those are different faults
+        # and they get different fixes.
+        "over_budget": bool(getattr(sw, "over_budget", False)),
+        "polled_at": float(getattr(sw, "polled_at", 0.0)),
+        # Scans in a row that ended without a complete reading of this
+        # switch. One is a slow moment; thirty in a row, which is what
+        # 10.3.7.10 managed, is a switch whose numbers stopped moving
+        # six hours ago while it went on looking alive.
+        "over_budget_scans": int(getattr(sw, "over_budget_scans", 0)),
         # Physical ports only (ifType 6/62/69/117): aggregates, CPU and
         # VLAN interfaces must not inflate the counters
         "ports_total": sum(1 for p in sw.ports.values() if p.is_physical),

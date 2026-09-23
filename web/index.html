@@ -16,16 +16,25 @@
     </div>
     <div class="toolbar">
       <span id="scan-status" class="status"></span>
+      <span id="layout-status" class="status hidden"></span>
       <span class="lang-switch" role="group" aria-label="Language">
         <button id="lang-ru">RU</button><button id="lang-en">EN</button>
       </span>
       <button id="freeze-btn"></button>
+      <button id="arrange-btn"></button>
+      <button id="reset-layout-btn" data-i18n="resetLayoutBtn"></button>
       <button id="alarms-btn"><span data-i18n="alarmsBtn"></span><span id="alarms-badge" class="badge hidden"></span></button>
       <button id="stp-btn" data-i18n="stpBtn"></button>
       <button id="journal-btn" data-i18n="journalBtn"></button>
       <button id="rescan" data-i18n="rescanBtn"></button>
     </div>
   </header>
+
+  <!-- Right-click menu. Its items are built from data (see
+       menuItemsFor in app.js): diagnostic actions, links, the
+       operator's own items from config.yaml, the layout. -->
+  <div id="node-menu" class="context-menu hidden" role="menu"></div>
+  <div id="toast" class="toast" role="status" aria-live="polite"></div>
 
   <main>
     <aside id="sidebar">
@@ -96,6 +105,16 @@
           <button id="stp-close">×</button>
         </div>
         <div class="panel-scroll"><div id="stp-body"></div></div>
+      </div>
+      <!-- Ping and traceroute from the MoonLan machine, started from
+           the node menu. Bottom left on purpose: a result has to
+           survive a click on a node, which opens its card top right. -->
+      <div id="actions" class="panel hidden">
+        <div class="panel-head">
+          <h3 id="actions-title"></h3>
+          <button id="actions-close">×</button>
+        </div>
+        <div class="panel-scroll"><div id="actions-body"></div></div>
       </div>
       <div id="empty-state" class="hidden">
         <p data-i18n="emptyLine1"></p>

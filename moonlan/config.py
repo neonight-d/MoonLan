@@ -8,6 +8,8 @@ from pathlib import Path
 
 import yaml
 
+from moonlan import menu
+
 DEFAULT_CONFIG_PATH = Path("config.yaml")
 # Point a second instance at its own file: the service runs out of the
 # project directory, so anything started there for a quick check would
@@ -33,6 +35,24 @@ class SnmpConfig:
     # back up from the last OID that did arrive. Not the same as
     # `retries`, which re-sends a single request.
     retries_on_break: int = 2
+    # The whole poll of one switch, start to finish. `timeout` bounds a
+    # single request; nothing bounded the sum of them, so one slow
+    # agent held up the entire scan — and, because a scan already
+    # running makes the next one return at once, every scan after it
+    # as well. Two minutes is several times what the slowest healthy
+    # switch on the network this was written for needs.
+    host_budget_seconds: int = 120
+    # An agent that does not implement a table is supposed to say so
+    # (noSuchObject), and that answer is cheap. Some simply go quiet,
+    # and the walk pays the full timeout budget for nothing — every
+    # cycle, forever. After this many walks in a row that returned no
+    # rows AND ended in a timeout, the OID is left alone on that host
+    # for `dead_oid_cooldown_scans` scans, then tried again: firmware
+    # gets updated. Only that one outcome counts. A partial answer is
+    # picked back up (retries_on_break), and an honest noSuchObject
+    # costs nothing to keep asking for.
+    dead_oid_strikes: int = 3
+    dead_oid_cooldown_scans: int = 30
 
 
 @dataclass
@@ -72,6 +92,30 @@ class LoopDetectionConfig:
 
     enabled: bool = True
     profiles: list = field(default_factory=list)
+
+
+@dataclass
+class ContextMenuConfig:
+    """The node menu: its diagnostic actions and the operator's links.
+
+    Parsed links only — an entry that could not be used is dropped by
+    menu.parse_links with a reason in ConfigReport.menu_problems.
+    """
+
+    # Nodes one action may name. Double-clicking a switch selects a
+    # hundred hosts; a hundred processes from one click is not a
+    # diagnostic, it is a load test.
+    max_targets: int = 64
+    # Diagnostic requests running on the server at once; one more is
+    # refused with a reason rather than queued without end
+    max_running: int = 4
+    # How a switch's own web interface is opened, unless the switch
+    # says otherwise with web_scheme: in its switches: entry
+    web_scheme: str = "http"
+    # Link schemes beyond http, https, ssh and telnet — winbox, say.
+    # javascript: and data: are refused whatever is written here.
+    allowed_schemes: list = field(default_factory=list)
+    links: list = field(default_factory=list)  # list[menu.MenuLink]
 
 
 @dataclass
@@ -119,6 +163,9 @@ class NotificationsConfig:
 DEFAULT_ALARM_NOTIFY: dict[str, list[str]] = {
     "host_down": ["email", "telegram", "syslog"],
     "switch_down": ["email", "telegram", "syslog"],
+    # Nobody needs waking for a switch that is answering; the operator
+    # does need to know its numbers stopped moving
+    "switch_stale": ["syslog"],
     "port_errors": ["syslog"],
     # discards are noisy and usually harmless: syslog only, never
     # Telegram or email
@@ -149,6 +196,11 @@ class Config:
     listen_port: int = 8080
     snmp: SnmpConfig = field(default_factory=SnmpConfig)
     switches: list[str] = field(default_factory=list)
+    # Per-switch SNMP settings, one entry per address in `switches`.
+    # Everything not written for that switch is inherited from `snmp:`,
+    # so this is always complete and nothing has to fall back to the
+    # global section at the point of use.
+    switch_snmp: dict = field(default_factory=dict)
     routers: list[str] = field(default_factory=list)
     scan_interval_minutes: int = 10
     ping_interval_seconds: int = 60
@@ -170,6 +222,21 @@ class Config:
     # A stale host whose IP ARP has not confirmed for this long
     # gives the address up: it may belong to another device now
     ip_confirm_hours: float = 6.0
+    # A measured rate is shown however old it is, with its age beside
+    # it — until this many minutes, past which it stops being data and
+    # becomes a memory. "—" is reserved for "never measured".
+    stale_rate_hide_minutes: float = 30.0
+    # How long a saved node position outlives the node itself. A
+    # device switched off for the night is not a device that was taken
+    # away: coming back, it belongs where it was. Only a position that
+    # is BOTH older than this and has no node on the current map is
+    # forgotten, and only at startup.
+    layout_keep_days: float = 90.0
+    # Scans in a row a switch may miss its poll budget before its card
+    # says so and switch_stale is raised. It is reachable; its data is
+    # not being refreshed, which is a different thing from both
+    # "answering" and "down".
+    stale_switch_scans: int = 5
     # Polls a brand-new MAC must appear in before it becomes a device
     # (a MAC ARP already knows by IP is taken at once). Damaged frames
     # invent addresses that live for one poll — this is what keeps them
@@ -194,6 +261,10 @@ class Config:
     loop_detection: LoopDetectionConfig = field(
         default_factory=LoopDetectionConfig
     )
+    context_menu: ContextMenuConfig = field(default_factory=ContextMenuConfig)
+    # switch address -> "http" | "https", for the switches whose own
+    # entry says how their web interface is reached
+    switch_web_scheme: dict = field(default_factory=dict)
     thresholds: Thresholds = field(default_factory=Thresholds)
     notifications: NotificationsConfig = field(default_factory=NotificationsConfig)
     alarm_notify: dict[str, list[str]] = field(
@@ -202,6 +273,60 @@ class Config:
     demo: bool = False
     # filled in by load_config: which settings came from the file
     report: "ConfigReport | None" = None
+
+    def host_snmp(self, ip: str) -> "HostSnmp":
+        """The settings this switch is polled with, inheritance applied.
+
+        A switch that is not in `switches:` — a router from `routers:`,
+        an address typed into diag — gets the global section, which is
+        what every caller assumed before per-switch settings existed.
+        """
+        found = self.switch_snmp.get(ip)
+        if found is not None:
+            return found
+        return HostSnmp(
+            community=self.snmp.community,
+            timeout=self.snmp.timeout,
+            retries=self.snmp.retries,
+            retries_on_break=self.snmp.retries_on_break,
+            host_budget_seconds=self.snmp.host_budget_seconds,
+        )
+
+    def host_budget(self, ip: str) -> int:
+        return self.host_snmp(ip).host_budget_seconds
+
+    def web_scheme(self, ip: str) -> str:
+        """How this switch's web interface is opened from the menu."""
+        return self.switch_web_scheme.get(ip) or self.context_menu.web_scheme
+
+    def starved_counters(self) -> list[tuple[str, int]]:
+        """Switches whose poll budget outlasts their counters cycle.
+
+        A scan holds a switch for as long as its budget allows, and a
+        counters cycle that finds it held gives up after a short wait.
+        At two intervals or more that is not an occasional miss: it is
+        every scan, and the switch's rates age visibly between them.
+
+        Not forbidden — a genuinely slow agent may need the budget —
+        but the operator should be told rather than left to work it out
+        from a panel full of stale values.
+        """
+        if self.counters_interval_seconds <= 0:
+            return []
+        limit = self.counters_interval_seconds * 2
+        return [
+            (ip, self.host_snmp(ip).host_budget_seconds)
+            for ip in self.switches
+            if self.host_snmp(ip).host_budget_seconds >= limit
+        ]
+
+    def custom_switches(self) -> list[str]:
+        """Addresses whose settings differ from the global section."""
+        return [
+            ip for ip in self.switches
+            if self.switch_snmp.get(ip)
+            and self.switch_snmp[ip].explicit
+        ]
 
 
 def parse_uplink_ports(entries: list[str]) -> set[tuple[str, str]]:
@@ -216,6 +341,139 @@ def parse_uplink_ports(entries: list[str]) -> set[tuple[str, str]]:
         if sep and ip.strip() and port.strip():
             parsed.add((ip.strip(), port.strip()))
     return parsed
+
+
+@dataclass(frozen=True)
+class HostSnmp:
+    """The SNMP settings one switch is actually polled with.
+
+    A network is never made of one kind of hardware. Five seconds with
+    two retries is a sensible compromise for a D-Link; on an RB941 it
+    means every request it does not answer costs fifteen seconds, and a
+    poll holds thirteen of those. Until now the only way to account for
+    that was to make the setting worse for every switch at once.
+
+    `explicit` names the keys this switch was given of its own; the
+    rest are inherited from the global `snmp:` section, and
+    `diag --config` prints which is which.
+    """
+
+    community: str
+    timeout: int
+    retries: int
+    retries_on_break: int
+    host_budget_seconds: int
+    explicit: frozenset = frozenset()
+
+
+# Per-switch keys, and where each one is read from a switches: entry
+HOST_SNMP_KEYS = (
+    "community", "timeout", "retries", "retries_on_break",
+    "host_budget_seconds",
+)
+_HOST_SNMP_CAST = {
+    "community": str,
+    "timeout": int,
+    "retries": int,
+    "retries_on_break": int,
+    "host_budget_seconds": int,
+}
+
+
+# Keys of a switches: entry that are not about polling it; read by
+# parse_switch_web rather than parse_switches
+SWITCH_MENU_KEYS = ("web_scheme",)
+WEB_SCHEMES = ("http", "https")
+
+
+def parse_switch_web(value) -> tuple[dict[str, str], list[str]]:
+    """`web_scheme:` of the switches: entries -> ({ip: scheme}, problems).
+
+    Part of a fleet serves its web interface over https only, and a
+    menu item that opens http:// on those is a menu item that fails.
+    """
+    schemes: dict[str, str] = {}
+    problems: list[str] = []
+    if not isinstance(value, (list, tuple)):
+        return schemes, problems
+    for entry in value:
+        if not isinstance(entry, dict) or "web_scheme" not in entry:
+            continue
+        ip = str(entry.get("ip") or entry.get("address") or "").strip()
+        scheme = str(entry["web_scheme"]).strip().lower()
+        if scheme not in WEB_SCHEMES:
+            problems.append(
+                f"{ip}: web_scheme {entry['web_scheme']!r} is not one of "
+                f"{', '.join(WEB_SCHEMES)} — context_menu.web_scheme is used"
+            )
+            continue
+        if ip:
+            schemes[ip] = scheme
+    return schemes, problems
+
+
+def parse_switches(
+    value, defaults: SnmpConfig
+) -> tuple[list[str], dict[str, HostSnmp], list[str]]:
+    """`switches:` -> (addresses, per-switch settings, complaints).
+
+    An entry is either an address, exactly as every config.yaml written
+    so far has it, or a mapping with `ip:` and any of the SNMP keys.
+    The old form must keep working untouched: this is the one file an
+    operator edits by hand.
+    """
+    problems: list[str] = []
+    addresses: list[str] = []
+    settings: dict[str, HostSnmp] = {}
+    if value is None:
+        return [], {}, []
+    if not isinstance(value, (list, tuple)):
+        value = [value]
+    for entry in value:
+        if isinstance(entry, dict):
+            ip = str(entry.get("ip") or entry.get("address") or "").strip()
+            if not ip:
+                problems.append(
+                    f"a switches: entry has no ip: {entry!r} — skipped"
+                )
+                continue
+            overrides: dict[str, object] = {}
+            for key, raw in entry.items():
+                if key in ("ip", "address") or key in SWITCH_MENU_KEYS:
+                    continue
+                if key not in _HOST_SNMP_CAST:
+                    problems.append(
+                        f"{ip}: unknown per-switch key {key!r} — ignored"
+                    )
+                    continue
+                try:
+                    overrides[key] = _HOST_SNMP_CAST[key](raw)
+                except (TypeError, ValueError):
+                    problems.append(
+                        f"{ip}: {key} is not a number: {raw!r} — "
+                        f"the global value is used"
+                    )
+        else:
+            ip = str(entry).strip()
+            overrides = {}
+        if not ip:
+            continue
+        addresses.append(ip)
+        settings[ip] = HostSnmp(
+            community=str(overrides.get("community", defaults.community)),
+            timeout=int(overrides.get("timeout", defaults.timeout)),
+            retries=int(overrides.get("retries", defaults.retries)),
+            retries_on_break=int(
+                overrides.get("retries_on_break", defaults.retries_on_break)
+            ),
+            host_budget_seconds=int(
+                overrides.get(
+                    "host_budget_seconds", defaults.host_budget_seconds
+                )
+            ),
+            explicit=frozenset(overrides),
+        )
+    return addresses, settings, problems
 
 
 def _as_str_list(value) -> list[str]:
@@ -254,6 +512,15 @@ class ConfigReport:
     # (dotted key, value, "config.yaml" | "default")
     values: list[tuple[str, object, str]] = field(default_factory=list)
     unknown: list[str] = field(default_factory=list)
+    # Entries the loader could read but not use: a switches: mapping
+    # with no ip:, a per-switch key nobody implements, a timeout that
+    # is not a number. Silently dropping any of those leaves an
+    # operator convinced a setting is in force when it is not.
+    problems: list[str] = field(default_factory=list)
+    # The same for context_menu: a link with a scheme that is not
+    # allowed, a placeholder nobody fills in. The item is left out of
+    # the menu and the service starts; this is where it says why.
+    menu_problems: list[str] = field(default_factory=list)
 
     @property
     def overrides(self) -> list[tuple[str, object, str]]:
@@ -351,9 +618,24 @@ def load_config(path: Path | None = None) -> Config:
         retries_on_break=r.get(
             "snmp.retries_on_break", d.snmp.retries_on_break, int
         ),
+        host_budget_seconds=r.get(
+            "snmp.host_budget_seconds", d.snmp.host_budget_seconds, int
+        ),
+        dead_oid_strikes=r.get(
+            "snmp.dead_oid_strikes", d.snmp.dead_oid_strikes, int
+        ),
+        dead_oid_cooldown_scans=r.get(
+            "snmp.dead_oid_cooldown_scans", d.snmp.dead_oid_cooldown_scans,
+            int,
+        ),
     )
 
-    cfg.switches = r.get("switches", d.switches, _as_str_list)
+    raw_switches = r.get("switches", d.switches)
+    cfg.switches, cfg.switch_snmp, switch_problems = parse_switches(
+        raw_switches, cfg.snmp
+    )
+    cfg.switch_web_scheme, web_problems = parse_switch_web(raw_switches)
+    switch_problems += web_problems
     cfg.routers = r.get("routers", d.routers, _as_str_list)
     cfg.scan_interval_minutes = r.get(
         "scan_interval_minutes", d.scan_interval_minutes, int
@@ -384,6 +666,15 @@ def load_config(path: Path | None = None) -> Config:
     cfg.ip_confirm_hours = r.get(
         "ip_confirm_hours", d.ip_confirm_hours, float
     )
+    cfg.stale_rate_hide_minutes = r.get(
+        "stale_rate_hide_minutes", d.stale_rate_hide_minutes, float
+    )
+    cfg.layout_keep_days = r.get(
+        "layout_keep_days", d.layout_keep_days, float
+    )
+    cfg.stale_switch_scans = r.get(
+        "stale_switch_scans", d.stale_switch_scans, int
+    )
     cfg.new_host_confirm_scans = r.get(
         "new_host_confirm_scans", d.new_host_confirm_scans, int
     )
@@ -409,6 +700,30 @@ def load_config(path: Path | None = None) -> Config:
             "loop_detection.enabled", d.loop_detection.enabled, bool
         ),
         profiles=r.get("loop_detection.profiles", [], list),
+    )
+
+    m = d.context_menu
+    web_scheme = r.get("context_menu.web_scheme", m.web_scheme, str).lower()
+    menu_problems: list[str] = []
+    if web_scheme not in WEB_SCHEMES:
+        menu_problems.append(
+            f"web_scheme {web_scheme!r} is not one of "
+            f"{', '.join(WEB_SCHEMES)} — http is used"
+        )
+        web_scheme = "http"
+    allowed, scheme_problems = menu.allowed_schemes(
+        r.get("context_menu.allowed_schemes", m.allowed_schemes)
+    )
+    links, link_problems = menu.parse_links(
+        r.get("context_menu.links", m.links), allowed
+    )
+    menu_problems += scheme_problems + link_problems
+    cfg.context_menu = ContextMenuConfig(
+        max_targets=r.get("context_menu.max_targets", m.max_targets, int),
+        max_running=r.get("context_menu.max_running", m.max_running, int),
+        web_scheme=web_scheme,
+        allowed_schemes=sorted(allowed),
+        links=links,
     )
 
     t = d.thresholds
@@ -518,6 +833,8 @@ def load_config(path: Path | None = None) -> Config:
         path=str(path.resolve() if exists else path), exists=exists,
         values=r.values,
         unknown=r.unknown_keys(),
+        problems=switch_problems,
+        menu_problems=menu_problems,
     )
 
     if os.environ.get("MOONLAN_DEMO") == "1":

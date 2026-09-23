@@ -31,6 +31,7 @@ from moonlan.stp import (
     judge_network,
     network_verdict,
     parse_bridge_id,
+    rootless,
 )
 
 ROOT_MAC = "34:0a:33:bc:ca:f0"
@@ -124,6 +125,101 @@ def tree_off(mac: str) -> StpData:
         ports={i: StpPort(bridge_port=i, if_index=i, state=1, enabled=False)
                for i in range(1, 5)},
     ))
+
+
+def rootless_bridge(mac: str) -> StpData:
+    """RouterOS: a real port table, and none of the scalars around it.
+
+    A walk of 1.3.6.1.2.1.17.2 on an RB941 returns
+    dot1dStpProtocolSpecification, dot1dStpPriority and the whole port
+    table — with forwarding and blocking states, path costs and a
+    designated root per port — and nothing in between. No
+    dot1dStpDesignatedRoot, no root cost, no root port, no topology
+    changes. So the switch names no root while its uptime is six weeks
+    and its TimeSinceTopologyChange is zero, which the historical
+    heuristic reads as "converged long ago".
+    """
+    return judge(StpData(
+        supported=True, protocol_spec=3, priority=32768,
+        designated_root="", root_cost=0, root_port=0,
+        own_macs={mac}, sys_uptime=413_991_900, time_since_change=0,
+        top_changes=0,
+        ports={
+            1: StpPort(bridge_port=1, if_index=1, state=STATE_FORWARDING,
+                       enabled=True, link_up=True),
+            3: StpPort(bridge_port=3, if_index=3, state=2, enabled=True,
+                       link_up=True),
+        },
+    ))
+
+
+class RootlessBridgeTest(unittest.TestCase):
+    """A bridge that names no root is not taking part in a tree.
+
+    Three RouterOS boxes reached the panel as a second spanning tree
+    whose root was the string "unknown", and stp_fragmented raised,
+    cleared and raised again over it. Two defects in a row: a verdict
+    that believed a heuristic with nothing to work on, and a grouping
+    that let the absence of a root become a root of its own.
+    """
+
+    def test_no_root_means_not_operating(self):
+        data = rootless_bridge("18:fd:74:fd:b3:af")
+        self.assertFalse(data.operating)
+        self.assertIn("names no root", data.reason)
+
+    def test_the_first_two_rules_still_come_first(self):
+        """Accepting a foreign root, and being confirmed by neighbours,
+        are evidence. They are not affected by this."""
+        data = member("aa:00:00:00:00:01", f"4096/{ROOT_MAC}", 20000)
+        self.assertTrue(data.operating)
+
+    def test_they_do_not_make_a_second_tree(self):
+        per_switch = {
+            "10.0.0.10": silent_root(ROOT_MAC),
+            "10.0.0.21": member("aa:00:00:00:00:01", f"4096/{ROOT_MAC}", 20000),
+            "10.3.6.2": rootless_bridge("18:fd:74:fd:b3:af"),
+            "10.3.6.4": rootless_bridge("18:fd:74:fd:e3:80"),
+            "10.3.7.10": rootless_bridge("18:fd:74:fd:b5:c5"),
+        }
+        judge_network(per_switch)
+        verdict = network_verdict(per_switch)
+        self.assertEqual(verdict["verdict"], "single")
+        self.assertEqual(len(verdict["roots"]), 1)
+        self.assertNotIn("unknown", verdict["roots"])
+        # …and they are listed rather than dropped out of sight
+        self.assertEqual(
+            verdict["rootless"], ["10.3.6.2", "10.3.6.4", "10.3.7.10"]
+        )
+
+    def test_two_real_roots_are_still_two(self):
+        """The alarm this protects must not be disarmed along the way."""
+        other = "02:11:22:33:44:55"
+        per_switch = {
+            "10.0.0.10": silent_root(ROOT_MAC),
+            "10.0.0.21": member("aa:00:00:00:00:01", f"4096/{ROOT_MAC}", 20000),
+            "10.9.0.1": silent_root(other),
+            "10.9.0.2": member("bb:00:00:00:00:02", f"4096/{other}", 20000),
+            "10.3.6.2": rootless_bridge("18:fd:74:fd:b3:af"),
+        }
+        judge_network(per_switch)
+        verdict = network_verdict(per_switch)
+        self.assertEqual(verdict["verdict"], "fragmented")
+        self.assertEqual(len(verdict["roots"]), 2)
+        self.assertEqual(verdict["rootless"], ["10.3.6.2"])
+
+    def test_a_switch_reporting_nothing_at_all_is_not_in_that_list(self):
+        """`reports_nothing` is a different finding with its own words.
+
+        Those agents answer the whole subtree with zeros; these answer
+        a real port table and skip the scalars. Lumping them together
+        would lose the distinction that names the cause.
+        """
+        per_switch = {
+            "10.0.0.10": silent_root(ROOT_MAC),
+            "10.0.0.44": tree_off("02:99:99:99:99:99"),
+        }
+        self.assertEqual(rootless(per_switch), [])
 
 
 class OperatingTest(unittest.TestCase):

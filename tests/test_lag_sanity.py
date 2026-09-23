@@ -43,6 +43,12 @@ class StubAgent(SnmpCollector):
         self._community = None
         self._walk_status = {}
         self._retries_on_break = 0
+        self._per_host = {}
+        self._dead_oids = {}
+        self._cycle = 0
+        self._dead_oid_strikes = 0
+        self._dead_oid_cooldown = 30
+        self._communities = {}
         self._lag = lag_column
         self._extra = dict(extra_ports)
 

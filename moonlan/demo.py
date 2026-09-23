@@ -51,6 +51,25 @@ v0.6.8 scenarios:
   number on every port: its ports stay ordinary, no trunk is drawn,
   no lag_degraded is raised, and the log says what was dropped.
 
+v0.6.13 scenarios:
+- access-sw-3 answers dot1dStp* with a real port table and none of the
+  scalars that hold the root, the way a RouterOS box does. It names no
+  root, so it is not counted as a spanning tree of its own: the panel
+  says one tree with the core at its head and lists that switch
+  separately underneath, and no stp_fragmented is raised.
+- access-sw-2 keeps missing its budget, so from the fifth scan on it is
+  a switch that answers and never finishes: the card counts the scans
+  and dates the reading, the list says the same on hover, and
+  switch_stale is raised — never switch_down, which would send somebody
+  to look for a device that is answering.
+
+v0.6.12 scenarios:
+- access-sw-2 stops finishing its poll inside the budget from the
+  second scan on: the header says one switch ran out of time, its card
+  dates the reading it last produced, its branch of the map stays
+  where it was, and no switch_down is raised for it. A device that
+  answers slowly is not a device that has gone quiet.
+
 v0.6.11 scenarios:
 - the core reports its spanning tree the way the real D-Links do —
   every dot1dStp* object a zero — and is recognised as the root only
@@ -94,6 +113,7 @@ v0.5.3 scenarios:
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import random
 import time
@@ -350,6 +370,7 @@ def _switch(ip: str, name: str, mac_octet: int) -> SwitchData:
         NO_PROFILE_SYS_OBJECT_ID if ip == NO_PROFILE_SWITCH
         else LOOP_SYS_OBJECT_ID
     )
+    sw.polled_at = time.time()
     return sw
 
 
@@ -526,6 +547,15 @@ def demo_network() -> list[SwitchData]:
     _add_lldp(core, ray1, ray2, ray3, ray4, core_port_to_ray)
     _add_stp(core, ray1, ray2, ray3, ray4, edge)
 
+    # From the second scan on, one ray answers too slowly to finish
+    # inside its budget. Its node and its branch stay on the map with
+    # the reading they last produced; the header counts it as late and
+    # its card dates the data. Nothing about it is alarmed on, because
+    # nothing about it is known to be wrong — it answers, slowly.
+    if _scan_count >= 2:
+        ray2.over_budget = True
+        ray2.over_budget_scans = _scan_count - 1
+        ray2.polled_at = time.time() - 640
     if _scan_count == 1:
         _report_rejected_fdb(ray4)
     # every scan: the switch keeps answering the LAG column with the
@@ -765,7 +795,7 @@ def _add_stp(core, ray1, ray2, ray3, ray4, edge) -> None:
         ports=_stp_ports(core, {1: 1, 2: 1, 5: 1, 25: 1}, True, ""),
     ))
     for ray, root_port, blocking in (
-        (ray1, 25, None), (ray2, 24, 24), (ray3, 23, None),
+        (ray1, 25, None), (ray2, 24, 24),
     ):
         states = {root_port: 5}
         if blocking is not None:
@@ -785,6 +815,19 @@ def _add_stp(core, ray1, ray2, ray3, ray4, edge) -> None:
             version=2, sys_uptime=uptime, own_macs=set(ray.own_macs),
             ports=_stp_ports(ray, states, True, root_id),
         ))
+    # A bridge shaped like a RouterOS one: dot1dStpPortTable is real —
+    # forwarding, blocking, path costs — and none of the scalars that
+    # hold the root are implemented. So it names no root while its
+    # uptime is weeks and its TimeSinceTopologyChange is zero, which
+    # the historical heuristic used to read as "converged long ago".
+    # Three of these became a second spanning tree called "unknown".
+    ray3.stp = judge(StpData(
+        supported=True, protocol_spec=3, priority=32768,
+        designated_root="", root_cost=0, root_port=0,
+        version=2, sys_uptime=413_991_900, time_since_change=0,
+        top_changes=0, own_macs=set(ray3.own_macs),
+        ports=_stp_ports(ray3, {23: 5, 24: 2}, True, ""),
+    ))
     # STP disabled: every field still answers, and every field lies
     ray4.stp = judge(StpData(
         supported=True, protocol_spec=3, priority=0,
@@ -1298,3 +1341,48 @@ class DemoCounters:
                 gaps_filled=4, filled_by="1.3.6.1.2.1.2.2.1.10",
             )
         return report
+
+
+# ---------- the node menu's ping and traceroute ----------
+
+async def fake_probe(argv: list[str], answers: bool) -> tuple[int, str, bool]:
+    """What ping or traceroute would print, for an address that does
+    not exist.
+
+    The demo's addresses are invented, and 10.0.0.x is exactly what a
+    real network next to the demo may be using: running the real tools
+    would probe somebody's actual devices. A device answers here when
+    the demo's own monitoring says it does, so the panel's two sources
+    — this probe and the continuous ping — agree the way they would on
+    a real network.
+    """
+    ip = argv[-1]
+    rng = random.Random(ip)
+    if argv[0] == "ping":
+        await asyncio.sleep(1.5 + rng.random())
+        head = f"PING {ip} ({ip}) 56(84) bytes of data.\n"
+        if not answers:
+            return 1, head + (
+                f"\n--- {ip} ping statistics ---\n"
+                "4 packets transmitted, 0 received, 100% packet loss, "
+                "time 3066ms\n"
+            ), False
+        times = [round(0.3 + rng.random() * 1.5, 3) for _ in range(4)]
+        lines = "".join(
+            f"64 bytes from {ip}: icmp_seq={n + 1} ttl=64 time={t} ms\n"
+            for n, t in enumerate(times)
+        )
+        return 0, head + lines + (
+            f"\n--- {ip} ping statistics ---\n"
+            "4 packets transmitted, 4 received, 0% packet loss, time 3004ms\n"
+            f"rtt min/avg/max/mdev = {min(times)}/"
+            f"{round(sum(times) / 4, 3)}/{max(times)}/0.210 ms\n"
+        ), False
+    await asyncio.sleep(3 + rng.random() * 2)
+    hops = [f"traceroute to {ip} ({ip}), 20 hops max, 60 byte packets"]
+    hops.append(f" 1  10.0.0.10  {round(0.4 + rng.random(), 3)} ms")
+    hops.append(
+        f" 2  {ip}  {round(0.8 + rng.random(), 3)} ms" if answers
+        else " 2  *\n 3  *\n 4  *"
+    )
+    return 0, "\n".join(hops) + "\n", False

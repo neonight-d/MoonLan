@@ -8,6 +8,94 @@ const I18N = {
     tagline: "local network map",
     journalBtn: "Journal",
     freezeBtn: "Freeze layout",
+    layoutPinnedMark: "placed by hand: {n}",
+    layoutPinnedHint:
+      "That many nodes are where somebody put them, out of reach of the "
+      + "layout engine. Everything else is arranged automatically, and "
+      + "where it ends up is recorded on its own \u2014 there is nothing "
+      + "to save by hand. Turn on Arrange to place a node, or press P "
+      + "with it selected; the same releases it again.",
+    menuPin: "Place here",
+    menuUnpin: "Release",
+    menuOpenCard: "Open card",
+    menuOpenPorts: "Ports",
+    menuSelected: "{n} nodes selected",
+    menuPing: "Ping",
+    menuTraceroute: "Traceroute",
+    menuPingGroup: "Ping the devices here ({n})",
+    menuPingSelection: "Ping the selection ({n})",
+    menu_web: "Web interface",
+    menu_ssh: "SSH",
+    menu_rdp: "Remote desktop (.rdp)",
+    menuCopyIp: "Copy IP",
+    menuCopyMac: "Copy MAC",
+    reasonNo_ip: "IP unknown",
+    reasonNo_mac: "MAC unknown",
+    reasonNo_name: "no name known",
+    reasonNo_switch: "switch unknown",
+    reasonNo_port: "port unknown",
+    reasonNoService: "no connection to the service",
+    reasonNoPing: "no ping on the server",
+    reasonNoTraceroute: "no traceroute on the server",
+    reasonNoDevices: "no devices here",
+    reasonTooMany: "{n} nodes: at most {limit} per action (context_menu.max_targets)",
+    copied: "Copied: {text}",
+    copyFailed: "Could not copy {text}",
+    actionsNodes: "{n} nodes",
+    actionStarting: "Starting…",
+    actionRunning: "Running on the MoonLan server…",
+    actionDone: "Done",
+    actionSimulated: "Demo mode: nothing is sent to the network, the result is simulated.",
+    actionTarget: "Target",
+    actionThisRun: "This run: 4 packets from the MoonLan server",
+    actionMonitor: "Continuous monitoring",
+    actionTool: "Tool",
+    pingSummary: "Answered: {n} of {total}",
+    pingLoss: "loss {loss}% ({received} of {sent} answered)",
+    pingRtt: "RTT min / avg / max",
+    ms: "ms",
+    colNode: "Node",
+    colLoss: "Loss",
+    colRtt: "Avg RTT",
+    colVerdict: "Result",
+    monitorNone: "not monitored",
+    monitorUp: "answering; last reply {time}",
+    monitorDown: "not answering; last reply {time}",
+    monitorNever: "not answering; it never has",
+    verdictOk: "answers",
+    verdictPartial: "losses",
+    verdictNoReply: "no reply",
+    verdictNoIp: "IP unknown",
+    verdictTimeout: "timed out",
+    verdictFailed: "failed",
+    refuseTooMany: "{n} nodes selected, but one action may name at most {limit} (context_menu.max_targets). Select fewer.",
+    refuseBusy: "The server is already running {limit} checks, which is the ceiling (context_menu.max_running). Try again in a few seconds.",
+    refuseNoTool: "There is no {tool} on the MoonLan server.",
+    refuseAddress: "The server takes node ids, not addresses: {list}",
+    refuseUnknown: "The server does not know these nodes — the map may be older than its last scan; reload the page: {list}",
+    refuseJobGone: "The server no longer keeps this result.",
+    refuseTraceOne: "Traceroute runs to one node at a time.",
+    refuseOther: "The server refused: {error}",
+    arrangeBtn: "Arrange",
+    arrangeOnBtn: "Arranging",
+    arrangeHint:
+      "In arrange mode dragging a node places it and keeps it there, "
+      + "and the right button lets it go again. Outside it a dragged "
+      + "node goes back to the layout engine \u2014 except one already "
+      + "placed by hand, which keeps its pin at the new spot.",
+    resetLayoutBtn: "Reset layout",
+    pinnedMark: "\ud83d\udccc",
+    pinnedHint:
+      "This node is where somebody put it, not where the layout "
+      + "engine would have put it. It is out of the physics and stays "
+      + "here for everyone looking at this map, through reloads and "
+      + "restarts.",
+    unpinBtn: "Release this node",
+    unpinConfirm: "Release \u201c{node}\u201d back to the layout engine?",
+    resetLayoutConfirm:
+      "Forget every saved position, for everyone? The map will lay "
+      + "itself out from scratch, and nodes placed by hand will lose "
+      + "their places. This cannot be undone.",
     unfreezeBtn: "Unfreeze",
     rescanBtn: "Rescan network",
     searchPlaceholder: "Search: name, IP or MAC…",
@@ -133,6 +221,16 @@ const I18N = {
       + "column shows \u2014 rather than 0. Unknown is not zero: no alarm "
       + "is raised or cleared on it either.",
     remembered: "from the inventory",
+    fromSaved: "from a saved reading",
+    readingFrom: "Reading taken",
+    hostFromSavedHint:
+      "{switch} did not finish its poll inside the budget, so this "
+      + "device is drawn where the last reading that did arrive put it, "
+      + "taken at {time}. Nobody has looked for it since: \u201clast "
+      + "seen\u201d above is the last time it really was found, and it "
+      + "is not moving while this lasts. Cables do not change every ten "
+      + "minutes, which is why the place is still shown \u2014 but a "
+      + "copy of a reading is not an observation.",
     rememberedHint:
       "The MAC is visible only on trunk ports right now, but the "
       + "inventory knows the port this device sits on, so it is drawn "
@@ -175,6 +273,30 @@ const I18N = {
     stpLastChange: "Since the last one",
     stpRootMark: "STP root",
     stpBlocking: "BLOCKING",
+    linkOrderUnknown:
+      "The order of the switches behind this port could not be worked "
+      + "out: their MAC tables do not show each other, and neither side "
+      + "reports the other over LLDP. They are all drawn on the nearest "
+      + "known switch, which is where they are reachable through \u2014 "
+      + "not necessarily what they are plugged into. A dashed line means "
+      + "a guess at the order, not a measured cable.",
+    linkCycleUnresolved:
+      "This link is part of a ring among polled switches in which no "
+      + "port is held in discarding by the spanning tree. One of its "
+      + "links is wrong, and nothing in the data says which \u2014 so "
+      + "none was removed, and all of them are marked rather than shown "
+      + "as facts.",
+    linkStpBlocking:
+      "The spanning tree is holding a port of this link in discarding, "
+      + "so it carries no traffic. A ring with a blocked port is what a "
+      + "working network with a physical ring looks like.",
+    switchLinks: "Links ({n})",
+    stpRootless:
+      "Answer dot1dStp* and name no root: {switches}. Their port tables "
+      + "are real, but they do not implement the objects that hold the "
+      + "root \u2014 RouterOS is one such agent. A bridge in a tree "
+      + "knows its root, so these are not counted as a spanning tree of "
+      + "their own, and they do not make the network fragmented.",
     stpBlockingHint:
       "Spanning tree holds this port in the blocking state: the link "
       + "exists but carries no user traffic. It is the standby path of "
@@ -233,6 +355,55 @@ const I18N = {
       + "Detection\u201d in the README for how to walk the private "
       + "branch and add a profile to config.yaml.",
     loopProfileHint: "profile {profile}, matched by {how}",
+    dataFrom: "Data from",
+    staleSwitchScans: "{n} scans running without a full poll",
+    staleSwitchHint:
+      "This switch has answered but not finished a full poll for {n} "
+      + "scans running, so everything on this card is from {time}. It is "
+      + "reachable \u2014 no \u201cswitch down\u201d alarm is raised for "
+      + "it \u2014 but its numbers have stopped moving. Its poll budget "
+      + "is too small for it: give it more time, or a shorter SNMP "
+      + "timeout of its own so the requests it never answers are given "
+      + "up on sooner. See switches: and snmp.host_budget_seconds in "
+      + "config.yaml.",
+    al_switch_stale: "Switch data not refreshing",
+    ageUnderMinute: "less than a minute ago",
+    ageMinutes: "{n} min ago",
+    ageHours: "{h} h ago",
+    ageHoursMinutes: "{h} h {n} min ago",
+    rateMeasured:
+      "Measured {when}. The counters cycle has not reached this switch "
+      + "since \u2014 it is being scanned, or it answers slowly. The "
+      + "number is real, only not current.",
+    rateTooOld:
+      "Last measured {when}. That is too long ago to show as a rate, so "
+      + "the cell is empty \u2014 but this port has been measured, "
+      + "which a port that never has never says. See "
+      + "stale_rate_hide_minutes in config.yaml.",
+    scanningProgress: "Scanning: {done} of {total}",
+    scanOverBudgetMark: "\u00b7 {n} switch(es) ran out of time",
+    scanOverBudgetHint:
+      "These switches did not finish answering inside their poll "
+      + "budget, so their part of the map is from an earlier scan: "
+      + "{switches}. They are not unreachable \u2014 they answer, only "
+      + "too slowly \u2014 and no alarm is raised for them. Their cards "
+      + "say when their data was taken.",
+    serviceOffline: "No connection to the service · data from {time}",
+    serviceOfflineHint:
+      "The page is not getting answers from MoonLan \u2014 it may be "
+      + "restarting, or this machine has lost the route to it. The map "
+      + "is the last picture that arrived, and it is not being "
+      + "refreshed. This says nothing about the switches: they are not "
+      + "being polled from here right now, that is all. Polling "
+      + "continues, and the notice clears by itself.",
+    overBudgetHint:
+      "This switch did not finish answering inside its poll budget, so "
+      + "everything on this card is the last reading that did arrive, "
+      + "taken at {time}. That is not the same as the switch being "
+      + "unreachable \u2014 it answers, only too slowly \u2014 and no "
+      + "\u201cswitch down\u201d alarm is raised for it. Give it more "
+      + "time or a shorter SNMP timeout of its own: see "
+      + "snmp.host_budget_seconds in config.yaml.",
     portFlapping: "flapping",
     portFlappingHint:
       "The port has changed link state {n} time(s) inside the window; "
@@ -330,6 +501,13 @@ const I18N = {
       "while; the device stays in the inventory until the retention " +
       "window ends.",
     ev_hosts_purged: "Old hosts removed",
+    ev_link_dropped: "Link withdrawn",
+    ev_layout_saved: "Layout saved",
+    ev_layout_cleared: "Layout reset",
+    ev_layout_pinned: "Placed by hand",
+    ev_layout_released: "Released",
+    evNodes: "{n}: {names}",
+    evNodesMore: "{n}: {names} and {more} more",
     offlineGroup: "Offline",
     offlineGroupTitle: "Offline devices · {n}",
     offlineGroupHint:
@@ -347,6 +525,94 @@ const I18N = {
     tagline: "карта локальной сети",
     journalBtn: "Журнал",
     freezeBtn: "Заморозить раскладку",
+    layoutPinnedMark: "поставлено руками: {n}",
+    layoutPinnedHint:
+      "Столько узлов стоят там, куда их поставил человек, и движку "
+      + "раскладки недоступны. Всё остальное раскладывается само, и "
+      + "куда оно встало — запоминается само же: сохранять руками "
+      + "нечего. Чтобы поставить узел, включите «Расстановку» или "
+      + "нажмите P на выделенном; тем же способом он и отпускается.",
+    menuPin: "Поставить здесь",
+    menuUnpin: "Отпустить",
+    menuOpenCard: "Открыть карточку",
+    menuOpenPorts: "Порты",
+    menuSelected: "Выбрано узлов: {n}",
+    menuPing: "Ping",
+    menuTraceroute: "Traceroute",
+    menuPingGroup: "Ping устройств группы ({n})",
+    menuPingSelection: "Ping выделенных ({n})",
+    menu_web: "Веб-интерфейс",
+    menu_ssh: "SSH",
+    menu_rdp: "Удалённый рабочий стол (.rdp)",
+    menuCopyIp: "Копировать IP",
+    menuCopyMac: "Копировать MAC",
+    reasonNo_ip: "IP неизвестен",
+    reasonNo_mac: "MAC неизвестен",
+    reasonNo_name: "имя неизвестно",
+    reasonNo_switch: "коммутатор неизвестен",
+    reasonNo_port: "порт неизвестен",
+    reasonNoService: "нет связи с сервисом",
+    reasonNoPing: "на сервере нет ping",
+    reasonNoTraceroute: "на сервере нет traceroute",
+    reasonNoDevices: "здесь нет устройств",
+    reasonTooMany: "узлов: {n}, а за одно действие не больше {limit} (context_menu.max_targets)",
+    copied: "Скопировано: {text}",
+    copyFailed: "Не удалось скопировать {text}",
+    actionsNodes: "узлов: {n}",
+    actionStarting: "Запуск…",
+    actionRunning: "Выполняется на сервере MoonLan…",
+    actionDone: "Готово",
+    actionSimulated: "Демо-режим: в сеть ничего не отправляется, результат имитирован.",
+    actionTarget: "Цель",
+    actionThisRun: "Этот запуск: 4 пакета с сервера MoonLan",
+    actionMonitor: "Непрерывный мониторинг",
+    actionTool: "Утилита",
+    pingSummary: "Ответили: {n} из {total}",
+    pingLoss: "потери {loss}% (ответов {received} из {sent})",
+    pingRtt: "RTT мин / сред / макс",
+    ms: "мс",
+    colNode: "Узел",
+    colLoss: "Потери",
+    colRtt: "Сред. RTT",
+    colVerdict: "Итог",
+    monitorNone: "не опрашивается",
+    monitorUp: "отвечает; последний ответ {time}",
+    monitorDown: "не отвечает; последний ответ {time}",
+    monitorNever: "не отвечает; ответа не было ни разу",
+    verdictOk: "отвечает",
+    verdictPartial: "с потерями",
+    verdictNoReply: "нет ответа",
+    verdictNoIp: "IP неизвестен",
+    verdictTimeout: "превышено время",
+    verdictFailed: "ошибка",
+    refuseTooMany: "Выбрано узлов: {n}, а за одно действие можно не больше {limit} (context_menu.max_targets). Уменьшите выделение.",
+    refuseBusy: "На сервере уже идёт {limit} проверок — это потолок (context_menu.max_running). Повторите через несколько секунд.",
+    refuseNoTool: "На сервере MoonLan нет {tool}.",
+    refuseAddress: "Сервер принимает идентификаторы узлов, а не адреса: {list}",
+    refuseUnknown: "Сервер не знает таких узлов — возможно, карта старше его последнего опроса; обновите страницу: {list}",
+    refuseJobGone: "Этот результат на сервере больше не хранится.",
+    refuseTraceOne: "Traceroute запускается до одного узла за раз.",
+    refuseOther: "Сервер отказал: {error}",
+    arrangeBtn: "Расстановка",
+    arrangeOnBtn: "Расставляю",
+    arrangeHint:
+      "В режиме расстановки перетаскивание ставит узел и оставляет его "
+      + "там, а правая кнопка отпускает обратно. Вне режима "
+      + "перетащенный узел возвращается под физику \u2014 кроме уже "
+      + "поставленного руками: тот остаётся закреплённым на новом месте.",
+    resetLayoutBtn: "Сбросить раскладку",
+    pinnedMark: "\ud83d\udccc",
+    pinnedHint:
+      "Этот узел стоит там, куда его поставил человек, а не там, куда "
+      + "его положил бы алгоритм раскладки. Он выведен из-под физики и "
+      + "остаётся здесь для всех, кто смотрит на эту карту, — и после "
+      + "перезагрузки страницы, и после перезапуска сервиса.",
+    unpinBtn: "Открепить узел",
+    unpinConfirm: "Открепить «{node}» и вернуть его под раскладку?",
+    resetLayoutConfirm:
+      "Забыть все сохранённые позиции — для всех? Карта разложится "
+      + "заново, а узлы, поставленные руками, потеряют свои места. "
+      + "Отменить это будет нельзя.",
     unfreezeBtn: "Разморозить",
     rescanBtn: "Опросить сеть",
     searchPlaceholder: "Поиск: имя, IP или MAC…",
@@ -473,6 +739,16 @@ const I18N = {
       + "колонке \u2014, а не 0. Неизвестно — это не ноль: тревоги по "
       + "такому значению не поднимаются и не снимаются.",
     remembered: "по инвентарю",
+    fromSaved: "по сохранённым данным",
+    readingFrom: "Показание снято",
+    hostFromSavedHint:
+      "{switch} не уложился в бюджет опроса, поэтому устройство "
+      + "нарисовано там, куда его поместило последнее полученное "
+      + "показание, снятое {time}. С тех пор его никто не искал: "
+      + "«последний раз виден» выше — это когда его действительно "
+      + "нашли, и пока так продолжается, это время не двигается. "
+      + "Кабели не переключаются каждые десять минут, поэтому место "
+      + "по-прежнему показано, — но копия показания не наблюдение.",
     rememberedHint:
       "Сейчас MAC виден только на магистральных портах, но в инвентаре "
       + "известен порт, на котором это устройство стоит, — поэтому оно "
@@ -515,6 +791,29 @@ const I18N = {
     stpLastChange: "С последнего",
     stpRootMark: "корень STP",
     stpBlocking: "BLOCKING",
+    linkOrderUnknown:
+      "Порядок коммутаторов за этим портом установить не удалось: их "
+      + "таблицы MAC не видят друг друга, и ни один не сообщает о другом "
+      + "по LLDP. Все они нарисованы на ближайшем известном коммутаторе "
+      + "— через него они достижимы, но не обязательно в него включены. "
+      + "Пунктир означает догадку о порядке, а не измеренный кабель.",
+    linkCycleUnresolved:
+      "Эта связь входит в кольцо между опрашиваемыми коммутаторами, в "
+      + "котором ни один порт не заблокирован остовным деревом. Одна из "
+      + "его связей неверна, а какая именно — из данных не следует, "
+      + "поэтому не снято ничего, а помечены все: кольцо, которое не "
+      + "удалось объяснить, не должно выглядеть как факт.",
+    linkStpBlocking:
+      "Остовное дерево держит порт этой связи в блокировке, и трафика по "
+      + "ней нет. Кольцо с заблокированным портом — это то, как выглядит "
+      + "исправная сеть с физическим кольцом.",
+    switchLinks: "Связи ({n})",
+    stpRootless:
+      "Отвечают на dot1dStp*, но корня не называют: {switches}. Таблицы "
+      + "портов у них настоящие, а объекты, где лежит корень, они не "
+      + "реализуют — так делает, например, RouterOS. Мост, участвующий "
+      + "в дереве, свой корень знает, поэтому отдельным деревом они не "
+      + "считаются и фрагментации не создают.",
     stpBlockingHint:
       "Остовное дерево держит этот порт в состоянии blocking: связь "
       + "есть, но пользовательский трафик через неё не идёт. Это "
@@ -573,6 +872,52 @@ const I18N = {
       + "обойти приватную ветку и добавить профиль в config.yaml, "
       + "написано в README, раздел «Loop Detection».",
     loopProfileHint: "профиль {profile}, опознан по {how}",
+    dataFrom: "Данные от",
+    staleSwitchScans: "{n} сканов подряд без полного опроса",
+    staleSwitchHint:
+      "Коммутатор отвечает, но не завершил полный опрос уже {n} сканов "
+      + "подряд, поэтому всё на этой карточке — от {time}. Он доступен, "
+      + "и тревога «коммутатор недоступен» по нему не поднимается, — но "
+      + "его показания перестали меняться. Бюджет опроса для него мал: "
+      + "дайте ему больше времени или свой, более короткий таймаут SNMP, "
+      + "чтобы запросы, на которые он не ответит, бросали раньше. См. "
+      + "switches: и snmp.host_budget_seconds в config.yaml.",
+    al_switch_stale: "Данные коммутатора не обновляются",
+    ageUnderMinute: "меньше минуты назад",
+    ageMinutes: "{n} мин назад",
+    ageHours: "{h} ч назад",
+    ageHoursMinutes: "{h} ч {n} мин назад",
+    rateMeasured:
+      "Измерено {when}. С тех пор цикл счётчиков до этого коммутатора не "
+      + "добрался — его опрашивает скан, либо он отвечает медленно. "
+      + "Значение настоящее, просто не сиюминутное.",
+    rateTooOld:
+      "Последний раз измерено {when}. Это слишком давно, чтобы "
+      + "показывать как скорость, поэтому ячейка пуста, — но порт "
+      + "измеряли, чего никогда не скажет порт, который не измеряли ни "
+      + "разу. См. stale_rate_hide_minutes в config.yaml.",
+    scanningProgress: "Идёт опрос: {done} из {total}",
+    scanOverBudgetMark: "\u00b7 не уложились: {n}",
+    scanOverBudgetHint:
+      "Эти коммутаторы не успели ответить целиком за отведённый бюджет "
+      + "опроса, поэтому их часть карты \u2014 с прошлого скана: "
+      + "{switches}. Недоступными они не считаются: они отвечают, просто "
+      + "медленно, и тревог по ним не поднимается. Время, на которое "
+      + "сняты их данные, написано в карточке каждого.",
+    serviceOffline: "Нет связи с сервисом · данные от {time}",
+    serviceOfflineHint:
+      "Страница не получает ответов от MoonLan — возможно, он "
+      + "перезапускается или до него пропал маршрут с этой машины. На "
+      + "карте последняя пришедшая картина, и она не обновляется. О "
+      + "коммутаторах это не говорит ничего: просто их сейчас отсюда не "
+      + "опрашивают. Опрос продолжается, и пометка снимется сама.",
+    overBudgetHint:
+      "Коммутатор не уложился в бюджет опроса, поэтому всё на этой "
+      + "карточке \u2014 последнее полученное измерение, снятое {time}. "
+      + "Это не то же самое, что «нет ответа»: он отвечает, просто "
+      + "слишком медленно, и тревога «коммутатор недоступен» по нему не "
+      + "поднимается. Дайте ему больше времени или свой, более короткий "
+      + "таймаут SNMP \u2014 см. snmp.host_budget_seconds в config.yaml.",
     portFlapping: "флаппинг",
     portFlappingHint:
       "Порт менял состояние линка {n} раз(а) за окно; последний переход "
@@ -670,6 +1015,13 @@ const I18N = {
       "MAC-адрес давно не появлялся в таблицах коммутаторов; устройство " +
       "остаётся в инвентаре до истечения срока хранения.",
     ev_hosts_purged: "Удалены старые хосты",
+    ev_link_dropped: "Связь снята",
+    ev_layout_saved: "Раскладка сохранена",
+    ev_layout_cleared: "Раскладка сброшена",
+    ev_layout_pinned: "Поставлено руками",
+    ev_layout_released: "Отпущено",
+    evNodes: "{n}: {names}",
+    evNodesMore: "{n}: {names} и ещё {more}",
     offlineGroup: "Офлайн",
     offlineGroupTitle: "Офлайн-устройства · {n}",
     offlineGroupHint:

@@ -1,4 +1,4 @@
-[Читать по-русски → README_RU.md](README_RU.md)
+[Русская версия → README_RU.md](README_RU.md)
 
 # MoonLan
 
@@ -16,9 +16,15 @@ An open-source alternative to LanTopoLog. MIT license.
 
 *Alarm panel: port errors, discards and host outages with one-click access to the switch port table.*
 
-## Features (v0.6.11)
+## Features (v0.7.2)
 
 - SNMP v2c polling of switches: device name, ports, speeds, statuses.
+  Each switch has a time budget for its whole poll
+  (`snmp.host_budget_seconds`) and may carry SNMP settings of its
+  own, so one slow agent delays itself rather than the whole map —
+  and is marked as late rather than reported as unreachable, which
+  it is not. An OID that answers nothing but timeouts is left alone
+  for a while and then tried again, out loud in the log both times.
 - MAC address tables (BRIDGE-MIB and Q-BRIDGE-MIB) from every switch,
   including entries on trunk bridge-ports missing from
   `dot1dBasePortIfIndex` (e.g. D-Link LACP trunks).
@@ -27,6 +33,22 @@ An open-source alternative to LanTopoLog. MIT license.
   the rays of a star. A switch is recognized in neighbors' FDB by its full
   MAC set (bridge MAC, interface MACs, management-IP MAC), with a fallback
   exclusion rule for one-way visibility. Link cards show ports of both ends.
+  Inside a branch the order is taken from LLDP first, where the two
+  devices name each other, and from the MAC tables where they do not —
+  a device reachable *through* a port is not the same statement as a
+  device *on the cable*, and a garland of switches behind one port used
+  to be drawn as a bunch hanging off it. A link the rule of "behind,
+  not beside" forbids is withdrawn, with both ends, both ports and the
+  reason in the journal. Where nothing can establish the order, the
+  lines are dashed and say so: a guess must not look like a measured
+  cable.
+- Rings among polled switches are resolved or explained. A ring with a
+  port the spanning tree holds in discarding is real and is drawn as
+  it is. A ring with no blocked port is an error of inference, and its
+  weakest link goes — a forwarding-table guess before a statement by
+  one device before a statement by both. A ring nothing can account for
+  keeps all its links, marked: erasing an arbitrary cable would be
+  worse than admitting it cannot be explained.
 - Link stability: FDB entries are merged over the last 3 polls, so links
   do not flicker when MAC table entries age out.
 - LACP (IEEE8023-LAG-MIB): an aggregate is drawn as a single thick line
@@ -58,6 +80,53 @@ An open-source alternative to LanTopoLog. MIT license.
   subnet behind a router, for instance — are listed under "Not on map",
   searchable and pingable. `python -m moonlan.diag --hosts` reports how
   complete the inventory is and which subnets are missing from it.
+  A device behind a switch that ran out of its poll budget keeps its
+  place on the map, drawn from the last reading that did arrive and
+  labelled with when that was — but nothing about it is recorded as a
+  sighting: "last seen" stops moving, and a new address is never
+  confirmed by repeats of one reading of it.
+- The interface says when it has stopped hearing from the service: the
+  last picture stays on screen and the header says how old it is,
+  instead of a map that quietly never changes again.
+- A layout that does not rearrange itself. Node positions live on the
+  server, not in one browser: a map of a network is a shared object,
+  and two people looking at it have to see the same picture. Where a
+  node ends up is recorded on its own once the layout settles — there
+  is nothing to save by hand and nothing to forget to press. A node
+  with no position yet starts next to the thing it is plugged into
+  rather than wherever the engine drops it. A page that has been open
+  for a week follows what other pages do — a pin, a release, a reset —
+  at its next refresh, and its own automatic save only ever adds what
+  the server does not have yet, so it cannot overwrite a pin set
+  somewhere else a minute ago.
+- Placing a node is a separate act from looking at one. Outside
+  **Arrange** mode a dragged node goes back to the layout engine; in
+  it, a drag places a node and keeps it there, and the right button
+  lets it go again. `P` does the same from the keyboard. A pinned node
+  can be dragged in either mode and keeps its pin at the new spot —
+  pinning says "the physics engine does not get to move this", not
+  "nobody does" — and the header counts how much of the map is
+  somebody's decision rather than the engine's. Placing and releasing
+  are entries in the journal, one per action.
+- Double-click a switch (or any group node) to select the devices on
+  it, Ctrl+click to add and remove, drag the selection to move it all
+  at once.
+- A right-click menu on every node, acting on the whole selection.
+  Ping and Traceroute run from the MoonLan machine, against the address
+  MoonLan itself knows for that node, and the result opens in a panel
+  beside what the continuous monitoring says; a selection or a group
+  is pinged at once, into a table that fills as the answers come in.
+  The web interface, SSH, remote desktop (a `.rdp` file), copy IP and
+  MAC, and links of your own from `config.yaml`. An item that cannot
+  run is greyed out with the reason — "IP unknown", "no traceroute on
+  the server" — rather than missing. See
+  [The node menu](#the-node-menu).
+- A node that vanished from the network keeps its place — a device
+  switched off for the night was not taken away — and a position is
+  forgotten only when it is both older than `layout_keep_days` and has
+  no node on the map. "Reset layout" asks once and then lays the map
+  out afresh, without a reload. `python -m moonlan.diag --layout`
+  reports all of it.
 - A readable map at any size: offline devices sharing a port hang off
   one "Offline · N" node instead of surrounding every switch with a
   cloud of grey dots (`offline_group_threshold`); the devices stay
@@ -157,13 +226,20 @@ An open-source alternative to LanTopoLog. MIT license.
   walk that stops partway through a table is resumed from where it
   stopped, and the ports it still missed are fetched one at a time. A
   switch whose poll fails costs only its own data: the others are
-  collected and shown regardless. The "Ports" panel of a switch shows live rates;
+  collected and shown regardless. A measured rate is never thrown away
+  for being old: it is shown dimmed with its age, and only past
+  `stale_rate_hide_minutes` does the cell empty — "—" means the port
+  has never been measured, which is a different fact and a different
+  investigation. The "Ports" panel of a switch shows live rates;
   map edges show the current trunk load ("2×1 Gbit/s · ↓34 ↑12 Mbit/s",
   summed over LAG members). Counter resets after a switch reboot are
   detected and do not produce rate spikes.
 - Stateful alarms: host_down (3 missed pings, only for hosts marked
   "Monitor" — the journal still records everything), switch_down
-  (2 failed SNMP polls, critical), port_errors, port_discards and
+  (2 failed SNMP polls, critical), switch_stale (a switch that answers
+  but has not finished a full poll for several scans — its data has
+  stopped being refreshed, which is neither up nor down), port_errors,
+  port_discards and
   port_util (threshold plus hysteresis), port_hosts_down (critical:
   several devices of one port went silent at once — one alarm instead
   of a burst), lag_degraded (a LAG member went down), new_mac. The
@@ -208,7 +284,7 @@ Version history: [CHANGELOG.md](CHANGELOG.md)
 | Version | Functionality |
 |---------|---------------|
 | v0.1    | SNMP polling, MAC tables, basic topology, web UI |
-| v0.2    | Manual map editing, context menus, layout export/import *(postponed)* |
+| v0.2 ~  | Manual map editing, context menus, layout export/import *(layout and manual placement done in v0.7; manual LINKS deliberately not)* |
 | v0.3 ✓  | Ping monitoring, journal of new MAC addresses, last-reply time, host IPs and names (ARP/DNS) |
 | v0.4 ✓  | Accurate link inference, LACP, VLAN, unmanaged switches |
 | v0.5 ✓  | Alerts and notifications: email, Telegram, Syslog; traffic thresholds; port error counters (ifInErrors etc.) |
@@ -224,8 +300,16 @@ Version history: [CHANGELOG.md](CHANGELOG.md)
 | v0.6.9 ✓| A device seen on an uplink is not behind it; host placement under test |
 | v0.6.10 ✓| Devices seen through a trunk are grouped beyond it, not on it |
 | v0.6.11 ✓| One root is one root; a panel header stays put |
-| v0.7    | Export to PDF and Draw.io, MAC address info import |
-| v0.8    | Windows computer inventory (WMI/WinRM) |
+| v0.6.12 ✓| A slow agent delays itself, not the whole map; per-switch SNMP settings |
+| v0.6.13 ✓| A dash means never measured; an unknown root is not a root |
+| v0.6.14 ✓| LLDP builds the tree; rings are resolved or explained |
+| v0.6.15 ✓| A reading nobody took is not an observation; the map says when it stopped |
+| v0.7 ✓  | A layout that does not rearrange itself: positions on the server |
+| v0.7.1 ✓| Dragging a node is not a decision: arrange mode, context menu, multi-selection |
+| v0.7.2 ✓| A pinned node moves, an open page sees, and the menu does something: ping, traceroute, links |
+| v0.7.3  | Authentication; commands on the server from the config, for administrators |
+| v0.8    | Export to PDF and Draw.io, MAC address info import |
+| v0.9    | Windows computer inventory (WMI/WinRM) |
 
 ## Requirements
 
@@ -257,10 +341,20 @@ snmp:
   retries: 2               # re-sends of a single request
   retries_on_break: 2      # times a walk that stops mid-table is
                            # picked back up from where it stopped
+  host_budget_seconds: 120 # the whole poll of one switch, start to
+                           # finish. `timeout` bounds one request;
+                           # this bounds the sum of them
+  dead_oid_strikes: 3      # walks with no rows AND a timeout, in a
+                           # row, after which that OID is left alone
+                           # on that host (0 — never)
+  dead_oid_cooldown_scans: 30  # for this many scans, then tried again
 
-switches:                  # IP addresses of managed switches
-  - 192.168.1.2
-  - 192.168.1.3
+switches:                  # IP addresses of managed switches. An entry
+  - 192.168.1.2            # is an address, or a mapping with `ip:` and
+  - ip: 192.168.1.3        # any snmp: key, which then applies to that
+    timeout: 2             # switch alone; everything else is inherited
+    retries: 1
+    host_budget_seconds: 90
 
 routers:                   # devices with an ARP table (routers,
   - 192.168.1.1            # L3 switches) — the source of host IPs
@@ -368,6 +462,229 @@ python -m moonlan.notify --test
 
 It sends a test message to every enabled channel and prints a
 per-channel result.
+
+### When one switch is not like the others
+
+A network is never made of one kind of hardware, and the settings
+above are one compromise for all of it. Four keys exist for the device
+that does not fit.
+
+**`snmp.host_budget_seconds`** (default 120) bounds the whole poll of
+one switch, start to finish; `timeout` bounds one request. A poll is a
+dozen walks of a dozen requests each, so an agent that answers
+everything slowly stays inside every single timeout and still takes
+eight minutes — and the scan waits for the last switch. A switch that
+runs past its budget is left out of that scan; the rest of the network
+gets its map on time.
+
+It is **not** reported as unreachable, because it is not: it answers,
+only too slowly. No `switch_down` is raised for it and none is cleared.
+Its last complete reading stays on the map, its card says when that
+reading was taken, and the header says how many switches ran out of
+time.
+
+**Per-switch settings.** An entry in `switches:` may be a mapping with
+`ip:` and any of `community`, `timeout`, `retries`,
+`retries_on_break`, `host_budget_seconds`. Those apply to that switch
+alone; anything not written there is inherited from the `snmp:`
+section. The old plain list of addresses keeps working exactly as it
+did.
+
+Reach for this when one device is unlike the rest. A box that answers
+slowly usually wants a *shorter* timeout and one retry, not a longer
+one: the requests that cost the time are the ones it will never answer,
+and the sooner they are given up on the better. A corner of the network
+set up years apart from the rest may want its own community.
+
+```yaml
+switches:
+  - 192.168.1.2                  # as before: everything from snmp:
+  - ip: 192.168.1.3
+    timeout: 2                   # a slow box: better to give up fast
+    retries: 1
+    host_budget_seconds: 90
+  - ip: 192.168.1.4
+    community: OtherString
+```
+
+`python -m moonlan.diag --config` prints the settings every switch is
+actually polled with and marks the ones it was given of its own.
+
+**`snmp.dead_oid_strikes`** (default 3) and
+**`snmp.dead_oid_cooldown_scans`** (default 30). An agent that does
+not implement a table is supposed to answer `noSuchObject`, which
+costs one round trip. Some go quiet instead, and the walk pays the
+whole retry budget to learn nothing — every cycle, forever. After
+`dead_oid_strikes` walks in a row that returned no rows **and** ended
+in a timeout, MoonLan stops asking that host for that OID for
+`dead_oid_cooldown_scans` scans, then tries again: firmware gets
+updated.
+
+Only that one outcome counts. A partial answer is what
+`retries_on_break` is for, and an honest `noSuchObject` is cheap to
+keep asking for. Both the pause and the resumption are logged, and the
+skipped walk reports "no answer" rather than an empty table — data
+missing because MoonLan stopped asking must never be mistaken for data
+the device denies having. Set `dead_oid_strikes: 0` to switch the rule
+off.
+
+```bash
+python -m moonlan.diag --skipped
+```
+
+asks the running service what is on pause right now and for how many
+more scans.
+
+### A dash, a stale value and a switch that stopped being read
+
+Three settings exist because three different absences used to look
+alike.
+
+**`stale_rate_hide_minutes`** (default 30). A measured port rate is
+never thrown away for being old. Until v0.6.13 anything older than
+three counters intervals was dropped from the answer and the panel drew
+"—" — the same "—" it draws for a counter the agent does not implement.
+Those are opposite diagnoses: one says "this switch has no such
+counter, stop looking", the other says "nobody has measured this
+lately". Now a rate older than three intervals is dimmed and says when
+it was taken; past this many minutes the cell empties, because a
+half-hour-old speed is a memory — and even then hovering it says when
+the port was last measured. A bare "—" with nothing behind it means the
+port has never been measured at all.
+
+**`stale_switch_scans`** (default 5). A switch may answer and never
+finish answering: its poll budget runs out every scan, its data stops
+being refreshed, and on the map it goes on looking alive from its last
+complete reading. One deployment had a switch that was not read in full
+once in six hours — thirty scans, thirty budget failures — and nothing
+said so outside the journal. After this many consecutive scans its card
+counts them and dates the reading, the switch list says the same on
+hover, and a `switch_stale` alarm is raised (warning, syslog by
+default). Never `switch_down`: sending somebody to look for a dead
+device that is answering wastes the trip. It clears the moment one full
+poll finishes.
+
+The usual cure is not a bigger budget but a shorter timeout for that
+device — see the per-switch settings above. `diag --config` prints how
+long each switch's last complete poll actually took, which is the
+number to set a budget from.
+
+**The counters cycle and the poll budget.** A scan holds a switch for
+as long as its budget allows, and a counters cycle that finds it held
+waits briefly and then skips it. So a `host_budget_seconds` at or above
+twice `counters_interval_seconds` means that switch misses a cycle
+after every scan and its rates visibly age. MoonLan says so at startup
+and in `diag --config`, per device. It is not forbidden — a genuinely
+slow agent may need the budget — but it should be a decision rather
+than a surprise.
+
+**`layout_keep_days`** (default 90). How long a saved node position
+outlives the node itself. A device switched off for the night was not
+taken away: coming back, it belongs where it was, so nothing is
+forgotten for being absent. A position goes only when it is BOTH older
+than this and has no node on the current map — and that housekeeping
+runs once, at the first scan after a restart, because before that scan
+there is no map to compare against and every position would look
+orphaned.
+
+### The node menu
+
+Right-click a node. What the menu offers, in this order: diagnostic
+actions, links, your own items, the layout.
+
+**Where the line is.** There is no sign-in yet (v0.7.3), so anything
+the menu can make the server do, anybody who opens the page can make it
+do. Two rules follow from that, and nothing in the config loosens them:
+
+- the server runs only its own built-in actions — ping and traceroute
+  — and only at addresses it found itself. The page sends a node id,
+  never an address; an id the service does not know is refused, and so
+  is an address sent in place of one. The tool runs from an argument
+  list with no shell, the address checked before it gets that far;
+- what `config.yaml` can add to the menu is **links**, opened on the
+  machine of whoever is looking at the map. A command run on the server
+  from a template would be remote execution for the whole LAN without
+  sign-in; that waits for sign-in, and will be for administrators.
+
+**Ping and traceroute** run on the MoonLan machine — the point is to see
+the network from where MoonLan sees it. Ping sends four packets and
+stops at ten seconds; traceroute (`tracepath` if there is no
+`traceroute`) stops at sixty. The result is a panel with loss, round
+trip times and the raw output, and next to them what the continuous
+monitoring knows about the same address — two sources, shown as two.
+Selecting several nodes (or right-clicking a group) pings them all into
+a table. Every run is a line in the service log: what, on which node,
+from which client address. Which tools this machine has is in the
+startup log and in `diag --config`; a missing one greys its item out
+with the reason. In demo mode nothing is sent to the network.
+
+**Keys** (all optional, section `context_menu`):
+
+- `max_targets` (64): nodes one action may name. More is refused with
+  the ceiling in the reason — never trimmed in silence. Double-clicking
+  a switch can select a hundred hosts, and a hundred processes from one
+  click is a load test rather than a diagnostic.
+- `max_running` (4): diagnostic runs at once on the server; one more is
+  refused with a reason instead of waiting in a queue without end.
+- `web_scheme` (`http`): how a switch's web interface is opened. A
+  switch that serves https only says so in its own `switches:` entry:
+  `- ip: 10.3.7.15` / `web_scheme: https`.
+- `allowed_schemes` (`[]`): link schemes beyond `http`, `https`, `ssh`
+  and `telnet` — `winbox`, say. `javascript:` and `data:` are refused
+  even if listed: a link with either would run code in the browser of
+  everybody looking at the map.
+- `links`: your own items —
+
+  ```yaml
+  context_menu:
+    allowed_schemes: [winbox]
+    links:
+      - label: "Winbox"
+        url: "winbox://{ip}"
+        applies_to: [switch]
+      - label: "Inventory card"
+        url: "https://inventory.local/find?mac={mac}"
+        applies_to: [host]
+  ```
+
+  `{ip}`, `{mac}`, `{name}`, `{switch}` (the switch the node hangs off;
+  its own address, for a switch) and `{port}` are filled in by the
+  server, each value URL-encoded — a MAC arrives as
+  `aa%3Abb%3A…`. An item whose value is unknown is greyed out with the
+  reason. `applies_to` takes `switch` (a polled switch or a bridge found
+  by LLDP), `host` and `group` (a switch without SNMP, "beyond the
+  trunk", "offline"); without it the item is on every node. An item
+  that cannot be used — a scheme that is not allowed, a placeholder
+  nobody fills in — is left out of the menu and the service starts;
+  the startup log and `diag --config` say why.
+
+Copying uses `navigator.clipboard` where the page is a secure one
+(https, or localhost) and the older way everywhere else — MoonLan is
+usually opened over plain http by address, where the clipboard API does
+not exist at all. A short note says whether the copy happened.
+
+### When SNMP says nothing at all
+
+SNMPv2c does not answer a wrong community string. Not with an error —
+it does not answer. From outside, that silence is shaped exactly like
+an agent that does not implement the object you asked for, and MoonLan
+used to say precisely that.
+
+So before deciding, it asks: `sysDescr`, which every agent must
+implement, and a ping.
+
+- the host answers ping and says nothing to `sysDescr` → the community
+  string or a disabled agent, and that is named first;
+- silent on both → not reachable from here at all, a network question
+  before it is an SNMP one;
+- `sysDescr` answers and the OID you asked about does not → the old
+  verdict, which is true here and can be said firmly.
+
+The same sentence goes into the service log when a switch stops
+answering. And when every configured switch goes silent at once, that
+is reported as one fact rather than N: one common cause is likelier
+than N simultaneous faults, and `snmp.community` is the first place to
+look.
 
 ## Running
 
@@ -496,6 +813,23 @@ instance `errors_per_minute: 10` used to count discards as errors and
 now applies to damaged frames alone, where the default is 5. The
 service logs the same summary on startup, at WARNING level when the
 file contains keys it does not recognise.
+
+The last table it prints is the SNMP settings every switch is actually
+polled with, marking the ones that switch was given of its own rather
+than inheriting from `snmp:`.
+
+#### What is not being asked for
+
+```bash
+python -m moonlan.diag --skipped
+```
+
+Lists the (host, OID) pairs MoonLan has stopped polling because they
+answered nothing but timeouts, and how many scans are left before each
+is tried again — see `dead_oid_strikes` above. The pause lives in the
+running service, so this asks it over the API rather than guessing; it
+needs MoonLan to be up, at the `listen.host` / `listen.port` from the
+same `config.yaml`.
 
 #### How complete is the inventory
 
@@ -1089,6 +1423,8 @@ MoonLan/
 │   ├── notify.py           # email/Telegram/Syslog notifications
 │   ├── db.py               # SQLite: hosts, event journal, alarms
 │   ├── pinger.py           # ping monitoring (system ping)
+│   ├── probes.py           # ping and traceroute on request, from the node menu
+│   ├── menu.py             # node menu links: scheme whitelist, filling in
 │   ├── diag.py             # SNMP diagnostic tool
 │   ├── demo.py             # demo network generator
 │   └── server.py           # FastAPI application and REST API
@@ -1111,4 +1447,15 @@ MoonLan/
 | POST   | `/api/scan`       | Start a new switch poll |
 | GET    | `/api/search?q=…` | Search by name, IP or MAC |
 | GET    | `/api/journal?limit=100` | Event journal, newest first |
+| GET    | `/api/layout`     | Saved node positions, `cleared_at` (the last reset), nodes missing from the layout and positions with no node |
+| PUT    | `/api/layout`     | Store positions: `{"nodes": {id: {x, y, pinned}}}`; with `"only_new": true` only nodes that have none, and the answer says what the others already have |
+| PATCH  | `/api/layout`     | Place or release several nodes in one action (one journal entry) |
+| DELETE | `/api/layout`     | Reset the whole layout |
+| GET    | `/api/node-menu?id=…` | What one node's menu offers: the node's address, MAC and name as MoonLan knows them, links filled in, which tools the server has |
+| POST   | `/api/actions`    | Start `{"action": "ping"\|"traceroute", "nodes": [node ids]}`; answers with a job, or refuses with the reason |
+| GET    | `/api/actions/{id}` | How a job is going, target by target |
 | GET    | `/api/status`     | Service status and last poll time |
+
+## Acknowledgments
+
+AI-Assisted Development: Built with [Claude Code](https://github.com/anthropics/claude-code) by [Anthropic](https://www.anthropic.com/)
