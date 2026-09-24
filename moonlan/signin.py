@@ -11,17 +11,21 @@ database on every request, so an account changed with
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import time
 from contextvars import ContextVar
+from dataclasses import dataclass
 
 from fastapi import FastAPI
+from pydantic import BaseModel, Field
 from starlette.requests import Request
 from starlette.responses import JSONResponse
 from starlette.routing import Match, Mount
 
 from . import access, auth
 from .access import Principal
+from .config import AuthConfig
 from .db import Database
 
 log = logging.getLogger("moonlan")
@@ -47,6 +51,48 @@ TOUCH_SECONDS = 60
 # Methods that change nothing and need no Origin check
 SAFE_METHODS = ("GET", "HEAD")
 
+# Between the password and the code: a ticket, not half a session. It
+# opens nothing but the second step, lives five minutes and survives
+# five wrong codes.
+TICKET_SECONDS = 300
+TICKET_TRIES = 5
+
+# Expired sessions are dropped when they come back; this sweeps up the
+# ones that never do
+PURGE_SECONDS = 3600
+
+
+@dataclass
+class Ticket:
+    user_id: int
+    expires: float
+    address: str
+    tries: int = 0
+    # the password hashed with today's parameters, stored once the
+    # sign-in is complete
+    rehashed: str | None = None
+
+
+class LoginBody(BaseModel):
+    # JSON, not a form: FastAPI reads forms only with python-multipart,
+    # and MoonLan adds no dependency for this
+    name: str = Field(max_length=64)
+    password: str = Field(max_length=auth.PASSWORD_MAX)
+
+
+class CodeBody(BaseModel):
+    ticket: str = Field(max_length=128)
+    code: str = Field(max_length=64)
+
+
+class PasswordBody(BaseModel):
+    current: str = Field(max_length=auth.PASSWORD_MAX)
+    new: str = Field(max_length=auth.PASSWORD_MAX * 2)
+
+
+def refuse(error: str, status: int, **extra) -> JSONResponse:
+    return JSONResponse({"error": error, **extra}, status_code=status)
+
 
 def principal() -> Principal | None:
     return _current.get()
@@ -60,10 +106,17 @@ def actor() -> str:
 
 class SignIn:
     """Sessions, looked up in `accounts` — the service's own database,
-    or the demo's accounts file in demo mode."""
+    or the demo's accounts file in demo mode. Signing in and out is
+    written to `journal`, the service's own database either way: the
+    journal is what the map shows."""
 
-    def __init__(self, accounts: Database):
+    def __init__(self, accounts: Database, journal: Database,
+                 settings: AuthConfig):
         self.accounts = accounts
+        self.journal = journal
+        self.settings = settings
+        self._tickets: dict[str, Ticket] = {}
+        self._purged = 0.0
 
     def sign_in_on(self) -> bool:
         return self.accounts.active_admins() > 0
@@ -91,6 +144,12 @@ class SignIn:
 
     def _lookup(self, token: str, now: float) -> tuple[bool, Principal | None]:
         on = self.sign_in_on()
+        if on and now - self._purged > PURGE_SECONDS:
+            self._purged = now
+            self.accounts.purge_sessions(
+                now - self.settings.session_idle_hours * 3600,
+                now - self.settings.session_max_days * 86400,
+            )
         if not on or not token:
             return on, None
         digest = auth.token_hash(token)
@@ -105,8 +164,18 @@ class SignIn:
             self.accounts.touch_session(digest, now)
         return on, who
 
+    def _expired(self, row: dict, now: float) -> bool:
+        """Idle too long, or open too long whatever it did. Every request
+        of an open page counts as activity: the map refreshing itself
+        every thirty seconds keeps a wall monitor signed in until
+        session_max_days."""
+        return (
+            now - row["last_seen"] > self.settings.session_idle_hours * 3600
+            or now - row["created_at"] > self.settings.session_max_days * 86400
+        )
+
     def _principal(self, row: dict, now: float) -> Principal | None:
-        if row["user_id"] is None:
+        if row["user_id"] is None or self._expired(row, now):
             return None
         if row["name"] is None or row["disabled"]:
             return None
@@ -129,6 +198,170 @@ class SignIn:
             self._lookup, request.cookies.get(SESSION_COOKIE, ""),
             time.time(),
         )
+
+    # ---------- signing in ----------
+
+    def _open_session(self, row: dict, second_factor: bool, address: str,
+                      now: float, rehashed: str | None = None) -> str:
+        token = auth.new_token()
+        self.accounts.add_session(
+            auth.token_hash(token), row["id"], now, second_factor, address
+        )
+        self.accounts.record_login(row["id"], now, rehashed)
+        self.journal.add_event(
+            now, "login", row["name"], json.dumps({"address": address}),
+            row["name"],
+        )
+        log.info("Signed in: %s from %s", row["name"], address)
+        return token
+
+    def _signed_in(self, token: str) -> JSONResponse:
+        """The cookie: HttpOnly — no script on the page reads it;
+        SameSite=Strict — no other site's page sends it; Path=/. Not
+        yet Secure: that needs HTTPS (v0.7.5). It lasts as long as a
+        session may, so a browser restart does not sign a wall monitor
+        out."""
+        response = JSONResponse({"status": "signed_in"})
+        response.set_cookie(
+            SESSION_COOKIE, token,
+            max_age=int(self.settings.session_max_days * 86400),
+            httponly=True, samesite="strict", path="/",
+        )
+        return response
+
+    def _check_password(self, name: str, password: str):
+        """(the account, whether the password is right) — the account
+        None when there is no such name."""
+        row = None if auth.name_problem(name) else self.accounts.user(name)
+        if row is None:
+            return None, False
+        return row, auth.verify_password(password, row["password"])
+
+    async def login(self, name: str, password: str,
+                    address: str) -> JSONResponse:
+        """The first step: name and password."""
+        now = time.time()
+        row, right = await asyncio.to_thread(
+            self._check_password, name, password
+        )
+        if not right:
+            log.warning("Sign-in failed for %r from %s", name, address)
+            # the same answer for a wrong name and a wrong password: which
+            # names exist is nobody's business
+            return refuse("invalid_credentials", 401)
+        if row["disabled"]:
+            # said only to somebody who knows the password
+            log.warning("Sign-in refused for %s from %s: account disabled",
+                        row["name"], address)
+            return refuse("disabled", 403)
+        rehashed = (
+            await asyncio.to_thread(auth.hash_password, password)
+            if auth.needs_rehash(row["password"]) else None
+        )
+        if row["totp_enabled"]:
+            ticket = auth.new_token()
+            self._drop_old_tickets(now)
+            self._tickets[auth.token_hash(ticket)] = Ticket(
+                row["id"], now + TICKET_SECONDS, address, rehashed=rehashed
+            )
+            return JSONResponse({"status": "code_required", "ticket": ticket})
+        token = await asyncio.to_thread(
+            self._open_session, row, False, address, now, rehashed
+        )
+        return self._signed_in(token)
+
+    def _drop_old_tickets(self, now: float) -> None:
+        for key in [k for k, t in self._tickets.items() if t.expires < now]:
+            del self._tickets[key]
+
+    async def second_step(self, ticket: str, code: str,
+                          address: str) -> JSONResponse:
+        """The second step: a code from the app or the key."""
+        now = time.time()
+        self._drop_old_tickets(now)
+        key = auth.token_hash(ticket)
+        entry = self._tickets.get(key)
+        if entry is None:
+            return refuse("ticket_expired", 401)
+        row = await asyncio.to_thread(self.accounts.user_by_id, entry.user_id)
+        if row is None or row["disabled"] or not row["totp_enabled"]:
+            del self._tickets[key]
+            return refuse("ticket_expired", 401)
+        step = auth.match_totp(row["totp_secret"], code, now)
+        if step is None:
+            entry.tries += 1
+            if entry.tries >= TICKET_TRIES:
+                del self._tickets[key]
+            log.warning("Sign-in: wrong code for %s from %s",
+                        row["name"], address)
+            return refuse("invalid_code", 401)
+        if not await asyncio.to_thread(
+            self.accounts.spend_totp_step, row["id"], step
+        ):
+            log.warning(
+                "Sign-in: a code of %s used a second time, from %s",
+                row["name"], address,
+            )
+            return refuse("code_used", 401)
+        del self._tickets[key]
+        token = await asyncio.to_thread(
+            self._open_session, row, True, address, now, entry.rehashed
+        )
+        return self._signed_in(token)
+
+    async def logout(self, who: Principal | None) -> JSONResponse:
+        if who is not None and who.session:
+            await asyncio.to_thread(self.accounts.drop_session, who.session)
+            await asyncio.to_thread(
+                self.journal.add_event, time.time(), "logout", who.name, "",
+                who.name,
+            )
+            log.info("Signed out: %s", who.name)
+        response = JSONResponse({"status": "signed_out"})
+        response.delete_cookie(SESSION_COOKIE, path="/")
+        return response
+
+    async def change_password(self, who: Principal | None, current: str,
+                              new: str) -> JSONResponse:
+        """One's own password. The current one is asked for: a session
+        taken over on the way (plain HTTP) must not be enough to lock
+        its owner out. The other sessions of the account are closed,
+        this one stays."""
+        if who is None or who.user_id is None:
+            return refuse("sign_in_required", 401)
+        row, right = await asyncio.to_thread(
+            self._check_password, who.name, current
+        )
+        if row is None or not right:
+            log.warning("Password change for %s: the current password was "
+                        "wrong", who.name)
+            return refuse("wrong_password", 403)
+        problem = auth.password_problem(row["name"], new)
+        if problem is None and new == current:
+            problem = "same_as_current"
+        if problem:
+            return refuse(problem, 400)
+        closed = await asyncio.to_thread(
+            self.accounts.set_password, row["name"],
+            await asyncio.to_thread(auth.hash_password, new), False,
+            who.session,
+        )
+        await asyncio.to_thread(
+            self.journal.add_event, time.time(), "user_password", row["name"],
+            json.dumps({"sessions": closed}), row["name"],
+        )
+        log.info("Password changed by %s themselves; %d other session(s) "
+                 "closed", row["name"], closed)
+        return JSONResponse({"status": "changed", "sessions_closed": closed})
+
+    def me(self, who: Principal) -> dict:
+        row = self.accounts.user(who.name) or {}
+        return {
+            "sign_in": True, "name": who.name, "role": who.role,
+            "step": who.step,
+            "totp": bool(row.get("totp_enabled")),
+            "recovery_left": auth.recovery_left(row.get("recovery", "")),
+        }
 
 
 def route_key(routes, scope) -> str | None:
@@ -202,8 +435,12 @@ class Guard:
             _current.reset(token)
 
 
+def _address(request: Request) -> str:
+    return request.client.host if request.client else "?"
+
+
 def add_routes(app: FastAPI, sign_in: SignIn) -> None:
-    """/api/auth/*: who am I, and (later) signing in and out.
+    """/api/auth/*: who am I, signing in and out, one's own password.
 
     Added to the app itself, not through an APIRouter: an included
     router is one opaque entry in app.routes, and the guard — like the
@@ -223,7 +460,28 @@ def add_routes(app: FastAPI, sign_in: SignIn) -> None:
                 {"error": "sign_in_required", "sign_in": True},
                 status_code=401,
             )
-        return {
-            "sign_in": True, "name": who.name, "role": who.role,
-            "step": who.step,
-        }
+        return await asyncio.to_thread(sign_in.me, who)
+
+    @app.post("/api/auth/login")
+    async def auth_login(body: LoginBody, request: Request):
+        """Name and password. With TOTP on, the answer is "a code is
+        needed" and a ticket for /api/auth/totp — not a session."""
+        if not await asyncio.to_thread(sign_in.sign_in_on):
+            return refuse("sign_in_off", 409)
+        return await sign_in.login(body.name, body.password, _address(request))
+
+    @app.post("/api/auth/totp")
+    async def auth_totp(body: CodeBody, request: Request):
+        return await sign_in.second_step(
+            body.ticket, body.code, _address(request)
+        )
+
+    @app.post("/api/auth/logout")
+    async def auth_logout():
+        return await sign_in.logout(principal())
+
+    @app.post("/api/auth/password")
+    async def auth_password(body: PasswordBody):
+        return await sign_in.change_password(
+            principal(), body.current, body.new
+        )

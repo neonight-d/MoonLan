@@ -45,6 +45,12 @@ RULES: dict[str, str] = {
     # who am I — or "sign-in is off", which the page has to be able to
     # learn before anybody has signed in
     "GET /api/auth/me": PUBLIC,
+    "POST /api/auth/login": PUBLIC,
+    "POST /api/auth/totp": PUBLIC,
+
+    # one's own session and password, whatever the role
+    "POST /api/auth/logout": SIGNED_IN,
+    "POST /api/auth/password": SIGNED_IN,
 
     # looking: the map, cards, ports, STP, the journal, alarms
     "GET /api/topology": VIEWER,
@@ -116,7 +122,10 @@ class Refusal:
 # What a session with a step still to do may call. Nothing else, or a
 # password marked "change at next sign-in" and an administrator with
 # no second factor would be only a suggestion.
-STEP_ROUTES: dict[str, set[str]] = {}
+STEP_ROUTES: dict[str, set[str]] = {
+    "password": {"POST /api/auth/password", "POST /api/auth/logout"},
+    "totp": {"POST /api/auth/logout"},
+}
 
 
 def decide(key: str, principal: Principal | None,

@@ -222,6 +222,27 @@ context_menu:
   #    url: "https://inventory.local/find?mac={mac}"
   #    applies_to: [host]
 
+# Sign-in (v0.7.4). It switches on by itself when the first
+# administrator is created on the server:
+#   python -m moonlan.users add <name> --role admin
+# Until then the map is open to everyone, as before. These are only the
+# session lifetimes.
+# Вход (v0.7.4). Включается сам, когда на сервере создан первый
+# администратор:
+#   python -m moonlan.users add <имя> --role admin
+# До тех пор карта открыта всем, как раньше. Здесь только сроки сессий.
+auth:
+  # Signed out after this long without a request. An open map asks the
+  # server every 30 s, so it never goes idle.
+  # Выход после стольких часов без запросов. Открытая карта обращается
+  # к серверу каждые 30 с, поэтому сама не простаивает.
+  session_idle_hours: 12
+  # …and after this long in any case. A wall monitor signed in as a
+  # viewer stays signed in for weeks.
+  # …и после стольких дней в любом случае. Стенной монитор под
+  # наблюдателем остаётся в системе неделями.
+  session_max_days: 30
+
 # Periodic scan, minutes (0 — manual only via /api/scan)
 # Периодический автоопрос, минут (0 — только вручную через /api/scan)
 scan_interval_minutes: 10
