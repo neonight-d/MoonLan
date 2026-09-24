@@ -3533,6 +3533,15 @@ function renderJournal(events) {
       host.className = "ev-host";
       host.textContent = ev.name || ev.ip || ev.mac || layoutEventText(ev);
       item.append(time, type, host);
+      // who did it: a pin, a reset, a cleared alarm, a sign-in
+      if (ev.user) {
+        const who = document.createElement("span");
+        who.className = "ev-user";
+        who.textContent = fmt("evBy", {
+          user: ev.user === "@console" ? t("evConsole") : ev.user,
+        });
+        item.append(who);
+      }
       return item;
     })
   );

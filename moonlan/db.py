@@ -1330,3 +1330,29 @@ class Database:
                 (name_key(name),),
             ).fetchall()
         return [dict(row) for row in rows]
+
+    def session_row(self, token_hash: str) -> dict | None:
+        """A session with what the guard needs of its account; the
+        account fields are None when the account is gone."""
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT s.token_hash, s.user_id, s.created_at, s.last_seen, "
+                "s.second_factor, s.address, u.name, u.role, u.disabled, "
+                "u.must_change, u.totp_enabled "
+                "FROM sessions s LEFT JOIN users u ON u.id = s.user_id "
+                "WHERE s.token_hash = ?", (token_hash,),
+            ).fetchone()
+        return dict(row) if row else None
+
+    def touch_session(self, token_hash: str, ts: float) -> None:
+        with self._lock, self._conn:
+            self._conn.execute(
+                "UPDATE sessions SET last_seen = ? WHERE token_hash = ?",
+                (ts, token_hash),
+            )
+
+    def drop_session(self, token_hash: str) -> bool:
+        with self._lock, self._conn:
+            return self._conn.execute(
+                "DELETE FROM sessions WHERE token_hash = ?", (token_hash,)
+            ).rowcount > 0

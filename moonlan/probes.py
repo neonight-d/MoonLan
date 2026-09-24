@@ -155,6 +155,8 @@ class Job:
     started: float = field(default_factory=time.time)
     finished: float = 0.0
     tool: str = ""
+    # who started it: their result is not shown to other users
+    owner: str = ""
 
     def as_dict(self) -> dict:
         return {
@@ -185,7 +187,8 @@ class Jobs:
     def get(self, job_id: str) -> Job | None:
         return self._jobs.get(job_id)
 
-    def start(self, action: str, targets: list[Target], limit: int) -> Job:
+    def start(self, action: str, targets: list[Target], limit: int,
+              owner: str = "") -> Job:
         """Starts a job in the background; Busy when `limit` are running."""
         self._prune()
         if self.running() >= limit:
@@ -194,7 +197,7 @@ class Jobs:
         if action == "traceroute":
             tool = self.tools["traceroute"][0]
         job = Job(id=uuid.uuid4().hex[:12], action=action,
-                  targets=targets, tool=tool)
+                  targets=targets, tool=tool, owner=owner)
         self._jobs[job.id] = job
         task = asyncio.get_running_loop().create_task(self._run(job))
         self._tasks.add(task)
