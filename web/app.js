@@ -244,13 +244,18 @@ function takeServerLayout(data, askedAt) {
   return "render";
 }
 
-/* What of the server's layout this page keeps: the pinned positions.
-   A page still running an older script may write where its physics
-   left a node; that is not a decision and is not taken. */
+/* What of the server's layout this page keeps: the pinned positions,
+   and the offsets recorded around them. A page still running an older
+   script may write where its physics left a node; that is not a
+   decision and is not taken. */
 function keptOf(entries) {
   const kept = {};
   for (const [id, pos] of Object.entries(entries)) {
-    if (pos.pinned) kept[id] = { x: pos.x, y: pos.y, pinned: true };
+    if (pos.pinned) {
+      kept[id] = { x: pos.x, y: pos.y, pinned: true };
+    } else if (pos.anchor) {
+      kept[id] = { x: pos.x, y: pos.y, pinned: false, anchor: pos.anchor };
+    }
   }
   return kept;
 }
@@ -306,8 +311,83 @@ function adoptLayout(entries, skip) {
    nothing more. A pinned node is still draggable: asking somebody to
    release a switch before nudging it a centimetre would be a rule
    about our bookkeeping, not about their map. */
-async function pinNodes(positions) {
-  await storeByHand(positions, true, "pinning a node");
+async function pinNodes(positions, neighbours) {
+  // Unless the caller says otherwise, the nodes around each one are
+  // recorded as they stand right now: `P` and the menu pin a node
+  // where it is, with what is around it.
+  if (neighbours === undefined) neighbours = neighboursAround(Object.keys(positions));
+  await storeByHand(positions, true, "pinning a node", neighbours);
+}
+
+/* The nodes that keep their place relative to a pinned one.
+
+   Only what hangs DIRECTLY off it, and only structure: a group, a
+   switch without SNMP, a switch or a bridge. A cloud of hosts folds
+   itself into a ring round its switch whatever it starts from, so an
+   offset per host would show nothing and cost hundreds of rows; a
+   group keeps roughly to the side it started on, and a random start
+   puts the "Offline" group on the right when a person left it on the
+   left. Anything further out is laid out from these. */
+const STRUCTURE_PREFIXES = ["sw:", "bridge:", "pseudo:", "trunk:", "offline:", "external:"];
+
+function isStructure(id) {
+  return STRUCTURE_PREFIXES.some((prefix) => id.startsWith(prefix));
+}
+
+/* anchor -> {node -> offset from it} for each of `anchors`, measured
+   from `positions` (the current ones when not given). Nodes that are
+   pinned themselves, or pinned in the same action, keep their own
+   position and are left out. */
+function neighboursAround(anchors, positions) {
+  const at = positions || (network ? network.getPositions() : {});
+  const pinning = new Set(anchors);
+  const result = {};
+  for (const anchor of anchors) {
+    const base = at[anchor];
+    if (!base) continue;
+    const offsets = {};
+    for (const [child, parent] of lastAnchors) {
+      if (parent !== anchor || !isStructure(child)) continue;
+      if (isPinned(child) || pinning.has(child) || !at[child]) continue;
+      offsets[child] = { x: at[child].x - base.x, y: at[child].y - base.y };
+    }
+    result[anchor] = offsets;
+  }
+  return result;
+}
+
+/* The menu's "Remember the places around it": for a node already
+   pinned, when the groups around it have been put right and the node
+   itself is where it should be. */
+async function rememberNeighbours(anchor) {
+  const neighbours = neighboursAround([anchor]);
+  const count = Object.keys(neighbours[anchor] || {}).length;
+  try {
+    await fetch("/api/layout", {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ nodes: {}, neighbours: neighbours }),
+    });
+  } catch (e) {
+    serviceLost("remembering the neighbours");
+    return;
+  }
+  serviceBack();
+  keepOffsets(neighbours);
+  showToast(fmt("neighboursRemembered", { n: count }));
+}
+
+/* This page's copy of the offsets, after the server took them: each
+   anchor's set replaces the one before it. */
+function keepOffsets(neighbours) {
+  for (const [anchor, offsets] of Object.entries(neighbours)) {
+    for (const [id, pos] of Object.entries(savedLayout)) {
+      if (pos.anchor === anchor) delete savedLayout[id];
+    }
+    for (const [id, offset] of Object.entries(offsets)) {
+      savedLayout[id] = { x: offset.x, y: offset.y, pinned: false, anchor: anchor };
+    }
+  }
 }
 
 function pinNode(id, x, y) {
@@ -331,21 +411,29 @@ async function unpinNodes(ids) {
 
 /* One action of the hand — a drop, `P`, a menu item — whatever the
    number of nodes: one request, and one line in the journal. */
-async function storeByHand(positions, pinned, what) {
+async function storeByHand(positions, pinned, what, neighbours) {
   const ids = Object.keys(positions);
   if (!ids.length) return;
   const nodes = {};
   for (const id of ids) {
     nodes[id] = { x: positions[id].x, y: positions[id].y, pinned: pinned };
-    if (pinned) savedLayout[id] = nodes[id];
-    else delete savedLayout[id];
+    if (pinned) {
+      savedLayout[id] = nodes[id];
+    } else {
+      delete savedLayout[id];
+      // with nothing pinned to measure from, the offsets around it
+      // mean nothing; the server forgets them too
+      for (const [other, pos] of Object.entries(savedLayout)) {
+        if (pos.anchor === id) delete savedLayout[other];
+      }
+    }
   }
   writing(ids);
   try {
     await fetch("/api/layout", {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ nodes: nodes }),
+      body: JSON.stringify({ nodes: nodes, neighbours: neighbours || {} }),
     });
   } catch (e) {
     written(ids);
@@ -354,6 +442,7 @@ async function storeByHand(positions, pinned, what) {
   }
   written(ids);
   serviceBack();
+  if (neighbours) keepOffsets(neighbours);
   if (!layoutSavedAt) layoutSavedAt = Date.now() / 1000;
   renderGraph();
   updateScanStatus();
@@ -366,6 +455,10 @@ function unpinNode(id) {
 function isPinned(id) {
   return !!(savedLayout[id] && savedLayout[id].pinned);
 }
+
+// What stood around the dragged nodes when the drag began (arrange
+// mode only), recorded with them at the drop
+let dragNeighbours = null;
 
 /* Lets the mouse move pinned nodes.
 
@@ -382,6 +475,11 @@ function isPinned(id) {
    so nothing else moves them; dragEnd pins them again. */
 function loosenForDrag(ids) {
   for (const id of ids) dragging.add(id);
+  // In arrange mode the drag will pin these nodes, and what is around
+  // each of them is recorded as it stands NOW, before the drag: that
+  // is the picture the person is placing. By the drop the groups have
+  // only started to follow, and their offsets would be the lag.
+  dragNeighbours = arrangeMode ? neighboursAround(ids) : null;
   const held = ids.filter(isPinned);
   if (!held.length) return;
   nodesDs.update(held.map((id) => ({ id: id, fixed: { x: false, y: false } })));
@@ -561,7 +659,23 @@ function seedPositions(nodes, edges) {
     // stands, taken together before any of them is placed
     const ready = left.filter((node) => known.has(anchors.get(node.id)));
     if (ready.length) {
-      for (const node of ready) around(node, known.get(anchors.get(node.id)));
+      for (const node of ready) {
+        const at = known.get(anchors.get(node.id));
+        // Where a person saw it round a pinned node, if that is still
+        // what it hangs off: an offset moves with its anchor, so a
+        // group comes back on the side it was left on even after the
+        // switch has been moved. A device that has changed switches
+        // has nothing to do with the old one's offset.
+        const offset = savedLayout[node.id];
+        if (
+          offset && offset.anchor &&
+          offset.anchor === anchors.get(node.id) && isPinned(offset.anchor)
+        ) {
+          place(node, at.x + offset.x, at.y + offset.y);
+        } else {
+          around(node, at);
+        }
+      }
       left = left.filter((node) => !known.has(node.id));
       continue;
     }
@@ -746,6 +860,16 @@ function menuItemsFor(ids, info, tools) {
     label: loose.length ? t("menuPin") : t("menuUnpin"),
     run: () => togglePinOnSelection(),
   });
+  // For a node already pinned: the groups round it have been put right
+  // and the node itself should stay where it is
+  if (single && isPinned(single)) {
+    const around = neighboursAround([single])[single] || {};
+    items.push({
+      key: "neighbours", group: "layout", label: t("menuRememberNeighbours"),
+      disabled: Object.keys(around).length ? null : t("reasonNoNeighbours"),
+      run: () => rememberNeighbours(single),
+    });
+  }
   // one node, one card: there is nothing to show for a crowd
   if (single) {
     items.push({
@@ -2055,7 +2179,15 @@ function renderGraph() {
       nodesDs.update(ids.map((id) => ({
         id: id, x: moved[id].x, y: moved[id].y, fixed: { x: true, y: true },
       })));
-      pinNodes(moved);
+      // In arrange mode the neighbours go with the pin, as they stood
+      // when the drag began. Moving a pinned node outside it leaves
+      // what was recorded alone: offsets move with their node anyway.
+      const around = {};
+      if (arrangeMode && dragNeighbours) {
+        for (const id of ids) if (dragNeighbours[id]) around[id] = dragNeighbours[id];
+      }
+      dragNeighbours = null;
+      pinNodes(moved, around);
     });
     network.on("oncontext", (params) => {
       params.event.preventDefault();

@@ -135,6 +135,91 @@ class LayoutStoreTest(unittest.TestCase):
         self.assertEqual(self.db.layout_cleared_at(), 150.0)
 
 
+OFFLINE = "offline:10.0.0.10:Gi0/7"
+TRUNK = "trunk:10.0.0.10:Gi0/24"
+
+
+class OffsetStoreTest(unittest.TestCase):
+    """Where the groups round a pinned node stood when it was placed."""
+
+    def setUp(self):
+        self.db = Database(":memory:")
+        self.db.set_node_position(CORE, 100, 200, pinned=True)
+
+    def test_offsets_are_stored_against_a_pinned_node(self):
+        stored = self.db.set_neighbours(
+            CORE, {OFFLINE: {"x": -90, "y": 10}, TRUNK: {"x": 80, "y": -5}}
+        )
+        self.assertEqual(stored, 2)
+        row = self.db.layout()[OFFLINE]
+        self.assertEqual((row["x"], row["y"], row["anchor"]), (-90.0, 10.0, CORE))
+        self.assertFalse(row["pinned"])
+
+    def test_nothing_is_measured_from_a_node_that_is_not_pinned(self):
+        self.assertEqual(
+            self.db.set_neighbours(PSEUDO, {OFFLINE: {"x": 1, "y": 1}}), 0
+        )
+        self.assertNotIn(OFFLINE, self.db.layout())
+
+    def test_a_new_set_replaces_the_old_one(self):
+        self.db.set_neighbours(
+            CORE, {OFFLINE: {"x": -90, "y": 10}, TRUNK: {"x": 80, "y": -5}}
+        )
+        self.db.set_neighbours(CORE, {OFFLINE: {"x": 60, "y": 0}})
+        saved = self.db.layout()
+        self.assertNotIn(TRUNK, saved)
+        self.assertEqual(saved[OFFLINE]["x"], 60.0)
+
+    def test_an_offset_never_overwrites_a_pin(self):
+        self.db.set_node_position(OFFLINE, 5, 5, pinned=True)
+        self.db.set_neighbours(CORE, {OFFLINE: {"x": -90, "y": 10}})
+        row = self.db.layout()[OFFLINE]
+        self.assertTrue(row["pinned"])
+        self.assertIsNone(row["anchor"])
+        self.assertEqual(row["x"], 5.0)
+
+    def test_pinning_a_node_that_had_an_offset_makes_it_absolute(self):
+        self.db.set_neighbours(CORE, {OFFLINE: {"x": -90, "y": 10}})
+        self.db.set_node_position(OFFLINE, 300, 300, pinned=True)
+        row = self.db.layout()[OFFLINE]
+        self.assertEqual((row["x"], row["pinned"], row["anchor"]), (300.0, True, None))
+
+    def test_releasing_the_anchor_forgets_its_neighbours(self):
+        self.db.set_neighbours(CORE, {OFFLINE: {"x": -90, "y": 10}})
+        self.db.forget_positions([CORE])
+        self.assertEqual(self.db.layout(), {})
+        self.db.set_node_position(CORE, 1, 1, pinned=True)
+        self.db.set_neighbours(CORE, {TRUNK: {"x": 1, "y": 1}})
+        self.db.forget_node_position(CORE)
+        self.assertEqual(self.db.layout(), {})
+
+    def test_offsets_survive_the_startup_cleanup(self):
+        self.db.set_neighbours(CORE, {OFFLINE: {"x": -90, "y": 10}})
+        self.db.save_layout({HOST: {"x": 3, "y": 3, "pinned": False}})
+        self.assertEqual(self.db.drop_unpinned_positions(), 1)
+        self.assertEqual(sorted(self.db.layout()), sorted([CORE, OFFLINE]))
+
+    def test_an_offset_that_no_longer_describes_the_map_goes(self):
+        self.db.set_node_position("sw:10.0.0.21", 0, 0, pinned=True)
+        self.db.set_neighbours(CORE, {OFFLINE: {"x": 1, "y": 1},
+                                      TRUNK: {"x": 2, "y": 2}})
+        self.db.set_neighbours("sw:10.0.0.21", {PSEUDO: {"x": 3, "y": 3}})
+        gone = self.db.drop_misplaced_offsets({
+            OFFLINE: "sw:10.0.0.21",   # moved to another switch
+            TRUNK: CORE,               # still where it was
+            # PSEUDO is not on the map at all: kept, like a pin
+        })
+        self.assertEqual(gone, [OFFLINE])
+        self.assertEqual(sorted(self.db.layout()),
+                         sorted([CORE, "sw:10.0.0.21", TRUNK, PSEUDO]))
+
+    def test_an_offset_whose_anchor_lost_its_pin_goes(self):
+        self.db.set_neighbours(CORE, {OFFLINE: {"x": 1, "y": 1}})
+        with self.db._lock, self.db._conn:
+            self.db._conn.execute("DELETE FROM layout WHERE node_id = ?", (CORE,))
+        self.assertEqual(self.db.drop_misplaced_offsets({}), [OFFLINE])
+
+
 class PurgeTest(unittest.TestCase):
     """What forgets a position, and what must not."""
 
@@ -191,6 +276,36 @@ class MigrationTest(unittest.TestCase):
             self.assertEqual(reopened.layout(), {})
             reopened.save_layout({CORE: {"x": 3, "y": 4}})
             self.assertEqual(reopened.layout()[CORE]["x"], 3.0)
+            reopened._conn.close()
+
+    def test_a_v072_table_gains_the_anchor_column(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "v072.db"
+            Database(path)._conn.close()
+            # the layout table exactly as v0.7.2 created it
+            conn = sqlite3.connect(path)
+            conn.execute("DROP TABLE layout")
+            conn.execute(
+                "CREATE TABLE layout (node_id TEXT PRIMARY KEY, x REAL NOT "
+                "NULL, y REAL NOT NULL, pinned INTEGER DEFAULT 0, "
+                "updated_at REAL NOT NULL)"
+            )
+            conn.execute(
+                "INSERT INTO layout VALUES (?, 10, 20, 1, 1.0)", (CORE,)
+            )
+            conn.execute(
+                "INSERT INTO layout VALUES (?, -500, 900, 0, 1.0)", (HOST,)
+            )
+            conn.commit()
+            conn.close()
+
+            reopened = Database(path)
+            self.assertEqual(reopened.drop_unpinned_positions(), 1)
+            saved = reopened.layout()
+            self.assertEqual(list(saved), [CORE])
+            self.assertIsNone(saved[CORE]["anchor"])
+            reopened.set_neighbours(CORE, {PSEUDO: {"x": 1, "y": 2}})
+            self.assertEqual(reopened.layout()[PSEUDO]["anchor"], CORE)
             reopened._conn.close()
 
     def test_a_v072_layout_keeps_only_its_pins(self):
@@ -399,6 +514,76 @@ class HandPlacedTest(unittest.TestCase):
         since = self._last_id()
         asyncio.run(server.api_delete_node_position(CORE))
         self.assertEqual(len(self._entries("layout_released", since)), 1)
+
+
+class OffsetApiTest(unittest.TestCase):
+    """Offsets through the handlers, against a small map."""
+
+    def setUp(self):
+        server.db.clear_layout()
+        self._saved = (server.state.switches, server.state.links,
+                       server.state.hosts, server.state.offline_groups,
+                       server.state.trunk_groups)
+        server.state.switches = [{"ip": "10.0.0.10"}, {"ip": "10.0.0.21"}]
+        server.state.links = [{"a": "10.0.0.10", "b": "10.0.0.21"}]
+        server.state.hosts = []
+        server.state.offline_groups = [
+            {"id": OFFLINE, "switch": "10.0.0.10", "port": "Gi0/7", "via": ""},
+        ]
+        server.state.trunk_groups = [
+            {"id": TRUNK, "switch": "10.0.0.21", "port": "Gi0/24", "via": ""},
+        ]
+
+    def tearDown(self):
+        server.db.clear_layout()
+        (server.state.switches, server.state.links, server.state.hosts,
+         server.state.offline_groups, server.state.trunk_groups) = self._saved
+
+    def _patch(self, nodes=None, neighbours=None):
+        body = server.LayoutBody(
+            nodes={k: server.NodePosition(**v) for k, v in (nodes or {}).items()},
+            neighbours={
+                anchor: {k: server.Offset(**v) for k, v in around.items()}
+                for anchor, around in (neighbours or {}).items()
+            },
+        )
+        return asyncio.run(server.api_patch_positions(body))
+
+    def test_placing_a_node_records_what_stands_round_it(self):
+        answer = self._patch(
+            {CORE: {"x": 0, "y": 0}},
+            {CORE: {OFFLINE: {"x": -80, "y": 20}}},
+        )
+        self.assertEqual(answer["neighbours"], {CORE: 1})
+        nodes = asyncio.run(server.api_layout())["nodes"]
+        self.assertEqual(nodes[OFFLINE]["anchor"], CORE)
+
+    def test_an_offset_with_somebody_elses_anchor_is_ignored(self):
+        """The trunk group hangs off 10.0.0.21 on this map. An offset
+        recorded from the core — the group was there once — says
+        nothing about where it belongs now."""
+        self._patch({CORE: {"x": 0, "y": 0}, "sw:10.0.0.21": {"x": 300, "y": 0}})
+        server.db.set_neighbours(CORE, {TRUNK: {"x": 50, "y": 50}})
+        nodes = asyncio.run(server.api_layout())["nodes"]
+        self.assertNotIn(TRUNK, nodes)
+        # …while one measured from its real anchor is taken
+        server.db.set_neighbours("sw:10.0.0.21", {TRUNK: {"x": 50, "y": 50}})
+        nodes = asyncio.run(server.api_layout())["nodes"]
+        self.assertEqual(nodes[TRUNK]["anchor"], "sw:10.0.0.21")
+
+    def test_releasing_a_node_forgets_its_neighbours_offsets(self):
+        self._patch(
+            {CORE: {"x": 0, "y": 0}},
+            {CORE: {OFFLINE: {"x": -80, "y": 20}}},
+        )
+        self._patch({CORE: {"x": 0, "y": 0, "pinned": False}})
+        self.assertEqual(server.db.layout(), {})
+
+    def test_the_anchors_the_server_derives(self):
+        anchors = server._layout_anchors()
+        self.assertEqual(anchors["sw:10.0.0.21"], CORE)
+        self.assertEqual(anchors[OFFLINE], CORE)
+        self.assertEqual(anchors[TRUNK], "sw:10.0.0.21")
 
 
 if __name__ == "__main__":

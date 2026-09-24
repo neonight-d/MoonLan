@@ -712,7 +712,9 @@ async def _purge_layout_once() -> None:
     Runs after the first scan of this process, because that is the
     first moment anything knows which nodes exist. A device switched
     off for the night keeps its place however long the night is; only
-    age decides, and only for something the map no longer has.
+    age decides, and only for something the map no longer has. The
+    same scan says what each node hangs off, so an offset recorded
+    around a pinned node that a device has since left goes too.
     """
     global layout_purged
     if layout_purged:
@@ -728,6 +730,16 @@ async def _purge_layout_once() -> None:
             len(gone), config.layout_keep_days,
             ", ".join(sorted(gone)[:10])
             + (" and more" if len(gone) > 10 else ""),
+        )
+    moved = await asyncio.to_thread(
+        db.drop_misplaced_offsets, _layout_anchors()
+    )
+    if moved:
+        log.info(
+            "Map layout: forgot the offset of %d node(s) that no longer "
+            "hang off the pinned node it was measured from: %s",
+            len(moved), ", ".join(sorted(moved)[:10])
+            + (" and more" if len(moved) > 10 else ""),
         )
 
 
@@ -2399,12 +2411,74 @@ class NodePosition(BaseModel):
     pinned: bool | None = None
 
 
+class Offset(BaseModel):
+    x: float
+    y: float
+
+
 class LayoutBody(BaseModel):
-    nodes: dict[str, NodePosition]
+    nodes: dict[str, NodePosition] = {}
     # Store only nodes that have no position yet, and say what the
-    # others already have. What the page's automatic save uses: its
-    # idea of "new" is as old as the page.
+    # others already have. What v0.7.2's automatic save used; kept for
+    # a page still running that script.
     only_new: bool = False
+    # pinned node -> {node hanging directly off it -> its offset}: how
+    # the groups and switches around a pinned node stood when a person
+    # placed it. The whole set for that anchor; it replaces the last.
+    neighbours: dict[str, dict[str, Offset]] = {}
+
+
+def _layout_anchors() -> dict[str, str]:
+    """node id -> the node it hangs off, as the map draws it.
+
+    The page reads this off the edges it has just built (the first edge
+    into a node); this builds the same edges in the same order from the
+    same topology. Needed here to tell whether an offset recorded around
+    a pinned node still describes the map: a device that moved to
+    another switch has nothing to do with the old one.
+    """
+    topo = state.as_dict()
+    anchors: dict[str, str] = {}
+    for link in topo["links"]:
+        anchors.setdefault("sw:" + link["b"], "sw:" + link["a"])
+    for pseudo in topo.get("pseudo_switches") or ():
+        anchors.setdefault(pseudo["id"], "sw:" + pseudo["switch"])
+    for bridge in topo.get("bridges") or ():
+        anchors.setdefault(bridge["id"], "sw:" + bridge["switch"])
+    for key in ("external_networks", "trunk_groups", "offline_groups"):
+        for group in topo.get(key) or ():
+            anchors.setdefault(
+                group["id"], group.get("via") or "sw:" + group["switch"]
+            )
+    for host in topo["hosts"]:
+        if host.get("merged_into"):
+            continue
+        anchors.setdefault(
+            "host:" + host["mac"], host.get("via") or "sw:" + host["switch"]
+        )
+    return anchors
+
+
+def _current_offsets(saved: dict[str, dict]) -> dict[str, dict]:
+    """The saved layout without offsets that no longer describe the map.
+
+    An offset is kept while its anchor is pinned and — for a node on
+    the map — while the node still hangs off that anchor. Otherwise it
+    is left out, and the node is laid out from the pinned ones like
+    anything else.
+    """
+    anchors = _layout_anchors()
+    kept = {}
+    for node_id, pos in saved.items():
+        anchor = pos.get("anchor")
+        if anchor:
+            base = saved.get(anchor)
+            if not base or not base["pinned"]:
+                continue
+            if node_id in anchors and anchors[node_id] != anchor:
+                continue
+        kept[node_id] = pos
+    return kept
 
 
 def _layout_node_ids() -> set[str]:
@@ -2630,7 +2704,7 @@ async def api_action_state(job_id: str):
 @app.get("/api/layout")
 async def api_layout() -> dict:
     """Saved node positions, and how they compare with the map."""
-    saved = await asyncio.to_thread(db.layout)
+    saved = _current_offsets(await asyncio.to_thread(db.layout))
     present = _layout_node_ids()
     return {
         "nodes": saved,
@@ -2732,8 +2806,16 @@ async def _store_hand_placed(positions: dict[str, NodePosition]) -> dict:
 @app.patch("/api/layout")
 async def api_patch_positions(body: LayoutBody) -> dict:
     """Several nodes placed or released in one action — a dragged
-    selection, `P` on a selection, one item of the menu."""
-    return await _store_hand_placed(body.nodes)
+    selection, `P` on a selection, one item of the menu — and how the
+    nodes around each placed one stood at that moment."""
+    result = await _store_hand_placed(body.nodes)
+    result["neighbours"] = {}
+    for anchor, offsets in body.neighbours.items():
+        result["neighbours"][anchor] = await asyncio.to_thread(
+            db.set_neighbours, anchor,
+            {node_id: {"x": o.x, "y": o.y} for node_id, o in offsets.items()},
+        )
+    return result
 
 
 @app.patch("/api/layout/{node_id:path}")

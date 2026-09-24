@@ -1043,7 +1043,11 @@ def run_layout_view(cfg) -> None:
     nodes = data.get("nodes") or {}
     missing = data.get("missing") or []
     pinned = [node for node, pos in nodes.items() if pos.get("pinned")]
-    loose = [node for node, pos in nodes.items() if not pos.get("pinned")]
+    offsets = [node for node, pos in nodes.items() if pos.get("anchor")]
+    loose = [
+        node for node, pos in nodes.items()
+        if not pos.get("pinned") and not pos.get("anchor")
+    ]
     saved_at = data.get("saved_at") or 0
     print(
         f"saved positions: {len(nodes)}"
@@ -1058,6 +1062,22 @@ def run_layout_view(cfg) -> None:
         print(f"  {node_id:<40} {pos['x']:>9.1f} {pos['y']:>9.1f}")
     if len(pinned) > 20:
         print(f"  … and {len(pinned) - 20} more")
+
+    # The groups and switches around a pinned node, recorded when it
+    # was placed: offsets, not positions, so they move with it
+    by_anchor: dict[str, list[str]] = {}
+    for node_id in offsets:
+        by_anchor.setdefault(nodes[node_id]["anchor"], []).append(node_id)
+    print(
+        f"\nplaced relative to a pinned node: {len(offsets)} node(s) "
+        f"around {len(by_anchor)} pinned node(s)"
+    )
+    for anchor in sorted(by_anchor)[:20]:
+        around = sorted(by_anchor[anchor])
+        print(
+            f"  {anchor:<40} {len(around)}: "
+            + ", ".join(around[:4]) + (" …" if len(around) > 4 else "")
+        )
 
     # Only what a person placed is kept (v0.7.3). Every other node is
     # laid out again on every load, from the pinned ones outwards — that

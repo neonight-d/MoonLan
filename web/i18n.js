@@ -13,10 +13,14 @@ const I18N = {
       "That many nodes are where somebody put them, out of reach of the "
       + "layout engine, and only they are kept. Everything else is laid "
       + "out again on every load, starting next to the nodes placed by "
-      + "hand. Turn on Arrange to place a node, or press P with it "
-      + "selected; the same releases it again.",
+      + "hand; the groups and switches round a placed node start where "
+      + "they stood when it was placed. Turn on Arrange to place a node, "
+      + "or press P with it selected; the same releases it again.",
     menuPin: "Place here",
     menuUnpin: "Release",
+    menuRememberNeighbours: "Remember the places around it",
+    reasonNoNeighbours: "no groups or switches around it",
+    neighboursRemembered: "Places around it remembered: {n}",
     menuOpenCard: "Open card",
     menuOpenPorts: "Ports",
     menuSelected: "{n} nodes selected",
@@ -530,11 +534,15 @@ const I18N = {
       "Столько узлов стоят там, куда их поставил человек, и движку "
       + "раскладки недоступны; запоминаются только они. Всё остальное "
       + "при каждой загрузке раскладывается заново, начиная рядом с "
-      + "поставленными руками. Чтобы поставить узел, включите "
-      + "«Расстановку» или нажмите P на выделенном; тем же способом он "
-      + "и отпускается.",
+      + "поставленными руками; группы и коммутаторы вокруг поставленного "
+      + "узла стартуют там, где стояли, когда его ставили. Чтобы "
+      + "поставить узел, включите «Расстановку» или нажмите P на "
+      + "выделенном; тем же способом он и отпускается.",
     menuPin: "Поставить здесь",
     menuUnpin: "Отпустить",
+    menuRememberNeighbours: "Запомнить расположение соседей",
+    reasonNoNeighbours: "рядом нет групп и коммутаторов",
+    neighboursRemembered: "Расположение соседей запомнено: {n}",
     menuOpenCard: "Открыть карточку",
     menuOpenPorts: "Порты",
     menuSelected: "Выбрано узлов: {n}",

@@ -83,7 +83,11 @@ CREATE TABLE IF NOT EXISTS layout (
     x          REAL NOT NULL,
     y          REAL NOT NULL,
     pinned     INTEGER DEFAULT 0,          -- 1 = placed by hand, physics off
-    updated_at REAL NOT NULL
+    updated_at REAL NOT NULL,
+    -- Set on a row that is not a position but an offset: x and y are
+    -- relative to this pinned node, which the node hangs off directly.
+    -- Absolute rows (the pinned ones) leave it empty.
+    anchor     TEXT DEFAULT NULL
 );
 CREATE TABLE IF NOT EXISTS alarms (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -196,6 +200,14 @@ class Database:
             "CREATE UNIQUE INDEX IF NOT EXISTS idx_hosts_ip "
             "ON hosts(ip) WHERE ip <> ''"
         )
+        layout_columns = {
+            row[1] for row in self._conn.execute("PRAGMA table_info(layout)")
+        }
+        if "anchor" not in layout_columns:
+            self._conn.execute(
+                "ALTER TABLE layout ADD COLUMN anchor TEXT DEFAULT NULL"
+            )
+            log.info("DB migration: added layout.anchor column")
 
     def _dedupe_ips(self) -> int:
         """Leaves each non-empty IP on its most recently seen host only."""
@@ -472,12 +484,15 @@ class Database:
     # ---------- map layout ----------
 
     def layout(self) -> dict[str, dict]:
-        """node id -> {x, y, pinned, updated_at}.
+        """node id -> {x, y, pinned, updated_at, anchor}.
 
         The map is a shared object, not a personal setting. Two people
         looking at one network have to see one picture, or "the switch
         at the bottom left" stops meaning anything — which is why this
         lives here and not in somebody's localStorage.
+
+        A row with an `anchor` holds an offset from that pinned node,
+        not a position.
         """
         with self._lock:
             rows = self._conn.execute("SELECT * FROM layout").fetchall()
@@ -486,6 +501,7 @@ class Database:
                 "x": row["x"], "y": row["y"],
                 "pinned": bool(row["pinned"]),
                 "updated_at": row["updated_at"],
+                "anchor": row["anchor"],
             }
             for row in rows
         }
@@ -513,7 +529,7 @@ class Database:
                     "ON CONFLICT(node_id) DO UPDATE SET "
                     "x = excluded.x, y = excluded.y, "
                     "pinned = excluded.pinned, "
-                    "updated_at = excluded.updated_at",
+                    "updated_at = excluded.updated_at, anchor = NULL",
                     (node_id, float(pos["x"]), float(pos["y"]),
                      int(bool(pinned)), now),
                 )
@@ -565,20 +581,91 @@ class Database:
         self.save_layout({node_id: {"x": x, "y": y, "pinned": pinned}})
 
     def forget_node_position(self, node_id: str) -> bool:
+        """Forgets one node, and the offsets of the nodes around it: with
+        nothing pinned to measure from, they mean nothing."""
         with self._lock, self._conn:
             cur = self._conn.execute(
                 "DELETE FROM layout WHERE node_id = ?", (node_id,)
             )
+            self._conn.execute(
+                "DELETE FROM layout WHERE anchor = ?", (node_id,)
+            )
         return cur.rowcount > 0
 
     def forget_positions(self, node_ids) -> int:
-        """Forgets several nodes at once; returns how many rows went."""
+        """Forgets several nodes at once, with the offsets measured from
+        them; returns how many of the nodes had a row."""
+        ids = [(node_id,) for node_id in node_ids]
         with self._lock, self._conn:
             cur = self._conn.executemany(
-                "DELETE FROM layout WHERE node_id = ?",
-                [(node_id,) for node_id in node_ids],
+                "DELETE FROM layout WHERE node_id = ?", ids
             )
-        return cur.rowcount
+            removed = cur.rowcount
+            self._conn.executemany("DELETE FROM layout WHERE anchor = ?", ids)
+        return removed
+
+    def set_neighbours(self, anchor: str, offsets: dict[str, dict]) -> int:
+        """Records how the nodes around a pinned one stand; returns how
+        many were stored.
+
+        `offsets` is the whole set for this anchor, as a person saw it
+        when placing it — it replaces what was recorded before. Nothing
+        is stored for an anchor that is not pinned (there is nothing to
+        measure from), and a node that is itself pinned keeps its pin.
+        """
+        now = time.time()
+        stored = 0
+        with self._lock, self._conn:
+            row = self._conn.execute(
+                "SELECT pinned FROM layout WHERE node_id = ?", (anchor,)
+            ).fetchone()
+            if not row or not row["pinned"]:
+                return 0
+            self._conn.execute(
+                "DELETE FROM layout WHERE anchor = ? AND pinned = 0", (anchor,)
+            )
+            for node_id, offset in offsets.items():
+                if node_id == anchor:
+                    continue
+                cur = self._conn.execute(
+                    "INSERT INTO layout (node_id, x, y, pinned, updated_at, "
+                    "anchor) VALUES (?, ?, ?, 0, ?, ?) "
+                    "ON CONFLICT(node_id) DO UPDATE SET "
+                    "x = excluded.x, y = excluded.y, "
+                    "updated_at = excluded.updated_at, anchor = excluded.anchor "
+                    "WHERE layout.pinned = 0",
+                    (node_id, float(offset["x"]), float(offset["y"]), now,
+                     anchor),
+                )
+                stored += cur.rowcount
+        return stored
+
+    def drop_misplaced_offsets(self, anchors: dict[str, str]) -> list[str]:
+        """Drops offsets that no longer describe the map; returns whose.
+
+        `anchors` is what each node on the map hangs off right now. An
+        offset stays only while its node still hangs off the same node
+        and that one is still pinned. A device that moved to another
+        switch keeps nothing of the old one; a node gone from the map
+        keeps its offset, like a pin, until age takes it.
+        """
+        with self._lock, self._conn:
+            rows = self._conn.execute(
+                "SELECT l.node_id, l.anchor, a.pinned AS anchor_pinned "
+                "FROM layout l LEFT JOIN layout a ON a.node_id = l.anchor "
+                "WHERE l.anchor IS NOT NULL"
+            ).fetchall()
+            gone = [
+                row["node_id"] for row in rows
+                if not row["anchor_pinned"]
+                or (row["node_id"] in anchors
+                    and anchors[row["node_id"]] != row["anchor"])
+            ]
+            self._conn.executemany(
+                "DELETE FROM layout WHERE node_id = ?",
+                [(node_id,) for node_id in gone],
+            )
+        return gone
 
     def drop_unpinned_positions(self) -> int:
         """Forgets every position nobody pinned; returns how many.
@@ -588,11 +675,15 @@ class Database:
         went stale the moment somebody moved what the node hangs off:
         after a reload a cloud of hosts started where its switch used to
         be and was dragged across half the map. Only what a person placed
-        is kept now. Run at every start, because a page still open with
-        an older script may go on writing such rows until it is reloaded.
+        is kept now: the pins, and the offsets recorded around a pin when
+        it was placed (`anchor` set), which move with it. Run at every
+        start, because a page still open with an older script may go on
+        writing such rows until it is reloaded.
         """
         with self._lock, self._conn:
-            cur = self._conn.execute("DELETE FROM layout WHERE pinned = 0")
+            cur = self._conn.execute(
+                "DELETE FROM layout WHERE pinned = 0 AND anchor IS NULL"
+            )
         return cur.rowcount
 
     def clear_layout(self) -> int:
