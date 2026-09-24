@@ -48,9 +48,11 @@ RULES: dict[str, str] = {
     "POST /api/auth/login": PUBLIC,
     "POST /api/auth/totp": PUBLIC,
 
-    # one's own session and password, whatever the role
+    # one's own session, password and second factor, whatever the role
     "POST /api/auth/logout": SIGNED_IN,
     "POST /api/auth/password": SIGNED_IN,
+    "POST /api/auth/totp/setup": SIGNED_IN,
+    "POST /api/auth/totp/confirm": SIGNED_IN,
 
     # looking: the map, cards, ports, STP, the journal, alarms
     "GET /api/topology": VIEWER,
@@ -124,7 +126,8 @@ class Refusal:
 # no second factor would be only a suggestion.
 STEP_ROUTES: dict[str, set[str]] = {
     "password": {"POST /api/auth/password", "POST /api/auth/logout"},
-    "totp": {"POST /api/auth/logout"},
+    "totp": {"POST /api/auth/totp/setup", "POST /api/auth/totp/confirm",
+             "POST /api/auth/logout"},
 }
 
 

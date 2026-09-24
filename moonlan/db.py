@@ -1411,3 +1411,21 @@ class Database:
                 "UPDATE users SET locked_until = ? WHERE id = ?",
                 (until, user_id),
             )
+
+    def set_totp_pending(self, user_id: int, secret: str) -> None:
+        """A secret shown in the browser, bound only once a code from it
+        has been typed back."""
+        with self._lock, self._conn:
+            self._conn.execute(
+                "UPDATE users SET totp_pending = ? WHERE id = ?",
+                (secret, user_id),
+            )
+
+    def use_recovery_code(self, user_id: int, before: str, after: str) -> bool:
+        """Replaces the recovery hashes only if nobody changed them in
+        between: two requests with one code cannot both spend it."""
+        with self._lock, self._conn:
+            return self._conn.execute(
+                "UPDATE users SET recovery = ? WHERE id = ? AND recovery = ?",
+                (after, user_id, before),
+            ).rowcount > 0
