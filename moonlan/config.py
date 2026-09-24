@@ -299,6 +299,16 @@ class Config:
         """How this switch's web interface is opened from the menu."""
         return self.switch_web_scheme.get(ip) or self.context_menu.web_scheme
 
+    def users_db_path(self) -> str:
+        """Where the accounts live: the database itself — or, in demo
+        mode, whose database is in memory and gone with the process, a
+        file of their own beside it. That is what lets
+        `MOONLAN_DEMO=1 python -m moonlan.users` reach the demo's
+        accounts, and keeps demo accounts out of the real ones."""
+        if not self.demo:
+            return self.db_path
+        return str(Path(self.db_path).with_name("demo-users.db"))
+
     def starved_counters(self) -> list[tuple[str, int]]:
         """Switches whose poll budget outlasts their counters cycle.
 

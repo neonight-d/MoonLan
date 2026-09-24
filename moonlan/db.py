@@ -11,6 +11,7 @@ import logging
 import sqlite3
 import threading
 import time
+from contextlib import contextmanager
 from pathlib import Path
 
 from .auth import name_key
@@ -117,12 +118,28 @@ CREATE TABLE IF NOT EXISTS users (
     password     TEXT NOT NULL,             -- scrypt$n$r$p$salt$hash
     totp_secret  TEXT DEFAULT '',           -- base32; '' = none bound
     totp_enabled INTEGER DEFAULT 0,
+    -- A secret shown in the browser and not yet confirmed with a code
+    -- from it: a mistake while scanning must not lock anybody out
+    totp_pending TEXT DEFAULT '',
+    totp_last_step INTEGER DEFAULT 0,       -- last 30 s step accepted: a code works once
     recovery     TEXT DEFAULT '',           -- hashes of unused recovery codes, one per line
     must_change  INTEGER DEFAULT 0,         -- 1 = a new password before anything else
     disabled     INTEGER DEFAULT 0,
+    locked_until REAL DEFAULT 0,            -- too many wrong passwords in a row
     created_at   REAL NOT NULL,
     last_login   REAL DEFAULT 0
 );
+CREATE TABLE IF NOT EXISTS sessions (
+    -- Signed-in browsers. The cookie carries a random token and this
+    -- table only its SHA-256: a copy of the database signs nobody in.
+    token_hash    TEXT PRIMARY KEY,
+    user_id       INTEGER,                  -- NULL: diag, from the server's shell
+    created_at    REAL NOT NULL,
+    last_seen     REAL NOT NULL,
+    second_factor INTEGER DEFAULT 0,        -- 1 = a TOTP or recovery code was given
+    address       TEXT DEFAULT ''
+);
+CREATE INDEX IF NOT EXISTS sessions_user ON sessions (user_id);
 CREATE TABLE IF NOT EXISTS alarms (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     type TEXT NOT NULL,        -- host_down|switch_down|port_errors|port_util|new_mac
@@ -250,6 +267,19 @@ class Database:
                 "ALTER TABLE journal ADD COLUMN user TEXT DEFAULT ''"
             )
             log.info("DB migration: added journal.user column")
+        user_columns = {
+            row[1] for row in self._conn.execute("PRAGMA table_info(users)")
+        }
+        for column, kind in (
+            ("totp_pending", "TEXT DEFAULT ''"),
+            ("totp_last_step", "INTEGER DEFAULT 0"),
+            ("locked_until", "REAL DEFAULT 0"),
+        ):
+            if column not in user_columns:
+                self._conn.execute(
+                    f"ALTER TABLE users ADD COLUMN {column} {kind}"
+                )
+                log.info("DB migration: added users.%s column", column)
 
     def _dedupe_ips(self) -> int:
         """Leaves each non-empty IP on its most recently seen host only."""
@@ -1118,5 +1148,185 @@ class Database:
         with self._lock:
             rows = self._conn.execute(
                 "SELECT * FROM users ORDER BY id"
+            ).fetchall()
+        return [dict(row) for row in rows]
+
+    # ---------- account changes ----------
+    #
+    # One rule holds for the console and the browser alike: the last
+    # enabled administrator cannot be removed, disabled or demoted.
+    # Without one, sign-in switches off and the map is open to everyone
+    # — so it must not be something a slip of the hand can do.
+
+    @contextmanager
+    def _account_change(self):
+        """A write that reads first. BEGIN IMMEDIATE takes the write
+        lock before the check, so the console and the service cannot
+        both find "another admin is left" and both act on it."""
+        with self._lock:
+            self._conn.execute("BEGIN IMMEDIATE")
+            try:
+                yield
+            except BaseException:
+                self._conn.rollback()
+                raise
+            self._conn.commit()
+
+    def _account(self, name: str) -> sqlite3.Row:
+        row = self._conn.execute(
+            "SELECT * FROM users WHERE name_key = ?", (name_key(name),)
+        ).fetchone()
+        if row is None:
+            raise AccountError("unknown", name)
+        return row
+
+    def _keep_an_admin(self, row: sqlite3.Row) -> None:
+        if row["role"] != "admin" or row["disabled"]:
+            return
+        others = self._conn.execute(
+            "SELECT COUNT(*) FROM users WHERE role = 'admin' "
+            "AND disabled = 0 AND id <> ?", (row["id"],),
+        ).fetchone()[0]
+        if not others:
+            raise AccountError("last_admin", row["name"])
+
+    def _close_sessions(self, user_id: int, keep: str = "") -> int:
+        return self._conn.execute(
+            "DELETE FROM sessions WHERE user_id = ? AND token_hash <> ?",
+            (user_id, keep),
+        ).rowcount
+
+    def active_admins(self) -> int:
+        """Enabled administrators. Zero means sign-in is off."""
+        with self._lock:
+            return self._conn.execute(
+                "SELECT COUNT(*) FROM users WHERE role = 'admin' "
+                "AND disabled = 0"
+            ).fetchone()[0]
+
+    def set_password(
+        self, name: str, password_hash: str, must_change: bool = False,
+        keep_session: str = "",
+    ) -> int:
+        """A new password. Every session of the account is closed —
+        except `keep_session`, the browser that changed it itself.
+        Returns how many were closed."""
+        with self._account_change():
+            row = self._account(name)
+            self._conn.execute(
+                "UPDATE users SET password = ?, must_change = ? WHERE id = ?",
+                (password_hash, int(must_change), row["id"]),
+            )
+            return self._close_sessions(row["id"], keep_session)
+
+    def set_role(self, name: str, role: str) -> tuple[str, int]:
+        """(the role it had, sessions closed)."""
+        with self._account_change():
+            row = self._account(name)
+            if role != "admin":
+                self._keep_an_admin(row)
+            self._conn.execute(
+                "UPDATE users SET role = ? WHERE id = ?", (role, row["id"])
+            )
+            return row["role"], self._close_sessions(row["id"])
+
+    def set_disabled(self, name: str, disabled: bool) -> int:
+        """Disables or enables an account; sessions closed."""
+        with self._account_change():
+            row = self._account(name)
+            if disabled:
+                self._keep_an_admin(row)
+            self._conn.execute(
+                "UPDATE users SET disabled = ? WHERE id = ?",
+                (int(disabled), row["id"]),
+            )
+            return self._close_sessions(row["id"])
+
+    def delete_user(self, name: str) -> int:
+        """Removes an account and its sessions; sessions closed."""
+        with self._account_change():
+            row = self._account(name)
+            self._keep_an_admin(row)
+            closed = self._close_sessions(row["id"])
+            self._conn.execute("DELETE FROM users WHERE id = ?", (row["id"],))
+            return closed
+
+    def reset_totp(self, name: str) -> int:
+        """Forgets the second factor and its recovery codes. An admin
+        binds a new one at the next sign-in. Sessions closed."""
+        with self._account_change():
+            row = self._account(name)
+            self._conn.execute(
+                "UPDATE users SET totp_secret = '', totp_enabled = 0, "
+                "totp_pending = '', totp_last_step = 0, recovery = '' "
+                "WHERE id = ?", (row["id"],),
+            )
+            return self._close_sessions(row["id"])
+
+    def enable_totp(
+        self, name: str, secret: str, recovery: str, last_step: int = 0,
+        keep_session: str = "",
+    ) -> int:
+        """Binds a second factor. Every session but `keep_session` is
+        closed: they were opened without one, and an administrator's
+        session opened on a password alone must not turn into a full
+        one because a secret was bound somewhere else meanwhile."""
+        with self._account_change():
+            row = self._account(name)
+            self._conn.execute(
+                "UPDATE users SET totp_secret = ?, totp_enabled = 1, "
+                "totp_pending = '', totp_last_step = ?, recovery = ? "
+                "WHERE id = ?", (secret, last_step, recovery, row["id"]),
+            )
+            if keep_session:
+                self._conn.execute(
+                    "UPDATE sessions SET second_factor = 1 "
+                    "WHERE token_hash = ?", (keep_session,),
+                )
+            return self._close_sessions(row["id"], keep_session)
+
+    def unlock(self, name: str) -> bool:
+        """Lifts a lock after wrong passwords; False if there was none."""
+        with self._account_change():
+            row = self._account(name)
+            self._conn.execute(
+                "UPDATE users SET locked_until = 0 WHERE id = ?", (row["id"],)
+            )
+            return row["locked_until"] > time.time()
+
+    def close_sessions(self, name: str) -> int:
+        """Signs an account out everywhere."""
+        with self._account_change():
+            return self._close_sessions(self._account(name)["id"])
+
+    def session_counts(self) -> dict[int, int]:
+        """user id -> open sessions."""
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT user_id, COUNT(*) FROM sessions "
+                "WHERE user_id IS NOT NULL GROUP BY user_id"
+            ).fetchall()
+        return {row[0]: row[1] for row in rows}
+
+    # ---------- sessions ----------
+
+    def add_session(
+        self, token_hash: str, user_id: int | None, ts: float,
+        second_factor: bool = False, address: str = "",
+    ) -> None:
+        with self._lock, self._conn:
+            self._conn.execute(
+                "INSERT INTO sessions (token_hash, user_id, created_at, "
+                "last_seen, second_factor, address) "
+                "VALUES (?, ?, ?, ?, ?, ?)",
+                (token_hash, user_id, ts, ts, int(second_factor), address),
+            )
+
+    def sessions_of(self, name: str) -> list[dict]:
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT s.* FROM sessions s JOIN users u ON u.id = s.user_id "
+                "WHERE u.name_key = ? ORDER BY s.created_at",
+                (name_key(name),),
             ).fetchall()
         return [dict(row) for row in rows]
