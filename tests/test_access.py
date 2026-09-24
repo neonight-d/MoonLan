@@ -282,6 +282,18 @@ class OpenModeTest(unittest.TestCase):
         with self.assertLogs("moonlan", "INFO") as logged:
             server.sign_in.log_state()
         self.assertIn("Sign-in: on", logged.output[0])
+        # …and what sign-in over plain HTTP is worth
+        self.assertIn("plain HTTP", logged.output[1])
+
+    def test_switching_on_is_logged_when_it_happens(self):
+        call(server.app, "GET", "/api/topology")
+        self.assertIs(server.sign_in._was_on, False)
+        self.cli("add", "anton", "--role", "admin")
+        with self.assertLogs("moonlan", "INFO") as logged:
+            call(server.app, "GET", "/api/topology")
+        self.assertTrue(any("Sign-in switched on" in line
+                            for line in logged.output))
+        self.assertTrue(any("plain HTTP" in line for line in logged.output))
 
 
 class JobOwnerTest(unittest.TestCase):
