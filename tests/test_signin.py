@@ -439,5 +439,110 @@ class ProtectionTest(SignInCase):
         self.assertIn("10.9.8.7", logged.output[0])
 
 
+class BindingTest(SignInCase):
+    """TOTP bound from the browser, and the recovery codes."""
+
+    def setup(self, cookie):
+        return call(server.app, "POST", "/api/auth/totp/setup", cookie=cookie)
+
+    def confirm(self, cookie, code, password=PASSWORD):
+        return call(server.app, "POST", "/api/auth/totp/confirm",
+                    cookie=cookie,
+                    json_body={"code": code, "password": password})
+
+    def test_an_administrator_binds_it_right_after_the_password(self):
+        self.add("boris", "admin")
+        cookie = cookie_of(self.login("boris"))
+        self.assertEqual(self.me(cookie).json()["step"], "totp")
+        shown = self.setup(cookie)
+        self.assertEqual(shown.status, 200, shown.body)
+        secret = shown.json()["secret"]
+        self.assertEqual(shown.json()["uri"], auth.otpauth_uri("boris", secret))
+        # nothing is bound until a code made from it comes back
+        self.assertEqual(self.db.user("boris")["totp_enabled"], 0)
+        code = auth.totp_code(auth.secret_bytes(secret), time.time())
+        bound = self.confirm(cookie, code)
+        self.assertEqual(bound.status, 200, bound.body)
+        codes = bound.json()["recovery"]
+        self.assertEqual(len(codes), 8)
+        me = self.me(cookie).json()
+        self.assertEqual((me["step"], me["totp"], me["recovery_left"]),
+                         (None, True, 8))
+        # this very session goes on as a full one
+        self.assertEqual(
+            call(server.app, "DELETE", "/api/layout", cookie=cookie).status,
+            200,
+        )
+        # and the code used to bind it is spent
+        ticket = self.login("boris").json()["ticket"]
+        self.assertEqual(self.code(ticket, code).json(), {"error": "code_used"})
+
+    def test_a_scanning_mistake_locks_nobody_out(self):
+        self.add("vera", "user")
+        cookie = cookie_of(self.login("vera"))
+        secret = self.setup(cookie).json()["secret"]
+        right = auth.totp_code(auth.secret_bytes(secret), time.time())
+        wrong = "000000" if right != "000000" else "111111"
+        self.assertEqual(self.confirm(cookie, wrong).json(),
+                         {"error": "invalid_code"})
+        self.assertEqual(self.db.user("vera")["totp_enabled"], 0)
+        # still signs in with the password alone
+        self.assertEqual(self.login("vera").json(), {"status": "signed_in"})
+
+    def test_binding_asks_for_the_password(self):
+        self.add("vera", "user")
+        cookie = cookie_of(self.login("vera"))
+        secret = self.setup(cookie).json()["secret"]
+        code = auth.totp_code(auth.secret_bytes(secret), time.time())
+        self.assertEqual(self.confirm(cookie, code, "not the password").json(),
+                         {"error": "wrong_password"})
+        self.assertEqual(self.db.user("vera")["totp_enabled"], 0)
+
+    def test_binding_closes_the_other_sessions(self):
+        self.add("vera", "user")
+        here = cookie_of(self.login("vera"))
+        there = cookie_of(self.login("vera"))
+        secret = self.setup(here).json()["secret"]
+        self.confirm(here, auth.totp_code(auth.secret_bytes(secret),
+                                          time.time()))
+        self.assertEqual(self.me(here).status, 200)
+        self.assertEqual(self.me(there).status, 401)
+
+    def test_rebinding_retires_the_old_secret(self):
+        old = self.secret("anton")
+        ticket = self.login("anton").json()["ticket"]
+        cookie = cookie_of(self.code(ticket, self.code_now("anton")))
+        new = self.setup(cookie).json()["secret"]
+        # the old secret works until the new one is confirmed
+        self.assertEqual(self.secret("anton"), old)
+        at = time.time() + 30   # the next step: the current one is spent
+        self.confirm(cookie, auth.totp_code(auth.secret_bytes(new), at))
+        self.assertEqual(self.secret("anton"), new)
+
+    def test_a_recovery_code_instead_of_the_app(self):
+        codes = auth.new_recovery_codes()
+        self.db.enable_totp("anton", self.secret("anton"),
+                            auth.hash_recovery_codes(codes))
+        ticket = self.login("anton").json()["ticket"]
+        answer = self.code(ticket, codes[2].upper())
+        self.assertEqual(answer.status, 200, answer.body)
+        cookie = cookie_of(answer)
+        self.assertEqual(self.me(cookie).json()["recovery_left"], 7)
+        # it works once
+        ticket = self.login("anton").json()["ticket"]
+        self.assertEqual(self.code(ticket, codes[2]).json(),
+                         {"error": "invalid_code"})
+        # the others still work
+        ticket = self.login("anton").json()["ticket"]
+        self.assertEqual(self.code(ticket, codes[5]).status, 200)
+        login = server.db.journal(1)[0]
+        self.assertEqual(login["event"], "login")
+        self.assertIn('"recovery_left": 6', login["details"])
+
+    def test_not_while_sign_in_is_off(self):
+        self.clean()
+        self.assertEqual(self.setup(None).json(), {"error": "sign_in_off"})
+
+
 if __name__ == "__main__":
     unittest.main()

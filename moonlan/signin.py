@@ -156,6 +156,14 @@ class CodeBody(BaseModel):
     code: str = Field(max_length=64)
 
 
+class BindBody(BaseModel):
+    code: str = Field(max_length=64)
+    # binding a second factor asks for the password: over plain HTTP a
+    # session can be taken on the way, and a second factor bound by
+    # whoever took it would lock the owner out of every next sign-in
+    password: str = Field(max_length=auth.PASSWORD_MAX)
+
+
 class PasswordBody(BaseModel):
     current: str = Field(max_length=auth.PASSWORD_MAX)
     new: str = Field(max_length=auth.PASSWORD_MAX * 2)
@@ -274,18 +282,25 @@ class SignIn:
     # ---------- signing in ----------
 
     def _open_session(self, row: dict, second_factor: bool, address: str,
-                      now: float, rehashed: str | None = None) -> str:
+                      now: float, rehashed: str | None = None,
+                      recovery_left: int | None = None) -> str:
         self.throttle.succeeded(address, auth.name_key(row["name"]))
         token = auth.new_token()
         self.accounts.add_session(
             auth.token_hash(token), row["id"], now, second_factor, address
         )
         self.accounts.record_login(row["id"], now, rehashed)
+        details = {"address": address}
+        if recovery_left is not None:
+            details["recovery_left"] = recovery_left
         self.journal.add_event(
-            now, "login", row["name"], json.dumps({"address": address}),
-            row["name"],
+            now, "login", row["name"], json.dumps(details), row["name"],
         )
-        log.info("Signed in: %s from %s", row["name"], address)
+        log.info(
+            "Signed in: %s from %s%s", row["name"], address,
+            "" if recovery_left is None else
+            f" with a recovery code ({recovery_left} left)",
+        )
         return token
 
     def _signed_in(self, token: str) -> JSONResponse:
@@ -433,6 +448,23 @@ class SignIn:
             del self._tickets[key]
             return self._locked(row["locked_until"], now)
         step = auth.match_totp(row["totp_secret"], code, now)
+        if step is None and len(auth.normal_recovery_code(code)) \
+                == auth.RECOVERY_LENGTH:
+            # a recovery code instead: a lost phone must not be a lost
+            # account. It works once.
+            left = await asyncio.to_thread(
+                auth.spend_recovery_code, code, row["recovery"]
+            )
+            if left is not None and await asyncio.to_thread(
+                self.accounts.use_recovery_code, row["id"], row["recovery"],
+                left,
+            ):
+                del self._tickets[key]
+                token = await asyncio.to_thread(
+                    self._open_session, row, True, address, now,
+                    entry.rehashed, auth.recovery_left(left),
+                )
+                return self._signed_in(token)
         if step is None:
             entry.tries += 1
             if entry.tries >= TICKET_TRIES:
@@ -507,6 +539,63 @@ class SignIn:
         log.info("Password changed by %s themselves; %d other session(s) "
                  "closed", row["name"], closed)
         return JSONResponse({"status": "changed", "sessions_closed": closed})
+
+    # ---------- one's own second factor ----------
+
+    async def totp_setup(self, who: Principal | None) -> JSONResponse:
+        """A new secret to scan. Nothing is bound yet: a mistake while
+        scanning must not lock anybody out, so the secret waits until a
+        code made from it comes back (totp_confirm)."""
+        if who is None or who.user_id is None:
+            return refuse("sign_in_required", 401)
+        secret = auth.new_totp_secret()
+        await asyncio.to_thread(self.accounts.set_totp_pending,
+                                who.user_id, secret)
+        return JSONResponse({
+            "secret": secret, "uri": auth.otpauth_uri(who.name, secret),
+        })
+
+    async def totp_confirm(self, who: Principal | None, code: str,
+                           password: str, address: str) -> JSONResponse:
+        """Binds the secret shown by totp_setup, once a code from it and
+        the password are right. Answers with the recovery codes — the
+        only time anybody sees them."""
+        if who is None or who.user_id is None:
+            return refuse("sign_in_required", 401)
+        now = time.time()
+        row, right = await asyncio.to_thread(
+            self._check_password, who.name, password
+        )
+        if row is None or not right:
+            locked = await self._failed(who.name, row, address, now,
+                                        "wrong password binding TOTP")
+            if locked is not None:
+                await asyncio.to_thread(self.accounts.close_sessions,
+                                        who.name)
+                return locked
+            return refuse("wrong_password", 403)
+        pending = row["totp_pending"]
+        if not pending:
+            return refuse("no_pending_secret", 409)
+        step = auth.match_totp(pending, code, now)
+        if step is None:
+            return refuse("invalid_code", 400)
+        codes = auth.new_recovery_codes()
+        stored = await asyncio.to_thread(auth.hash_recovery_codes, codes)
+        closed = await asyncio.to_thread(
+            self.accounts.enable_totp, row["name"], pending, stored, step,
+            who.session,
+        )
+        await asyncio.to_thread(
+            self.journal.add_event, now, "user_totp_enabled", row["name"],
+            json.dumps({"sessions": closed, "rebound": bool(
+                row["totp_enabled"])}), row["name"],
+        )
+        log.info("TOTP bound by %s from %s%s; %d other session(s) closed",
+                 row["name"], address,
+                 " (a new secret in place of the old)"
+                 if row["totp_enabled"] else "", closed)
+        return JSONResponse({"status": "bound", "recovery": codes})
 
     def me(self, who: Principal) -> dict:
         row = self.accounts.user(who.name) or {}
@@ -633,6 +722,16 @@ def add_routes(app: FastAPI, sign_in: SignIn) -> None:
     @app.post("/api/auth/logout")
     async def auth_logout():
         return await sign_in.logout(principal())
+
+    @app.post("/api/auth/totp/setup")
+    async def auth_totp_setup():
+        return await sign_in.totp_setup(principal())
+
+    @app.post("/api/auth/totp/confirm")
+    async def auth_totp_confirm(body: BindBody, request: Request):
+        return await sign_in.totp_confirm(
+            principal(), body.code, body.password, _address(request)
+        )
 
     @app.post("/api/auth/password")
     async def auth_password(body: PasswordBody, request: Request):
