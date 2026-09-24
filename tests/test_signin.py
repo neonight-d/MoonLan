@@ -31,6 +31,7 @@ class SignInCase(unittest.TestCase):
         self.clean()
         self.addCleanup(self.clean)
         server.sign_in._tickets.clear()
+        server.sign_in.throttle = signin.Throttle()
         # the admin that switches sign-in on
         self.add("anton", "admin", totp=True)
 
@@ -55,9 +56,9 @@ class SignInCase(unittest.TestCase):
         return call(server.app, "POST", "/api/auth/login",
                     json_body={"name": name, "password": password}, **kwargs)
 
-    def code(self, ticket, code):
+    def code(self, ticket, code, **kwargs):
         return call(server.app, "POST", "/api/auth/totp",
-                    json_body={"ticket": ticket, "code": code})
+                    json_body={"ticket": ticket, "code": code}, **kwargs)
 
     def code_now(self, name, at=None):
         return auth.totp_code(
@@ -198,8 +199,10 @@ class CodeStepTest(SignInCase):
         ticket = self.login("anton").json()["ticket"]
         right = self.code_now("anton")
         wrong = "000000" if right != "000000" else "111111"
-        for _ in range(signin.TICKET_TRIES):
-            self.assertEqual(self.code(ticket, wrong).json(),
+        for n in range(signin.TICKET_TRIES):
+            # from different addresses: this is about the ticket, not
+            # about the delay per address
+            self.assertEqual(self.code(ticket, wrong, client=f"10.0.1.{n}").json(),
                              {"error": "invalid_code"})
         self.assertEqual(self.code(ticket, right).json(),
                          {"error": "ticket_expired"})
@@ -305,6 +308,135 @@ class StepsTest(SignInCase):
             call(server.app, "POST", "/api/auth/logout", cookie=cookie).status,
             200,
         )
+
+
+class ThrottleTest(unittest.TestCase):
+    def test_the_delay_doubles_after_five(self):
+        throttle = signin.Throttle()
+        delays = []
+        for n in range(12):
+            throttle.address_failed("10.0.0.5", 1000.0)
+            delays.append(throttle.wait("10.0.0.5", 1000.0))
+        self.assertEqual(delays, [0, 0, 0, 0, 1, 2, 4, 8, 16, 32, 60, 60])
+        self.assertEqual(throttle.wait("10.0.0.6", 1000.0), 0)
+        throttle.succeeded("10.0.0.5", "vera")
+        self.assertEqual(throttle.wait("10.0.0.5", 1000.0), 0)
+
+    def test_an_address_quiet_for_an_hour_starts_over(self):
+        throttle = signin.Throttle()
+        for _ in range(7):
+            throttle.address_failed("10.0.0.5", 1000.0)
+        throttle.address_failed("10.0.0.6", 1000.0 + 3700)
+        self.assertEqual(throttle.failures("10.0.0.5"), 0)
+
+    def test_ten_in_a_row_lock(self):
+        throttle = signin.Throttle()
+        self.assertEqual(
+            [throttle.account_failed("vera") for _ in range(10)],
+            [False] * 9 + [True],
+        )
+        # the count starts over after a lock
+        self.assertFalse(throttle.account_failed("vera"))
+
+
+class ProtectionTest(SignInCase):
+    def test_the_sixth_attempt_waits(self):
+        self.add("vera", "user")
+        for _ in range(5):
+            self.assertEqual(self.login("vera", "wrong password").status, 401)
+        answer = self.login("vera")
+        self.assertEqual(answer.status, 429)
+        self.assertEqual(answer.json(),
+                         {"error": "too_many_attempts", "retry_after": 1})
+        self.assertEqual(answer.header("retry-after"), ["1"])
+        # another address is not held up
+        self.assertEqual(self.login("vera", client="10.0.0.98").status, 200)
+
+    def test_a_wait_is_not_a_guess(self):
+        # attempts refused for being too soon are not checked at all, so
+        # the right password in the middle of a flood does not get in
+        # either — and costs no scrypt
+        self.add("vera", "user")
+        for _ in range(5):
+            self.login("vera", "wrong password")
+        with mock.patch.object(auth, "verify_password") as verify:
+            self.assertEqual(self.login("vera").status, 429)
+        verify.assert_not_called()
+
+    def lock_vera(self):
+        # from ten addresses: the lock is about the account, whoever types
+        for n in range(signin.ACCOUNT_LOCK_FAILURES):
+            answer = self.login("vera", "wrong password", client=f"10.0.2.{n}")
+        return answer
+
+    def test_ten_wrong_passwords_lock_the_account(self):
+        self.add("vera", "user")
+        last = self.lock_vera()
+        self.assertEqual(last.status, 423)
+        self.assertEqual(last.json()["error"], "locked")
+        self.assertAlmostEqual(last.json()["retry_after"], 900, delta=2)
+        # the right password does not open it either
+        self.assertEqual(self.login("vera", client="10.0.3.1").status, 423)
+        self.assertGreater(self.db.user("vera")["locked_until"], time.time())
+        event = server.db.journal(1)[0]
+        self.assertEqual((event["event"], event["mac"]),
+                         ("account_locked", "vera"))
+
+    def test_unlock_from_the_console(self):
+        self.add("vera", "user")
+        self.lock_vera()
+        import contextlib
+        import io
+        from moonlan import users
+        with contextlib.redirect_stdout(io.StringIO()) as out:
+            self.assertEqual(users.main(["unlock", "vera"]), 0)
+        self.assertIn("unlocked", out.getvalue())
+        self.assertEqual(self.login("vera", client="10.0.3.1").status, 200)
+
+    def test_a_lock_ends_by_itself(self):
+        self.add("vera", "user")
+        self.lock_vera()
+        self.db.lock(self.db.user("vera")["id"], time.time() - 1)
+        self.assertEqual(self.login("vera", client="10.0.3.1").status, 200)
+
+    def test_a_name_nobody_has_locks_the_same_way(self):
+        # or "locked" would tell which names are real
+        self.add("vera", "user")
+        real = self.lock_vera()
+        for n in range(signin.ACCOUNT_LOCK_FAILURES):
+            phantom = self.login("nobody-here", "wrong password",
+                                 client=f"10.0.4.{n}")
+        self.assertEqual(real.status, phantom.status)
+        self.assertEqual(real.json()["error"], phantom.json()["error"])
+        self.assertEqual(
+            self.login("nobody-here", "x" * 12, client="10.0.5.1").json()["error"],
+            self.login("vera", "x" * 12, client="10.0.5.2").json()["error"],
+        )
+
+    def test_a_name_nobody_has_costs_a_hash(self):
+        with mock.patch.object(auth, "burn_a_check",
+                               wraps=auth.burn_a_check) as burn:
+            self.login("nobody-here", "some password")
+        burn.assert_called_once_with("some password")
+
+    def test_wrong_codes_count_towards_the_lock(self):
+        # the password is known here; the code is what is being guessed
+        right = self.code_now("anton")
+        wrong = "000000" if right != "000000" else "111111"
+        last = None
+        for n in range(signin.ACCOUNT_LOCK_FAILURES):
+            ticket = self.login("anton", client=f"10.0.6.{n}").json()["ticket"]
+            last = self.code(ticket, wrong, client=f"10.0.6.{n}")
+        self.assertEqual(last.status, 423)
+        self.assertEqual(self.login("anton", client="10.0.7.1").status, 423)
+
+    def test_failures_are_logged_with_the_address(self):
+        self.add("vera", "user")
+        logger = logging.getLogger("moonlan")
+        logger.setLevel(logging.WARNING)
+        with self.assertLogs("moonlan", "WARNING") as logged:
+            self.login("vera", "wrong password", client="10.9.8.7")
+        self.assertIn("10.9.8.7", logged.output[0])
 
 
 if __name__ == "__main__":

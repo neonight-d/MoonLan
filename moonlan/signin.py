@@ -13,6 +13,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import math
 import time
 from contextvars import ContextVar
 from dataclasses import dataclass
@@ -60,6 +61,76 @@ TICKET_TRIES = 5
 # Expired sessions are dropped when they come back; this sweeps up the
 # ones that never do
 PURGE_SECONDS = 3600
+
+
+# Wrong passwords and codes. Counted in this process's memory: MoonLan
+# is one process, and starting the count over after a restart is fine.
+#
+# By address: the first five failures in a row cost nothing — people
+# mistype — then every next attempt waits twice as long, up to a
+# minute. By account: ten in a row lock it for fifteen minutes — not
+# for good, or anybody could lock the administrator out by typing the
+# name. `python -m moonlan.users unlock` lifts it early.
+ADDRESS_FREE_FAILURES = 5
+ADDRESS_MAX_DELAY = 60.0
+ACCOUNT_LOCK_FAILURES = 10
+ACCOUNT_LOCK_SECONDS = 15 * 60
+# An address that has been quiet this long starts from zero
+FORGET_SECONDS = 3600
+
+
+class Throttle:
+    def __init__(self):
+        # address -> (failures in a row, no attempt before, last failure)
+        self._addresses: dict[str, tuple[int, float, float]] = {}
+        # name key -> failures in a row
+        self._accounts: dict[str, int] = {}
+        # name key -> locked until: names nobody has. They lock exactly
+        # like real ones, or "locked" would tell which names are real.
+        self._phantoms: dict[str, float] = {}
+
+    def wait(self, address: str, now: float) -> float:
+        """Seconds this address has to wait before its next attempt."""
+        entry = self._addresses.get(address)
+        return max(0.0, entry[1] - now) if entry else 0.0
+
+    def failures(self, address: str) -> int:
+        entry = self._addresses.get(address)
+        return entry[0] if entry else 0
+
+    def address_failed(self, address: str, now: float) -> None:
+        for other, (_, _, last) in list(self._addresses.items()):
+            if now - last > FORGET_SECONDS:
+                del self._addresses[other]
+        count = self.failures(address) + 1
+        delay = 0.0
+        if count >= ADDRESS_FREE_FAILURES:
+            delay = min(ADDRESS_MAX_DELAY,
+                        2.0 ** (count - ADDRESS_FREE_FAILURES))
+        self._addresses[address] = (count, now + delay, now)
+
+    def account_failed(self, key: str) -> bool:
+        """Counts one; True when this one locks the account."""
+        count = self._accounts.get(key, 0) + 1
+        if count >= ACCOUNT_LOCK_FAILURES:
+            self._accounts.pop(key, None)
+            return True
+        self._accounts[key] = count
+        return False
+
+    def phantom_locked(self, key: str, now: float) -> float:
+        until = self._phantoms.get(key, 0.0)
+        if until and until <= now:
+            del self._phantoms[key]
+            return 0.0
+        return until
+
+    def lock_phantom(self, key: str, until: float) -> None:
+        self._phantoms[key] = until
+
+    def succeeded(self, address: str, key: str) -> None:
+        self._addresses.pop(address, None)
+        self._accounts.pop(key, None)
 
 
 @dataclass
@@ -117,6 +188,7 @@ class SignIn:
         self.settings = settings
         self._tickets: dict[str, Ticket] = {}
         self._purged = 0.0
+        self.throttle = Throttle()
 
     def sign_in_on(self) -> bool:
         return self.accounts.active_admins() > 0
@@ -203,6 +275,7 @@ class SignIn:
 
     def _open_session(self, row: dict, second_factor: bool, address: str,
                       now: float, rehashed: str | None = None) -> str:
+        self.throttle.succeeded(address, auth.name_key(row["name"]))
         token = auth.new_token()
         self.accounts.add_session(
             auth.token_hash(token), row["id"], now, second_factor, address
@@ -231,24 +304,90 @@ class SignIn:
 
     def _check_password(self, name: str, password: str):
         """(the account, whether the password is right) — the account
-        None when there is no such name."""
+        None when there is no such name.
+
+        A name nobody has costs the same scrypt as a real one: answering
+        at once for an unknown name and after 40 ms for a known one would
+        tell anybody with a stopwatch which names exist.
+        """
         row = None if auth.name_problem(name) else self.accounts.user(name)
         if row is None:
+            auth.burn_a_check(password)
             return None, False
         return row, auth.verify_password(password, row["password"])
+
+    def _too_soon(self, address: str, now: float) -> JSONResponse | None:
+        wait = self.throttle.wait(address, now)
+        if wait <= 0:
+            return None
+        seconds = math.ceil(wait)
+        response = refuse("too_many_attempts", 429, retry_after=seconds)
+        response.headers["Retry-After"] = str(seconds)
+        return response
+
+    def _locked(self, until: float, now: float) -> JSONResponse:
+        seconds = math.ceil(until - now)
+        response = refuse("locked", 423, retry_after=seconds)
+        response.headers["Retry-After"] = str(seconds)
+        return response
+
+    async def _failed(self, name: str, row: dict | None, address: str,
+                      now: float, what: str) -> JSONResponse | None:
+        """Counts a wrong password or code, logs it, and locks the
+        account on the tenth in a row — the answer to give then, or
+        None for the usual one."""
+        self.throttle.address_failed(address, now)
+        key = auth.name_key(name)
+        log.warning(
+            "Sign-in failed for %r from %s: %s (%d in a row from this "
+            "address)", name, address, what, self.throttle.failures(address),
+        )
+        if not self.throttle.account_failed(key):
+            return None
+        until = now + ACCOUNT_LOCK_SECONDS
+        if row is None:
+            self.throttle.lock_phantom(key, until)
+        else:
+            await asyncio.to_thread(self.accounts.lock, row["id"], until)
+            await asyncio.to_thread(
+                self.journal.add_event, now, "account_locked", row["name"],
+                json.dumps({"address": address,
+                            "minutes": ACCOUNT_LOCK_SECONDS // 60}),
+            )
+        log.warning(
+            "Sign-in: %r locked for %d minutes after %d failures in a row "
+            "(the last from %s); python -m moonlan.users unlock %s lifts it",
+            name, ACCOUNT_LOCK_SECONDS // 60, ACCOUNT_LOCK_FAILURES, address,
+            name,
+        )
+        return self._locked(until, now)
 
     async def login(self, name: str, password: str,
                     address: str) -> JSONResponse:
         """The first step: name and password."""
         now = time.time()
+        too_soon = self._too_soon(address, now)
+        if too_soon is not None:
+            return too_soon
         row, right = await asyncio.to_thread(
             self._check_password, name, password
         )
+        locked_until = (
+            row["locked_until"] if row is not None
+            else self.throttle.phantom_locked(auth.name_key(name), now)
+        )
+        if locked_until > now:
+            # checked after the password, not before: a lock must not
+            # answer any faster than a wrong password does
+            self.throttle.address_failed(address, now)
+            log.warning("Sign-in refused for %r from %s: locked", name, address)
+            return self._locked(locked_until, now)
         if not right:
-            log.warning("Sign-in failed for %r from %s", name, address)
             # the same answer for a wrong name and a wrong password: which
             # names exist is nobody's business
-            return refuse("invalid_credentials", 401)
+            locked = await self._failed(name, row, address, now,
+                                        "wrong name or password")
+            return locked or refuse("invalid_credentials", 401)
         if row["disabled"]:
             # said only to somebody who knows the password
             log.warning("Sign-in refused for %s from %s: account disabled",
@@ -278,6 +417,9 @@ class SignIn:
                           address: str) -> JSONResponse:
         """The second step: a code from the app or the key."""
         now = time.time()
+        too_soon = self._too_soon(address, now)
+        if too_soon is not None:
+            return too_soon
         self._drop_old_tickets(now)
         key = auth.token_hash(ticket)
         entry = self._tickets.get(key)
@@ -287,13 +429,19 @@ class SignIn:
         if row is None or row["disabled"] or not row["totp_enabled"]:
             del self._tickets[key]
             return refuse("ticket_expired", 401)
+        if row["locked_until"] > now:
+            del self._tickets[key]
+            return self._locked(row["locked_until"], now)
         step = auth.match_totp(row["totp_secret"], code, now)
         if step is None:
             entry.tries += 1
             if entry.tries >= TICKET_TRIES:
                 del self._tickets[key]
-            log.warning("Sign-in: wrong code for %s from %s",
-                        row["name"], address)
+            locked = await self._failed(row["name"], row, address, now,
+                                        "wrong code")
+            if locked is not None:
+                self._tickets.pop(key, None)
+                return locked
             return refuse("invalid_code", 401)
         if not await asyncio.to_thread(
             self.accounts.spend_totp_step, row["id"], step
@@ -322,7 +470,7 @@ class SignIn:
         return response
 
     async def change_password(self, who: Principal | None, current: str,
-                              new: str) -> JSONResponse:
+                              new: str, address: str) -> JSONResponse:
         """One's own password. The current one is asked for: a session
         taken over on the way (plain HTTP) must not be enough to lock
         its owner out. The other sessions of the account are closed,
@@ -333,8 +481,14 @@ class SignIn:
             self._check_password, who.name, current
         )
         if row is None or not right:
-            log.warning("Password change for %s: the current password was "
-                        "wrong", who.name)
+            # counted like a wrong password at sign-in: a session taken
+            # over on the way must not get to guess at leisure
+            locked = await self._failed(who.name, row, address, time.time(),
+                                        "wrong current password")
+            if locked is not None:
+                await asyncio.to_thread(self.accounts.close_sessions,
+                                        who.name)
+                return locked
             return refuse("wrong_password", 403)
         problem = auth.password_problem(row["name"], new)
         if problem is None and new == current:
@@ -481,7 +635,7 @@ def add_routes(app: FastAPI, sign_in: SignIn) -> None:
         return await sign_in.logout(principal())
 
     @app.post("/api/auth/password")
-    async def auth_password(body: PasswordBody):
+    async def auth_password(body: PasswordBody, request: Request):
         return await sign_in.change_password(
-            principal(), body.current, body.new
+            principal(), body.current, body.new, _address(request)
         )

@@ -1402,3 +1402,12 @@ class Database:
                 "DELETE FROM sessions WHERE last_seen < ? OR created_at < ?",
                 (idle_before, created_before),
             ).rowcount
+
+    def lock(self, user_id: int, until: float) -> None:
+        """Too many wrong passwords in a row: no sign-in until `until`,
+        or until python -m moonlan.users unlock."""
+        with self._lock, self._conn:
+            self._conn.execute(
+                "UPDATE users SET locked_until = ? WHERE id = ?",
+                (until, user_id),
+            )
