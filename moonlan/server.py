@@ -20,7 +20,7 @@ from pydantic import BaseModel
 
 from . import (
     __version__, corruption, counters, demo, loopdetect, menu, pinger,
-    probes, stp,
+    probes, signin, stp,
 )
 from .alarms import AlarmEngine
 from .config import Config, load_config, parse_uplink_ports
@@ -49,6 +49,11 @@ state = TopologyState()
 config: Config = load_config()
 # In demo mode the DB lives in memory so the real one is not polluted
 db = Database(":memory:" if config.demo else config.db_path)
+# Accounts and sessions: the same database — except in demo mode, where
+# they need a file python -m moonlan.users can reach (see
+# Config.users_db_path)
+accounts = Database(config.users_db_path()) if config.demo else db
+sign_in = signin.SignIn(accounts)
 
 # Ping state of switches (they are not in the hosts table): ip -> {ping_up, last_ping_ok}
 switch_ping: dict[str, dict] = {}
@@ -2004,6 +2009,16 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="MoonLan", version=__version__, lifespan=lifespan)
+# Every request passes the rights table in access.py before a handler
+# sees it (a no-op while sign-in is off)
+app.add_middleware(signin.Guard, signin=sign_in, router=app.router)
+
+
+@app.get("/api/health")
+async def api_health() -> dict:
+    """For monitoring from outside, without signing in: is it up, and
+    which version. Nothing about the network."""
+    return {"status": "ok", "version": __version__}
 
 
 @app.get("/api/topology")
@@ -2381,7 +2396,7 @@ async def api_alarms(
 
 @app.post("/api/alarms/{alarm_id}/clear")
 async def api_clear_alarm(alarm_id: int):
-    row = await alarm_engine.manual_clear(alarm_id)
+    row = await alarm_engine.manual_clear(alarm_id, user=signin.actor())
     if row is None:
         return JSONResponse({"error": "no such active alarm"}, status_code=404)
     return {"id": alarm_id, "cleared": True}
@@ -2402,6 +2417,12 @@ async def api_patch_host(mac: str, body: HostPatch):
     ok = await asyncio.to_thread(db.set_monitored, mac, body.monitored)
     if not ok:
         return JSONResponse({"error": "unknown host"}, status_code=404)
+    # who asked for alarms about this device, or stopped them
+    await asyncio.to_thread(
+        db.add_event, time.time(),
+        "monitor_on" if body.monitored else "monitor_off", mac, "",
+        signin.actor(),
+    )
     return {"mac": mac, "monitored": body.monitored}
 
 
@@ -2678,7 +2699,8 @@ async def api_start_action(body: ActionBody, request: Request):
     ]
     try:
         job = jobs.start(
-            body.action, targets, config.context_menu.max_running
+            body.action, targets, config.context_menu.max_running,
+            owner=signin.actor(),
         )
     except probes.Busy:
         return _refuse("busy", 429, limit=config.context_menu.max_running)
@@ -2687,16 +2709,22 @@ async def api_start_action(body: ActionBody, request: Request):
         f"{t.node} ({t.ip or 'no address'})" for t in targets[:5]
     ) + (f" and {len(targets) - 5} more" if len(targets) > 5 else "")
     log.info(
-        "Menu: %s of %s requested from %s (job %s)",
-        body.action, shown, client, job.id,
+        "Menu: %s of %s requested from %s%s (job %s)",
+        body.action, shown, client,
+        f" by {signin.actor()}" if signin.actor() else "", job.id,
     )
     return job.as_dict()
 
 
 @app.get("/api/actions/{job_id}")
 async def api_action_state(job_id: str):
+    """A ping's result is for whoever started it, and for an
+    administrator. Somebody else's job answers as if it did not exist."""
     job = jobs.get(job_id)
-    if job is None:
+    who = signin.principal()
+    if job is None or (
+        who is not None and who.role != "admin" and job.owner != who.name
+    ):
         return _refuse("unknown_job", 404)
     return job.as_dict()
 
@@ -2746,7 +2774,7 @@ async def api_put_layout(body: LayoutBody) -> dict:
     if stored:
         await asyncio.to_thread(
             db.add_event, time.time(), "layout_saved", "",
-            f"{len(stored)} node(s)",
+            f"{len(stored)} node(s)", signin.actor(),
         )
         log.info("Map layout saved: %d node(s)", len(stored))
     return {
@@ -2768,15 +2796,16 @@ async def _journal_layout_action(event: str, node_ids: list[str]) -> None:
     Pinning and releasing were not in the journal at all, which is why
     a pin wiped out by another page's save was visible to nobody. The
     details are data, not a sentence — the page words them in its own
-    language and by the nodes' captions. When sign-in arrives (v0.7.3)
-    this is the entry that gets the user's name.
+    language and by the nodes' captions — and it names who did it.
     """
     if not node_ids:
         return
     details = json.dumps({
         "n": len(node_ids), "ids": node_ids[:LAYOUT_EVENT_IDS],
     })
-    await asyncio.to_thread(db.add_event, time.time(), event, "", details)
+    await asyncio.to_thread(
+        db.add_event, time.time(), event, "", details, signin.actor()
+    )
 
 
 async def _store_hand_placed(positions: dict[str, NodePosition]) -> dict:
@@ -2850,9 +2879,12 @@ async def api_clear_layout() -> dict:
     cleared_at = time.time()
     await asyncio.to_thread(
         db.add_event, cleared_at, "layout_cleared", "",
-        f"{removed} node(s)",
+        f"{removed} node(s)", signin.actor(),
     )
-    log.info("Map layout cleared: %d node(s) forgotten", removed)
+    log.info(
+        "Map layout cleared: %d node(s) forgotten%s", removed,
+        f" (by {signin.actor()})" if signin.actor() else "",
+    )
     # the page that asked for it must not mistake its own reset for
     # somebody else's on the next refresh
     return {"removed": removed, "cleared_at": cleared_at}
@@ -2869,6 +2901,8 @@ async def _scan_once() -> None:
 
 @app.post("/api/scan")
 async def api_scan() -> dict:
+    if signin.actor():
+        log.info("Network scan requested by %s", signin.actor())
     asyncio.create_task(_scan_once())
     return {"status": "started"}
 

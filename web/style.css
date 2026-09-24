@@ -237,6 +237,7 @@ main { flex: 1; display: flex; min-height: 0; }
 #journal-list li:first-child { border-top: none; }
 #journal-list .ev-time { color: var(--text-dim); font-size: 0.78rem; }
 #journal-list .ev-host { font-family: ui-monospace, monospace; color: var(--text-dim); }
+#journal-list .ev-user { color: var(--text-dim); font-size: 0.78rem; }
 #journal-list .ev-new  { color: var(--link); }
 #journal-list .ev-down { color: var(--warn); }
 #journal-list .ev-up   { color: var(--ok); }

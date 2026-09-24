@@ -904,11 +904,14 @@ class AlarmEngine:
         for mac in new_macs:
             await self._raise("new_mac", mac, details.get(mac, ""), auto_clear=True)
 
-    async def manual_clear(self, alarm_id: int) -> dict | None:
+    async def manual_clear(
+        self, alarm_id: int, user: str = ""
+    ) -> dict | None:
         """Operator-initiated clear of one active alarm by its id.
 
         Returns the cleared row or None if there is no such active
-        alarm. Notifies through the normal routing.
+        alarm. Notifies through the normal routing. `user` is who
+        cleared it, for the journal.
         """
         ts = time.time()
         row = await asyncio.to_thread(
@@ -921,10 +924,11 @@ class AlarmEngine:
         self._missing.pop((alarm_type, subject), None)
         await asyncio.to_thread(
             self._db.add_event, ts, "alarm_cleared", subject,
-            f"{row['severity']} {alarm_type}: cleared manually",
+            f"{row['severity']} {alarm_type}: cleared manually", user,
         )
-        log.info("Alarm cleared manually: %s %s (id %d)",
-                 alarm_type, subject, alarm_id)
+        log.info("Alarm cleared manually: %s %s (id %d)%s",
+                 alarm_type, subject, alarm_id,
+                 f" by {user}" if user else "")
         await self._notifier.notify(
             alarm_type, subject, row["severity"], "cleared manually",
             cleared=True, display=display_subject(subject),

@@ -512,6 +512,10 @@ const I18N = {
     ev_layout_released: "Released",
     evNodes: "{n}: {names}",
     evNodesMore: "{n}: {names} and {more} more",
+    ev_monitor_on: "Monitoring on",
+    ev_monitor_off: "Monitoring off",
+    evBy: "by {user}",
+    evConsole: "the server console",
     offlineGroup: "Offline",
     offlineGroupTitle: "Offline devices · {n}",
     offlineGroupHint:
@@ -1031,6 +1035,10 @@ const I18N = {
     ev_layout_released: "Отпущено",
     evNodes: "{n}: {names}",
     evNodesMore: "{n}: {names} и ещё {more}",
+    ev_monitor_on: "Наблюдение включено",
+    ev_monitor_off: "Наблюдение выключено",
+    evBy: "кто: {user}",
+    evConsole: "консоль сервера",
     offlineGroup: "Офлайн",
     offlineGroupTitle: "Офлайн-устройства · {n}",
     offlineGroupHint:
