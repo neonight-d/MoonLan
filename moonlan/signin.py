@@ -183,6 +183,19 @@ def refuse(error: str, status: int, **extra) -> JSONResponse:
     return JSONResponse({"error": error, **extra}, status_code=status)
 
 
+def log_plain_http() -> None:
+    """What signing in over plain HTTP is worth, said where the operator
+    looks: it keeps out a stranger at the keyboard and a guessed
+    password, not somebody reading the traffic on the same segment."""
+    log.warning(
+        "Sign-in runs over plain HTTP: passwords and session cookies cross "
+        "the network in clear text, and anyone who can read the traffic "
+        "can take a session. HTTPS arrives in v0.7.5; until then bind "
+        "TOTP with python -m moonlan.users totp <name> on this machine "
+        "rather than from a browser."
+    )
+
+
 def principal() -> Principal | None:
     return _current.get()
 
@@ -207,6 +220,10 @@ class SignIn:
         self._tickets: dict[str, Ticket] = {}
         self._purged = 0.0
         self.throttle = Throttle()
+        # sign-in as the last request found it: the first administrator
+        # created from the console switches it on between two requests,
+        # and the log should say so then, not at the next restart
+        self._was_on: bool | None = None
 
     def sign_in_on(self) -> bool:
         return self.accounts.active_admins() > 0
@@ -231,9 +248,15 @@ class SignIn:
             "Sign-in: on — %d administrator(s), %d user(s), %d viewer(s)",
             roles["admin"], roles["user"], roles["viewer"],
         )
+        log_plain_http()
 
     def _lookup(self, token: str, now: float) -> tuple[bool, Principal | None]:
         on = self.sign_in_on()
+        if on and self._was_on is False:
+            log.info("Sign-in switched on: an enabled administrator exists "
+                     "now. Every open map asks to sign in.")
+            log_plain_http()
+        self._was_on = on
         if on and now - self._purged > PURGE_SECONDS:
             self._purged = now
             self.accounts.purge_sessions(

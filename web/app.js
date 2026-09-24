@@ -686,6 +686,12 @@ function renderNotice() {
     const command = document.createElement("code");
     command.textContent = me.create_admin;
     parts.push(text, command);
+  } else if (me && me.name && plainHttp()) {
+    // Signing in over plain HTTP guards against a stranger at the
+    // keyboard and a guessed password, not against somebody reading
+    // the traffic. The page says so for as long as it is true — calmly,
+    // as a fact about this installation, not as an alarm.
+    parts.push(h("span", { text: t("noticeHttp") }));
   }
   els.notice.replaceChildren(...parts);
   els.notice.classList.toggle("hidden", !parts.length);
