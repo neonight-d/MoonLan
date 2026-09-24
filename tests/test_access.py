@@ -6,15 +6,17 @@ test lists every route the app has and fails on any that is not
 written down in access.RULES.
 """
 
-import json
+import contextlib
+import io
 import time
 import unittest
+from unittest import mock
 
 from starlette.routing import Mount
 
 import service_fixture  # noqa: F401  (sets MOONLAN_CONFIG first)
 from asgi_client import call
-from moonlan import access, auth, server, signin
+from moonlan import access, auth, server, signin, users
 from moonlan.access import Principal
 
 
@@ -226,6 +228,60 @@ class ServiceTest(unittest.TestCase):
         self.assertEqual(
             call(server.app, "GET", "/api/topology", cookie=user).status, 401
         )
+
+
+class OpenModeTest(unittest.TestCase):
+    """Sign-in is off until the first administrator exists, and on from
+    the next request after `python -m moonlan.users add` — which opens
+    the database file separately, as it does beside a running service."""
+
+    def setUp(self):
+        ServiceTest.clean(self)
+
+    def tearDown(self):
+        ServiceTest.clean(self)
+
+    @property
+    def db(self):
+        return server.accounts
+
+    def cli(self, *argv):
+        out = io.StringIO()
+        with mock.patch("getpass.getpass",
+                        return_value="correct horse battery"), \
+                contextlib.redirect_stdout(out):
+            self.assertEqual(users.main(list(argv)), 0, out.getvalue())
+
+    def test_from_open_to_closed_without_a_restart(self):
+        me = call(server.app, "GET", "/api/auth/me")
+        self.assertEqual(me.status, 200)
+        self.assertIs(me.json()["sign_in"], False)
+        self.assertIn("--role admin", me.json()["create_admin"])
+        self.assertEqual(call(server.app, "GET", "/api/topology").status, 200)
+
+        self.cli("add", "wall", "--role", "viewer")
+        # a viewer does not switch anything on
+        self.assertEqual(call(server.app, "GET", "/api/topology").status, 200)
+
+        self.cli("add", "anton", "--role", "admin")
+        self.assertEqual(call(server.app, "GET", "/api/topology").status, 401)
+        me = call(server.app, "GET", "/api/auth/me")
+        self.assertEqual((me.status, me.json()["sign_in"]), (401, True))
+
+    def test_accounts_are_never_open(self):
+        with mock.patch.dict(access.RULES, {"GET /api/users": access.ACCOUNTS}):
+            refusal = access.decide("GET /api/users", None, False)
+        self.assertIsNotNone(refusal)
+        self.assertEqual(refusal.body, {"error": "sign_in_off"})
+
+    def test_the_log_says_which(self):
+        with self.assertLogs("moonlan", "WARNING") as logged:
+            server.sign_in.log_state()
+        self.assertIn("python -m moonlan.users add", logged.output[0])
+        self.cli("add", "anton", "--role", "admin")
+        with self.assertLogs("moonlan", "INFO") as logged:
+            server.sign_in.log_state()
+        self.assertIn("Sign-in: on", logged.output[0])
 
 
 class JobOwnerTest(unittest.TestCase):

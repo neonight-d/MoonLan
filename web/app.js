@@ -43,6 +43,7 @@ const els = {
   actionsClose: document.getElementById("actions-close"),
   layoutStatus: document.getElementById("layout-status"),
   resetLayoutBtn: document.getElementById("reset-layout-btn"),
+  notice: document.getElementById("notice"),
   langRu: document.getElementById("lang-ru"),
   langEn: document.getElementById("lang-en"),
 };
@@ -133,6 +134,7 @@ function setLang(newLang) {
   lang = newLang;
   localStorage.setItem(LANG_KEY, lang);
   applyStatic();
+  renderNotice();
   applyArrangeMode();
   updateScanStatus();
   renderSidebar();
@@ -155,6 +157,39 @@ function setLang(newLang) {
     renderStp();
   }
   if (!els.actions.classList.contains("hidden")) renderAction();
+}
+
+/* ---------- who is looking ----------
+
+   Until the first administrator is created on the server, sign-in is
+   off and the map is open to everybody — which the header says for as
+   long as it lasts, with the command that ends it. */
+
+let me = null; // /api/auth/me: {sign_in: false} or who this browser is
+
+async function loadMe() {
+  let response;
+  try {
+    response = await fetch("/api/auth/me");
+  } catch (e) {
+    return;
+  }
+  const answer = await response.json();
+  me = response.status === 401 ? { sign_in: true } : answer;
+  renderNotice();
+}
+
+function renderNotice() {
+  const parts = [];
+  if (me && me.sign_in === false) {
+    const text = document.createElement("span");
+    text.textContent = t("noticeOpen") + " " + t("noticeOpenHint") + " ";
+    const command = document.createElement("code");
+    command.textContent = me.create_admin;
+    parts.push(text, command);
+  }
+  els.notice.replaceChildren(...parts);
+  els.notice.classList.toggle("hidden", !parts.length);
 }
 
 /* ---------- layout freeze ---------- */
@@ -3675,6 +3710,7 @@ function togglePinOnSelection() {
 
 applyStatic();
 applyArrangeMode();
+loadMe();
 // The layout arrives with the first map, so nodes start where they
 // were left rather than where the physics engine throws them and then
 // get yanked into place a moment later.

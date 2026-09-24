@@ -42,6 +42,9 @@ RULES: dict[str, str] = {
     # for monitoring from outside: status and version, nothing about
     # the network
     "GET /api/health": PUBLIC,
+    # who am I — or "sign-in is off", which the page has to be able to
+    # learn before anybody has signed in
+    "GET /api/auth/me": PUBLIC,
 
     # looking: the map, cards, ports, STP, the journal, alarms
     "GET /api/topology": VIEWER,

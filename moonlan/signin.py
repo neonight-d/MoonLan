@@ -15,6 +15,7 @@ import logging
 import time
 from contextvars import ContextVar
 
+from fastapi import FastAPI
 from starlette.requests import Request
 from starlette.responses import JSONResponse
 from starlette.routing import Match, Mount
@@ -26,6 +27,9 @@ from .db import Database
 log = logging.getLogger("moonlan")
 
 SESSION_COOKIE = "moonlan_session"
+
+# How to switch sign-in on, for the log and for the page
+CREATE_ADMIN = "python -m moonlan.users add <name> --role admin"
 
 # Who the request being handled comes from. Set by the guard for the
 # length of the request, so a handler that journals an action can name
@@ -63,6 +67,27 @@ class SignIn:
 
     def sign_in_on(self) -> bool:
         return self.accounts.active_admins() > 0
+
+    def log_state(self) -> None:
+        """One line at startup: is the map open, or behind sign-in."""
+        users = self.accounts.users()
+        if not self.sign_in_on():
+            log.warning(
+                "Sign-in is not set up: the map is open to everyone who can "
+                "reach it, and anyone can pin, reset the layout and start a "
+                "scan. Create the first administrator on this machine with: "
+                "%s — sign-in switches on at once, no restart needed.",
+                CREATE_ADMIN,
+            )
+            return
+        roles = {role: 0 for role in auth.ROLES}
+        for row in users:
+            if not row["disabled"]:
+                roles[row["role"]] += 1
+        log.info(
+            "Sign-in: on — %d administrator(s), %d user(s), %d viewer(s)",
+            roles["admin"], roles["user"], roles["viewer"],
+        )
 
     def _lookup(self, token: str, now: float) -> tuple[bool, Principal | None]:
         on = self.sign_in_on()
@@ -116,7 +141,10 @@ def route_key(routes, scope) -> str | None:
                 return access.STATIC
             # HEAD is GET without the body, and has GET's rights
             method = "GET" if scope["method"] == "HEAD" else scope["method"]
-            return f"{method} {route.path}"
+            # a kind of route with no path of its own is named by
+            # nothing in the table — administrators only, not open
+            path = getattr(route, "path", None) or f"<{type(route).__name__}>"
+            return f"{method} {path}"
     return None
 
 
@@ -172,3 +200,30 @@ class Guard:
             await self.app(scope, receive, send)
         finally:
             _current.reset(token)
+
+
+def add_routes(app: FastAPI, sign_in: SignIn) -> None:
+    """/api/auth/*: who am I, and (later) signing in and out.
+
+    Added to the app itself, not through an APIRouter: an included
+    router is one opaque entry in app.routes, and the guard — like the
+    test that every route is in the rights table — has to see each
+    route by its own path.
+    """
+
+    @app.get("/api/auth/me")
+    async def auth_me(request: Request):
+        """Who this browser is signed in as — or that sign-in is off,
+        which the page shows in its header for as long as it lasts."""
+        on, who = await sign_in.who(request)
+        if not on:
+            return {"sign_in": False, "create_admin": CREATE_ADMIN}
+        if who is None:
+            return JSONResponse(
+                {"error": "sign_in_required", "sign_in": True},
+                status_code=401,
+            )
+        return {
+            "sign_in": True, "name": who.name, "role": who.role,
+            "step": who.step,
+        }
