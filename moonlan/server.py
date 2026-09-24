@@ -1990,6 +1990,7 @@ async def lifespan(app: FastAPI):
             "No switches are configured in config.yaml. Add addresses to "
             "the switches section or start with MOONLAN_DEMO=1."
         )
+    await asyncio.to_thread(sign_in.log_state)
     await purge_invalid_macs()
     await purge_old_hosts()
     await drop_unpinned_positions()
@@ -2012,6 +2013,7 @@ app = FastAPI(title="MoonLan", version=__version__, lifespan=lifespan)
 # Every request passes the rights table in access.py before a handler
 # sees it (a no-op while sign-in is off)
 app.add_middleware(signin.Guard, signin=sign_in, router=app.router)
+signin.add_routes(app, sign_in)
 
 
 @app.get("/api/health")

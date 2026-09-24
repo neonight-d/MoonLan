@@ -516,6 +516,8 @@ const I18N = {
     ev_monitor_off: "Monitoring off",
     evBy: "by {user}",
     evConsole: "the server console",
+    noticeOpen: "Sign-in is not set up — the map is open to everyone.",
+    noticeOpenHint: "To create an administrator, run on the server:",
     offlineGroup: "Offline",
     offlineGroupTitle: "Offline devices · {n}",
     offlineGroupHint:
@@ -1039,6 +1041,8 @@ const I18N = {
     ev_monitor_off: "Наблюдение выключено",
     evBy: "кто: {user}",
     evConsole: "консоль сервера",
+    noticeOpen: "Вход не настроен — карта открыта всем.",
+    noticeOpenHint: "Создать администратора — на сервере:",
     offlineGroup: "Офлайн",
     offlineGroupTitle: "Офлайн-устройства · {n}",
     offlineGroupHint:
