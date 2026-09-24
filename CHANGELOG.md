@@ -6,6 +6,92 @@ for before the next one started.
 
 Русская версия — [CHANGELOG_RU.md](CHANGELOG_RU.md).
 
+## v0.7.4 — 2026-09-24
+
+Sign in, three roles, and a second factor.
+
+Since v0.7.2 the node menu runs ping and traceroute on the MoonLan
+machine, and anybody who opened the map could clear an alarm, pin a
+node, reset the shared layout and start a scan. The map is open to the
+whole local network, pupils included.
+
+**Accounts, and the first administrator on the server.** A `users`
+table and a `user` column in the journal, both added to an existing
+database. Passwords are scrypt (n=2¹⁴, r=8, p=1) with the parameters
+stored in the hash, at least ten characters and not the name, no
+composition rules. The first administrator is made with
+`python -m moonlan.users add <name> --role admin` — not with a setup
+page, which would make an administrator of whoever opened the map first
+after the install. The same command lists accounts, sets passwords
+(asked twice, never taken from the command line), roles, disables,
+enables, deletes, resets and binds TOTP and unlocks, with the service
+running. The last enabled administrator cannot be deleted, disabled or
+demoted — on the console and in the browser alike, checked in the same
+transaction as the change. A new password, role, disabling, deleting
+and resetting TOTP close every session of the account.
+
+**Open until then.** With no enabled administrator the service answers
+exactly as v0.7.3, and the header says the map is open to everyone,
+with the command that ends it. The first administrator switches
+sign-in on at the next request of every open page, without a restart.
+
+**One table of rights.** `moonlan/access.py` maps every route to the
+least role it needs; a route not in it is for administrators only, and
+a test lists every route of the app and fails on any the table does not
+name — which on its first run caught that this FastAPI keeps an
+included router as one opaque route. A middleware checks every request
+before the handler runs: 401 without a session, 403 with the role that
+is needed. Changing requests must carry the map's own `Origin`. A
+ping's result is seen by whoever started it and by administrators.
+`/api/health` answers without sign-in, with the status and the version
+only.
+
+**Signing in.** JSON, not a form (no python-multipart). With TOTP on,
+the password step returns a five-minute ticket, not half a session. The
+session is a random token in an `HttpOnly`, `SameSite=Strict` cookie;
+the database keeps its SHA-256. It ends after 12 hours without a
+request and after 30 days in any case — the map refreshing itself
+counts as activity, which keeps a wall monitor signed in for weeks. An
+account with a temporary password can do nothing but set its own; an
+administrator without a second factor can do nothing but bind one.
+
+**Protection.** One answer, and one scrypt's worth of time, for a wrong
+name and a wrong password. After five failures in a row from an
+address each next attempt waits twice as long, up to a minute; ten in
+a row lock the account for fifteen minutes, which `unlock` lifts
+early. A name nobody has locks the same way. Failures are log lines
+with the address; sign-in, sign-out and locks are journal entries.
+
+**TOTP.** RFC 6238 defaults — HMAC-SHA1, six digits, thirty seconds,
+one step either side — so the secret can live on an OATH hardware key.
+A code's step is spent in the same UPDATE that checks it: a code never
+works twice. Bound on the server (`moonlan.users totp` prints the
+secret and the otpauth:// line, the way to bind it without the secret
+crossing the network) or in the browser, where it binds only once a
+code from it comes back with the password. Eight recovery codes, shown
+once, stored as hashes, each good once instead of a code.
+
+**The interface.** The sign-in form over the map; after it the request
+that met a 401 goes on, so a session that ends while the page is open
+costs a password, not the place on the map. What a role may not do is
+greyed out with the role it needs, in the header, the node menu, the
+cards and the alarms — the discipline of v0.7.2's menu. The header
+names who is signed in; the name opens one's own page (password, TOTP,
+recovery codes left); Users gives an administrator the console's
+commands in the browser, with generated temporary passwords.
+
+**Honest about HTTP.** Over plain HTTP the password and the session
+cross the network in clear text. The header of a signed-in user says
+so, calmly and for as long as it is true, and so does the log at
+startup and at the moment sign-in switches on. HTTPS and passkeys are
+v0.7.5.
+
+`diag --config` shows the state of sign-in: on or off, accounts per
+role, administrators without TOTP, locked accounts, HTTP. diag, which
+writes nothing to the database, asks the running service with a token
+the service writes at every start beside its database (mode 0600) and
+reads as a viewer.
+
 ## v0.7.3 — 2026-09-24
 
 What a person placed is kept, the rest is laid out again.
