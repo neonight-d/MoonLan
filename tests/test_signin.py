@@ -544,5 +544,118 @@ class BindingTest(SignInCase):
         self.assertEqual(self.setup(None).json(), {"error": "sign_in_off"})
 
 
+class AccountsApiTest(SignInCase):
+    """The Users section's API: an administrator's, the console's rules."""
+
+    def setUp(self):
+        super().setUp()
+        ticket = self.login("anton").json()["ticket"]
+        self.admin = cookie_of(self.code(ticket, self.code_now("anton")))
+
+    def api(self, method, path, body=None, cookie=None):
+        return call(server.app, method, path, json_body=body,
+                    cookie=cookie or self.admin)
+
+    def test_create_with_a_temporary_password(self):
+        answer = self.api("POST", "/api/users", {"name": "vera", "role": "user"})
+        self.assertEqual(answer.status, 200, answer.body)
+        password = answer.json()["password"]
+        self.assertIsNone(auth.password_problem("vera", password))
+        cookie = cookie_of(self.login("vera", password))
+        self.assertEqual(self.me(cookie).json()["step"], "password")
+        event = server.db.journal(5)
+        added = next(e for e in event if e["event"] == "user_added")
+        self.assertEqual((added["mac"], added["user"]), ("vera", "anton"))
+
+    def test_names_and_roles_are_checked(self):
+        self.assertEqual(
+            self.api("POST", "/api/users", {"name": "two words",
+                                            "role": "user"}).json(),
+            {"error": "bad_name"},
+        )
+        self.assertEqual(
+            self.api("POST", "/api/users", {"name": "vera",
+                                            "role": "root"}).json(),
+            {"error": "bad_role"},
+        )
+        self.api("POST", "/api/users", {"name": "vera", "role": "user"})
+        taken = self.api("POST", "/api/users", {"name": "VERA", "role": "user"})
+        self.assertEqual((taken.status, taken.json()["error"]),
+                         (409, "exists"))
+
+    def test_the_last_administrator_here_too(self):
+        for body in ({"role": "user"}, {"disabled": True}):
+            answer = self.api("PATCH", "/api/users/anton", body)
+            self.assertEqual((answer.status, answer.json()["error"]),
+                             (409, "last_admin"), body)
+        answer = self.api("DELETE", "/api/users/anton")
+        self.assertEqual((answer.status, answer.json()["error"]),
+                         (409, "last_admin"))
+
+    def test_role_disable_delete(self):
+        self.add("vera", "user")
+        vera = cookie_of(self.login("vera"))
+        self.assertEqual(self.api("PATCH", "/api/users/vera",
+                                  {"role": "viewer"}).status, 200)
+        self.assertEqual(self.db.user("vera")["role"], "viewer")
+        # a new role signs the account out
+        self.assertEqual(self.me(vera).status, 401)
+        vera = cookie_of(self.login("vera"))
+        self.api("PATCH", "/api/users/vera", {"disabled": True})
+        self.assertEqual(self.me(vera).status, 401)
+        self.assertEqual(self.login("vera").json(), {"error": "disabled"})
+        self.api("PATCH", "/api/users/vera", {"disabled": False})
+        self.assertEqual(self.login("vera").status, 200)
+        self.assertEqual(self.api("DELETE", "/api/users/vera").status, 200)
+        self.assertIsNone(self.db.user("vera"))
+        self.assertEqual(self.api("DELETE", "/api/users/vera").status, 404)
+
+    def test_new_password_reset_totp_unlock_sign_out(self):
+        self.add("vera", "user", totp=True)
+        answer = self.api("POST", "/api/users/vera/password")
+        password = answer.json()["password"]
+        self.assertTrue(auth.verify_password(
+            password, self.db.user("vera")["password"]))
+        self.assertEqual(self.db.user("vera")["must_change"], 1)
+        self.assertEqual(self.api("POST", "/api/users/vera/reset-totp").status,
+                         200)
+        self.assertEqual(self.db.user("vera")["totp_enabled"], 0)
+        self.db.lock(self.db.user("vera")["id"], time.time() + 600)
+        self.assertEqual(self.api("POST", "/api/users/vera/unlock").json(),
+                         {"status": "unlocked"})
+        vera = cookie_of(self.login("vera", password))
+        self.assertEqual(self.api("POST", "/api/users/vera/logout").json(),
+                         {"sessions_closed": 1})
+        self.assertEqual(self.me(vera).status, 401)
+
+    def test_the_list(self):
+        self.add("vera", "user")
+        users = {u["name"]: u for u in self.api("GET", "/api/users").json()["users"]}
+        self.assertEqual(set(users), {"anton", "vera"})
+        self.assertEqual((users["anton"]["role"], users["anton"]["totp"],
+                          users["anton"]["sessions"]), ("admin", True, 1))
+        self.assertNotIn("password", users["vera"])
+        self.assertNotIn("totp_secret", users["vera"])
+
+    def test_only_for_administrators(self):
+        self.add("vera", "user")
+        vera = cookie_of(self.login("vera"))
+        for method, path in (("GET", "/api/users"),
+                             ("POST", "/api/users/anton/password"),
+                             ("DELETE", "/api/users/anton")):
+            answer = self.api(method, path, cookie=vera)
+            self.assertEqual((answer.status, answer.json()["need"]),
+                             (403, "admin"), path)
+
+    def test_never_while_sign_in_is_off(self):
+        # the first administrator comes from the console, not from here
+        self.clean()
+        answer = call(server.app, "POST", "/api/users",
+                      json_body={"name": "mallory", "role": "admin"})
+        self.assertEqual((answer.status, answer.json()),
+                         (403, {"error": "sign_in_off"}))
+        self.assertIsNone(self.db.user("mallory"))
+
+
 if __name__ == "__main__":
     unittest.main()

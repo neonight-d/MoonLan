@@ -35,6 +35,10 @@ header {
   display: flex;
   justify-content: space-between;
   align-items: center;
+  /* v0.7.4 added three buttons to a toolbar that was already full: on
+     a narrow window it wraps instead of pushing the page sideways */
+  flex-wrap: wrap;
+  gap: 8px 18px;
   padding: 10px 18px;
   border-bottom: 1px solid var(--line);
   background: var(--bg-panel);
@@ -68,7 +72,14 @@ header {
 h1 { margin: 0; font-size: 1.15rem; letter-spacing: 0.04em; }
 .tagline { color: var(--text-dim); font-size: 0.85rem; }
 
-.toolbar { display: flex; align-items: center; gap: 12px; }
+.toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 6px 12px;
+}
+.toolbar button { white-space: nowrap; }
 .status { color: var(--text-dim); font-size: 0.85rem; }
 
 /* RU | EN language switcher */
@@ -103,7 +114,7 @@ button:focus-visible { outline: 2px solid var(--link); outline-offset: 2px; }
 
 /* ---------- two panels ---------- */
 
-main { flex: 1; display: flex; min-height: 0; }
+main { flex: 1; display: flex; min-height: 0; position: relative; }
 
 #sidebar {
   width: 300px;
@@ -453,6 +464,147 @@ main { flex: 1; display: flex; min-height: 0; }
 #empty-state code { color: var(--moon); }
 
 .hidden { display: none !important; }
+
+/* ---------- signing in, roles, accounts ---------- */
+
+/* Not for this role: greyed out, never removed — a viewer who does
+   not see a button concludes the function does not exist. The reason
+   is in the tooltip and, on a click, in a toast. */
+.toolbar button.off, .panel-btn.off, .alarm-clear.off, .gate button.off {
+  color: var(--text-dim);
+  border-color: var(--line);
+  cursor: not-allowed;
+}
+.toolbar button.off:hover, .panel-btn.off:hover { background: transparent; }
+.alarm-clear.off:hover { color: var(--text-dim); }
+
+.user-chip { border-color: var(--line); color: var(--text); }
+.user-chip .role { color: var(--text-dim); margin-left: 6px; font-size: 0.8rem; }
+
+/* while the gate is up, the toolbar has nothing to offer: the gate
+   says what comes first (the language switch stays) */
+body.gated .toolbar > button { display: none; }
+
+.gate {
+  position: absolute;
+  inset: 0;
+  z-index: 30;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+  background: rgba(14, 20, 32, 0.78);
+  backdrop-filter: blur(3px);
+  overflow: auto;
+}
+.gate-card {
+  width: min(430px, 100%);
+  max-height: 100%;
+  overflow: auto;
+  background: var(--bg-panel);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 20px 22px;
+  box-shadow: 0 10px 40px rgba(0, 0, 0, 0.6);
+}
+.gate-card h2 { margin: 0 0 12px; font-size: 1.1rem; color: var(--moon); }
+.gate-card p { margin: 0 0 10px; font-size: 0.88rem; line-height: 1.4; }
+
+.form label { display: block; margin: 10px 0 0; font-size: 0.82rem; color: var(--text-dim); }
+.form input, .form select {
+  display: block;
+  width: 100%;
+  margin-top: 4px;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--bg);
+  color: var(--text);
+  font: inherit;
+}
+.form input:focus-visible, .form select:focus-visible { outline: 2px solid var(--link); }
+/* the name beside a password, for the browser's password manager only */
+.form input[hidden] { display: none; }
+.form .buttons { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 14px; }
+.form .error, #users .error { min-height: 1.2em; margin: 10px 0 0; color: #d96b6b; font-size: 0.85rem; }
+.form .done { margin: 10px 0 0; color: var(--ok); font-size: 0.85rem; }
+
+.hint-line { color: var(--text-dim); font-size: 0.82rem; }
+/* plain HTTP: said calmly, and said before the password is typed */
+.http-note {
+  margin: 0 0 12px;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  color: var(--text-dim);
+  font-size: 0.8rem;
+  line-height: 1.4;
+}
+.http-note code, .gate-card code, #account code, #users code {
+  font-family: ui-monospace, monospace;
+  color: var(--text);
+  user-select: all;
+  /* a command wraps between its words, not in the middle of one */
+  overflow-wrap: anywhere;
+}
+
+.totp-secret {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  margin: 10px 0;
+}
+.totp-secret canvas { background: #fff; padding: 8px; border-radius: 6px; }
+.totp-secret .secret { font-family: ui-monospace, monospace; font-size: 1rem; letter-spacing: 0.05em; }
+.totp-secret .uri { font-size: 0.72rem; word-break: break-all; color: var(--text-dim); }
+.recovery-codes {
+  columns: 2;
+  margin: 10px 0;
+  padding: 10px 14px;
+  border: 1px dashed var(--line);
+  border-radius: 6px;
+  font-family: ui-monospace, monospace;
+  font-size: 0.95rem;
+  list-style: none;
+}
+.recovery-codes li { padding: 2px 0; }
+
+#account, #users { width: min(440px, calc(100vw - 28px)); }
+#account dl { margin: 0 0 6px; font-size: 0.88rem; }
+#account dt { color: var(--text-dim); margin-top: 8px; }
+#account dd { margin: 2px 0 0; }
+#account .form { margin-top: 6px; }
+
+.user-list { list-style: none; margin: 8px 0 0; padding: 0; font-size: 0.85rem; }
+.user-list > li { padding: 9px 0; border-top: 1px solid var(--line); }
+.user-list > li:first-child { border-top: none; }
+.user-list .who { display: flex; align-items: center; gap: 8px; }
+.user-list .who strong { font-weight: 600; }
+.user-list .who select {
+  margin-left: auto;
+  padding: 3px 6px;
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  background: var(--bg);
+  color: var(--text);
+  font: inherit;
+  font-size: 0.8rem;
+}
+.user-list .state { color: var(--text-dim); font-size: 0.78rem; margin-top: 3px; }
+.user-list .state .bad { color: var(--warn); }
+.user-list .acts { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
+.user-list .acts button { padding: 2px 8px; font-size: 0.75rem; }
+.new-user { display: flex; gap: 6px; align-items: flex-end; flex-wrap: wrap; }
+.new-user label { flex: 1 1 140px; margin: 0; }
+.new-user .buttons { margin: 0; }
+.secret-once {
+  margin: 10px 0 0;
+  padding: 8px 10px;
+  border: 1px solid var(--ok);
+  border-radius: 6px;
+  font-size: 0.85rem;
+}
 
 @media (max-width: 720px) {
   main { flex-direction: column; }

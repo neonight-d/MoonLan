@@ -44,6 +44,18 @@ const els = {
   layoutStatus: document.getElementById("layout-status"),
   resetLayoutBtn: document.getElementById("reset-layout-btn"),
   notice: document.getElementById("notice"),
+  usersBtn: document.getElementById("users-btn"),
+  userChip: document.getElementById("user-chip"),
+  logoutBtn: document.getElementById("logout-btn"),
+  gate: document.getElementById("gate"),
+  gateTitle: document.getElementById("gate-title"),
+  gateBody: document.getElementById("gate-body"),
+  account: document.getElementById("account"),
+  accountBody: document.getElementById("account-body"),
+  accountClose: document.getElementById("account-close"),
+  users: document.getElementById("users"),
+  usersBody: document.getElementById("users-body"),
+  usersClose: document.getElementById("users-close"),
   langRu: document.getElementById("lang-ru"),
   langEn: document.getElementById("lang-en"),
 };
@@ -134,7 +146,10 @@ function setLang(newLang) {
   lang = newLang;
   localStorage.setItem(LANG_KEY, lang);
   applyStatic();
-  renderNotice();
+  applyRole();
+  // the sign-in form is redrawn in the new language; a form half way
+  // through a code or a password is left alone
+  if (gateUp() && gateView === "signIn") renderSignIn();
   applyArrangeMode();
   updateScanStatus();
   renderSidebar();
@@ -157,15 +172,43 @@ function setLang(newLang) {
     renderStp();
   }
   if (!els.actions.classList.contains("hidden")) renderAction();
+  if (!els.users.classList.contains("hidden")) refreshUsers();
 }
 
 /* ---------- who is looking ----------
 
-   Until the first administrator is created on the server, sign-in is
-   off and the map is open to everybody — which the header says for as
-   long as it lasts, with the command that ends it. */
+   Sign-in arrives with the first administrator created on the server
+   (python -m moonlan.users). Until then the map is open to everybody,
+   which the header says for as long as it lasts, with the command that
+   ends it.
 
-let me = null; // /api/auth/me: {sign_in: false} or who this browser is
+   After that every request carries the session cookie. A 401 anywhere
+   brings the sign-in form up over the map, and the request that met it
+   waits and goes on once somebody has signed in: a session that ended
+   while the page was open costs a password, not the place on the map.
+   A 403 "step_required" does the same with what has to come first — a
+   password of one's own, an administrator's second factor. */
+
+let me = null; // /api/auth/me: {sign_in: false, ...}, or who this browser is
+let everSignedIn = false; // …so a later 401 reads "the session ended"
+const ROLE_RANK = { viewer: 1, user: 2, admin: 3 };
+
+/* null when this browser may do what needs `role`, or why not. While
+   sign-in is off the map is what it always was: everything is allowed.
+   Before /api/auth/me has answered nothing is refused here either —
+   the server refuses whatever it has to. */
+function needRole(role) {
+  if (!me || !me.sign_in || !me.role) return null;
+  if (ROLE_RANK[me.role] >= ROLE_RANK[role]) return null;
+  return fmt("reasonNeedRole", { role: t("role_" + role) });
+}
+
+/* Accounts are never open: not before sign-in exists, and not below
+   an administrator. */
+function accountsReason() {
+  if (!me || !me.sign_in) return t("reasonSignInOff");
+  return needRole("admin");
+}
 
 async function loadMe() {
   let response;
@@ -176,8 +219,464 @@ async function loadMe() {
   }
   const answer = await response.json();
   me = response.status === 401 ? { sign_in: true } : answer;
-  renderNotice();
+  if (me.name) everSignedIn = true;
+  applyRole();
 }
+
+/* Every call to the service goes through here. Network errors are
+   thrown as before — the callers know what "the service is gone"
+   means for them. */
+async function api(path, options) {
+  for (;;) {
+    if (gateWait) await gateWait;
+    const response = await fetch(path, options);
+    if (response.status === 401) {
+      await throughGate("signIn");
+      continue;
+    }
+    if (response.status === 403) {
+      let body = null;
+      try {
+        body = await response.clone().json();
+      } catch (e) {
+        body = null;
+      }
+      if (body && body.error === "step_required") {
+        await throughGate(body.step);
+        continue;
+      }
+      if (body && body.error === "forbidden") {
+        // the role changed while the page was open
+        showToast(fmt("reasonNeedRole", { role: t("role_" + body.need) }));
+        loadMe();
+      }
+    }
+    return response;
+  }
+}
+
+function jsonPost(path, body) {
+  return {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body || {}),
+  };
+}
+
+/* A small element builder: the forms below are all fields, labels and
+   buttons, and innerHTML would put whatever a name contains into the
+   page as markup. */
+function h(tag, props, ...children) {
+  const el = document.createElement(tag);
+  for (const [key, value] of Object.entries(props || {})) {
+    if (value === undefined || value === null || value === false) continue;
+    if (key === "class") el.className = value;
+    else if (key === "text") el.textContent = value;
+    else if (key.startsWith("on")) el.addEventListener(key.slice(2), value);
+    else el.setAttribute(key, value === true ? "" : value);
+  }
+  for (const child of children) {
+    if (child !== null && child !== undefined && child !== false) el.append(child);
+  }
+  return el;
+}
+
+function field(labelKey, props) {
+  const input = h("input", props);
+  return { label: h("label", {}, t(labelKey), input), input: input };
+}
+
+function errorText(answer) {
+  const code = (answer && answer.error) || "other";
+  if (code === "locked") {
+    return fmt("err_locked", {
+      minutes: Math.max(1, Math.ceil((answer.retry_after || 60) / 60)),
+    });
+  }
+  if (code === "too_many_attempts") {
+    return fmt("err_too_many_attempts", { seconds: answer.retry_after || 1 });
+  }
+  const key = "err_" + code;
+  return t(key) !== key ? t(key) : fmt("err_other", { error: code });
+}
+
+/* POST to /api/auth/*, from inside the gate: not through api(), which
+   would wait for the very gate this is part of. */
+async function authPost(path, body) {
+  try {
+    const response = await fetch(path, jsonPost(path, body));
+    let answer = {};
+    try {
+      answer = await response.json();
+    } catch (e) {
+      answer = {};
+    }
+    return { ok: response.ok, status: response.status, answer: answer };
+  } catch (e) {
+    return { ok: false, status: 0, answer: { error: "no_service" } };
+  }
+}
+
+function plainHttp() {
+  return location.protocol !== "https:";
+}
+
+/* ---------- the gate ---------- */
+
+let gateWait = null; // what requests wait on while the gate is up
+let gateDone = null; // …and what lets them go
+
+function gateUp() {
+  return !els.gate.classList.contains("hidden");
+}
+
+/* Puts the gate up (unless it is up already) and resolves once
+   whoever is at the keyboard has got through it. */
+function throughGate(kind) {
+  if (!gateWait) {
+    gateWait = new Promise((resolve) => {
+      gateDone = resolve;
+    });
+    showGate(kind);
+  }
+  return gateWait;
+}
+
+function showGate(kind) {
+  closeNodeMenu();
+  if (kind === "signIn" && (!me || !me.sign_in || me.name)) {
+    // whatever the page believed — sign-in off, or signed in as
+    // somebody — the server has just said otherwise
+    me = { sign_in: true };
+    applyRole();
+  }
+  els.gate.classList.remove("hidden");
+  document.body.classList.add("gated");
+  if (kind !== "signIn" && !(me && me.name)) {
+    // a step met on the first request of the page, before
+    // /api/auth/me has answered: its forms need the name
+    els.gateBody.replaceChildren();
+    loadMe().then(() => showGate(me && me.name ? kind : "signIn"));
+    return;
+  }
+  if (kind === "signIn") renderSignIn();
+  else if (kind === "password") renderNewPassword();
+  else if (kind === "totp") renderBindTotp(true);
+  else if (kind === "bind") renderBindTotp(false);
+}
+
+function closeGate() {
+  els.gate.classList.add("hidden");
+  document.body.classList.remove("gated");
+  els.gateBody.replaceChildren();
+  const done = gateDone;
+  gateWait = null;
+  gateDone = null;
+  if (done) done();
+}
+
+function gateForm(titleKey, parts, onSubmit) {
+  els.gateTitle.textContent = t(titleKey);
+  const form = h("form", { class: "form", novalidate: true }, ...parts);
+  form.addEventListener("submit", (event) => {
+    event.preventDefault();
+    onSubmit(form);
+  });
+  els.gateBody.replaceChildren(form);
+  const first = form.querySelector("input:not([type=hidden]):not([readonly])");
+  if (first) first.focus();
+  return form;
+}
+
+/* After a password or a code: who is this, and is there a step left. */
+async function signedIn() {
+  await loadMe();
+  if (me && me.step) {
+    showGate(me.step);
+    return;
+  }
+  closeGate();
+}
+
+async function signOut() {
+  await authPost("/api/auth/logout", {});
+  // a fresh page: nothing of the previous person's map stays behind
+  // the form for the next one
+  location.reload();
+}
+
+let gateView = null; // which form the gate shows, for the language switch
+
+function renderSignIn(message) {
+  gateView = "signIn";
+  const name = field("fieldName", {
+    name: "username", autocomplete: "username", autocapitalize: "none",
+    spellcheck: "false", required: true,
+  });
+  const password = field("fieldPassword", {
+    type: "password", name: "password", autocomplete: "current-password",
+    required: true,
+  });
+  const error = h("p", { class: "error", role: "alert", text: message || "" });
+  const button = h("button", { type: "submit", text: t("signInBtn") });
+  gateForm("signInTitle", [
+    everSignedIn ? h("p", { text: t("signInAgain") }) : null,
+    plainHttp() ? h("p", { class: "http-note", text: t("httpSignIn") }) : null,
+    name.label, password.label, error,
+    h("div", { class: "buttons" }, button),
+  ], async () => {
+    button.disabled = true;
+    const result = await authPost("/api/auth/login", {
+      name: name.input.value.trim(), password: password.input.value,
+    });
+    button.disabled = false;
+    if (result.ok && result.answer.status === "code_required") {
+      renderCode(result.answer.ticket);
+    } else if (result.ok) {
+      await signedIn();
+    } else if (result.answer.error === "sign_in_off") {
+      // nobody to sign in as after all: the map is open
+      await loadMe();
+      closeGate();
+    } else {
+      error.textContent = errorText(result.answer);
+      password.input.select();
+    }
+  });
+}
+
+function renderCode(ticket) {
+  gateView = "code";
+  const code = field("fieldCode", {
+    name: "code", autocomplete: "one-time-code", autocapitalize: "none",
+    spellcheck: "false", required: true,
+  });
+  const error = h("p", { class: "error", role: "alert" });
+  const button = h("button", { type: "submit", text: t("confirmBtn") });
+  gateForm("codeTitle", [
+    h("p", { text: t("codeHint") }),
+    code.label, error,
+    h("div", { class: "buttons" }, button,
+      h("button", { type: "button", text: t("backBtn"), onclick: () => renderSignIn() })),
+  ], async () => {
+    button.disabled = true;
+    const result = await authPost("/api/auth/totp", {
+      ticket: ticket, code: code.input.value.trim(),
+    });
+    button.disabled = false;
+    if (result.ok) {
+      await signedIn();
+    } else if (result.answer.error === "ticket_expired" || result.answer.error === "locked") {
+      renderSignIn(errorText(result.answer));
+    } else {
+      error.textContent = errorText(result.answer);
+      code.input.select();
+    }
+  });
+}
+
+/* The fields of a password change; the username goes along hidden so a
+   password manager files the new password under the right name. */
+function passwordFields() {
+  return {
+    user: h("input", {
+      type: "text", name: "username", autocomplete: "username",
+      value: (me && me.name) || "", readonly: true, hidden: true,
+    }),
+    current: field("fieldCurrentPassword", {
+      type: "password", autocomplete: "current-password", required: true,
+    }),
+    fresh: field("fieldNewPassword", {
+      type: "password", autocomplete: "new-password", required: true,
+    }),
+    again: field("fieldRepeatPassword", {
+      type: "password", autocomplete: "new-password", required: true,
+    }),
+  };
+}
+
+async function changePassword(fields, error) {
+  if (fields.fresh.input.value !== fields.again.input.value) {
+    error.textContent = t("err_mismatch");
+    return null;
+  }
+  const result = await authPost("/api/auth/password", {
+    current: fields.current.input.value, new: fields.fresh.input.value,
+  });
+  if (!result.ok) {
+    error.textContent = errorText(result.answer);
+    return null;
+  }
+  return result.answer;
+}
+
+function renderNewPassword() {
+  gateView = "password";
+  const fields = passwordFields();
+  const error = h("p", { class: "error", role: "alert" });
+  const button = h("button", { type: "submit", text: t("saveBtn") });
+  gateForm("newPasswordTitle", [
+    h("p", { text: t("newPasswordHint") }),
+    h("p", { class: "hint-line", text: t("passwordRules") }),
+    fields.user, fields.current.label, fields.fresh.label, fields.again.label,
+    error,
+    h("div", { class: "buttons" }, button,
+      h("button", { type: "button", text: t("logoutBtn"), onclick: signOut })),
+  ], async () => {
+    button.disabled = true;
+    const done = await changePassword(fields, error);
+    button.disabled = false;
+    if (done) await signedIn();
+  });
+}
+
+/* ---------- binding a second factor ----------
+
+   The secret is shown, nothing is bound: it waits on the server until a
+   code made from it comes back with the password, so a mistake while
+   scanning locks nobody out. Over plain HTTP the page says the secret
+   is crossing the network in the clear, and how to avoid that. */
+
+const QR_LIBRARY = "https://cdnjs.cloudflare.com/ajax/libs/qrious/4.0.2/qrious.min.js";
+let qrLoading = null;
+
+/* Loaded when a QR code is needed and not before: a wall monitor has
+   no use for it. Resolves false if cdnjs cannot be reached — the
+   secret is on the screen as text anyway. */
+function loadQrLibrary() {
+  if (window.QRious) return Promise.resolve(true);
+  if (!qrLoading) {
+    qrLoading = new Promise((resolve) => {
+      const script = document.createElement("script");
+      script.src = QR_LIBRARY;
+      script.onload = () => resolve(!!window.QRious);
+      script.onerror = () => {
+        qrLoading = null;
+        resolve(false);
+      };
+      document.head.append(script);
+    });
+  }
+  return qrLoading;
+}
+
+function copyButton(text) {
+  return h("button", {
+    type: "button", class: "panel-btn", text: t("copyBtn"),
+    onclick: () => copyText(text),
+  });
+}
+
+function renderBindTotp(required) {
+  gateView = "totp";
+  const command = "python -m moonlan.users totp " + ((me && me.name) || "<name>");
+  const show = h("button", { type: "button", text: t("showSecretBtn") });
+  const leave = required
+    ? h("button", { type: "button", text: t("logoutBtn"), onclick: signOut })
+    : h("button", { type: "button", text: t("backBtn"), onclick: closeGate });
+  const area = h("div");
+  gateForm("totpTitle", [
+    required ? h("p", { text: t("totpRequired") }) : null,
+    plainHttp()
+      ? h("p", { class: "http-note" },
+          ...fmt("totpHttp", { command: "\u0000" }).split("\u0000").flatMap(
+            (text, i) => (i ? [h("code", { text: command }), text] : [text])
+          ))
+      : null,
+    required ? h("p", { class: "hint-line", text: t("totpBoundOnServer") }) : null,
+    area,
+    h("div", { class: "buttons" }, show, leave),
+  ], () => {});
+  show.addEventListener("click", async () => {
+    show.disabled = true;
+    const result = await authPost("/api/auth/totp/setup", {});
+    show.disabled = false;
+    if (!result.ok) {
+      area.replaceChildren(h("p", { class: "error", text: errorText(result.answer) }));
+      return;
+    }
+    show.remove();
+    renderSecret(area, result.answer, required);
+  });
+}
+
+function renderSecret(area, secret, required) {
+  const grouped = secret.secret.replace(/(.{4})(?=.)/g, "$1 ");
+  const qr = h("div");
+  const code = field("fieldCode", {
+    autocomplete: "one-time-code", autocapitalize: "none", spellcheck: "false",
+    inputmode: "numeric", required: true,
+  });
+  const user = h("input", {
+    type: "text", name: "username", autocomplete: "username",
+    value: (me && me.name) || "", readonly: true, hidden: true,
+  });
+  const password = field("fieldPassword", {
+    type: "password", autocomplete: "current-password", required: true,
+  });
+  const error = h("p", { class: "error", role: "alert" });
+  const bind = h("button", { type: "submit", text: t("bindBtn") });
+  area.replaceChildren(
+    h("p", { class: "hint-line", text: t("totpScanHint") }),
+    h("div", { class: "totp-secret" },
+      qr,
+      h("div", { class: "hint-line", text: t("totpSecretLabel") }),
+      h("div", { class: "secret", text: grouped }),
+      copyButton(secret.secret),
+      h("div", { class: "hint-line", text: t("totpUriLabel") }),
+      h("div", { class: "uri", text: secret.uri }),
+      copyButton(secret.uri)),
+    h("p", { text: t("totpConfirmHint") }),
+    user, code.label, password.label, error,
+    h("div", { class: "buttons" }, bind)
+  );
+  code.input.focus();
+  loadQrLibrary().then((ok) => {
+    if (!ok) {
+      qr.replaceChildren(h("p", { class: "hint-line", text: t("qrUnavailable") }));
+      return;
+    }
+    const canvas = h("canvas");
+    // eslint-disable-next-line no-undef
+    new QRious({ element: canvas, value: secret.uri, size: 200, level: "M" });
+    qr.replaceChildren(canvas);
+  });
+  const form = area.closest("form");
+  form.onsubmit = async (event) => {
+    event.preventDefault();
+    bind.disabled = true;
+    const result = await authPost("/api/auth/totp/confirm", {
+      code: code.input.value.trim(), password: password.input.value,
+    });
+    bind.disabled = false;
+    if (!result.ok) {
+      error.textContent = errorText(result.answer);
+      return;
+    }
+    renderRecovery(result.answer.recovery, required);
+  };
+}
+
+/* Shown once, and the gate stays until the person says they have them. */
+function renderRecovery(codes, required) {
+  gateForm("recoveryTitle", [
+    h("p", { text: t("recoveryHint") }),
+    h("ul", { class: "recovery-codes" }, ...codes.map((c) => h("li", { text: c }))),
+    h("div", { class: "buttons" },
+      h("button", { type: "submit", text: t("recoveryDoneBtn") }),
+      copyButton(codes.join("\n"))),
+  ], async () => {
+    if (required) {
+      await signedIn();
+    } else {
+      closeGate();
+      await loadMe();
+      if (!els.account.classList.contains("hidden")) renderAccount();
+    }
+  });
+}
+
+/* ---------- the header: who, and what this role may do ---------- */
 
 function renderNotice() {
   const parts = [];
@@ -190,6 +689,269 @@ function renderNotice() {
   }
   els.notice.replaceChildren(...parts);
   els.notice.classList.toggle("hidden", !parts.length);
+}
+
+/* Not for this role: greyed out with the reason, never removed. */
+function gateButton(button, reason) {
+  button.classList.toggle("off", !!reason);
+  button.setAttribute("aria-disabled", reason ? "true" : "false");
+  button.dataset.why = reason || "";
+  button.title = reason || "";
+}
+
+/* For a click handler: go ahead, or say why not. */
+function allowed(button) {
+  if (!button.dataset.why) return true;
+  showToast(button.dataset.why);
+  return false;
+}
+
+function applyRole() {
+  renderNotice();
+  const signedInAs = me && me.sign_in && me.name;
+  els.userChip.classList.toggle("hidden", !signedInAs);
+  els.logoutBtn.classList.toggle("hidden", !signedInAs);
+  if (signedInAs) {
+    els.userChip.replaceChildren(
+      me.name, h("span", { class: "role", text: t("role_" + me.role) })
+    );
+    els.userChip.title = t("userChipHint");
+  }
+  gateButton(els.rescan, needRole("user"));
+  gateButton(els.arrangeBtn, needRole("user"));
+  gateButton(els.resetLayoutBtn, needRole("admin"));
+  gateButton(els.usersBtn, accountsReason());
+  if (arrangeMode && needRole("user")) arrangeMode = false;
+  applyArrangeMode();
+  // what an open panel offers depends on the role
+  if (!els.details.classList.contains("hidden") && shownDetails) {
+    if (shownDetails.type === "link") showLinkDetails(shownDetails.id);
+    else showDetails(shownDetails.id);
+  }
+  if (!els.alarms.classList.contains("hidden") && lastAlarms) renderAlarms();
+  if (!els.account.classList.contains("hidden")) renderAccount();
+  if (!els.users.classList.contains("hidden") && accountsReason()) {
+    els.users.classList.add("hidden");
+  }
+}
+
+/* ---------- your own account ---------- */
+
+function hideAccountPanels() {
+  els.account.classList.add("hidden");
+  els.users.classList.add("hidden");
+}
+
+function hidePanelsFor(panel) {
+  for (const other of [els.details, els.journal, els.alarms, els.stp,
+    els.account, els.users]) {
+    if (other !== panel) other.classList.add("hidden");
+  }
+  if (panel !== els.details) shownDetails = null;
+  closePorts();
+}
+
+function toggleAccount() {
+  if (!els.account.classList.contains("hidden")) {
+    els.account.classList.add("hidden");
+    return;
+  }
+  hidePanelsFor(els.account);
+  els.account.classList.remove("hidden");
+  renderAccount();
+  loadMe();
+}
+
+function renderAccount() {
+  if (!me || !me.name) return;
+  const totp = me.totp
+    ? t("totpOn") + " · " + fmt("recoveryLeft", { n: me.recovery_left })
+    : t("totpOff");
+  const fields = passwordFields();
+  const error = h("p", { class: "error", role: "alert" });
+  const done = h("p", { class: "done" });
+  const save = h("button", { type: "submit", text: t("saveBtn") });
+  const form = h("form", { class: "form hidden", novalidate: true },
+    h("p", { class: "hint-line", text: t("passwordRules") }),
+    fields.user, fields.current.label, fields.fresh.label, fields.again.label,
+    error, h("div", { class: "buttons" }, save));
+  form.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    error.textContent = "";
+    save.disabled = true;
+    const answer = await changePassword(fields, error);
+    save.disabled = false;
+    if (answer) {
+      form.classList.add("hidden");
+      done.textContent = fmt("passwordChanged", { n: answer.sessions_closed });
+    }
+  });
+  els.accountBody.replaceChildren(
+    h("dl", {},
+      h("dt", { text: t("fieldName") }), h("dd", { text: me.name }),
+      h("dt", { text: t("accountRole") }), h("dd", { text: t("role_" + me.role) }),
+      h("dt", { text: t("accountTotp") }), h("dd", { text: totp })),
+    h("button", {
+      class: "panel-btn", text: t("changePasswordBtn"),
+      onclick: () => {
+        form.classList.toggle("hidden");
+        done.textContent = "";
+        if (!form.classList.contains("hidden")) fields.current.input.focus();
+      },
+    }),
+    h("button", {
+      class: "panel-btn", text: t(me.totp ? "rebindTotpBtn" : "bindTotpBtn"),
+      title: me.totp ? t("rebindHint") : null,
+      onclick: () => showGate("bind"),
+    }),
+    h("button", { class: "panel-btn", text: t("logoutBtn"), onclick: signOut }),
+    done, form
+  );
+}
+
+/* ---------- accounts, for an administrator ---------- */
+
+let usersNotice = null; // a temporary password, shown once
+
+async function toggleUsers() {
+  if (!els.users.classList.contains("hidden")) {
+    els.users.classList.add("hidden");
+    return;
+  }
+  hidePanelsFor(els.users);
+  usersNotice = null;
+  els.users.classList.remove("hidden");
+  await refreshUsers();
+}
+
+async function refreshUsers(error) {
+  let data;
+  try {
+    data = await (await api("/api/users")).json();
+  } catch (e) {
+    serviceLost("the users");
+    return;
+  }
+  if (!data.users) return;
+  renderUsers(data.users, data.me, error);
+}
+
+/* One change to one account: the request, and the list again. */
+async function userAction(path, options, confirmKey, name) {
+  if (confirmKey && !window.confirm(fmt(confirmKey, { name: name }))) return;
+  // a temporary password is shown until the next change, not forever
+  usersNotice = null;
+  let response;
+  try {
+    response = await api(path, options);
+  } catch (e) {
+    serviceLost("changing an account");
+    return;
+  }
+  const answer = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    await refreshUsers(errorText(answer));
+    return;
+  }
+  if (answer.password) {
+    usersNotice = fmt(path.endsWith("/password") ? "userNewPassword" : "userCreated", {
+      name: answer.name, password: answer.password,
+    });
+  } else {
+    showToast(t("usersDone"));
+  }
+  await refreshUsers();
+}
+
+function userState(user) {
+  const now = Date.now() / 1000;
+  const parts = [];
+  if (user.disabled) parts.push(h("span", { class: "bad", text: t("stateDisabled") }));
+  else if (user.locked_until > now) {
+    parts.push(h("span", { class: "bad", text: fmt("stateLocked", { time: fmtTime(user.locked_until) }) }));
+  } else parts.push(t("stateActive"));
+  if (user.must_change) parts.push(t("stateMustChange"));
+  if (user.totp) parts.push(t("userTotpOn"));
+  else if (user.role === "admin") {
+    parts.push(h("span", { class: "bad", text: t("userTotpAdminMissing") }));
+  } else parts.push(t("userTotpOff"));
+  parts.push(user.last_login
+    ? fmt("userLastLogin", { time: fmtTime(user.last_login) })
+    : t("userNever"));
+  parts.push(fmt("userSessions", { n: user.sessions }));
+  const line = h("div", { class: "state" });
+  parts.forEach((part, i) => {
+    if (i) line.append(" · ");
+    line.append(part);
+  });
+  return line;
+}
+
+function renderUsers(users, myName, errorMessage) {
+  const name = h("input", {
+    autocomplete: "off", autocapitalize: "none", spellcheck: "false",
+    required: true,
+  });
+  const role = h("select", {},
+    ...["viewer", "user", "admin"].map((r) => h("option", { value: r, text: t("role_" + r) })));
+  const create = h("form", { class: "form new-user", novalidate: true },
+    h("label", {}, t("fieldName"), name),
+    h("label", {}, t("accountRole"), role),
+    h("div", { class: "buttons" }, h("button", { type: "submit", text: t("addBtn") })));
+  create.addEventListener("submit", (event) => {
+    event.preventDefault();
+    userAction("/api/users",
+      jsonPost("/api/users", { name: name.value.trim(), role: role.value }));
+  });
+  const list = h("ul", { class: "user-list" }, ...users.map((user) => {
+    const path = "/api/users/" + encodeURIComponent(user.name);
+    const select = h("select", {},
+      ...["viewer", "user", "admin"].map((r) =>
+        h("option", { value: r, text: t("role_" + r), selected: r === user.role })));
+    select.addEventListener("change", () =>
+      userAction(path, {
+        method: "PATCH", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ role: select.value }),
+      }));
+    const act = (key, run) => h("button", { type: "button", text: t(key), onclick: run });
+    return h("li", {},
+      h("div", { class: "who" },
+        h("strong", { text: user.name }),
+        user.name === myName ? h("span", { class: "hint-line", text: "(" + t("userYou") + ")" }) : null,
+        select),
+      userState(user),
+      h("div", { class: "acts" },
+        act("actNewPassword", () =>
+          userAction(path + "/password", jsonPost(path + "/password"), "confirmNewPassword", user.name)),
+        user.totp
+          ? act("actResetTotp", () =>
+            userAction(path + "/reset-totp", jsonPost(path + "/reset-totp"), "confirmResetTotp", user.name))
+          : null,
+        user.locked_until
+          ? act("actUnlock", () => userAction(path + "/unlock", jsonPost(path + "/unlock")))
+          : null,
+        user.sessions
+          ? act("actSignOut", () => userAction(path + "/logout", jsonPost(path + "/logout")))
+          : null,
+        user.disabled
+          ? act("actEnable", () => userAction(path, {
+            method: "PATCH", headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ disabled: false }),
+          }))
+          : act("actDisable", () => userAction(path, {
+            method: "PATCH", headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ disabled: true }),
+          }, "confirmDisable", user.name)),
+        act("actDelete", () =>
+          userAction(path, { method: "DELETE" }, "confirmDelete", user.name))));
+  }));
+  // replaceChildren would write a null out as the word "null"
+  els.usersBody.replaceChildren(...[
+    create,
+    errorMessage ? h("p", { class: "error", role: "alert", text: errorMessage }) : null,
+    usersNotice ? h("p", { class: "secret-once", text: usersNotice }) : null,
+    list,
+  ].filter(Boolean));
 }
 
 /* ---------- layout freeze ---------- */
@@ -398,7 +1160,7 @@ async function rememberNeighbours(anchor) {
   const neighbours = neighboursAround([anchor]);
   const count = Object.keys(neighbours[anchor] || {}).length;
   try {
-    await fetch("/api/layout", {
+    await api("/api/layout", {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ nodes: {}, neighbours: neighbours }),
@@ -465,7 +1227,7 @@ async function storeByHand(positions, pinned, what, neighbours) {
   }
   writing(ids);
   try {
-    await fetch("/api/layout", {
+    await api("/api/layout", {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ nodes: nodes, neighbours: neighbours || {} }),
@@ -537,7 +1299,7 @@ async function resetLayout() {
   if (!window.confirm(t("resetLayoutConfirm"))) return;
   let answer;
   try {
-    answer = await (await fetch("/api/layout", { method: "DELETE" })).json();
+    answer = await (await api("/api/layout", { method: "DELETE" })).json();
   } catch (e) {
     serviceLost("clearing the layout");
     return;
@@ -811,18 +1573,22 @@ function menuItemsFor(ids, info, tools) {
       ? fmt("reasonTooMany", { n: n, limit: tools.max_targets })
       : null;
   const noPing = tools && !tools.ping ? t("reasonNoPing") : null;
+  // the server acting — a ping, a pin — is for users; a viewer sees
+  // the item, greyed out with the role it needs
+  const noRole = needRole("user");
 
   if (single && !isGroupNode(single)) {
     const noIp = node && !node.ip ? missingReason("ip") : null;
     items.push({
       key: "ping", group: "actions", label: t("menuPing"),
-      disabled: offline || noPing || noIp,
+      disabled: noRole || offline || noPing || noIp,
       run: () => startAction("ping", [single]),
     });
     items.push({
       key: "traceroute", group: "actions", label: t("menuTraceroute"),
       disabled:
-        offline || (tools && !tools.traceroute ? t("reasonNoTraceroute") : null) || noIp,
+        noRole || offline ||
+        (tools && !tools.traceroute ? t("reasonNoTraceroute") : null) || noIp,
       run: () => startAction("traceroute", [single]),
     });
   } else if (single) {
@@ -831,7 +1597,7 @@ function menuItemsFor(ids, info, tools) {
       key: "pingGroup", group: "actions",
       label: fmt("menuPingGroup", { n: devices.length }),
       disabled:
-        offline || noPing ||
+        noRole || offline || noPing ||
         (devices.length ? null : t("reasonNoDevices")) ||
         tooMany(devices.length),
       run: () => startAction("ping", devices, nodeTitle(single)),
@@ -842,7 +1608,7 @@ function menuItemsFor(ids, info, tools) {
       key: "pingSelection", group: "actions",
       label: fmt("menuPingSelection", { n: targets.length }),
       disabled:
-        offline || noPing ||
+        noRole || offline || noPing ||
         (targets.length ? null : t("reasonNoDevices")) ||
         tooMany(targets.length),
       run: () => startAction("ping", targets),
@@ -893,6 +1659,7 @@ function menuItemsFor(ids, info, tools) {
   items.push({
     key: "pin", group: "layout",
     label: loose.length ? t("menuPin") : t("menuUnpin"),
+    disabled: noRole,
     run: () => togglePinOnSelection(),
   });
   // For a node already pinned: the groups round it have been put right
@@ -901,7 +1668,8 @@ function menuItemsFor(ids, info, tools) {
     const around = neighboursAround([single])[single] || {};
     items.push({
       key: "neighbours", group: "layout", label: t("menuRememberNeighbours"),
-      disabled: Object.keys(around).length ? null : t("reasonNoNeighbours"),
+      disabled:
+        noRole || (Object.keys(around).length ? null : t("reasonNoNeighbours")),
       run: () => rememberNeighbours(single),
     });
   }
@@ -943,7 +1711,7 @@ async function openNodeMenu(ids, at) {
   let tools = null;
   try {
     if (ids.length === 1) {
-      const response = await fetch(
+      const response = await api(
         "/api/node-menu?id=" + encodeURIComponent(ids[0])
       );
       if (response.ok) {
@@ -952,10 +1720,10 @@ async function openNodeMenu(ids, at) {
       } else {
         // a node the service no longer has: the map is older than the
         // service's picture of it; the layout items still work
-        tools = (await (await fetch("/api/actions")).json());
+        tools = (await (await api("/api/actions")).json());
       }
     } else {
-      tools = await (await fetch("/api/actions")).json();
+      tools = await (await api("/api/actions")).json();
     }
   } catch (e) {
     serviceLost("the node menu");
@@ -1117,7 +1885,7 @@ async function startAction(action, ids, title) {
   renderAction();
   let answer;
   try {
-    const response = await fetch("/api/actions", {
+    const response = await api("/api/actions", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ action: action, nodes: ids }),
@@ -1143,7 +1911,7 @@ function followAction() {
   actionTimer = setTimeout(async () => {
     let job;
     try {
-      job = await (await fetch("/api/actions/" + id)).json();
+      job = await (await api("/api/actions/" + id)).json();
     } catch (e) {
       serviceLost("the result of a ping");
       followAction();
@@ -1323,7 +2091,7 @@ function applyArrangeMode() {
   els.arrangeBtn.textContent = arrangeMode
     ? t("arrangeOnBtn")
     : t("arrangeBtn");
-  els.arrangeBtn.title = t("arrangeHint");
+  els.arrangeBtn.title = els.arrangeBtn.dataset.why || t("arrangeHint");
   // The map itself changes, not only the button: a mode you can
   // forget you are in is a mode that edits the map by accident.
   els.network.classList.toggle("arranging", arrangeMode);
@@ -1582,9 +2350,10 @@ let scanWatcher = null;
 function watchScan() {
   if (scanWatcher) return;
   scanWatcher = setInterval(async () => {
+    if (gateWait) return;
     let status;
     try {
-      status = await (await fetch("/api/status")).json();
+      status = await (await api("/api/status")).json();
       serviceBack();
     } catch (e) {
       serviceLost("scan progress");
@@ -1607,16 +2376,30 @@ function watchScan() {
 
 /* ---------- data loading and rendering ---------- */
 
+let topologyLoading = false;
+
 async function loadTopology() {
+  // The refresh timer keeps ticking while the sign-in form is up; one
+  // request waiting behind the form is enough
+  if (topologyLoading) return;
+  topologyLoading = true;
+  try {
+    await loadTopologyOnce();
+  } finally {
+    topologyLoading = false;
+  }
+}
+
+async function loadTopologyOnce() {
   let topo;
   let alarms;
   let layout;
   const askedAt = performance.now();
   try {
     [topo, alarms, layout] = await Promise.all([
-      fetch("/api/topology").then((r) => r.json()),
+      api("/api/topology").then((r) => r.json()),
       fetchAlarms("active=1"),
-      fetch("/api/layout").then((r) => r.json()),
+      api("/api/layout").then((r) => r.json()),
     ]);
   } catch (e) {
     // Whatever is on screen stays there. This is the moment somebody
@@ -2207,6 +2990,16 @@ function renderGraph() {
       }
       const ids = Object.keys(moved);
       if (!ids.length) return;
+      // A viewer can look by dragging, but a pinned node is the shared
+      // picture: it goes back where it was, and the page says why.
+      if (needRole("user")) {
+        nodesDs.update(ids.map((id) => ({
+          id: id, x: savedLayout[id].x, y: savedLayout[id].y,
+          fixed: { x: true, y: true },
+        })));
+        showToast(fmt("dragNotSaved", { role: t("role_user") }));
+        return;
+      }
       // vis has just put back the `fixed` it recorded at dragStart —
       // which for a pinned node is the `false` loosenForDrag gave it.
       // Hold the nodes again here and now: saving is a round trip, and
@@ -2704,7 +3497,8 @@ function showDetails(nodeId) {
         : ""}
       ${offMap ? `<dt>${t("lastArpLabel")}</dt><dd>${fmtTime(host.last_arp)}</dd>` : ""}
       <dt>${t("firstSeen")}</dt><dd>${fmtDate(host.first_seen)}</dd></dl>
-      <button id="monitor-btn" class="panel-btn${host.monitored ? " active" : ""}">
+      <button id="monitor-btn" class="panel-btn${host.monitored ? " active" : ""}${
+        needRole("user") ? " off" : ""}">
         ${host.monitored ? "★" : "☆"} ${t("monitorBtn")}</button>`;
   }
   // Placed by hand: say so, and offer to hand it back to the physics
@@ -2713,18 +3507,20 @@ function showDetails(nodeId) {
   if (savedLayout[nodeId] && savedLayout[nodeId].pinned) {
     html +=
       `<p class="hint">${t("pinnedHint")}</p>` +
-      `<button id="unpin-btn" class="panel-btn">${t("unpinBtn")}</button>`;
+      `<button id="unpin-btn" class="panel-btn${needRole("user") ? " off" : ""}">${t("unpinBtn")}</button>`;
   }
   shownDetails = { type: "node", id: nodeId };
   setDetails(html);
   els.details.classList.remove("hidden");
   els.journal.classList.add("hidden");
+  hideAccountPanels();
   els.alarms.classList.add("hidden");
   els.stp.classList.add("hidden");
   closePorts();
   const unpinBtn = document.getElementById("unpin-btn");
   if (unpinBtn) {
-    unpinBtn.addEventListener("click", () => unpinNode(nodeId));
+    gateButton(unpinBtn, needRole("user"));
+    unpinBtn.addEventListener("click", () => allowed(unpinBtn) && unpinNode(nodeId));
   }
   const portsBtn = document.getElementById("ports-btn");
   if (portsBtn) {
@@ -2741,7 +3537,8 @@ function showDetails(nodeId) {
   }
   const monitorBtn = document.getElementById("monitor-btn");
   if (monitorBtn) {
-    monitorBtn.addEventListener("click", () => toggleMonitor(nodeId));
+    gateButton(monitorBtn, needRole("user"));
+    monitorBtn.addEventListener("click", () => allowed(monitorBtn) && toggleMonitor(nodeId));
   }
   // a device of the group: its node is always on the map
   for (const row of els.detailsBody.querySelectorAll(".offline-list li")) {
@@ -2815,7 +3612,7 @@ function lldpHostLine(lldp) {
 async function toggleMonitor(nodeId) {
   const host = findHost(nodeId);
   if (!host) return;
-  const res = await fetch("/api/host/" + encodeURIComponent(host.mac), {
+  const res = await api("/api/host/" + encodeURIComponent(host.mac), {
     method: "PATCH",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ monitored: !host.monitored }),
@@ -2838,6 +3635,7 @@ async function openPorts(ip, highlightPort) {
   portsHighlight = highlightPort || null;
   hideDetails();
   els.journal.classList.add("hidden");
+  hideAccountPanels();
   els.alarms.classList.add("hidden");
   els.stp.classList.add("hidden");
   await refreshPorts();
@@ -2854,10 +3652,12 @@ function closePorts() {
 }
 
 async function refreshPorts() {
-  if (!portsIp) return;
+  // its 30 s timer waits for nobody: the request behind the sign-in
+  // form is the one that goes on
+  if (!portsIp || gateWait) return;
   let data;
   try {
-    const res = await fetch(
+    const res = await api(
       "/api/switch/" + encodeURIComponent(portsIp) + "/ports"
     );
     data = await res.json();
@@ -3217,6 +4017,7 @@ function showLinkDetails(edgeId) {
   setDetails(html);
   els.details.classList.remove("hidden");
   els.journal.classList.add("hidden");
+  hideAccountPanels();
   els.alarms.classList.add("hidden");
   els.stp.classList.add("hidden");
   closePorts();
@@ -3235,7 +4036,7 @@ function fmtDuration(seconds) {
 
 /* One alarms request; also picks up the flap window for the tooltip */
 async function fetchAlarms(query) {
-  const data = await (await fetch("/api/alarms?" + query)).json();
+  const data = await (await api("/api/alarms?" + query)).json();
   if (data.flap_window_hours) flapWindowHours = data.flap_window_hours;
   return data.alarms || [];
 }
@@ -3260,6 +4061,7 @@ async function toggleAlarms() {
   await refreshAlarms();
   hideDetails();
   els.journal.classList.add("hidden");
+  hideAccountPanels();
   els.stp.classList.add("hidden");
   closePorts();
   els.alarms.classList.remove("hidden");
@@ -3268,7 +4070,7 @@ async function toggleAlarms() {
 /* Manually clear one active alarm (with confirmation), then refresh */
 async function clearAlarm(id) {
   if (!confirm(t("clearConfirm"))) return;
-  const res = await fetch("/api/alarms/" + id + "/clear", { method: "POST" });
+  const res = await api("/api/alarms/" + id + "/clear", { method: "POST" });
   if (!res.ok) return;
   await refreshAlarms();
 }
@@ -3316,7 +4118,8 @@ function renderAlarms() {
         const clear = document.createElement("button");
         clear.className = "alarm-clear";
         clear.textContent = "✕ " + t("clearBtn");
-        clear.addEventListener("click", () => clearAlarm(a.id));
+        gateButton(clear, needRole("user"));
+        clear.addEventListener("click", () => allowed(clear) && clearAlarm(a.id));
         head.append(clear);
       }
       // device on its own line, wrapped in full — never truncated
@@ -3534,10 +4337,11 @@ async function toggleStp() {
     els.stp.classList.add("hidden");
     return;
   }
-  lastStp = await (await fetch("/api/stp")).json();
+  lastStp = await (await api("/api/stp")).json();
   renderStp();
   hideDetails();
   closePorts();
+  hideAccountPanels();
   els.journal.classList.add("hidden");
   els.alarms.classList.add("hidden");
   els.stp.classList.remove("hidden");
@@ -3562,14 +4366,17 @@ function renderJournal(events) {
           alarm_cleared: "ev-up",
         }[ev.event] || "";
       // events arrive as codes; unknown codes are shown as-is
+      if (ev.event === "account_locked") type.className = "ev-down";
       const translated = t("ev_" + ev.event);
       type.textContent = translated === "ev_" + ev.event ? ev.event : translated;
       const host = document.createElement("span");
       host.className = "ev-host";
-      host.textContent = ev.name || ev.ip || ev.mac || layoutEventText(ev);
+      host.textContent =
+        accountEventText(ev) || ev.name || ev.ip || ev.mac || layoutEventText(ev);
       item.append(time, type, host);
-      // who did it: a pin, a reset, a cleared alarm, a sign-in
-      if (ev.user) {
+      // who did it: a pin, a reset, a cleared alarm, somebody else's
+      // account — not a sign-in, where it would only repeat the name
+      if (ev.user && !(ACCOUNT_EVENTS.has(ev.event) && ev.user === ev.mac)) {
         const who = document.createElement("span");
         who.className = "ev-user";
         who.textContent = fmt("evBy", {
@@ -3585,6 +4392,38 @@ function renderJournal(events) {
     empty.textContent = t("noEvents");
     els.journalList.append(empty);
   }
+}
+
+/* Sign-ins and account changes: the account, then what the details
+   say — the address, the role before and after, a temporary password. */
+const ACCOUNT_EVENTS = new Set([
+  "login", "logout", "account_locked", "user_added", "user_role",
+  "user_password", "user_disabled", "user_enabled", "user_totp_reset",
+  "user_totp_enabled", "user_unlocked", "user_sessions_closed",
+  "user_deleted",
+]);
+
+function accountEventText(ev) {
+  if (!ACCOUNT_EVENTS.has(ev.event)) return "";
+  let data = {};
+  try {
+    data = ev.details ? JSON.parse(ev.details) : {};
+  } catch (e) {
+    data = {};
+  }
+  const parts = [ev.mac];
+  if (data.role) {
+    parts.push(
+      (data.was ? t("role_" + data.was) + " → " : "") + t("role_" + data.role)
+    );
+  }
+  if (data.temporary) parts.push(t("evTemporary"));
+  if (data.address) parts.push(data.address);
+  if (data.recovery_left !== undefined) {
+    parts.push(fmt("evRecoveryUsed", { n: data.recovery_left }));
+  }
+  if (data.minutes) parts.push(fmt("evLockedFor", { n: data.minutes }));
+  return parts.join(" · ");
 }
 
 /* "3 nodes: access-sw-1, access-sw-2, gw" for a pin or a release.
@@ -3612,12 +4451,13 @@ async function toggleJournal() {
     els.journal.classList.add("hidden");
     return;
   }
-  const res = await fetch("/api/journal?limit=100");
+  const res = await api("/api/journal?limit=100");
   const data = await res.json();
   lastEvents = data.events;
   renderJournal(lastEvents);
   hideDetails();
   closePorts();
+  hideAccountPanels();
   els.alarms.classList.add("hidden");
   els.stp.classList.add("hidden");
   els.journal.classList.remove("hidden");
@@ -3639,12 +4479,12 @@ async function rescan() {
   els.rescan.disabled = true;
   isScanning = true;
   updateScanStatus();
-  await fetch("/api/scan", { method: "POST" });
+  await api("/api/scan", { method: "POST" });
   watchScan();
 }
 
 els.search.addEventListener("input", applySearchFilter);
-els.rescan.addEventListener("click", rescan);
+els.rescan.addEventListener("click", () => allowed(els.rescan) && rescan());
 els.detailsClose.addEventListener("click", hideDetails);
 els.journalBtn.addEventListener("click", toggleJournal);
 els.journalClose.addEventListener("click", () =>
@@ -3655,11 +4495,16 @@ for (const th of document.querySelectorAll("#ports th[data-sort]")) {
   th.addEventListener("click", () => setPortsSort(th.dataset.sort));
 }
 els.freezeBtn.addEventListener("click", toggleFreeze);
-els.arrangeBtn.addEventListener("click", toggleArrangeMode);
+els.arrangeBtn.addEventListener("click", () => allowed(els.arrangeBtn) && toggleArrangeMode());
 document.addEventListener("click", (event) => {
   if (!els.nodeMenu.contains(event.target)) closeNodeMenu();
 });
-els.resetLayoutBtn.addEventListener("click", resetLayout);
+els.resetLayoutBtn.addEventListener("click", () => allowed(els.resetLayoutBtn) && resetLayout());
+els.usersBtn.addEventListener("click", () => allowed(els.usersBtn) && toggleUsers());
+els.usersClose.addEventListener("click", () => els.users.classList.add("hidden"));
+els.userChip.addEventListener("click", toggleAccount);
+els.accountClose.addEventListener("click", () => els.account.classList.add("hidden"));
+els.logoutBtn.addEventListener("click", signOut);
 els.actionsClose.addEventListener("click", closeActions);
 els.alarmsBtn.addEventListener("click", toggleAlarms);
 els.alarmsClose.addEventListener("click", () =>
@@ -3697,6 +4542,11 @@ function togglePinOnSelection() {
   if (!network) return;
   const ids = network.getSelectedNodes();
   if (!ids.length) return;
+  const why = needRole("user");
+  if (why) {
+    showToast(why);
+    return;
+  }
   const loose = ids.filter((id) => !isPinned(id));
   if (loose.length) {
     const at = network.getPositions(loose);

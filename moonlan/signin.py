@@ -27,7 +27,7 @@ from starlette.routing import Match, Mount
 from . import access, auth
 from .access import Principal
 from .config import AuthConfig
-from .db import Database
+from .db import AccountError, Database
 
 log = logging.getLogger("moonlan")
 
@@ -167,6 +167,16 @@ class BindBody(BaseModel):
 class PasswordBody(BaseModel):
     current: str = Field(max_length=auth.PASSWORD_MAX)
     new: str = Field(max_length=auth.PASSWORD_MAX * 2)
+
+
+class NewUserBody(BaseModel):
+    name: str = Field(max_length=64)
+    role: str
+
+
+class UserPatch(BaseModel):
+    role: str | None = None
+    disabled: bool | None = None
 
 
 def refuse(error: str, status: int, **extra) -> JSONResponse:
@@ -597,6 +607,38 @@ class SignIn:
                  if row["totp_enabled"] else "", closed)
         return JSONResponse({"status": "bound", "recovery": codes})
 
+    # ---------- accounts, for an administrator ----------
+
+    def users(self) -> list[dict]:
+        sessions = self.accounts.session_counts()
+        now = time.time()
+        return [
+            {
+                "name": row["name"], "role": row["role"],
+                "disabled": bool(row["disabled"]),
+                "totp": bool(row["totp_enabled"]),
+                "recovery_left": auth.recovery_left(row["recovery"]),
+                "must_change": bool(row["must_change"]),
+                "locked_until": (
+                    row["locked_until"] if row["locked_until"] > now else 0
+                ),
+                "last_login": row["last_login"],
+                "created_at": row["created_at"],
+                "sessions": sessions.get(row["id"], 0),
+            }
+            for row in self.accounts.users()
+        ]
+
+    def account_event(self, event: str, name: str, **details) -> None:
+        """An account change made in the browser, under the name of the
+        administrator who made it."""
+        self.journal.add_event(
+            time.time(), event, name, json.dumps(details) if details else "",
+            actor(),
+        )
+        log.info("Accounts: %s %s by %s%s", event, name, actor(),
+                 f" {details}" if details else "")
+
     def me(self, who: Principal) -> dict:
         row = self.accounts.user(who.name) or {}
         return {
@@ -732,6 +774,124 @@ def add_routes(app: FastAPI, sign_in: SignIn) -> None:
         return await sign_in.totp_confirm(
             principal(), body.code, body.password, _address(request)
         )
+
+    def account_refusal(error: AccountError) -> JSONResponse:
+        status = {"unknown": 404, "exists": 409, "last_admin": 409}
+        return refuse(error.code, status.get(error.code, 400),
+                      name=error.name)
+
+    async def run(call, *args):
+        """An account change, with the database's refusals turned into
+        answers: no such name, name taken, the last administrator."""
+        try:
+            return await asyncio.to_thread(call, *args), None
+        except AccountError as error:
+            return None, account_refusal(error)
+
+    @app.get("/api/users")
+    async def users_list():
+        return {"users": await asyncio.to_thread(sign_in.users),
+                "me": actor()}
+
+    @app.post("/api/users")
+    async def users_add(body: NewUserBody):
+        """A new account with a temporary password, generated here and
+        shown once: the person sets their own at the first sign-in."""
+        if auth.name_problem(body.name):
+            return refuse("bad_name", 400)
+        if body.role not in auth.ROLES:
+            return refuse("bad_role", 400)
+        password = auth.temporary_password()
+        row, refusal = await run(
+            sign_in.accounts.add_user, body.name, body.role,
+            await asyncio.to_thread(auth.hash_password, password), True,
+        )
+        if refusal:
+            return refusal
+        await asyncio.to_thread(sign_in.account_event, "user_added",
+                                row["name"], role=body.role, temporary=True)
+        return {"name": row["name"], "role": row["role"],
+                "password": password}
+
+    @app.patch("/api/users/{name}")
+    async def users_change(name: str, body: UserPatch):
+        """A role, or disabled / enabled. The last enabled
+        administrator is refused, as on the console."""
+        if body.role is not None:
+            if body.role not in auth.ROLES:
+                return refuse("bad_role", 400)
+            result, refusal = await run(
+                sign_in.accounts.set_role, name, body.role
+            )
+            if refusal:
+                return refusal
+            was, closed = result
+            await asyncio.to_thread(sign_in.account_event, "user_role", name,
+                                    role=body.role, was=was, sessions=closed)
+        if body.disabled is not None:
+            closed, refusal = await run(
+                sign_in.accounts.set_disabled, name, body.disabled
+            )
+            if refusal:
+                return refusal
+            await asyncio.to_thread(
+                sign_in.account_event,
+                "user_disabled" if body.disabled else "user_enabled", name,
+                sessions=closed,
+            )
+        return {"status": "changed"}
+
+    @app.post("/api/users/{name}/password")
+    async def users_password(name: str):
+        """A new temporary password for somebody who forgot theirs."""
+        password = auth.temporary_password()
+        closed, refusal = await run(
+            sign_in.accounts.set_password, name,
+            await asyncio.to_thread(auth.hash_password, password), True,
+        )
+        if refusal:
+            return refusal
+        await asyncio.to_thread(sign_in.account_event, "user_password", name,
+                                temporary=True, sessions=closed)
+        return {"name": name, "password": password}
+
+    @app.post("/api/users/{name}/reset-totp")
+    async def users_reset_totp(name: str):
+        closed, refusal = await run(sign_in.accounts.reset_totp, name)
+        if refusal:
+            return refusal
+        await asyncio.to_thread(sign_in.account_event, "user_totp_reset",
+                                name, sessions=closed)
+        return {"status": "reset"}
+
+    @app.post("/api/users/{name}/unlock")
+    async def users_unlock(name: str):
+        was_locked, refusal = await run(sign_in.accounts.unlock, name)
+        if refusal:
+            return refusal
+        if was_locked:
+            await asyncio.to_thread(sign_in.account_event, "user_unlocked",
+                                    name)
+        return {"status": "unlocked" if was_locked else "not_locked"}
+
+    @app.post("/api/users/{name}/logout")
+    async def users_logout(name: str):
+        """Signs the account out everywhere."""
+        closed, refusal = await run(sign_in.accounts.close_sessions, name)
+        if refusal:
+            return refusal
+        await asyncio.to_thread(sign_in.account_event,
+                                "user_sessions_closed", name, sessions=closed)
+        return {"sessions_closed": closed}
+
+    @app.delete("/api/users/{name}")
+    async def users_delete(name: str):
+        closed, refusal = await run(sign_in.accounts.delete_user, name)
+        if refusal:
+            return refusal
+        await asyncio.to_thread(sign_in.account_event, "user_deleted", name,
+                                sessions=closed)
+        return {"status": "deleted"}
 
     @app.post("/api/auth/password")
     async def auth_password(body: PasswordBody, request: Request):

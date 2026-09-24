@@ -27,6 +27,9 @@
       <button id="stp-btn" data-i18n="stpBtn"></button>
       <button id="journal-btn" data-i18n="journalBtn"></button>
       <button id="rescan" data-i18n="rescanBtn"></button>
+      <button id="users-btn" data-i18n="usersBtn"></button>
+      <button id="user-chip" class="user-chip hidden"></button>
+      <button id="logout-btn" class="hidden" data-i18n="logoutBtn"></button>
     </div>
   </header>
   <!-- What the header has to keep saying: that the map is open to
@@ -119,11 +122,38 @@
         </div>
         <div class="panel-scroll"><div id="actions-body"></div></div>
       </div>
+      <!-- Your own account: password, second factor -->
+      <div id="account" class="panel hidden">
+        <div class="panel-head">
+          <h3 data-i18n="accountTitle"></h3>
+          <button id="account-close">×</button>
+        </div>
+        <div class="panel-scroll"><div id="account-body"></div></div>
+      </div>
+      <!-- Accounts, for an administrator -->
+      <div id="users" class="panel hidden">
+        <div class="panel-head">
+          <h3 data-i18n="usersTitle"></h3>
+          <button id="users-close">×</button>
+        </div>
+        <div class="panel-scroll"><div id="users-body"></div></div>
+      </div>
       <div id="empty-state" class="hidden">
         <p data-i18n="emptyLine1"></p>
         <p data-i18n-html="emptyLine2"></p>
       </div>
     </section>
+    <!-- Signing in, and what has to come before anything else: a
+         password of one's own, an administrator's second factor. Over
+         the map rather than instead of it, so a session that ended
+         while the page was open carries on where it was. -->
+    <div id="gate" class="gate hidden" role="dialog" aria-modal="true"
+         aria-labelledby="gate-title">
+      <div class="gate-card">
+        <h2 id="gate-title"></h2>
+        <div id="gate-body"></div>
+      </div>
+    </div>
   </main>
 
   <script src="i18n.js"></script>
