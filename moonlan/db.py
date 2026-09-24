@@ -133,7 +133,7 @@ CREATE TABLE IF NOT EXISTS sessions (
     -- Signed-in browsers. The cookie carries a random token and this
     -- table only its SHA-256: a copy of the database signs nobody in.
     token_hash    TEXT PRIMARY KEY,
-    user_id       INTEGER,                  -- NULL: diag, from the server's shell
+    user_id       INTEGER NOT NULL,
     created_at    REAL NOT NULL,
     last_seen     REAL NOT NULL,
     second_factor INTEGER DEFAULT 0,        -- 1 = a TOTP or recovery code was given
@@ -1311,7 +1311,7 @@ class Database:
     # ---------- sessions ----------
 
     def add_session(
-        self, token_hash: str, user_id: int | None, ts: float,
+        self, token_hash: str, user_id: int, ts: float,
         second_factor: bool = False, address: str = "",
     ) -> None:
         with self._lock, self._conn:

@@ -11,9 +11,11 @@ database on every request, so an account changed with
 from __future__ import annotations
 
 import asyncio
+import hmac
 import json
 import logging
 import math
+import os
 import time
 from contextvars import ContextVar
 from dataclasses import dataclass
@@ -32,6 +34,13 @@ from .db import AccountError, Database
 log = logging.getLogger("moonlan")
 
 SESSION_COOKIE = "moonlan_session"
+
+# diag, on the server: python -m moonlan.diag asks the running service
+# for what only the service knows (poll times, paused OIDs, which nodes
+# are on the map). It sends this header with the token the service
+# wrote next to its database at startup — readable by whoever can read
+# the database itself, and good for looking only.
+CONSOLE_HEADER = "x-moonlan-console"
 
 # How to switch sign-in on, for the log and for the page
 CREATE_ADMIN = "python -m moonlan.users add <name> --role admin"
@@ -224,6 +233,8 @@ class SignIn:
         # created from the console switches it on between two requests,
         # and the log should say so then, not at the next restart
         self._was_on: bool | None = None
+        self._console: str = ""    # hash of the token in the console file
+        self.console_path: str = ""
 
     def sign_in_on(self) -> bool:
         return self.accounts.active_admins() > 0
@@ -307,10 +318,48 @@ class SignIn:
 
     async def who(self, request: Request) -> tuple[bool, Principal | None]:
         """(is sign-in on, who is asking — None for nobody)."""
-        return await asyncio.to_thread(
+        on, who = await asyncio.to_thread(
             self._lookup, request.cookies.get(SESSION_COOKIE, ""),
             time.time(),
         )
+        console = request.headers.get(CONSOLE_HEADER, "")
+        if who is None and console and self._console and hmac.compare_digest(
+            auth.token_hash(console), self._console
+        ):
+            who = Principal(name="@console", role="viewer", console=True)
+        return on, who
+
+    # ---------- diag, from the server's shell ----------
+
+    def write_console_token(self, path: str) -> None:
+        """A fresh token for diag at every start, in a file only the
+        service's own user can read (0600) — the same people who can
+        read the database. diag writes nothing to the database, so it
+        cannot sign itself in; this is how it asks the service instead.
+        """
+        token = auth.new_token()
+        try:
+            fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+            with os.fdopen(fd, "w", encoding="ascii") as handle:
+                handle.write(token + "\n")
+            os.chmod(path, 0o600)
+        except OSError as exc:
+            log.warning(
+                "Could not write %s (%s): once sign-in is on, "
+                "python -m moonlan.diag will not be able to ask this "
+                "service for poll times, paused OIDs or the map's nodes",
+                path, exc,
+            )
+            return
+        self._console = auth.token_hash(token)
+        self.console_path = path
+
+    def remove_console_token(self) -> None:
+        if self.console_path:
+            try:
+                os.unlink(self.console_path)
+            except OSError:
+                pass
 
     # ---------- signing in ----------
 
