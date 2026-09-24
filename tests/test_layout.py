@@ -115,6 +115,18 @@ class LayoutStoreTest(unittest.TestCase):
         self.assertEqual(self.db.clear_layout(), 2)
         self.assertEqual(self.db.layout(), {})
 
+    def test_what_nobody_pinned_is_dropped(self):
+        """A position the physics engine left behind is not kept."""
+        self.db.save_layout({
+            CORE: {"x": 1, "y": 1, "pinned": True},
+            HOST: {"x": 2, "y": 2, "pinned": False},
+            PSEUDO: {"x": 3, "y": 3, "pinned": False},
+        })
+        self.assertEqual(self.db.drop_unpinned_positions(), 2)
+        self.assertEqual(list(self.db.layout()), [CORE])
+        # …and there is nothing left to drop the next time
+        self.assertEqual(self.db.drop_unpinned_positions(), 0)
+
     def test_the_last_reset_comes_from_the_journal(self):
         self.assertEqual(self.db.layout_cleared_at(), 0.0)
         self.db.add_event(100.0, "layout_cleared", "", "3 node(s)")
@@ -179,6 +191,27 @@ class MigrationTest(unittest.TestCase):
             self.assertEqual(reopened.layout(), {})
             reopened.save_layout({CORE: {"x": 3, "y": 4}})
             self.assertEqual(reopened.layout()[CORE]["x"], 3.0)
+            reopened._conn.close()
+
+    def test_a_v072_layout_keeps_only_its_pins(self):
+        """What v0.7.2 wrote: a few pins and a position for every other
+        node, written once. The pins survive the upgrade, the rest goes
+        at the first start."""
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "v072.db"
+            db = Database(path)
+            db.save_layout({
+                CORE: {"x": 10, "y": 20, "pinned": True},
+                HOST: {"x": -500, "y": 900, "pinned": False},
+                PSEUDO: {"x": -480, "y": 870, "pinned": False},
+            })
+            db._conn.close()
+
+            reopened = Database(path)
+            self.assertEqual(reopened.drop_unpinned_positions(), 2)
+            saved = reopened.layout()
+            self.assertEqual(list(saved), [CORE])
+            self.assertEqual((saved[CORE]["x"], saved[CORE]["y"]), (10.0, 20.0))
             reopened._conn.close()
 
 
@@ -341,19 +374,25 @@ class HandPlacedTest(unittest.TestCase):
         self.assertEqual(details["n"], 12)
         self.assertEqual(len(details["ids"]), server.LAYOUT_EVENT_IDS)
 
-    def test_released_is_not_forgotten(self):
-        """The row stays with the pin cleared: the node keeps a saved
-        position, and "missing" never lists a node somebody released."""
+    def test_released_is_forgotten(self):
+        """Only what a person placed is kept (v0.7.3). v0.7.2 kept the
+        row with the pin cleared; that position went stale as soon as
+        anything around the node moved. Released, the node is laid out
+        from the pinned ones on the next load."""
         self._patch({CORE: {"x": 1, "y": 1}})
         since = self._last_id()
         self._patch({CORE: {"x": 40, "y": 50, "pinned": False}})
-        saved = server.db.layout()[CORE]
-        self.assertEqual(
-            (saved["x"], saved["y"], saved["pinned"]), (40.0, 50.0, False)
-        )
+        self.assertNotIn(CORE, server.db.layout())
         self.assertEqual(len(self._entries("layout_released", since)), 1)
         self.assertEqual(self._entries("layout_pinned", since), [])
-        self.assertNotIn(CORE, asyncio.run(server.api_layout())["missing"])
+
+    def test_a_pin_and_a_release_in_one_action(self):
+        self._patch({CORE: {"x": 1, "y": 1}})
+        self._patch({
+            CORE: {"x": 1, "y": 1, "pinned": False},
+            "sw:10.0.0.21": {"x": 2, "y": 2},
+        })
+        self.assertEqual(list(server.db.layout()), ["sw:10.0.0.21"])
 
     def test_an_older_page_releasing_by_delete_is_journalled_too(self):
         self._patch({CORE: {"x": 1, "y": 1}})

@@ -11,10 +11,10 @@ const I18N = {
     layoutPinnedMark: "placed by hand: {n}",
     layoutPinnedHint:
       "That many nodes are where somebody put them, out of reach of the "
-      + "layout engine. Everything else is arranged automatically, and "
-      + "where it ends up is recorded on its own \u2014 there is nothing "
-      + "to save by hand. Turn on Arrange to place a node, or press P "
-      + "with it selected; the same releases it again.",
+      + "layout engine, and only they are kept. Everything else is laid "
+      + "out again on every load, starting next to the nodes placed by "
+      + "hand. Turn on Arrange to place a node, or press P with it "
+      + "selected; the same releases it again.",
     menuPin: "Place here",
     menuUnpin: "Release",
     menuOpenCard: "Open card",
@@ -528,10 +528,11 @@ const I18N = {
     layoutPinnedMark: "поставлено руками: {n}",
     layoutPinnedHint:
       "Столько узлов стоят там, куда их поставил человек, и движку "
-      + "раскладки недоступны. Всё остальное раскладывается само, и "
-      + "куда оно встало — запоминается само же: сохранять руками "
-      + "нечего. Чтобы поставить узел, включите «Расстановку» или "
-      + "нажмите P на выделенном; тем же способом он и отпускается.",
+      + "раскладки недоступны; запоминаются только они. Всё остальное "
+      + "при каждой загрузке раскладывается заново, начиная рядом с "
+      + "поставленными руками. Чтобы поставить узел, включите "
+      + "«Расстановку» или нажмите P на выделенном; тем же способом он "
+      + "и отпускается.",
     menuPin: "Поставить здесь",
     menuUnpin: "Отпустить",
     menuOpenCard: "Открыть карточку",

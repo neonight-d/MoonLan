@@ -166,24 +166,23 @@ let layoutFrozen = localStorage.getItem(FREEZE_KEY) === "1";
 
 /* ---------- saved layout ----------
 
-   Where the nodes sit is kept on the server, not in this browser. A
-   map of a network is a shared object: two people looking at one
-   network have to see one picture, or "the switch at the bottom left"
-   stops meaning anything. The language and the freeze toggle are
+   Where a person put a node is kept on the server, not in this
+   browser. A map of a network is a shared object: two people looking
+   at one network have to see one picture, or "the switch at the bottom
+   left" stops meaning anything. The language and the freeze toggle are
    personal settings and stay in localStorage; coordinates are not.
 
-   `placed` remembers which nodes have already been given their saved
-   position in this session. An unpinned node is started there and then
-   left to the physics engine — re-applying the coordinates on every
-   thirty-second refresh would drag it back and fight the layout. */
+   Only what a person placed is kept. v0.7.1 also wrote down where the
+   physics engine happened to leave every other node, once, and v0.7.3
+   stopped it: that position went stale the moment somebody moved what
+   the node hangs off, and after a reload a cloud of hosts started
+   where its switch used to be and was dragged across half the map.
+   Everything that is not pinned is laid out again on every load, from
+   the pinned nodes outwards (seedPositions). */
 let savedLayout = {};
 let layoutSavedAt = 0;
-const placed = new Set();
 // Nodes the mouse is holding right now, from dragStart to dragEnd
 const dragging = new Set();
-// How long to let the layout settle before writing down where a new
-// node ended up
-const AUTOSAVE_SETTLE_MS = 4000;
 
 /* The layout is read with every refresh of the map, not once.
 
@@ -220,19 +219,16 @@ function takeServerLayout(data, askedAt) {
   if (!layoutLoaded) {
     layoutLoaded = true;
     knownClearedAt = clearedAt;
-    savedLayout = server;
+    savedLayout = keptOf(server);
     return "render";
   }
   if (clearedAt > knownClearedAt) {
     // Somebody reset the layout. Recognised by the reset itself, not
-    // by rows going missing — a node released by an older page or
-    // forgotten by age takes its row with it just the same. The page
-    // starts again from what the server has now, which is usually the
-    // picture the resetting page has already saved.
+    // by rows going missing — a node released or forgotten by age
+    // takes its row with it just the same. The page starts again from
+    // what the server has now.
     knownClearedAt = clearedAt;
-    savedLayout = server;
-    placed.clear();
-    autoSaved.clear();
+    savedLayout = keptOf(server);
     return "rebuild";
   }
   const stale = (id) =>
@@ -240,29 +236,33 @@ function takeServerLayout(data, askedAt) {
   adoptLayout(server, stale);
   for (const id of Object.keys(savedLayout)) {
     if (id in server || stale(id)) continue;
-    // Gone from the server without a reset: released by a page that
-    // still deletes, or forgotten by age. The node stays where it is,
-    // goes back to the physics engine, and gets a position again with
-    // the next automatic save.
+    // Gone from the server without a reset: released somewhere, or
+    // forgotten by age. The node stays where it is and goes back to
+    // the physics engine.
     delete savedLayout[id];
-    placed.add(id);
-    autoSaved.delete(id);
   }
   return "render";
 }
 
-/* The saved position of a node, if it has one and has not been given
-   it already. A pinned node keeps being told where it is: it is out of
-   the physics engine, so nothing else would hold it there. */
+/* What of the server's layout this page keeps: the pinned positions.
+   A page still running an older script may write where its physics
+   left a node; that is not a decision and is not taken. */
+function keptOf(entries) {
+  const kept = {};
+  for (const [id, pos] of Object.entries(entries)) {
+    if (pos.pinned) kept[id] = { x: pos.x, y: pos.y, pinned: true };
+  }
+  return kept;
+}
+
+/* Where a person put a node, if one did. A pinned node keeps being
+   told where it is: it is out of the physics engine, so nothing else
+   would hold it there. Every other node gets its start from
+   seedPositions. */
 function layoutFor(id) {
   const pos = savedLayout[id];
-  if (!pos) return null;
-  const first = !placed.has(id);
-  placed.add(id);
-  if (pos.pinned) {
-    return { x: pos.x, y: pos.y, fixed: { x: true, y: true } };
-  }
-  return first ? { x: pos.x, y: pos.y } : null;
+  if (!pos || !pos.pinned) return null;
+  return { x: pos.x, y: pos.y, fixed: { x: true, y: true } };
 }
 
 /* Applied to every node as it is built: where it goes, whether the
@@ -288,98 +288,16 @@ function applyLayout(node) {
   return node;
 }
 
-/* Records where the nodes nobody has placed yet have ended up.
-
-   There is no "save layout" button any more, and there should not be
-   one: a button that has to be pressed for the picture to survive is
-   a button somebody will forget, and then the map they arranged is
-   gone. A node that has no saved position gets one as soon as the
-   layout settles; a node that already has one is never touched here,
-   or every open browser would rewrite the shared picture on every
-   refresh.
-
-   `autoSaved` keeps one client from sending the same node twice while
-   the answer is still in flight. */
-const autoSaved = new Set();
-let autoSaveTimer = null;
-
-async function saveNewPositions() {
-  if (!network) return;
-  const positions = network.getPositions();
-  const fresh = {};
-  for (const id of Object.keys(positions)) {
-    if (savedLayout[id] || autoSaved.has(id)) continue;
-    fresh[id] = { x: positions[id].x, y: positions[id].y, pinned: false };
-  }
-  const ids = Object.keys(fresh);
-  if (!ids.length) return;
-  for (const id of ids) autoSaved.add(id);
-  let answer;
-  try {
-    // "New" is this page's opinion, and it is as old as the page.
-    // Another page may have placed and pinned the node since; the
-    // server decides, in one transaction, and says what it kept.
-    const response = await fetch("/api/layout", {
-      method: "PUT",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ nodes: fresh, only_new: true }),
-    });
-    answer = await response.json();
-  } catch (e) {
-    for (const id of ids) autoSaved.delete(id);
-    serviceLost("saving the layout");
-    return;
-  }
-  serviceBack();
-  for (const id of answer.stored || []) {
-    savedLayout[id] = fresh[id];
-    placed.add(id);
-  }
-  if (adoptLayout(answer.existing || {})) renderGraph();
-  if (!layoutSavedAt) layoutSavedAt = answer.saved_at || Date.now() / 1000;
-  updateScanStatus();
-}
-
-/* Takes positions somebody else decided on.
-
-   A pinned one is somebody's decision about where a node goes, and is
-   applied: the node moves there and is held. An unpinned one is only
-   where another page's physics happened to leave the node; this
-   page's own physics has already placed it next to what it is plugged
-   into, and pulling it across the map to match would be two engines
-   fighting over one box. So it is recorded — it is what the next page
-   to open will start from — and not applied.
-
-   A node not on screen yet is not "already placed": when it appears
-   it starts from the recorded position, as it would on a fresh page.
-
-   Returns whether anything on screen has to change. */
+/* Takes positions somebody else decided on: a node pinned elsewhere
+   moves there and is held (layoutFor applies it on every render), a
+   node released elsewhere is let go where it stands. */
 function adoptLayout(entries, skip) {
-  let changed = false;
-  for (const [id, pos] of Object.entries(entries)) {
+  const kept = keptOf(entries);
+  for (const id of Object.keys(entries)) {
     if (dragging.has(id) || (skip && skip(id))) continue;
-    const was = savedLayout[id];
-    savedLayout[id] = { x: pos.x, y: pos.y, pinned: !!pos.pinned };
-    if (pos.pinned) {
-      if (!was || !was.pinned || was.x !== pos.x || was.y !== pos.y) {
-        changed = true;
-      }
-    } else {
-      if (nodesDs && nodesDs.get(id)) placed.add(id);
-      if (was && was.pinned) changed = true;
-    }
+    if (kept[id]) savedLayout[id] = kept[id];
+    else delete savedLayout[id];
   }
-  return changed;
-}
-
-/* The physics engine emits `stabilized` when it settles, which is the
-   right moment — but with the simulation running continuously it may
-   not come for a while, and a node added by a scan should not have to
-   wait for it. So a short timer as well, and one idempotent function
-   behind both. */
-function scheduleAutoSave() {
-  clearTimeout(autoSaveTimer);
-  autoSaveTimer = setTimeout(saveNewPositions, AUTOSAVE_SETTLE_MS);
 }
 
 /* Pins one or more nodes where they are, and remembers it.
@@ -400,11 +318,10 @@ function pinNode(id, x, y) {
    cheap and reversible in one gesture, and a dialog in front of it
    only makes the cheap thing feel expensive.
 
-   Released is not forgotten. The node keeps its row, with the
-   coordinates it has and the pin cleared: deleting the row, as v0.7.1
-   did, left a node with no saved position that this page would never
-   save again, and after F5 it went back to its anchor instead of
-   staying where the physics had it. */
+   The server forgets a released node's position: only what a person
+   placed is kept. It stays where it stands on this page, and on the
+   next load it is laid out from the pinned nodes like everything
+   else. */
 async function unpinNodes(ids) {
   const at = network ? network.getPositions(ids) : {};
   const positions = {};
@@ -420,9 +337,8 @@ async function storeByHand(positions, pinned, what) {
   const nodes = {};
   for (const id of ids) {
     nodes[id] = { x: positions[id].x, y: positions[id].y, pinned: pinned };
-    savedLayout[id] = nodes[id];
-    // a released node stays where it stands
-    if (!pinned) placed.add(id);
+    if (pinned) savedLayout[id] = nodes[id];
+    else delete savedLayout[id];
   }
   writing(ids);
   try {
@@ -499,8 +415,6 @@ async function resetLayout() {
   knownClearedAt = Math.max(knownClearedAt, answer.cleared_at || 0);
   savedLayout = {};
   layoutSavedAt = 0;
-  placed.clear();
-  autoSaved.clear();
   // Forgetting the positions on the server is only half of it. vis
   // keeps x and y on the node it has already built, and nothing in
   // the update path can take them away again — `setOptions` assigns a
@@ -587,14 +501,27 @@ function idHash(id) {
 
 /* Gives a position to every node that has none.
 
-   A node nobody has placed yet used to be dropped wherever vis felt
-   like putting it, which on a fresh map or straight after a reset
-   means a scattering of boxes with no relation to the network. A new
-   device belongs next to the thing it is plugged into, and the
-   physics engine can take it from there. */
+   Only pinned nodes have a stored position, so on every load this lays
+   out everything else, and it does it from the pinned nodes outwards:
+   first the nodes hanging directly off a pinned one, then the level
+   below them, and so on. Each goes next to what it hangs off, at an
+   offset derived from its id — the same spot for everybody, so two
+   pages opening one map start from one picture and the physics
+   engine, which is not random, takes both the same way.
+
+   Two cases have no pinned node to start from. A switch nobody pinned
+   above switches somebody did belongs among them, not wherever a hash
+   would put it, so it starts in the middle of its placed children. And
+   a part of the map with nothing placed anywhere in it starts around
+   the middle of what already stands. */
 function seedPositions(nodes, edges) {
   const anchors = anchorMap(edges);
   lastAnchors = anchors;
+  const children = new Map();
+  for (const [child, anchor] of anchors) {
+    if (!children.has(anchor)) children.set(anchor, []);
+    children.get(anchor).push(child);
+  }
   const known = new Map();
   const existing = network ? network.getPositions() : {};
   for (const node of nodes) {
@@ -604,36 +531,64 @@ function seedPositions(nodes, edges) {
       known.set(node.id, existing[node.id]);
     }
   }
-  // A node that hangs off nothing — the root of the tree, or a
-  // switch nobody could link — anchors the rest. Without it a first
-  // load has no starting point at all and every chain below stays
-  // unplaced.
-  for (const node of nodes) {
-    if (known.has(node.id) || anchors.has(node.id)) continue;
+  const place = (node, x, y) => {
+    node.x = x;
+    node.y = y;
+    known.set(node.id, { x: x, y: y });
+  };
+  const around = (node, at) => {
     const hash = idHash(node.id);
-    node.x = (hash % 400) - 200;
-    node.y = ((hash >>> 16) % 400) - 200;
-    known.set(node.id, { x: node.x, y: node.y });
-  }
-  // A chain — switch, then the group on it, then the hosts in the
-  // group — needs a pass per level. Four covers every shape the map
-  // draws, and the loop stops as soon as a pass places nothing.
-  for (let pass = 0; pass < 6; pass++) {
-    let placedAny = false;
-    for (const node of nodes) {
-      if (known.has(node.id)) continue;
-      const at = known.get(anchors.get(node.id));
-      if (!at) continue;
-      const hash = idHash(node.id);
-      // angle and radius from different bits, or they move together
-      const angle = ((hash % 360) * Math.PI) / 180;
-      const radius = 70 + ((hash >>> 16) % 50);
-      node.x = at.x + Math.cos(angle) * radius;
-      node.y = at.y + Math.sin(angle) * radius;
-      known.set(node.id, { x: node.x, y: node.y });
-      placedAny = true;
+    // angle and radius from different bits, or they move together
+    const angle = ((hash % 360) * Math.PI) / 180;
+    const radius = 70 + ((hash >>> 16) % 50);
+    place(node, at.x + Math.cos(angle) * radius, at.y + Math.sin(angle) * radius);
+  };
+  const middle = (points) => {
+    let x = 0;
+    let y = 0;
+    for (const point of points) {
+      x += point.x;
+      y += point.y;
     }
-    if (!placedAny) break;
+    return points.length
+      ? { x: x / points.length, y: y / points.length }
+      : { x: 0, y: 0 };
+  };
+
+  let left = nodes.filter((node) => !known.has(node.id));
+  while (left.length) {
+    // Outwards, one level at a time: everything whose anchor already
+    // stands, taken together before any of them is placed
+    const ready = left.filter((node) => known.has(anchors.get(node.id)));
+    if (ready.length) {
+      for (const node of ready) around(node, known.get(anchors.get(node.id)));
+      left = left.filter((node) => !known.has(node.id));
+      continue;
+    }
+    // Upwards: among its children that already stand
+    const parent = left.find((node) =>
+      (children.get(node.id) || []).some((child) => known.has(child))
+    );
+    if (parent) {
+      const placedKids = children
+        .get(parent.id)
+        .filter((child) => known.has(child))
+        .map((child) => known.get(child));
+      around(parent, middle(placedKids));
+      left = left.filter((node) => node !== parent);
+      continue;
+    }
+    // Nothing placed touches what is left: start its root — or, for a
+    // ring with no root, its first node — around the middle of the map
+    const start = left.find((node) => !anchors.has(node.id)) || left[0];
+    const centre = middle([...known.values()]);
+    const hash = idHash(start.id);
+    place(
+      start,
+      centre.x + (hash % 400) - 200,
+      centre.y + ((hash >>> 16) % 400) - 200
+    );
+    left = left.filter((node) => node !== start);
   }
   return nodes;
 }
@@ -655,7 +610,6 @@ function rebuildGraph() {
   edgesDs.clear();
   nodesDs.add(nodes);
   edgesDs.add(edges);
-  scheduleAutoSave();
 }
 
 /* ---------- context menu ----------
@@ -1948,6 +1902,12 @@ function buildGraphData() {
     }, host.switch, host.port));
   }
 
+  // The physics engine walks its nodes in the order they were added.
+  // It is not random, so two pages that start from the same positions
+  // in the same order end up with the same picture — and the order of
+  // the lists the server sends is not something to rely on. The edges
+  // keep theirs: the first edge into a node names what it hangs off.
+  nodes.sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
   return { nodes, edges };
 }
 
@@ -2029,8 +1989,8 @@ function setSelectedNode(id) {
 
 function renderGraph() {
   const { nodes, edges } = buildGraphData();
-  // Anything without a saved position starts next to what it is
-  // plugged into, not wherever the engine drops it
+  // Anything nobody pinned starts next to what it is plugged into, laid
+  // out from the pinned nodes outwards
   seedPositions(nodes, edges);
 
   if (!network) {
@@ -2047,6 +2007,9 @@ function renderGraph() {
       // them vis's own behaviour, which is better than a reimplementation
       interaction: { hover: true, multiselect: true },
       nodes: { borderWidthSelected: 4 },
+      // Every node arrives with a position, but whatever vis still
+      // decides on its own should come out the same in every tab
+      layout: { randomSeed: 7 },
     };
     network = new vis.Network(
       els.network,
@@ -2059,9 +2022,6 @@ function renderGraph() {
     // swallowed the next real one, and after moving a node the first
     // click on anything opened nothing.
     network.on("dragStart", (params) => loosenForDrag(params.nodes));
-    // A new node's position is worth writing down once the layout has
-    // settled around it — not while it is still being pushed about
-    network.on("stabilized", saveNewPositions);
     // Double click on a container takes everything on it: the cloud of
     // devices behind one switch is the thing people want to move out
     // of the way in one go.
@@ -2154,9 +2114,6 @@ function renderGraph() {
       network.redraw();
     });
     applyFreeze();  // a freeze chosen earlier survives a reload
-    // The very first map is exactly the one most likely to hold nodes
-    // nobody has a position for
-    scheduleAutoSave();
     return;
   }
 
@@ -2168,7 +2125,6 @@ function renderGraph() {
   edgesDs.remove(edgesDs.getIds().filter((id) => !edgeIds.has(id)));
   nodesDs.update(nodes);
   edgesDs.update(edges);
-  scheduleAutoSave();
 }
 
 /* A long press is a press.

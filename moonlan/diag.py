@@ -1043,6 +1043,7 @@ def run_layout_view(cfg) -> None:
     nodes = data.get("nodes") or {}
     missing = data.get("missing") or []
     pinned = [node for node, pos in nodes.items() if pos.get("pinned")]
+    loose = [node for node, pos in nodes.items() if not pos.get("pinned")]
     saved_at = data.get("saved_at") or 0
     print(
         f"saved positions: {len(nodes)}"
@@ -1058,15 +1059,19 @@ def run_layout_view(cfg) -> None:
     if len(pinned) > 20:
         print(f"  … and {len(pinned) - 20} more")
 
-    print(f"\non the map but not in the saved layout: {len(missing)}")
-    for node_id in missing[:20]:
-        print(f"  {node_id}")
-    if len(missing) > 20:
-        print(f"  … and {len(missing) - 20} more")
-    if missing:
+    # Only what a person placed is kept (v0.7.3). Every other node is
+    # laid out again on every load, from the pinned ones outwards — that
+    # is not a gap in the layout, it is how the layout works.
+    print(
+        f"\nlaid out again on every load, from the pinned nodes: "
+        f"{len(missing)} node(s) on the map"
+    )
+    if loose:
         print(
-            "  ^ they appeared after the layout was saved. Place them and\n"
-            "    save again, or save to record the map as it is now."
+            f"\nsaved positions nobody pinned: {len(loose)}\n"
+            "  ^ written by a page still running a script older than\n"
+            "    v0.7.3. The map ignores them, and the service removes them\n"
+            "    at its next start; reload that page."
         )
 
     # The other direction: a saved position whose node is gone. Kept on

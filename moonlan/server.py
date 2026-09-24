@@ -1892,6 +1892,27 @@ def _log_config() -> None:
         )
 
 
+async def drop_unpinned_positions() -> None:
+    """Startup: the layout keeps what a person placed, and nothing else.
+
+    One line either way, so the first start after the upgrade says how
+    many of the old positions went — and a later one says so too if a
+    page still running an older script wrote some since.
+    """
+    removed = await asyncio.to_thread(db.drop_unpinned_positions)
+    kept = sum(
+        1 for pos in (await asyncio.to_thread(db.layout)).values()
+        if pos["pinned"]
+    )
+    log.info(
+        "Map layout: %d position(s) placed by hand kept; %d position(s) "
+        "nobody placed removed — they were only where the layout engine "
+        "once left a node, and went stale as soon as what it hangs off "
+        "moved. Those nodes are laid out from the pinned ones on every "
+        "load.", kept, removed,
+    )
+
+
 async def purge_invalid_macs() -> None:
     """Startup cleanup: drop records whose MAC cannot be real.
 
@@ -1954,6 +1975,7 @@ async def lifespan(app: FastAPI):
         )
     await purge_invalid_macs()
     await purge_old_hosts()
+    await drop_unpinned_positions()
     await alarm_engine.load()
     await alarm_engine.clear_missing_hosts(
         set(await asyncio.to_thread(db.hosts_by_mac))
@@ -2607,7 +2629,7 @@ async def api_action_state(job_id: str):
 
 @app.get("/api/layout")
 async def api_layout() -> dict:
-    """Saved node positions, and which of the current nodes lack one."""
+    """Saved node positions, and how they compare with the map."""
     saved = await asyncio.to_thread(db.layout)
     present = _layout_node_ids()
     return {
@@ -2617,10 +2639,9 @@ async def api_layout() -> dict:
         # sees this move treats it as a reset of its own; the rows alone
         # could not tell it that.
         "cleared_at": await asyncio.to_thread(db.layout_cleared_at),
-        # Nodes on the map that the saved layout does not cover. A
-        # switch added yesterday has no place in a picture drawn the
-        # day before, and that gap has to be visible rather than found
-        # at printing time.
+        # Nodes on the map with no saved position: since v0.7.3 that is
+        # everything nobody pinned, laid out again on every load from
+        # the pinned nodes. A count, not a list of gaps to fill.
         "missing": sorted(present - set(saved)),
         # …and the other direction: a saved position whose node is not
         # on the map. Kept on purpose — a device switched off for the
@@ -2688,20 +2709,21 @@ async def _store_hand_placed(positions: dict[str, NodePosition]) -> dict:
     """Stores nodes placed or released by hand, journalled per kind.
 
     A node sent without `pinned` is pinned: this is the hand putting it
-    somewhere. Released means `pinned: false` with the coordinates it
-    has — the row stays, so the node keeps a saved position and the map
-    never has a node that is neither placed nor saved.
+    somewhere. Released (`pinned: false`) is forgotten: only what a
+    person placed is kept, and a released node is laid out from the
+    pinned ones on the next load like everything else.
     """
     rows = {
-        node_id: {
-            "x": pos.x, "y": pos.y,
-            "pinned": True if pos.pinned is None else pos.pinned,
-        }
+        node_id: {"x": pos.x, "y": pos.y, "pinned": True}
         for node_id, pos in positions.items()
+        if pos.pinned is None or pos.pinned
     }
-    await asyncio.to_thread(db.save_layout, rows)
-    pinned = [node_id for node_id, row in rows.items() if row["pinned"]]
-    released = [node_id for node_id, row in rows.items() if not row["pinned"]]
+    released = [node_id for node_id in positions if node_id not in rows]
+    if rows:
+        await asyncio.to_thread(db.save_layout, rows)
+    if released:
+        await asyncio.to_thread(db.forget_positions, released)
+    pinned = list(rows)
     await _journal_layout_action("layout_pinned", pinned)
     await _journal_layout_action("layout_released", released)
     return {"pinned": pinned, "released": released}

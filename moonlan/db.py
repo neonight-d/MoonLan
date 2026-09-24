@@ -571,6 +571,30 @@ class Database:
             )
         return cur.rowcount > 0
 
+    def forget_positions(self, node_ids) -> int:
+        """Forgets several nodes at once; returns how many rows went."""
+        with self._lock, self._conn:
+            cur = self._conn.executemany(
+                "DELETE FROM layout WHERE node_id = ?",
+                [(node_id,) for node_id in node_ids],
+            )
+        return cur.rowcount
+
+    def drop_unpinned_positions(self) -> int:
+        """Forgets every position nobody pinned; returns how many.
+
+        Up to v0.7.2 the page wrote down where the physics engine had
+        left each unpinned node, once, and never again. That position
+        went stale the moment somebody moved what the node hangs off:
+        after a reload a cloud of hosts started where its switch used to
+        be and was dragged across half the map. Only what a person placed
+        is kept now. Run at every start, because a page still open with
+        an older script may go on writing such rows until it is reloaded.
+        """
+        with self._lock, self._conn:
+            cur = self._conn.execute("DELETE FROM layout WHERE pinned = 0")
+        return cur.rowcount
+
     def clear_layout(self) -> int:
         with self._lock, self._conn:
             cur = self._conn.execute("DELETE FROM layout")
