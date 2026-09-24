@@ -422,13 +422,22 @@ class Database:
         """
         if confirm_scans <= 1:
             return set()
+        rows: dict[str, sqlite3.Row] = {}
+        macs = list(fdb_macs)
         with self._lock:
-            rows = {
-                row["mac"]: row
-                for row in self._conn.execute(
-                    "SELECT mac, seen_count, ip, confirmed FROM hosts"
-                ).fetchall()
-            }
+            # SQLite has a finite parameter limit. Small batches keep the
+            # query bounded while still avoiding a full inventory scan.
+            for start in range(0, len(macs), 500):
+                chunk = macs[start:start + 500]
+                placeholders = ",".join("?" for _ in chunk)
+                rows.update(
+                    (row["mac"], row)
+                    for row in self._conn.execute(
+                        "SELECT mac, seen_count, ip, confirmed "
+                        f"FROM hosts WHERE mac IN ({placeholders})",
+                        chunk,
+                    ).fetchall()
+                )
         pending: set[str] = set()
         for mac in fdb_macs:
             row = rows.get(mac)
@@ -814,6 +823,39 @@ class Database:
         with self._lock:
             rows = self._conn.execute("SELECT * FROM hosts").fetchall()
         return {row["mac"]: dict(row) for row in rows}
+
+    def hosts_by_macs(self, macs: set[str] | list[str]) -> dict[str, dict]:
+        """Return only the requested host rows.
+
+        Ping monitoring and other hot paths often need metadata for a
+        small subset of the inventory. Reading the whole hosts table
+        for every cycle turns an O(number of targets) operation into an
+        O(number of inventory records) one.
+        """
+        macs = list(dict.fromkeys(macs))
+        if not macs:
+            return {}
+        result: dict[str, dict] = {}
+        with self._lock:
+            for start in range(0, len(macs), 500):
+                chunk = macs[start:start + 500]
+                placeholders = ",".join("?" for _ in chunk)
+                rows = self._conn.execute(
+                    f"SELECT * FROM hosts WHERE mac IN ({placeholders})",
+                    chunk,
+                ).fetchall()
+                result.update((row["mac"], dict(row)) for row in rows)
+        return result
+
+    def host_by_ip(self, ip: str) -> dict | None:
+        """Return the host currently holding an IP, if any."""
+        if not ip:
+            return None
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT * FROM hosts WHERE ip = ?", (ip,)
+            ).fetchone()
+        return dict(row) if row else None
 
     def hosts_with_ip(self) -> list[tuple[str, str]]:
         """(mac, ip) pairs of all hosts with a known IP."""
