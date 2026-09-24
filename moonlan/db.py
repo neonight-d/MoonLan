@@ -1356,3 +1356,49 @@ class Database:
             return self._conn.execute(
                 "DELETE FROM sessions WHERE token_hash = ?", (token_hash,)
             ).rowcount > 0
+
+    def user_by_id(self, user_id: int) -> dict | None:
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT * FROM users WHERE id = ?", (user_id,)
+            ).fetchone()
+        return dict(row) if row else None
+
+    def record_login(
+        self, user_id: int, ts: float, rehashed: str | None = None
+    ) -> None:
+        """A successful sign-in; with a password hash made with today's
+        parameters when the stored one was made with older ones."""
+        with self._lock, self._conn:
+            self._conn.execute(
+                "UPDATE users SET last_login = ? WHERE id = ?", (ts, user_id)
+            )
+            if rehashed:
+                self._conn.execute(
+                    "UPDATE users SET password = ? WHERE id = ?",
+                    (rehashed, user_id),
+                )
+
+    def spend_totp_step(self, user_id: int, step: int) -> bool:
+        """Takes one 30-second step of this person's codes; False when
+        it — or a later one — was taken already.
+
+        One UPDATE with the comparison in its WHERE, so two requests
+        carrying the same code cannot both get through: a code read off
+        the wire or over a shoulder has been spent by its owner.
+        """
+        with self._lock, self._conn:
+            return self._conn.execute(
+                "UPDATE users SET totp_last_step = ? "
+                "WHERE id = ? AND totp_last_step < ?",
+                (step, user_id, step),
+            ).rowcount > 0
+
+    def purge_sessions(self, idle_before: float, created_before: float) -> int:
+        """Sessions past either limit; a browser that never came back
+        leaves its row behind otherwise."""
+        with self._lock, self._conn:
+            return self._conn.execute(
+                "DELETE FROM sessions WHERE last_seen < ? OR created_at < ?",
+                (idle_before, created_before),
+            ).rowcount

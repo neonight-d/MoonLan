@@ -53,7 +53,7 @@ db = Database(":memory:" if config.demo else config.db_path)
 # they need a file python -m moonlan.users can reach (see
 # Config.users_db_path)
 accounts = Database(config.users_db_path()) if config.demo else db
-sign_in = signin.SignIn(accounts)
+sign_in = signin.SignIn(accounts, db, config.auth)
 
 # Ping state of switches (they are not in the hosts table): ip -> {ping_up, last_ping_ok}
 switch_ping: dict[str, dict] = {}

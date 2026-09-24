@@ -119,6 +119,21 @@ class ContextMenuConfig:
 
 
 @dataclass
+class AuthConfig:
+    """Sessions after signing in (v0.7.4). Sign-in itself switches on
+    with the first administrator, not with a setting."""
+
+    # Signed out after this long without a request. The map refreshes
+    # itself every thirty seconds, and that counts: an open page never
+    # goes idle.
+    session_idle_hours: float = 12.0
+    # …and after this long whatever happens. A wall monitor signed in
+    # as a viewer has to stay signed in for weeks — a day would have
+    # somebody typing a password into it every morning.
+    session_max_days: float = 30.0
+
+
+@dataclass
 class EmailConfig:
     enabled: bool = False
     smtp_host: str = ""
@@ -262,6 +277,7 @@ class Config:
         default_factory=LoopDetectionConfig
     )
     context_menu: ContextMenuConfig = field(default_factory=ContextMenuConfig)
+    auth: AuthConfig = field(default_factory=AuthConfig)
     # switch address -> "http" | "https", for the switches whose own
     # entry says how their web interface is reached
     switch_web_scheme: dict = field(default_factory=dict)
@@ -734,6 +750,15 @@ def load_config(path: Path | None = None) -> Config:
         web_scheme=web_scheme,
         allowed_schemes=sorted(allowed),
         links=links,
+    )
+
+    cfg.auth = AuthConfig(
+        session_idle_hours=r.get(
+            "auth.session_idle_hours", d.auth.session_idle_hours, float
+        ),
+        session_max_days=r.get(
+            "auth.session_max_days", d.auth.session_max_days, float
+        ),
     )
 
     t = d.thresholds
