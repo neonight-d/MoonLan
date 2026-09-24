@@ -50,8 +50,10 @@ import json
 import sqlite3
 import sys
 import time
+import urllib.error
 import urllib.request
 from collections import Counter
+from pathlib import Path
 
 from . import counters, loopdetect, pinger, probes, stp
 from .anonymize import Anonymizer, AnonymizingWriter
@@ -887,6 +889,7 @@ def run_config_audit(cfg) -> None:
             print(f"  {problem}")
 
     _print_node_menu(cfg)
+    _print_sign_in(cfg)
 
     # The settings each switch is actually polled with. The global
     # section is only half the answer once a switch may carry keys of
@@ -960,20 +963,116 @@ def _print_node_menu(cfg) -> None:
             print(f"    {problem}")
 
 
+def _console_token(cfg) -> str:
+    """The token the running service wrote next to its database for
+    this tool (v0.7.4); "" when there is none or it cannot be read."""
+    try:
+        return Path(cfg.users_db_path() + ".console").read_text(
+            encoding="ascii"
+        ).strip()
+    except OSError:
+        return ""
+
+
+def _print_sign_in(cfg) -> None:
+    """Part of `--config`: is the map behind sign-in, and is anything
+    about the accounts wrong. Read from the database, read-only."""
+    path = cfg.users_db_path()
+    print(f"\nsign-in (accounts in {path}):")
+    try:
+        conn = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
+        conn.row_factory = sqlite3.Row
+        users = [dict(r) for r in conn.execute("SELECT * FROM users")]
+        sessions = conn.execute("SELECT COUNT(*) FROM sessions").fetchone()[0]
+        conn.close()
+    except sqlite3.Error as exc:
+        print(
+            f"  no accounts table here ({exc}): the service has not run "
+            "v0.7.4 or later on this database yet — sign-in is off"
+        )
+        return
+    now = time.time()
+    enabled = [u for u in users if not u["disabled"]]
+    admins = [u for u in enabled if u["role"] == "admin"]
+    if not admins:
+        print(
+            "  state:       OFF — the map is open to everyone who can reach "
+            "it.\n               Create the first administrator: "
+            "python -m moonlan.users add <name> --role admin"
+        )
+    else:
+        print(f"  state:       ON — {len(admins)} enabled administrator(s)")
+    roles = Counter(u["role"] for u in enabled)
+    disabled = len(users) - len(enabled)
+    print(
+        f"  accounts:    {roles['admin']} administrator(s), {roles['user']} "
+        f"user(s), {roles['viewer']} viewer(s)"
+        + (f"; {disabled} disabled" if disabled else "")
+    )
+    bare = [u["name"] for u in admins if not u["totp_enabled"]]
+    print(
+        "  administrators without TOTP: "
+        + (", ".join(bare) if bare else "none")
+    )
+    if bare:
+        print(
+            "    ^ there should be none. They can do nothing but bind it at\n"
+            "      their next sign-in; to bind it here, without the secret\n"
+            "      crossing the network: python -m moonlan.users totp <name>"
+        )
+    locked = [u for u in users if u["locked_until"] > now]
+    print("  locked now:  " + (", ".join(
+        f"{u['name']} until "
+        + time.strftime("%H:%M", time.localtime(u["locked_until"]))
+        for u in locked) if locked else "none"))
+    if locked:
+        print("    ^ ten wrong passwords in a row; it ends by itself, or: "
+              "python -m moonlan.users unlock <name>")
+    print(f"  sessions:    {sessions} open; they end after "
+          f"{cfg.auth.session_idle_hours:g} h without a request, "
+          f"{cfg.auth.session_max_days:g} days at most")
+    print(
+        "  connection:  HTTP — the service has no TLS of its own yet: "
+        "passwords and\n               session cookies cross the network "
+        "in clear text (HTTPS: v0.7.5)"
+    )
+
+
 def _ask_service(cfg, path: str) -> dict | None:
     """One GET against the running service, or None with a reason.
 
     Several reports need state that lives in the service process and
     nowhere else — which OIDs are on pause, how long each poll took.
     Guessing at it would be worse than saying it is not available.
+
+    Once sign-in is on, the service answers this tool only with the
+    token it wrote next to its database at startup: this tool writes
+    nothing to the database and cannot sign itself in, and whoever can
+    read that file can read the database anyway.
     """
     host = cfg.listen_host
     if host in ("0.0.0.0", "::", ""):
         host = "127.0.0.1"
     url = f"http://{host}:{cfg.listen_port}{path}"
+    request = urllib.request.Request(url)
+    token = _console_token(cfg)
+    if token:
+        request.add_header("X-MoonLan-Console", token)
     try:
-        with urllib.request.urlopen(url, timeout=5) as response:
+        with urllib.request.urlopen(request, timeout=5) as response:
             return json.loads(response.read().decode("utf-8"))
+    except urllib.error.HTTPError as exc:
+        if exc.code in (401, 403):
+            print(
+                f"the service at {url} asks for sign-in and did not take "
+                f"this tool's token ({cfg.users_db_path()}.console"
+                + (": not readable here" if not token else "")
+                + "). Run diag as the user MoonLan runs as, in its "
+                "directory, after the service has started."
+            )
+        else:
+            print(f"could not ask the service at {url}: {exc}")
+        return None
     except Exception as exc:
         print(f"could not ask the service at {url}: {exc}")
         return None

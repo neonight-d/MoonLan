@@ -1991,6 +1991,9 @@ async def lifespan(app: FastAPI):
             "the switches section or start with MOONLAN_DEMO=1."
         )
     await asyncio.to_thread(sign_in.log_state)
+    await asyncio.to_thread(
+        sign_in.write_console_token, config.users_db_path() + ".console"
+    )
     await purge_invalid_macs()
     await purge_old_hosts()
     await drop_unpinned_positions()
@@ -2007,6 +2010,7 @@ async def lifespan(app: FastAPI):
     yield
     for task in tasks:
         task.cancel()
+    sign_in.remove_console_token()
 
 
 app = FastAPI(title="MoonLan", version=__version__, lifespan=lifespan)
