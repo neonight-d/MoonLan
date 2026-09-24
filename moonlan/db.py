@@ -13,9 +13,21 @@ import threading
 import time
 from pathlib import Path
 
+from .auth import name_key
+
 log = logging.getLogger(__name__)
 
 DEFAULT_DB_PATH = Path("moonlan.db")
+
+
+class AccountError(Exception):
+    """An account change refused, with a code the caller words:
+    "exists", "unknown", "last_admin"."""
+
+    def __init__(self, code: str, name: str = ""):
+        super().__init__(f"{code}: {name}" if name else code)
+        self.code = code
+        self.name = name
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS hosts (
@@ -41,7 +53,12 @@ CREATE TABLE IF NOT EXISTS journal (
     event   TEXT NOT NULL,                -- 'new_mac' | 'host_down' | 'host_up'
                                           -- | 'alarm_raised' | 'alarm_cleared'
     mac     TEXT NOT NULL,                -- alarm events store the subject here
-    details TEXT DEFAULT ''
+    details TEXT DEFAULT '',
+    -- Who did it, for what a person does: pins, releases, a reset, a
+    -- cleared alarm, a sign-in. '' for what MoonLan did itself (and for
+    -- everything while sign-in is off); "@console" for what was done
+    -- with python -m moonlan.users on the server.
+    user    TEXT DEFAULT ''
 );
 CREATE TABLE IF NOT EXISTS lldp_neighbors (
     switch_ip  TEXT NOT NULL,             -- the polled switch
@@ -88,6 +105,23 @@ CREATE TABLE IF NOT EXISTS layout (
     -- relative to this pinned node, which the node hangs off directly.
     -- Absolute rows (the pinned ones) leave it empty.
     anchor     TEXT DEFAULT NULL
+);
+CREATE TABLE IF NOT EXISTS users (
+    -- The people who sign in to the map (v0.7.4). While no enabled
+    -- admin is in here, sign-in is off and the map is open to all, as
+    -- it was before.
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    name         TEXT NOT NULL,             -- as typed when created
+    name_key     TEXT NOT NULL UNIQUE,      -- casefold(name): "Anton" is "anton"
+    role         TEXT NOT NULL,             -- viewer | user | admin
+    password     TEXT NOT NULL,             -- scrypt$n$r$p$salt$hash
+    totp_secret  TEXT DEFAULT '',           -- base32; '' = none bound
+    totp_enabled INTEGER DEFAULT 0,
+    recovery     TEXT DEFAULT '',           -- hashes of unused recovery codes, one per line
+    must_change  INTEGER DEFAULT 0,         -- 1 = a new password before anything else
+    disabled     INTEGER DEFAULT 0,
+    created_at   REAL NOT NULL,
+    last_login   REAL DEFAULT 0
 );
 CREATE TABLE IF NOT EXISTS alarms (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -208,6 +242,14 @@ class Database:
                 "ALTER TABLE layout ADD COLUMN anchor TEXT DEFAULT NULL"
             )
             log.info("DB migration: added layout.anchor column")
+        journal_columns = {
+            row[1] for row in self._conn.execute("PRAGMA table_info(journal)")
+        }
+        if "user" not in journal_columns:
+            self._conn.execute(
+                "ALTER TABLE journal ADD COLUMN user TEXT DEFAULT ''"
+            )
+            log.info("DB migration: added journal.user column")
 
     def _dedupe_ips(self) -> int:
         """Leaves each non-empty IP on its most recently seen host only."""
@@ -911,11 +953,15 @@ class Database:
 
     # ---------- journal ----------
 
-    def add_event(self, ts: float, event: str, mac: str, details: str = "") -> None:
+    def add_event(
+        self, ts: float, event: str, mac: str, details: str = "",
+        user: str = "",
+    ) -> None:
         with self._lock, self._conn:
             self._conn.execute(
-                "INSERT INTO journal (ts, event, mac, details) VALUES (?, ?, ?, ?)",
-                (ts, event, mac, details),
+                "INSERT INTO journal (ts, event, mac, details, user) "
+                "VALUES (?, ?, ?, ?, ?)",
+                (ts, event, mac, details, user),
             )
 
     # ---------- alarms ----------
@@ -1027,9 +1073,50 @@ class Database:
         """Latest events, newest first; each with the host's name and IP."""
         with self._lock:
             rows = self._conn.execute(
-                "SELECT j.id, j.ts, j.event, j.mac, j.details, h.name, h.ip "
+                "SELECT j.id, j.ts, j.event, j.mac, j.details, j.user, "
+                "h.name, h.ip "
                 "FROM journal j LEFT JOIN hosts h ON h.mac = j.mac "
                 "ORDER BY j.id DESC LIMIT ?",
                 (limit,),
+            ).fetchall()
+        return [dict(row) for row in rows]
+
+    # ---------- users ----------
+
+    def add_user(
+        self, name: str, role: str, password_hash: str,
+        must_change: bool = False, ts: float | None = None,
+    ) -> dict:
+        """A new account; AccountError("exists") when the name is taken
+        in any letter case."""
+        key = name_key(name)
+        with self._lock, self._conn:
+            try:
+                self._conn.execute(
+                    "INSERT INTO users (name, name_key, role, password, "
+                    "must_change, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+                    (name, key, role, password_hash, int(must_change),
+                     time.time() if ts is None else ts),
+                )
+            except sqlite3.IntegrityError:
+                raise AccountError("exists", name) from None
+            row = self._conn.execute(
+                "SELECT * FROM users WHERE name_key = ?", (key,)
+            ).fetchone()
+        return dict(row)
+
+    def user(self, name: str) -> dict | None:
+        """One account by name, in any letter case, or None."""
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT * FROM users WHERE name_key = ?", (name_key(name),)
+            ).fetchone()
+        return dict(row) if row else None
+
+    def users(self) -> list[dict]:
+        """Every account, in the order they were created."""
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT * FROM users ORDER BY id"
             ).fetchall()
         return [dict(row) for row in rows]
