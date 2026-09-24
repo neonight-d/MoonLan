@@ -6,6 +6,59 @@ for before the next one started.
 
 Русская версия — [CHANGELOG_RU.md](CHANGELOG_RU.md).
 
+## v0.7.3 — 2026-09-24
+
+What a person placed is kept, the rest is laid out again.
+
+After v0.7.2 pins worked: they moved with the mouse, were the same in
+every tab and survived a reload. The operator placed eleven key nodes,
+opened a second tab, and the eleven were there. Nothing else was. Every
+chain of unpinned switches had wandered off, the clouds of hosts stood
+somewhere else, links crossed half the map, and new devices appeared
+far from their switch.
+
+The cause was a decision of v0.7.1: the position of an unpinned node
+was written down once, where the physics engine happened to leave it,
+and v0.7.2 made sure nothing ever overwrote it. That position went
+stale the moment somebody moved what the node hangs off. After a
+reload a cloud of hosts started where its switch used to be and was
+dragged across the map; new nodes were placed next to anchors that
+themselves stood in their old places. An absolute position of an
+unpinned node was worse than none.
+
+**Only pins are stored.** The automatic save is gone. At every start
+the service removes the positions nobody pinned and says in one log
+line how many went — the first start after the upgrade clears what
+earlier versions wrote. Releasing a node now forgets its position,
+which reverses v0.7.2 on purpose. Everything that is not pinned is
+laid out on every load from the pinned nodes outwards, a level at a
+time, at offsets derived from the node ids; a switch nobody pinned
+above switches somebody did starts among them. The nodes go into the
+layout engine in id order, and since the engine is not random, two
+pages start from the same picture and head for the same one. On the
+demo the start positions of all 87 nodes were identical in two tabs,
+and with the layout frozen the whole map was; with the physics running
+a tab in the background simply computes fewer steps.
+
+**The groups round a pinned node are kept as offsets.** Laid out from
+scratch, a group goes next to its switch but on whichever side its id
+falls. So the nodes hanging directly off a pinned one — groups, a
+switch without SNMP, an unpinned switch, a bridge, not hosts — are
+recorded relative to it when a person pins it: as they stood when the
+drag began, or at `P` and the menu. "Remember the places around it"
+does the same for a node already pinned. An offset moves with its node,
+is only a starting point, and holds only while the node still hangs
+off the same pinned one; releasing, resetting, a device moving to
+another switch and age remove it. `layout.anchor` is an additive
+column.
+
+On the demo, with the layout frozen, the groups came back exactly at
+their offsets in the same page and in a second one. With the physics
+running the engine decides where they settle, as it may: on that map,
+the same places with an offset or without.
+
+`diag --layout` counts pins and offsets separately.
+
 ## v0.7.2 — 2026-09-22
 
 A pinned node moves, an open page sees, and the menu does something.

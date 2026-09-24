@@ -16,7 +16,7 @@ An open-source alternative to LanTopoLog. MIT license.
 
 *Alarm panel: port errors, discards and host outages with one-click access to the switch port table.*
 
-## Features (v0.7.2)
+## Features (v0.7.3)
 
 - SNMP v2c polling of switches: device name, ports, speeds, statuses.
   Each switch has a time budget for its whole poll
@@ -88,17 +88,21 @@ An open-source alternative to LanTopoLog. MIT license.
 - The interface says when it has stopped hearing from the service: the
   last picture stays on screen and the header says how old it is,
   instead of a map that quietly never changes again.
-- A layout that does not rearrange itself. Node positions live on the
-  server, not in one browser: a map of a network is a shared object,
-  and two people looking at it have to see the same picture. Where a
-  node ends up is recorded on its own once the layout settles — there
-  is nothing to save by hand and nothing to forget to press. A node
-  with no position yet starts next to the thing it is plugged into
-  rather than wherever the engine drops it. A page that has been open
-  for a week follows what other pages do — a pin, a release, a reset —
-  at its next refresh, and its own automatic save only ever adds what
-  the server does not have yet, so it cannot overwrite a pin set
-  somewhere else a minute ago.
+- What a person placed is kept, the rest is laid out again. Pinned
+  positions live on the server, not in one browser: a map of a network
+  is a shared object, and two people looking at it have to see the
+  same picture. Nothing else is stored as a position — where the
+  physics engine happened to leave an unpinned node goes stale as soon
+  as somebody moves what it hangs off. On every load the map is laid
+  out from the pinned nodes outwards: what hangs off a pinned node
+  starts next to it, then the next level, each at a spot derived from
+  its id, so two pages start from one picture (and with the layout
+  frozen show exactly one). The groups and switches round a pinned
+  node — not the hosts, which fold round their switch whatever they
+  start from — are remembered as offsets from it when it is placed, and
+  start there, on the side a person left them, even after the node has
+  been moved. A page that has been open for a week follows what other
+  pages pin, release or reset at its next refresh.
 - Placing a node is a separate act from looking at one. Outside
   **Arrange** mode a dragged node goes back to the layout engine; in
   it, a drag places a node and keeps it there, and the right button
@@ -107,7 +111,9 @@ An open-source alternative to LanTopoLog. MIT license.
   pinning says "the physics engine does not get to move this", not
   "nobody does" — and the header counts how much of the map is
   somebody's decision rather than the engine's. Placing and releasing
-  are entries in the journal, one per action.
+  are entries in the journal, one per action. "Remember the places
+  around it" in the menu of a pinned node records how the groups round
+  it stand now, without moving the node.
 - Double-click a switch (or any group node) to select the devices on
   it, Ctrl+click to add and remove, drag the selection to move it all
   at once.
@@ -307,7 +313,8 @@ Version history: [CHANGELOG.md](CHANGELOG.md)
 | v0.7 ✓  | A layout that does not rearrange itself: positions on the server |
 | v0.7.1 ✓| Dragging a node is not a decision: arrange mode, context menu, multi-selection |
 | v0.7.2 ✓| A pinned node moves, an open page sees, and the menu does something: ping, traceroute, links |
-| v0.7.3  | Authentication; commands on the server from the config, for administrators |
+| v0.7.3 ✓| What a person placed is kept, the rest is laid out again from it |
+| v0.7.4  | Authentication; commands on the server from the config, for administrators |
 | v0.8    | Export to PDF and Draw.io, MAC address info import |
 | v0.9    | Windows computer inventory (WMI/WinRM) |
 
@@ -585,7 +592,15 @@ forgotten for being absent. A position goes only when it is BOTH older
 than this and has no node on the current map — and that housekeeping
 runs once, at the first scan after a restart, because before that scan
 there is no map to compare against and every position would look
-orphaned.
+orphaned. Offsets of the groups round a pinned node follow the same
+rule, and one also goes when its node no longer hangs off that pinned
+node — a device that moved to another switch has nothing to do with
+the old one's offset.
+
+Upgrading from v0.7.2 or earlier: at the first start the service
+removes every saved position nobody pinned and says in the log how
+many — those were only where the layout engine once left a node. The
+pins stay.
 
 ### The node menu
 
@@ -1447,9 +1462,9 @@ MoonLan/
 | POST   | `/api/scan`       | Start a new switch poll |
 | GET    | `/api/search?q=…` | Search by name, IP or MAC |
 | GET    | `/api/journal?limit=100` | Event journal, newest first |
-| GET    | `/api/layout`     | Saved node positions, `cleared_at` (the last reset), nodes missing from the layout and positions with no node |
+| GET    | `/api/layout`     | Pinned positions and the offsets recorded round them (`anchor`), `cleared_at` (the last reset), nodes laid out from the pins and positions with no node |
 | PUT    | `/api/layout`     | Store positions: `{"nodes": {id: {x, y, pinned}}}`; with `"only_new": true` only nodes that have none, and the answer says what the others already have |
-| PATCH  | `/api/layout`     | Place or release several nodes in one action (one journal entry) |
+| PATCH  | `/api/layout`     | Place or release several nodes in one action (one journal entry); `neighbours` records the offsets round a pinned node |
 | DELETE | `/api/layout`     | Reset the whole layout |
 | GET    | `/api/node-menu?id=…` | What one node's menu offers: the node's address, MAC and name as MoonLan knows them, links filled in, which tools the server has |
 | POST   | `/api/actions`    | Start `{"action": "ping"\|"traceroute", "nodes": [node ids]}`; answers with a job, or refuses with the reason |
