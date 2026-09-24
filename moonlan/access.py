@@ -85,6 +85,16 @@ RULES: dict[str, str] = {
     "PUT /api/layout": ADMIN,
     "DELETE /api/layout": ADMIN,
 
+    # accounts: administrators, and only once sign-in is on
+    "GET /api/users": ACCOUNTS,
+    "POST /api/users": ACCOUNTS,
+    "PATCH /api/users/{name}": ACCOUNTS,
+    "POST /api/users/{name}/password": ACCOUNTS,
+    "POST /api/users/{name}/reset-totp": ACCOUNTS,
+    "POST /api/users/{name}/unlock": ACCOUNTS,
+    "POST /api/users/{name}/logout": ACCOUNTS,
+    "DELETE /api/users/{name}": ACCOUNTS,
+
     # FastAPI's own description of the API: a map of every door, so
     # not for everybody
     "GET /openapi.json": ADMIN,

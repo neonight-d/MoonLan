@@ -228,6 +228,15 @@ def new_recovery_codes() -> list[str]:
     return codes
 
 
+def temporary_password() -> str:
+    """For an account an administrator creates or resets in the browser:
+    twelve characters in three groups, from the same unambiguous
+    alphabet as the recovery codes — read out or copied onto paper, and
+    replaced by the person at their first sign-in."""
+    raw = "".join(secrets.choice(RECOVERY_ALPHABET) for _ in range(12))
+    return "-".join(raw[i:i + 4] for i in range(0, 12, 4))
+
+
 def normal_recovery_code(code: str) -> str:
     return "".join(ch for ch in (code or "").lower() if ch.isalnum())
 
