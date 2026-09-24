@@ -63,10 +63,8 @@ async def _demo_probe(argv: list[str], timeout: float):
     """The menu's ping and traceroute in demo mode: nothing is sent.
     A device answers when the demo's own monitoring says it does."""
     ip = argv[-1]
-    rows = await asyncio.to_thread(db.hosts_by_mac)
-    answers = any(
-        row["ip"] == ip and row["ping_up"] for row in rows.values()
-    ) or any(
+    row = await asyncio.to_thread(db.host_by_ip, ip)
+    answers = bool(row and row["ping_up"]) or any(
         sw_ip == ip and ping.get("ping_up")
         for sw_ip, ping in switch_ping.items()
     )
@@ -1445,7 +1443,9 @@ async def run_ping() -> None:
                 "last_ping_ok": now if up else prev.get("last_ping_ok", 0),
             }
     if results_by_mac:
-        meta = await asyncio.to_thread(db.hosts_by_mac)
+        # Only ping targets can affect this cycle's host alarms. Avoid
+        # rebuilding metadata for the entire inventory every minute.
+        meta = await asyncio.to_thread(db.hosts_by_macs, results_by_mac)
         for mac, row in meta.items():
             row["monitored"] = _effective_monitored(row)
             # A located host missing from the latest FDB is not
