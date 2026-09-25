@@ -12,22 +12,58 @@ export MOONLAN_CONFIG=/absolute/path/to/config.yaml
 
 ## Health checks
 
-Simple liveness:
+Simple liveness, without sign-in:
 
 ~~~bash
-curl -fsS http://127.0.0.1:8000/api/health
+curl -fsS http://127.0.0.1:8080/api/health
 ~~~
 
-Detailed state:
+Detailed state — needs a viewer once sign-in is on; see
+[HEALTHCHECK.md](HEALTHCHECK.md) for reading it from the server itself:
 
 ~~~bash
-curl -s http://127.0.0.1:8000/api/status
+curl -s http://127.0.0.1:8080/api/status
 ~~~
+
+## Users and access
+
+Accounts are managed on the server, with the service running. Run the
+command where MoonLan runs, with the same `config.yaml` (or
+`MOONLAN_CONFIG`): it prints which database it works on. Full story:
+[SIGN-IN.md](SIGN-IN.md).
+
+The first administrator — sign-in switches on at the next request of
+every open map, no restart:
+
+~~~bash
+python -m moonlan.users add <name> --role admin
+~~~
+
+Its second factor, bound here so the secret never crosses the network:
+
+~~~bash
+python -m moonlan.users totp <name>
+~~~
+
+Getting somebody back in:
+
+~~~bash
+python -m moonlan.users list                  # roles, state, TOTP, locks, sessions
+python -m moonlan.users unlock <name>         # after ten wrong passwords
+python -m moonlan.users passwd <name> --temporary
+python -m moonlan.users reset-totp <name>     # a lost phone and no recovery codes
+~~~
+
+Passwords are asked for, never taken from the command line. The last
+enabled administrator cannot be deleted, disabled or demoted.
+`diag --config` shows administrators without TOTP and accounts locked
+right now. Run `diag` as the user MoonLan runs as: it asks the service
+with a token only that user can read.
 
 ## Empty map
 
 1. Check /api/health.
-2. Check /api/status.
+2. Check /api/status (signed in, or with the console token).
 3. Run python -m moonlan.diag --config.
 4. Verify configured switch addresses.
 5. Verify SNMP reachability and community strings.
