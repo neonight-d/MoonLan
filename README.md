@@ -243,8 +243,8 @@ Small, focused changes are preferred over broad rewrites.
 2. Add a regression test.
 3. Preserve existing public APIs/class names unless a breaking change is intentional.
 4. Run the full test suite.
-5. Update documentation and changelog when behavior changes.
-6. Use a clear Conventional Commit-style message.
+5. Update documentation when behavior changes; describe the user-visible effect in the pull request.
+6. Leave the version and the changelog alone — they are written when a release is cut.
 
 See **[CONTRIBUTING.md](CONTRIBUTING.md)**.
 
