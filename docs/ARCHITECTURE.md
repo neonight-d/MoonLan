@@ -44,7 +44,15 @@ SQLite stores inventory, layout, alarms, and journal information. WAL mode is us
 
 moonlan/server.py is the FastAPI boundary. It combines the latest topology state with fresh database fields when serving the UI.
 
-The /api/health endpoint is intentionally cheap and does not require a successful SNMP scan. /api/status contains deeper operational state.
+The /api/health endpoint is intentionally cheap, answers without sign-in, and says only that the process is up and which version it is. /api/status contains deeper operational state and needs a viewer.
+
+### Sign-in and rights
+
+- moonlan/access.py is the rights table: every route of the app ("METHOD /path/template") and the least role it needs — public, signed_in, viewer, user, admin, accounts. A route missing from it is for administrators only; tests/test_access.py lists every route of the app and fails on any the table does not name, and tests/test_docs.py checks the table in docs/API.md against it.
+- moonlan/signin.py is an ASGI middleware in front of every request. It finds the route the way the router does, looks the session cookie up in the database on every request — so an account changed from the console takes effect at once — and answers 401 or 403 before the handler runs or the body is read. It also holds the sign-in, one's own password and TOTP, and the accounts API. Who is asking reaches the handlers through a ContextVar, which is how the journal names the person.
+- moonlan/auth.py has the primitives: scrypt passwords, RFC 6238 TOTP, recovery codes, tokens. Standard library only.
+- moonlan/users.py is `python -m moonlan.users`, the accounts from the server's shell. It writes to the same database; the service sees the change at its next request.
+- While no enabled administrator exists, the table is not applied (except to account management): the service answers as it did before sign-in existed.
 
 ### Web UI
 
