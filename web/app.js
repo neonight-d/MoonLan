@@ -129,6 +129,8 @@ function applyStatic() {
     el.innerHTML = t(el.dataset.i18nHtml);
   }
   els.search.placeholder = t("searchPlaceholder");
+  labelIcon(els.journalBtn, t("journalBtn"));
+  renderBadge();
   els.detailsClose.title = t("close");
   els.journalClose.title = t("close");
   // what the two counters actually mean — the whole point of v0.5.4
@@ -2094,10 +2096,12 @@ let arrangeMode = false;
 
 function applyArrangeMode() {
   els.arrangeBtn.classList.toggle("active", arrangeMode);
-  els.arrangeBtn.textContent = arrangeMode
-    ? t("arrangeOnBtn")
-    : t("arrangeBtn");
-  els.arrangeBtn.title = els.arrangeBtn.dataset.why || t("arrangeHint");
+  els.arrangeBtn.setAttribute("aria-pressed", arrangeMode ? "true" : "false");
+  const name = arrangeMode ? t("arrangeOnBtn") : t("arrangeBtn");
+  labelIcon(
+    els.arrangeBtn, name,
+    (els.arrangeBtn.dataset.why || name) + "\n\n" + t("arrangeHint")
+  );
   // The map itself changes, not only the button: a mode you can
   // forget you are in is a mode that edits the map by accident.
   els.network.classList.toggle("arranging", arrangeMode);
@@ -2110,8 +2114,17 @@ function toggleArrangeMode() {
 
 function applyFreeze() {
   if (network) network.setOptions({ physics: !layoutFrozen });
-  els.freezeBtn.textContent = layoutFrozen ? t("unfreezeBtn") : t("freezeBtn");
+  // an icon: what it does now is in the tooltip, and the lit button
+  // says it is on
+  labelIcon(els.freezeBtn, layoutFrozen ? t("unfreezeBtn") : t("freezeBtn"));
   els.freezeBtn.classList.toggle("active", layoutFrozen);
+  els.freezeBtn.setAttribute("aria-pressed", layoutFrozen ? "true" : "false");
+}
+
+/* The words behind an icon: the tooltip and what a screen reader says */
+function labelIcon(button, label, title) {
+  button.setAttribute("aria-label", label);
+  button.title = title || label;
 }
 
 function toggleFreeze() {
@@ -2434,6 +2447,12 @@ async function loadTopologyOnce() {
 }
 
 function renderBadge() {
+  labelIcon(
+    els.alarmsBtn,
+    activeAlarms.length
+      ? t("alarmsBtn") + ": " + activeAlarms.length
+      : t("alarmsBtn")
+  );
   els.alarmsBadge.textContent = activeAlarms.length;
   els.alarmsBadge.classList.toggle("hidden", activeAlarms.length === 0);
   els.alarmsBadge.classList.toggle(

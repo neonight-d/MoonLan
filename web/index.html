@@ -20,12 +20,17 @@
       <span class="lang-switch" role="group" aria-label="Language">
         <button id="lang-ru">RU</button><button id="lang-en">EN</button>
       </span>
-      <button id="freeze-btn"></button>
-      <button id="arrange-btn"></button>
+      <!-- Icons, drawn here rather than taken from a font or a CDN: they
+           must not depend on the outside network, and they take the
+           colour of the theme — the lit state included. Each one has a
+           title and an aria-label in the current language (applyStatic):
+           an icon without a word is recognised by whoever drew it. -->
+      <button id="freeze-btn" type="button" class="icon-btn"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M12 12L12.0 2.0M14.6 3.0L12.0 5.5L9.4 3.0M12 12L3.3 7.0M5.5 5.2L6.4 8.8L2.9 9.8M12 12L3.3 17.0M2.9 14.2L6.4 15.2L5.5 18.8M12 12L12.0 22.0M9.4 21.0L12.0 18.5L14.6 21.0M12 12L20.7 17.0M18.5 18.8L17.6 15.3L21.1 14.2M12 12L20.7 7.0M21.1 9.8L17.6 8.8L18.5 5.2"/></svg></button>
+      <button id="arrange-btn" type="button" class="icon-btn"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M12 3v18M3 12h18M9 6l3-3 3 3M9 18l3 3 3-3M6 9l-3 3 3 3M18 9l3 3-3 3"/></svg></button>
       <button id="reset-layout-btn" data-i18n="resetLayoutBtn"></button>
-      <button id="alarms-btn"><span data-i18n="alarmsBtn"></span><span id="alarms-badge" class="badge hidden"></span></button>
+      <button id="alarms-btn" type="button" class="icon-btn"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M18 16v-5a6 6 0 0 0-12 0v5l-2 2h16z"/><path d="M10.2 20.5a2 2 0 0 0 3.6 0"/></svg><span id="alarms-badge" class="badge hidden"></span></button>
       <button id="stp-btn" data-i18n="stpBtn"></button>
-      <button id="journal-btn" data-i18n="journalBtn"></button>
+      <button id="journal-btn" type="button" class="icon-btn"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M9 6h11M9 12h11M9 18h11"/><path class="dot" d="M4.5 6h.01M4.5 12h.01M4.5 18h.01"/></svg></button>
       <button id="rescan" data-i18n="rescanBtn"></button>
       <button id="users-btn" data-i18n="usersBtn"></button>
       <button id="user-chip" class="user-chip hidden"></button>
