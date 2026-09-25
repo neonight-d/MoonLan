@@ -58,6 +58,47 @@ The /api/health endpoint is intentionally cheap, answers without sign-in, and sa
 
 The web layer is static HTML/CSS/JavaScript. The browser refreshes API data and renders the topology with vis-network. Server-side content hashing gives UI assets versioned URLs while static responses remain revalidated.
 
+## How it works, step by step
+
+1. MoonLan polls every switch from `config.yaml` via SNMP: `sysName`,
+   `sysDescr`, the interface table (IF-MIB) and the MAC forwarding
+   table (BRIDGE-MIB / Q-BRIDGE-MIB). FDB entries on bridge-ports
+   missing from `dot1dBasePortIfIndex` (trunks on some D-Link models)
+   are kept on synthetic ports instead of being dropped.
+2. Physical member ports of LACP aggregates (IEEE8023-LAG-MIB) are
+   mapped to the logical aggregate port and treated as one port.
+3. A link between switches A and B is drawn only when it is direct:
+   the ports through which A and B see each other must not both see
+   any third switch (the intersection of foreign MAC sets is empty).
+   This prevents false ray-to-ray links in a star, where every ray sees
+   all the others through the core. A switch is recognized by any MAC
+   from its full set (bridge MAC, interface MACs, management-IP MAC);
+   one-way visibility is resolved by an exclusion rule.
+4. MAC addresses on the remaining ports are end devices shown on the
+   map; each host gets the PVID (untagged VLAN) of its port. If more
+   than `unmanaged_threshold` hosts are visible behind one port, they
+   are grouped under a "Switch without SNMP" node.
+5. Host IPs are taken from the ARP tables of the `routers` devices
+   (`ipNetToMediaPhysAddress`), names via reverse DNS.
+6. All hosts with an IP and all switches are pinged regularly; status
+   and last-reply time are visible in the list, on the map and in the
+   device card.
+7. A separate light loop polls port counters (octets, errors,
+   discards) and converts deltas into per-port rates. The alarm engine
+   evaluates the rules after every ping/scan/counters cycle, stores
+   alarms in SQLite, mirrors transitions into the journal and routes
+   notifications to email/Telegram/Syslog with a cooldown.
+8. LLDP is polled in the same cycle. Neighbours are resolved against
+   the local port table (`lldpRemLocalPortNum` is not an ifIndex), ports
+   carrying forwarded LLDP frames are excluded, links both devices
+   announce override the inference, and neighbours with the `bridge`
+   capability that belong to no polled switch become named nodes.
+   BRIDGE-MIB `dot1dStp*` is read alongside and judged before use.
+9. Hosts, the event journal and alarms are stored in SQLite
+   (`moonlan.db`), so `first_seen` and history survive restarts.
+10. The result is available through the REST API (`/api/topology`)
+    and in the web UI.
+
 ## Performance boundaries
 
 Keep different switch SNMP polls, independent ping targets, and independent counter polls parallel where their per-switch lock is free.
