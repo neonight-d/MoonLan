@@ -6,6 +6,55 @@ for before the next one started.
 
 Русская версия — [CHANGELOG_RU.md](CHANGELOG_RU.md).
 
+## v0.7.5 — 2026-09-25
+
+One row of controls, and documentation from the community.
+
+v0.7.4 made sign-in, roles and a second factor, and the header did not
+survive it: thirteen things in one row, eleven of them buttons with
+words on them, each added by a version of its own.
+
+**The header.** Freeze layout, Arrange, Alarms and Journal are icons —
+inline SVG in the page's own colours, no icon font and no CDN — each
+with a tooltip and an aria-label in the current language; the bell
+keeps its count, and a lit button says freezing or arranging is on
+where a word used to. STP stays three letters. Rescan network, Users
+and Reset layout go into one Actions menu (⋯) built from data like the
+node menu, with Reset below its own line and its confirmation; what a
+role may not do is in it greyed out with the role it needs, and it
+works from the keyboard. Sign out moves to the account card the name
+opens; the sign-in form has its own language switch. "Placed by hand"
+moves from the status line into the Arrange tooltip. On a 1920 screen
+the header is one row with some 800 pixels to spare, on a 1366 laptop
+one row with over 200 — and where it does not fit, the status gives way
+to the time of the scan alone, measured, before anything wraps.
+
+**PR #2.** ItsWanheda's documentation and database work is taken over
+with its authorship: CONTRIBUTING.md, SECURITY.md and the guides in
+docs/ by cherry-pick, the new README structure by hand with him as
+co-author, and the narrower inventory queries of the ping cycle, which
+a test shows to raise exactly the alarms the whole-table query did. Not
+taken: his version numbers and changelog entries, his /api/health —
+which told anybody without a session about the network — the Pylint
+workflow, which was not valid YAML, and the map overlay, which repeated
+counters already on screen.
+
+**The documentation, brought up to v0.7.4.** docs/API.md describes
+signing in and lists every route with its role, in a table a test
+checks against the code both ways; docs/CONFIGURATION.md lists every
+key the loader reads, and a test fails on an undocumented one;
+HEALTHCHECK, SECURITY, OPERATIONS and ARCHITECTURE know about sign-in.
+The two READMEs have one structure — the Russian one translated, the
+details in English documents under docs/ (features, configuration,
+sign-in, operations, diagnostics, LLDP/STP/loops), each old section
+with an address of its own, and a test that every relative link
+resolves.
+
+Thanks to ItsWanheda for the documentation and the database hot-path
+work ([#2](https://github.com/neonight-d/MoonLan/pull/2)).
+
+HTTPS and passkeys move to v0.7.6.
+
 ## v0.7.4 — 2026-09-24
 
 Sign in, three roles, and a second factor.
