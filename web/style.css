@@ -132,6 +132,7 @@ button:hover { background: rgba(232, 228, 213, 0.1); }
   stroke-linejoin: round;
 }
 .icon .dot { stroke-width: 3; }
+#more-btn .icon .dot { stroke-width: 3.4; }
 /* the count is the point of the bell: it sits on the icon */
 .icon-btn .badge {
   position: absolute;
@@ -742,6 +743,10 @@ body.gated .toolbar > button { display: none; }
 }
 
 .context-menu button:hover { background: var(--bg-hover); }
+.context-menu button:focus-visible { outline: 2px solid var(--link); outline-offset: -2px; }
+/* the one action that cannot be undone, below its own line */
+.context-menu button.danger { color: #e39a9a; }
+.context-menu button.danger.off { color: var(--text-dim); }
 
 #network.arranging { cursor: move; }
 

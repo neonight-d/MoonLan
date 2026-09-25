@@ -10,7 +10,6 @@ const els = {
   switchCount: document.getElementById("switch-count"),
   hostCount: document.getElementById("host-count"),
   search: document.getElementById("search"),
-  rescan: document.getElementById("rescan"),
   scanStatus: document.getElementById("scan-status"),
   details: document.getElementById("details"),
   detailsBody: document.getElementById("details-body"),
@@ -42,9 +41,9 @@ const els = {
   actionsBody: document.getElementById("actions-body"),
   actionsClose: document.getElementById("actions-close"),
   layoutStatus: document.getElementById("layout-status"),
-  resetLayoutBtn: document.getElementById("reset-layout-btn"),
+  moreBtn: document.getElementById("more-btn"),
+  moreMenu: document.getElementById("more-menu"),
   notice: document.getElementById("notice"),
-  usersBtn: document.getElementById("users-btn"),
   userChip: document.getElementById("user-chip"),
   logoutBtn: document.getElementById("logout-btn"),
   gate: document.getElementById("gate"),
@@ -130,6 +129,7 @@ function applyStatic() {
   }
   els.search.placeholder = t("searchPlaceholder");
   labelIcon(els.journalBtn, t("journalBtn"));
+  labelIcon(els.moreBtn, t("moreBtn"));
   renderBadge();
   els.detailsClose.title = t("close");
   els.journalClose.title = t("close");
@@ -346,6 +346,7 @@ function throughGate(kind) {
 
 function showGate(kind) {
   closeNodeMenu();
+  closeMoreMenu(false);
   if (kind === "signIn" && (!me || !me.sign_in || me.name)) {
     // whatever the page believed — sign-in off, or signed in as
     // somebody — the server has just said otherwise
@@ -725,10 +726,10 @@ function applyRole() {
     );
     els.userChip.title = t("userChipHint");
   }
-  gateButton(els.rescan, needRole("user"));
   gateButton(els.arrangeBtn, needRole("user"));
-  gateButton(els.resetLayoutBtn, needRole("admin"));
-  gateButton(els.usersBtn, accountsReason());
+  // what the Actions menu offers is decided when it opens; one open now
+  // was drawn for another role
+  closeMoreMenu(false);
   if (arrangeMode && needRole("user")) arrangeMode = false;
   applyArrangeMode();
   // what an open panel offers depends on the role
@@ -1700,6 +1701,64 @@ function menuItemsFor(ids, info, tools) {
   return items;
 }
 
+/* ---------- the header's Actions ----------
+
+   What does something to the whole network or to everybody's picture:
+   a rescan, the accounts, a reset. The reset stands below its own line
+   — the one thing in it that cannot be undone must not sit among the
+   harmless ones — and keeps its confirmation. What a role may not do is
+   in the menu all the same, greyed out with the role it needs: a viewer
+   opens it and finds every item grey, with the reason. */
+
+const MORE_GROUPS = ["network", "danger"];
+
+function moreItems() {
+  const scanning = isScanning || topology.scanning;
+  return [
+    {
+      key: "rescan", group: "network", label: t("rescanBtn"),
+      disabled: needRole("user") || (scanning ? t("reasonScanning") : null),
+      run: rescan,
+    },
+    {
+      key: "users", group: "network", label: t("usersBtn"),
+      disabled: accountsReason(),
+      run: toggleUsers,
+    },
+    {
+      key: "reset", group: "danger", label: t("resetLayoutBtn"), danger: true,
+      disabled: needRole("admin"),
+      run: resetLayout,
+    },
+  ];
+}
+
+function openMoreMenu() {
+  closeNodeMenu();
+  els.moreMenu.replaceChildren(...menuButtons(moreItems(), MORE_GROUPS, (item) => {
+    closeMoreMenu(true);
+    item.run();
+  }));
+  els.moreMenu.classList.remove("hidden");
+  els.moreBtn.setAttribute("aria-expanded", "true");
+  // under the button, its right edge on the button's
+  const button = els.moreBtn.getBoundingClientRect();
+  const width = els.moreMenu.offsetWidth;
+  els.moreMenu.style.top = button.bottom + 6 + "px";
+  els.moreMenu.style.left =
+    Math.max(4, Math.min(button.right - width, window.innerWidth - width - 8)) + "px";
+  const first = els.moreMenu.querySelector('[role="menuitem"]');
+  if (first) first.focus();
+}
+
+function closeMoreMenu(returnFocus) {
+  if (els.moreMenu.classList.contains("hidden")) return;
+  els.moreMenu.classList.add("hidden");
+  els.moreMenu.replaceChildren();
+  els.moreBtn.setAttribute("aria-expanded", "false");
+  if (returnFocus) els.moreBtn.focus();
+}
+
 function closeNodeMenu() {
   menuSerial++;
   els.nodeMenu.classList.add("hidden");
@@ -1741,30 +1800,32 @@ async function openNodeMenu(ids, at) {
   renderNodeMenu(ids, menuItemsFor(ids, info, tools), at);
 }
 
-function renderNodeMenu(ids, items, at) {
+/* The items of a menu built from data: the groups in their order with a
+   line between them, and an item that cannot run greyed out with the
+   reason. Both the node menu and the header's Actions use it. */
+function menuButtons(items, groups, pick) {
   const parts = [];
-  const head = document.createElement("div");
-  head.className = "context-menu-head";
-  head.textContent =
-    ids.length === 1 ? nodeTitle(ids[0]) : fmt("menuSelected", { n: ids.length });
-  parts.push(head);
   let drawn = 0;
-  for (const group of MENU_GROUPS) {
+  for (const group of groups) {
     const members = items.filter((item) => item.group === group);
     if (!members.length) continue;
     if (drawn++) {
       const sep = document.createElement("div");
       sep.className = "context-menu-sep";
+      sep.setAttribute("role", "separator");
       parts.push(sep);
     }
     for (const item of members) {
       const button = document.createElement("button");
       button.type = "button";
+      button.setAttribute("role", "menuitem");
       button.dataset.key = item.key;
       button.textContent = item.label;
+      if (item.danger) button.classList.add("danger");
       if (item.disabled) {
         // not the `disabled` attribute: a disabled button shows no
-        // tooltip in some browsers, and the reason is the point
+        // tooltip in some browsers, and the reason is the point — and
+        // it could not be reached with the arrow keys either
         button.classList.add("off");
         button.setAttribute("aria-disabled", "true");
         button.title = item.disabled;
@@ -1775,12 +1836,49 @@ function renderNodeMenu(ids, items, at) {
       }
       button.addEventListener("click", () => {
         if (item.disabled) return;
-        closeNodeMenu();
-        item.run();
+        pick(item);
       });
       parts.push(button);
     }
   }
+  return parts;
+}
+
+/* Arrow keys, Home and End move through a menu's items; Escape closes
+   it (with the focus back where the menu came from); Tab leaves it. */
+function menuKeys(event, menu, close) {
+  const items = [...menu.querySelectorAll('[role="menuitem"]')];
+  if (!items.length) return;
+  const at = items.indexOf(document.activeElement);
+  let next = null;
+  if (event.key === "ArrowDown") next = (at + 1) % items.length;
+  else if (event.key === "ArrowUp") next = (at - 1 + items.length) % items.length;
+  else if (event.key === "Home") next = 0;
+  else if (event.key === "End") next = items.length - 1;
+  else if (event.key === "Escape") {
+    event.preventDefault();
+    event.stopPropagation();
+    close(true);
+    return;
+  } else if (event.key === "Tab") {
+    close(false);
+    return;
+  }
+  if (next !== null) {
+    event.preventDefault();
+    items[next].focus();
+  }
+}
+
+function renderNodeMenu(ids, items, at) {
+  const head = document.createElement("div");
+  head.className = "context-menu-head";
+  head.textContent =
+    ids.length === 1 ? nodeTitle(ids[0]) : fmt("menuSelected", { n: ids.length });
+  const parts = [head, ...menuButtons(items, MENU_GROUPS, (item) => {
+    closeNodeMenu();
+    item.run();
+  })];
   els.nodeMenu.replaceChildren(...parts);
   els.nodeMenu.classList.remove("hidden");
   // Keep it on screen: near the bottom or the right edge it flips
@@ -2386,7 +2484,6 @@ function watchScan() {
     if (!status.scanning) {
       clearInterval(scanWatcher);
       scanWatcher = null;
-      els.rescan.disabled = false;
       isScanning = false;
       await loadTopology();
     }
@@ -4501,7 +4598,6 @@ function applySearchFilter() {
 }
 
 async function rescan() {
-  els.rescan.disabled = true;
   isScanning = true;
   updateScanStatus();
   await api("/api/scan", { method: "POST" });
@@ -4509,7 +4605,7 @@ async function rescan() {
 }
 
 els.search.addEventListener("input", applySearchFilter);
-els.rescan.addEventListener("click", () => allowed(els.rescan) && rescan());
+
 els.detailsClose.addEventListener("click", hideDetails);
 els.journalBtn.addEventListener("click", toggleJournal);
 els.journalClose.addEventListener("click", () =>
@@ -4523,9 +4619,17 @@ els.freezeBtn.addEventListener("click", toggleFreeze);
 els.arrangeBtn.addEventListener("click", () => allowed(els.arrangeBtn) && toggleArrangeMode());
 document.addEventListener("click", (event) => {
   if (!els.nodeMenu.contains(event.target)) closeNodeMenu();
+  if (!els.moreMenu.contains(event.target) && !els.moreBtn.contains(event.target)) {
+    closeMoreMenu(false);
+  }
 });
-els.resetLayoutBtn.addEventListener("click", () => allowed(els.resetLayoutBtn) && resetLayout());
-els.usersBtn.addEventListener("click", () => allowed(els.usersBtn) && toggleUsers());
+els.moreBtn.addEventListener("click", () => {
+  if (els.moreMenu.classList.contains("hidden")) openMoreMenu();
+  else closeMoreMenu(true);
+});
+els.moreMenu.addEventListener("keydown", (event) =>
+  menuKeys(event, els.moreMenu, closeMoreMenu)
+);
 els.usersClose.addEventListener("click", () => els.users.classList.add("hidden"));
 els.userChip.addEventListener("click", toggleAccount);
 els.accountClose.addEventListener("click", () => els.account.classList.add("hidden"));
@@ -4550,13 +4654,15 @@ document.addEventListener("keydown", (event) => {
     (target.tagName === "INPUT" ||
       target.tagName === "TEXTAREA" ||
       target.isContentEditable);
-  if (typing) return;
+  // …nor inside a menu, where the keys move through the items
+  if (typing || (target && target.closest && target.closest('[role="menu"]'))) return;
   if (event.key === "p" || event.key === "P") {
     togglePinOnSelection();
   } else if (event.key === "Escape") {
     if (network) network.unselectAll();
     setSelectedNode(null);
     closeNodeMenu();
+    closeMoreMenu(false);
   }
 });
 
