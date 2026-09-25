@@ -113,6 +113,11 @@ const I18N = {
       "“Rescan network” in the Actions menu (⋯), or start the service with " +
       "<code>MOONLAN_DEMO=1</code> to see a demo network.",
     scanning: "Scanning the network…",
+    scanningShort: "scan {done}/{total}",
+    scanningShortStart: "scanning…",
+    scanFailedShort: "failed {time}",
+    serviceOfflineShort: "offline",
+    arrangePinned: "Placed by hand: {n}.",
     scanPrefix: "Last scan: ",
     scanFailed: "Last scan failed: ",
     noData: "No data yet",
@@ -762,6 +767,11 @@ const I18N = {
       "«Опросить сеть» в меню «Действия» (⋯), либо запустите сервис с " +
       "<code>MOONLAN_DEMO=1</code>, чтобы увидеть демо-сеть.",
     scanning: "Идёт опрос сети…",
+    scanningShort: "опрос {done}/{total}",
+    scanningShortStart: "опрос…",
+    scanFailedShort: "сбой {time}",
+    serviceOfflineShort: "нет связи",
+    arrangePinned: "Поставлено руками: {n}.",
     scanPrefix: "Опрос: ",
     scanFailed: "Последний опрос не удался: ",
     noData: "Данных пока нет",
