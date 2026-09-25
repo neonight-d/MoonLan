@@ -109,8 +109,8 @@ const I18N = {
     noEvents: "No events yet",
     emptyLine1: "The map is empty.",
     emptyLine2:
-      "Add switches to <code>config.yaml</code> and press " +
-      "“Rescan network”, or start the service with " +
+      "Add switches to <code>config.yaml</code> and choose " +
+      "“Rescan network” in the Actions menu (⋯), or start the service with " +
       "<code>MOONLAN_DEMO=1</code> to see a demo network.",
     scanning: "Scanning the network…",
     scanPrefix: "Last scan: ",
@@ -758,8 +758,8 @@ const I18N = {
     noEvents: "Событий пока нет",
     emptyLine1: "Схема пока пуста.",
     emptyLine2:
-      "Укажите коммутаторы в <code>config.yaml</code> и нажмите " +
-      "«Опросить сеть», либо запустите сервис с " +
+      "Укажите коммутаторы в <code>config.yaml</code> и выберите " +
+      "«Опросить сеть» в меню «Действия» (⋯), либо запустите сервис с " +
       "<code>MOONLAN_DEMO=1</code>, чтобы увидеть демо-сеть.",
     scanning: "Идёт опрос сети…",
     scanPrefix: "Опрос: ",

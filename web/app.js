@@ -45,7 +45,6 @@ const els = {
   moreMenu: document.getElementById("more-menu"),
   notice: document.getElementById("notice"),
   userChip: document.getElementById("user-chip"),
-  logoutBtn: document.getElementById("logout-btn"),
   gate: document.getElementById("gate"),
   gateTitle: document.getElementById("gate-title"),
   gateBody: document.getElementById("gate-body"),
@@ -151,7 +150,11 @@ function setLang(newLang) {
   applyRole();
   // the sign-in form is redrawn in the new language; a form half way
   // through a code or a password is left alone
-  if (gateUp() && gateView === "signIn") renderSignIn();
+  if (gateUp() && gateView === "signIn") {
+    // the name typed so far survives the switch
+    const typed = els.gateBody.querySelector('input[name="username"]');
+    renderSignIn(undefined, typed && typed.value);
+  }
   applyArrangeMode();
   updateScanStatus();
   renderSidebar();
@@ -410,11 +413,24 @@ async function signOut() {
 
 let gateView = null; // which form the gate shows, for the language switch
 
-function renderSignIn(message) {
+/* The sign-in form's own language switch: the language is needed
+   before anybody has signed in. */
+function gateLangSwitch() {
+  const choose = (code) => h("button", {
+    type: "button", text: code.toUpperCase(),
+    class: lang === code ? "active" : null,
+    "aria-pressed": lang === code ? "true" : "false",
+    onclick: () => setLang(code),
+  });
+  return h("span", { class: "lang-switch gate-lang", role: "group",
+                     "aria-label": "Language" }, choose("ru"), choose("en"));
+}
+
+function renderSignIn(message, typedName) {
   gateView = "signIn";
   const name = field("fieldName", {
     name: "username", autocomplete: "username", autocapitalize: "none",
-    spellcheck: "false", required: true,
+    spellcheck: "false", required: true, value: typedName || null,
   });
   const password = field("fieldPassword", {
     type: "password", name: "password", autocomplete: "current-password",
@@ -423,6 +439,7 @@ function renderSignIn(message) {
   const error = h("p", { class: "error", role: "alert", text: message || "" });
   const button = h("button", { type: "submit", text: t("signInBtn") });
   gateForm("signInTitle", [
+    gateLangSwitch(),
     everSignedIn ? h("p", { text: t("signInAgain") }) : null,
     plainHttp() ? h("p", { class: "http-note", text: t("httpSignIn") }) : null,
     name.label, password.label, error,
@@ -719,7 +736,6 @@ function applyRole() {
   renderNotice();
   const signedInAs = me && me.sign_in && me.name;
   els.userChip.classList.toggle("hidden", !signedInAs);
-  els.logoutBtn.classList.toggle("hidden", !signedInAs);
   if (signedInAs) {
     els.userChip.replaceChildren(
       me.name, h("span", { class: "role", text: t("role_" + me.role) })
@@ -4633,7 +4649,6 @@ els.moreMenu.addEventListener("keydown", (event) =>
 els.usersClose.addEventListener("click", () => els.users.classList.add("hidden"));
 els.userChip.addEventListener("click", toggleAccount);
 els.accountClose.addEventListener("click", () => els.account.classList.add("hidden"));
-els.logoutBtn.addEventListener("click", signOut);
 els.actionsClose.addEventListener("click", closeActions);
 els.alarmsBtn.addEventListener("click", toggleAlarms);
 els.alarmsClose.addEventListener("click", () =>
