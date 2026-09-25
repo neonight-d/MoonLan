@@ -199,7 +199,7 @@ def log_plain_http() -> None:
     log.warning(
         "Sign-in runs over plain HTTP: passwords and session cookies cross "
         "the network in clear text, and anyone who can read the traffic "
-        "can take a session. HTTPS arrives in v0.7.5; until then bind "
+        "can take a session. HTTPS arrives in v0.7.6; until then bind "
         "TOTP with python -m moonlan.users totp <name> on this machine "
         "rather than from a browser."
     )
@@ -388,7 +388,7 @@ class SignIn:
     def _signed_in(self, token: str) -> JSONResponse:
         """The cookie: HttpOnly — no script on the page reads it;
         SameSite=Strict — no other site's page sends it; Path=/. Not
-        yet Secure: that needs HTTPS (v0.7.5). It lasts as long as a
+        yet Secure: that needs HTTPS (v0.7.6). It lasts as long as a
         session may, so a browser restart does not sign a wall monitor
         out."""
         response = JSONResponse({"status": "signed_in"})

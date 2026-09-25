@@ -1034,7 +1034,7 @@ def _print_sign_in(cfg) -> None:
     print(
         "  connection:  HTTP — the service has no TLS of its own yet: "
         "passwords and\n               session cookies cross the network "
-        "in clear text (HTTPS: v0.7.5)"
+        "in clear text (HTTPS: v0.7.6)"
     )
 
 

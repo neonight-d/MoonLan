@@ -100,7 +100,7 @@ class PasswordStepTest(SignInCase):
         self.assertIn("samesite=strict", lower)
         self.assertIn("path=/", lower)
         self.assertIn(f"max-age={30 * 86400}", lower)
-        # Secure arrives with HTTPS in v0.7.5; over http the browser
+        # Secure arrives with HTTPS in v0.7.6; over http the browser
         # would drop a Secure cookie
         self.assertNotIn("secure", lower.replace("samesite", ""))
 
