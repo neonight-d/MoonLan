@@ -40,7 +40,6 @@ const els = {
   actionsTitle: document.getElementById("actions-title"),
   actionsBody: document.getElementById("actions-body"),
   actionsClose: document.getElementById("actions-close"),
-  layoutStatus: document.getElementById("layout-status"),
   moreBtn: document.getElementById("more-btn"),
   moreMenu: document.getElementById("more-menu"),
   notice: document.getElementById("notice"),
@@ -358,6 +357,7 @@ function showGate(kind) {
   }
   els.gate.classList.remove("hidden");
   document.body.classList.add("gated");
+  fitHeader();
   if (kind !== "signIn" && !(me && me.name)) {
     // a step met on the first request of the page, before
     // /api/auth/me has answered: its forms need the name
@@ -374,6 +374,7 @@ function showGate(kind) {
 function closeGate() {
   els.gate.classList.add("hidden");
   document.body.classList.remove("gated");
+  fitHeader();
   els.gateBody.replaceChildren();
   const done = gateDone;
   gateWait = null;
@@ -758,6 +759,8 @@ function applyRole() {
   if (!els.users.classList.contains("hidden") && accountsReason()) {
     els.users.classList.add("hidden");
   }
+  // the name in the header may be longer or shorter than before
+  fitHeader();
 }
 
 /* ---------- your own account ---------- */
@@ -2212,9 +2215,13 @@ function applyArrangeMode() {
   els.arrangeBtn.classList.toggle("active", arrangeMode);
   els.arrangeBtn.setAttribute("aria-pressed", arrangeMode ? "true" : "false");
   const name = arrangeMode ? t("arrangeOnBtn") : t("arrangeBtn");
+  const pinned = pinnedCount();
   labelIcon(
     els.arrangeBtn, name,
-    (els.arrangeBtn.dataset.why || name) + "\n\n" + t("arrangeHint")
+    (els.arrangeBtn.dataset.why || name) + "\n\n" + t("arrangeHint") +
+      (pinned
+        ? "\n\n" + fmt("arrangePinned", { n: pinned }) + " " + t("layoutPinnedHint")
+        : "")
   );
   // The map itself changes, not only the button: a mode you can
   // forget you are in is a mode that edits the map by accident.
@@ -2369,80 +2376,108 @@ function fmtAge(seconds) {
     : fmt("ageHours", { h: hours });
 }
 
+function clock(ts) {
+  return new Date(ts * 1000).toLocaleTimeString(locale());
+}
+
+/* The status line, in two lengths (see fitHeader): the whole sentence,
+   and a short form the header falls back to when one row would not
+   hold everything. The sentence, and why, are always in the tooltip. */
+function setScanStatus(full, short, cls, hint) {
+  els.scanStatus.className = "status" + (cls ? " " + cls : "");
+  els.scanStatus.replaceChildren(
+    h("span", { class: "st-full", text: full }),
+    h("span", { class: "st-short", text: short })
+  );
+  els.scanStatus.title = hint ? full + "\n\n" + hint : full;
+  fitHeader();
+}
+
 function updateScanStatus() {
-  els.scanStatus.classList.remove("failed");
-  els.scanStatus.classList.remove("partial");
-  els.scanStatus.classList.remove("offline");
-  els.scanStatus.title = "";
+  updateLayoutStatus();
   // Nothing below this line is arriving any more, so it goes first:
   // everything else the header could say is about a picture that has
   // stopped being refreshed.
   if (!serviceReachable) {
-    els.scanStatus.classList.add("offline");
-    els.scanStatus.textContent = fmt("serviceOffline", {
-      time: topology.last_scan ? fmtTime(topology.last_scan) : t("noData"),
-    });
-    els.scanStatus.title = t("serviceOfflineHint");
+    setScanStatus(
+      fmt("serviceOffline", {
+        time: topology.last_scan ? fmtTime(topology.last_scan) : t("noData"),
+      }),
+      t("serviceOfflineShort"), "offline", t("serviceOfflineHint")
+    );
     return;
   }
   // A scan of eight switches took ten minutes and the interface said
   // nothing at all about it — the only way to find out whether
   // anything was happening was journalctl. One line settles it.
   if (isScanning || topology.scanning) {
-    els.scanStatus.textContent =
-      topology.scan_total > 0
-        ? fmt("scanningProgress", {
-            done: topology.scan_done || 0,
-            total: topology.scan_total,
-          })
-        : t("scanning");
+    const counted = topology.scan_total > 0;
+    const counts = { done: topology.scan_done || 0, total: topology.scan_total };
+    setScanStatus(
+      counted ? fmt("scanningProgress", counts) : t("scanning"),
+      counted ? fmt("scanningShort", counts) : t("scanningShortStart")
+    );
     return;
   }
   // A failed scan used to read exactly like a service that had just
   // started. It now says so, and keeps the map from the last good one.
   if (topology.last_error) {
-    els.scanStatus.classList.add("failed");
-    els.scanStatus.textContent =
+    setScanStatus(
       t("scanFailed") +
-      new Date(topology.last_error_ts * 1000).toLocaleString(locale());
-    els.scanStatus.title = topology.last_error;
+        new Date(topology.last_error_ts * 1000).toLocaleString(locale()),
+      fmt("scanFailedShort", { time: clock(topology.last_error_ts) }),
+      "failed", topology.last_error
+    );
     return;
   }
-  els.scanStatus.textContent = topology.last_scan
-    ? t("scanPrefix") + new Date(topology.last_scan * 1000).toLocaleString(locale())
-    : t("noData");
+  if (!topology.last_scan) {
+    setScanStatus(t("noData"), t("noData"));
+    return;
+  }
+  let full =
+    t("scanPrefix") + new Date(topology.last_scan * 1000).toLocaleString(locale());
   // Switches the last scan gave up waiting for. Worth seeing — their
   // part of the map is older than the rest — but not an alarm: they
-  // answer, and nothing about them is being claimed.
+  // answer, and nothing about them is being claimed. Short of room the
+  // amber colour stays, the words go to the tooltip.
   const late = topology.scan_over_budget || [];
   if (late.length) {
-    els.scanStatus.classList.add("partial");
-    els.scanStatus.textContent +=
-      "  " + fmt("scanOverBudgetMark", { n: late.length });
-    els.scanStatus.title = fmt("scanOverBudgetHint", {
-      switches: late.map(switchName).join(", "),
-    });
+    full += "  " + fmt("scanOverBudgetMark", { n: late.length });
   }
-  updateLayoutStatus();
+  setScanStatus(
+    full, clock(topology.last_scan), late.length ? "partial" : "",
+    late.length
+      ? fmt("scanOverBudgetHint", { switches: late.map(switchName).join(", ") })
+      : ""
+  );
 }
 
-/* How much of this map was arranged by a person.
+/* How much of this map was arranged by a person — reference, not the
+   state of the network, so since v0.7.5 it lives in the tooltip of the
+   Arrange button rather than in the status line. */
+function pinnedCount() {
+  return Object.keys(savedLayout).filter((id) => savedLayout[id].pinned).length;
+}
 
-   Until v0.7.1 this counted nodes the saved picture did not contain,
-   which made sense while saving was something you pressed a button
-   for. Now a position is recorded as soon as the layout settles, so
-   "not saved" is a state no node stays in — and a count of it would
-   be a number that is always zero, or worse, briefly not. What is
-   worth knowing is how much of the picture is somebody's decision
-   rather than the engine's. */
 function updateLayoutStatus() {
-  const pinned = Object.keys(savedLayout).filter((id) =>
-    savedLayout[id].pinned
-  ).length;
-  els.layoutStatus.classList.toggle("hidden", pinned === 0);
-  if (!pinned) return;
-  els.layoutStatus.textContent = fmt("layoutPinnedMark", { n: pinned });
-  els.layoutStatus.title = t("layoutPinnedHint");
+  applyArrangeMode();
+}
+
+/* One row of controls. If it does not fit, the status line gives way
+   first — the time of the scan alone — then the tagline beside the
+   name; on a phone-sized window the row is allowed to break instead
+   (style.css). Measured rather than guessed from the window width: a
+   long user name or the other language changes what fits. */
+function fitHeader() {
+  const header = document.querySelector("header");
+  const brand = header.querySelector(".brand");
+  const crowded = () =>
+    header.scrollWidth > header.clientWidth + 1 ||
+    brand.scrollWidth > brand.clientWidth + 1;
+  header.classList.remove("compact", "compact-more");
+  if (window.innerWidth <= 860 || !crowded()) return;
+  header.classList.add("compact");
+  if (crowded()) header.classList.add("compact-more");
 }
 
 /* The service can go away — restarted, redeployed, or the machine this
@@ -4656,6 +4691,7 @@ els.alarmsClose.addEventListener("click", () =>
 );
 els.stpBtn.addEventListener("click", toggleStp);
 els.stpClose.addEventListener("click", () => els.stp.classList.add("hidden"));
+window.addEventListener("resize", fitHeader);
 els.langRu.addEventListener("click", () => setLang("ru"));
 els.langEn.addEventListener("click", () => setLang("en"));
 

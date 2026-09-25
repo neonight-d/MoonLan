@@ -35,16 +35,26 @@ header {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  /* v0.7.4 added three buttons to a toolbar that was already full: on
-     a narrow window it wraps instead of pushing the page sideways */
-  flex-wrap: wrap;
+  /* One row. v0.7.4 added three buttons to a toolbar that was already
+     full and the header wrapped onto a second one; since v0.7.5 the
+     status line gives way first (fitHeader in app.js), and only a
+     narrow window below lets the row break. */
+  flex-wrap: nowrap;
   gap: 8px 18px;
   padding: 10px 18px;
   border-bottom: 1px solid var(--line);
   background: var(--bg-panel);
 }
 
-.brand { display: flex; align-items: center; gap: 10px; }
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  flex: 0 1 auto;
+  overflow: hidden;
+}
+.brand h1, .tagline { white-space: nowrap; }
 
 /* A line under the header that stays: the map is open to everybody,
    or the connection is not encrypted. Said plainly, not in red — it
@@ -76,11 +86,29 @@ h1 { margin: 0; font-size: 1.15rem; letter-spacing: 0.04em; }
   display: flex;
   align-items: center;
   justify-content: flex-end;
-  flex-wrap: wrap;
-  gap: 6px 12px;
+  flex: 0 0 auto;
+  flex-wrap: nowrap;
+  gap: 6px 10px;
 }
 .toolbar button { white-space: nowrap; }
-.status { color: var(--text-dim); font-size: 0.85rem; }
+.status { color: var(--text-dim); font-size: 0.85rem; white-space: nowrap; }
+
+/* The status in two lengths: the sentence, and — when the header would
+   otherwise need a second row — the time of the scan alone. The
+   sentence is always in the tooltip. */
+#scan-status .st-short { display: none; }
+header.compact #scan-status .st-full { display: none; }
+header.compact #scan-status .st-short { display: inline; }
+header.compact-more .tagline { display: none; }
+
+@media (max-width: 860px) {
+  /* a phone: nothing fits one row, and the page must not scroll
+     sideways — the header wraps */
+  header { flex-wrap: wrap; }
+  .brand { overflow: visible; }
+  .toolbar { flex: 1 1 auto; flex-wrap: wrap; }
+  .status { white-space: normal; }
+}
 
 /* RU | EN language switcher */
 .lang-switch { display: inline-flex; }
