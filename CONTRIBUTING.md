@@ -5,7 +5,7 @@ Thanks for contributing to MoonLan. The project values small, testable changes t
 ## Development setup
 
 ~~~bash
-git clone https://github.com/ItsWanheda/MoonLan.git
+git clone https://github.com/neonight-d/MoonLan.git
 cd MoonLan
 python3 -m venv .venv
 source .venv/bin/activate
