@@ -34,32 +34,20 @@ For SNMP changes, remember that successful observation, partial observation, sta
 
 ## Documentation
 
-Update documentation when you change configuration, API behavior, topology rules, operator-visible UI behavior, alarms, or diagnostic commands. Release-facing behavior belongs in CHANGELOG.md.
+Update documentation when you change configuration, API behavior, topology rules, operator-visible UI behavior, alarms, or diagnostic commands.
+
+Do not edit `CHANGELOG.md`, `CHANGELOG_RU.md` or the version number in `moonlan/__init__.py`. The maintainer writes the changelog and sets the version when a release is cut; describe the user-visible effect of your change in the pull request instead, and it will be carried into the changelog from there.
 
 ## Commit messages
 
-Use short Conventional Commit-style messages:
+Any clear message is fine. The project's own history uses a short sentence that says what is now true, for example:
 
 ~~~text
-feat: add ...
-fix: preserve ...
-perf: reduce ...
-test: cover ...
-docs: clarify ...
-refactor: simplify ...
-ci: update ...
-chore: bump ...
+A pinned node moves under the mouse
+Releasing a node does not erase where it is
 ~~~
 
-Describe the actual change, not the intention.
-
-Good:
-
-~~~text
-fix: keep stale FDB readings out of host confirmations
-~~~
-
-Avoid vague messages such as "update stuff" or "final fix".
+Conventional Commit prefixes (`fix:`, `docs:`, …) are welcome too. Either way, describe the actual change, not the intention — avoid messages such as "update stuff" or "final fix".
 
 ## Pull requests
 
