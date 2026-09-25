@@ -549,7 +549,9 @@ body.gated .toolbar > button { display: none; }
   padding: 20px 22px;
   box-shadow: 0 10px 40px rgba(0, 0, 0, 0.6);
 }
-.gate-card h2 { margin: 0 0 12px; font-size: 1.1rem; color: var(--moon); }
+.gate-card { position: relative; }
+.gate-card h2 { margin: 0 0 12px; padding-right: 80px; font-size: 1.1rem; color: var(--moon); }
+.gate-lang { position: absolute; top: 18px; right: 20px; }
 .gate-card p { margin: 0 0 10px; font-size: 0.88rem; line-height: 1.4; }
 
 .form label { display: block; margin: 10px 0 0; font-size: 0.82rem; color: var(--text-dim); }
