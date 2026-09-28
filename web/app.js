@@ -223,7 +223,7 @@ async function loadMe() {
   }
   const answer = await response.json();
   me = response.status === 401
-    ? { sign_in: true, https_url: answer.https_url }
+    ? { sign_in: true, https_url: answer.https_url, passkeys: answer.passkeys }
     : answer;
   if (me.name) everSignedIn = true;
   applyRole();
@@ -360,8 +360,10 @@ function showGate(kind) {
   closeMoreMenu(false);
   if (kind === "signIn" && (!me || !me.sign_in || me.name)) {
     // whatever the page believed — sign-in off, or signed in as
-    // somebody — the server has just said otherwise
-    me = { sign_in: true };
+    // somebody — the server has just said otherwise; what it said about
+    // the address and keys still holds
+    me = { sign_in: true, https_url: me && me.https_url,
+           passkeys: me && me.passkeys };
     applyRole();
   }
   els.gate.classList.remove("hidden");
@@ -448,6 +450,15 @@ function renderSignIn(message, typedName) {
   });
   const error = h("p", { class: "error", role: "alert", text: message || "" });
   const button = h("button", { type: "submit", text: t("signInBtn") });
+  // the key road: greyed out with the reason when this page cannot take it
+  const why = keyUnavailable();
+  const withKey = h("button", { type: "button", class: "key-btn", text: t("signInKeyBtn") });
+  gateButton(withKey, why ? keyWhyText(why) : null);
+  withKey.addEventListener("click", () => {
+    if (!allowed(withKey)) return;
+    error.textContent = "";
+    signInWithKey("", error, withKey);
+  });
   gateForm("signInTitle", [
     gateLangSwitch(),
     everSignedIn ? h("p", { text: t("signInAgain") }) : null,
@@ -455,7 +466,8 @@ function renderSignIn(message, typedName) {
       ? h("p", { class: "http-note" }, ...withLink("httpsSignIn", me.https_url))
       : plainHttp() ? h("p", { class: "http-note", text: t("httpSignIn") }) : null,
     name.label, password.label, error,
-    h("div", { class: "buttons" }, button),
+    h("div", { class: "buttons" }, button, withKey),
+    why ? keyWhyLine(why) : null,
   ], async () => {
     button.disabled = true;
     const result = await authPost("/api/auth/login", {
@@ -463,7 +475,7 @@ function renderSignIn(message, typedName) {
     });
     button.disabled = false;
     if (result.ok && result.answer.status === "code_required") {
-      renderCode(result.answer.ticket);
+      renderCode(result.answer.ticket, result.answer.methods);
     } else if (result.ok) {
       await signedIn();
     } else if (result.answer.error === "sign_in_off") {
@@ -479,19 +491,35 @@ function renderSignIn(message, typedName) {
   });
 }
 
-function renderCode(ticket) {
+function renderCode(ticket, methods) {
   gateView = "code";
+  methods = methods || ["totp", "recovery"];
   const code = field("fieldCode", {
     name: "code", autocomplete: "one-time-code", autocapitalize: "none",
     spellcheck: "false", required: true,
   });
   const error = h("p", { class: "error", role: "alert" });
   const button = h("button", { type: "submit", text: t("confirmBtn") });
+  const byKey = methods.includes("passkey");
+  const why = byKey ? keyUnavailable() : null;
+  const useKey = byKey
+    ? h("button", { type: "button", class: "key-btn", text: t("useKeyBtn") }) : null;
+  if (useKey) {
+    gateButton(useKey, why ? keyWhyText(why) : null);
+    useKey.addEventListener("click", () => {
+      if (!allowed(useKey)) return;
+      error.textContent = "";
+      signInWithKey(ticket, error, useKey);
+    });
+  }
+  const hint = methods.includes("totp") ? "codeHint"
+    : byKey ? "codeHintKey" : "codeHintKeyOff";
   gateForm("codeTitle", [
-    h("p", { text: t("codeHint") }),
+    h("p", { text: t(hint) }),
     code.label, error,
-    h("div", { class: "buttons" }, button,
+    h("div", { class: "buttons" }, useKey, button,
       h("button", { type: "button", text: t("backBtn"), onclick: () => renderSignIn() })),
+    why ? keyWhyLine(why) : null,
   ], async () => {
     button.disabled = true;
     const result = await authPost("/api/auth/totp", {
@@ -889,6 +917,40 @@ function keyAddForm(onAdded, onBack) {
     }
   });
   return { form: form, focus: () => password.input.focus() };
+}
+
+/* Signing in with a key: alone (no ticket) or as the second step after
+   the password (the password step's ticket). */
+async function signInWithKey(ticket, error, button) {
+  button.disabled = true;
+  try {
+    const begun = await authPost("/api/auth/passkey/begin", { ticket: ticket });
+    if (!begun.ok) {
+      if (begun.answer.error === "ticket_expired") renderSignIn(errorText(begun.answer));
+      else error.textContent = errorText(begun.answer);
+      return;
+    }
+    let credential;
+    try {
+      credential = await getKey(begun.answer.options);
+    } catch (e) {
+      error.textContent = keyErrorText(e);
+      return;
+    }
+    const done = await authPost("/api/auth/passkey/finish", {
+      request: begun.answer.request, credential: credential,
+    });
+    if (done.ok) {
+      await signedIn();
+    } else if (ticket && (done.answer.error === "ticket_expired" ||
+                          done.answer.error === "locked")) {
+      renderSignIn(errorText(done.answer));
+    } else {
+      error.textContent = errorText(done.answer);
+    }
+  } finally {
+    button.disabled = false;
+  }
 }
 
 /* What was added, in a sentence: with the reason when the key could
@@ -4826,7 +4888,8 @@ const ACCOUNT_EVENTS = new Set([
   "login", "logout", "account_locked", "user_added", "user_role",
   "user_password", "user_disabled", "user_enabled", "user_totp_reset",
   "user_totp_enabled", "user_unlocked", "user_sessions_closed",
-  "user_deleted",
+  "user_deleted", "user_passkey_added", "user_passkey_removed",
+  "user_passkeys_reset", "passkey_clone_suspected",
 ]);
 
 function accountEventText(ev) {
@@ -4844,9 +4907,13 @@ function accountEventText(ev) {
     );
   }
   if (data.temporary) parts.push(t("evTemporary"));
+  if (data.label) parts.push("“" + data.label + "”");
+  if (data.passwordless) parts.push(t("keyPasswordlessShort"));
   if (data.address) parts.push(data.address);
   if (data.recovery_left !== undefined) {
     parts.push(fmt("evRecoveryUsed", { n: data.recovery_left }));
+  } else if (data.method && t("evMethod_" + data.method) !== "evMethod_" + data.method) {
+    parts.push(t("evMethod_" + data.method));
   }
   if (data.minutes) parts.push(fmt("evLockedFor", { n: data.minutes }));
   return parts.join(" · ");

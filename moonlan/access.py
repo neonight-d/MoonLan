@@ -47,6 +47,8 @@ RULES: dict[str, str] = {
     "GET /api/auth/me": PUBLIC,
     "POST /api/auth/login": PUBLIC,
     "POST /api/auth/totp": PUBLIC,
+    "POST /api/auth/passkey/begin": PUBLIC,
+    "POST /api/auth/passkey/finish": PUBLIC,
 
     # one's own session, password and second factor, whatever the role
     "POST /api/auth/logout": SIGNED_IN,

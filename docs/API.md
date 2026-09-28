@@ -61,6 +61,8 @@ tests.
 | GET | `/api/auth/me` | public |
 | POST | `/api/auth/login` | public |
 | POST | `/api/auth/totp` | public |
+| POST | `/api/auth/passkey/begin` | public |
+| POST | `/api/auth/passkey/finish` | public |
 | POST | `/api/auth/logout` | signed_in |
 | POST | `/api/auth/password` | signed_in |
 | POST | `/api/auth/totp/setup` | signed_in |
@@ -137,9 +139,11 @@ address is https.
 JSON, not a form: `{"name": "…", "password": "…"}`.
 
 - `{"status": "signed_in"}` and the session cookie;
-- `{"status": "code_required", "ticket": "…"}` when the account has
-  TOTP — the ticket lives five minutes and opens nothing but the next
-  step;
+- `{"status": "code_required", "ticket": "…", "methods": […]}` when
+  the account has TOTP or a key — the ticket lives five minutes and
+  opens nothing but the next step; `methods` says what that step can
+  be: `"totp"`, `"passkey"` (while the server can check keys),
+  `"recovery"`;
 - **401** `invalid_credentials` — the same for a wrong name and a wrong
   password;
 - **403** `disabled` — said only when the password was right;
@@ -152,8 +156,34 @@ JSON, not a form: `{"name": "…", "password": "…"}`.
 ### POST /api/auth/totp
 
 `{"ticket": "…", "code": "…"}` — a six-digit TOTP code or one of the
-recovery codes. Errors: `invalid_code`, `code_used` (a code works once),
+recovery codes (which work for an account whose second factor is a key
+too). Errors: `invalid_code`, `code_used` (a code works once),
 `ticket_expired`, `locked`, `too_many_attempts`.
+
+### POST /api/auth/passkey/begin and /api/auth/passkey/finish
+
+Signing in with a key. `begin` takes `{"ticket": "…"}` for the second
+step after the password — the options then list that account's keys,
+user verification `discouraged` — or `{}` to sign in with a key alone:
+`allowCredentials` empty (the key offers what it keeps for this host)
+and user verification `required`. It answers `{"request": "…",
+"options": {…}}` (`PublicKeyCredentialRequestOptions` in JSON form).
+`finish` takes `{"request": "…", "credential": {…}}` and answers like
+`/api/auth/login`: `{"status": "signed_in"}` and the session cookie.
+
+Checked: the challenge (once, five minutes), the origin (exactly
+`listen.public_url`), the RP ID hash, the signature, whose key it is
+(its user handle, or the ticket's account), user verification when
+alone, and the signature counter — a counter that goes back while both
+it and the stored one are above 0 is refused and raises
+`passkey_clone_suspected` (critical); a key that always says 0 is
+taken. Failures count like wrong passwords: per address, and per
+account once the key's owner is known. Errors (**401** unless noted):
+`challenge_expired`, `key_refused`, `key_unknown`,
+`no_user_verification`, `key_second_only` (the key was added to work
+after the password only), `ticket_expired`, `locked` (**423**),
+`too_many_attempts` (**429**), `disabled` (**403**), `passkeys_off`
+(**409**).
 
 ### POST /api/auth/logout
 

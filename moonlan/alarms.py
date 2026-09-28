@@ -118,6 +118,8 @@ SEVERITIES = {
     "loop_detection_disabled": "info",
     # alarms about MoonLan itself rather than the network (service_alarm)
     "tls_cert_expiring": "warning",
+    # a key answered with a signature counter that went back: a copy
+    "passkey_clone_suspected": "critical",
 }
 
 HOST_DOWN_AFTER = 3    # consecutive failed pings

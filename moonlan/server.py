@@ -2199,6 +2199,11 @@ async def lifespan(app: FastAPI):
     sign_in.remove_console_token()
 
 
+# a key that looks copied raises an alarm like anything on the network
+sign_in.raise_alarm = lambda alarm_type, subject, message: (
+    alarm_engine.service_alarm(alarm_type, subject, True, message)
+)
+
 app = FastAPI(title="MoonLan", version=__version__, lifespan=lifespan)
 # Every request passes the rights table in access.py before a handler
 # sees it (a no-op while sign-in is off)

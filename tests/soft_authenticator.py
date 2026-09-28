@@ -100,13 +100,15 @@ def create(options: dict, origin: str, alg: int = -7, *, uv: bool = True,
 
 def get(options: dict, origin: str, key: SoftKey, *, uv: bool = True,
         counter: int | None = None, rp_id: str | None = None,
-        user_handle: bool = True) -> dict:
+        user_handle: bool = True, any_key: bool = False) -> dict:
     """navigator.credentials.get() — the response. `counter` sets the
-    signature counter; by default it goes up by one each time."""
+    signature counter; by default it goes up by one each time.
+    `any_key` answers even when the key is not among the allowed ones,
+    as a tampered client could."""
     public = options["publicKey"] if "publicKey" in options else options
     allowed = [websafe_decode(c["id"])
                for c in public.get("allowCredentials") or []]
-    if allowed:
+    if allowed and not any_key:
         assert key.credential_id in allowed, "not one of the allowed keys"
     if counter is None:
         key.counter += 1

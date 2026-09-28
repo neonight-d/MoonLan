@@ -272,7 +272,8 @@ class KeysCase(unittest.TestCase):
     def setUp(self):
         logger = logging.getLogger("moonlan")
         self.addCleanup(logger.setLevel, logger.level)
-        logger.setLevel(logging.ERROR)
+        # a copied key is an ERROR line by design; not here
+        logger.setLevel(logging.CRITICAL)
         self.db = server.accounts
         self.clean()
         self.addCleanup(self.clean)
@@ -487,6 +488,254 @@ class AddKeyTest(KeysCase):
         _, answer = self.add_key("olga", cookie=cookie)
         self.assertEqual(answer.status, 200, answer.body)
         self.assertIsNone(self.me(cookie)["step"])
+
+
+
+# ---------- signing in with a key ----------
+
+class SignInCase(KeysCase):
+    def begin(self, ticket="", **kwargs):
+        return self.post("/api/auth/passkey/begin", {"ticket": ticket},
+                         **kwargs)
+
+    def finish(self, request, credential, **kwargs):
+        return self.post("/api/auth/passkey/finish",
+                         {"request": request, "credential": credential},
+                         **kwargs)
+
+    def alone(self, key, client="10.0.0.99", origin=ORIGIN, **answer):
+        """Signs in with the key alone. The answer."""
+        begun = self.begin(client=client).json()
+        credential = soft.get(begun["options"], origin, key, **answer)
+        return self.finish(begun["request"], credential, client=client)
+
+    def password(self, name="vera", client="10.0.0.99"):
+        answer = self.post("/api/auth/login",
+                           {"name": name, "password": PASSWORD},
+                           client=client)
+        self.assertEqual(answer.status, 200, answer.body)
+        return answer.json()
+
+    def after_password(self, key, name="vera", client="10.0.0.99",
+                       **answer):
+        ticket = self.password(name, client)["ticket"]
+        begun = self.begin(ticket, client=client).json()
+        credential = soft.get(begun["options"], ORIGIN, key, **answer)
+        return self.finish(begun["request"], credential, client=client)
+
+    def logins(self):
+        return [json.loads(e["details"]) for e in server.db.journal(20)
+                if e["event"] == "login"]
+
+
+class SignInWithKeyTest(SignInCase):
+    def test_alone_es256_and_eddsa(self):
+        for alg in (-7, -8):
+            with self.subTest(alg=alg):
+                key, _ = self.add_key(alg=alg, passwordless=True)
+                answer = self.alone(key)
+                self.assertEqual(answer.status, 200, answer.body)
+                header = answer.header("set-cookie")[0]
+                self.assertTrue(header.startswith("__Host-moonlan_session="))
+                self.assertEqual(self.logins()[0]["method"], "passkey")
+
+    def test_the_options_alone(self):
+        options = self.begin().json()["options"]
+        self.assertEqual(options["rpId"], "example.local")
+        self.assertEqual(options["allowCredentials"], [])
+        self.assertEqual(options["userVerification"], "required")
+        self.assertEqual(len(websafe_decode(options["challenge"])), 32)
+
+    def test_after_the_password(self):
+        key, _ = self.add_key(passwordless=False)
+        step = self.password()
+        self.assertEqual(step["status"], "code_required")
+        self.assertEqual(step["methods"], ["passkey", "recovery"])
+        begun = self.begin(step["ticket"]).json()
+        options = begun["options"]
+        self.assertEqual(
+            [websafe_decode(c["id"]) for c in options["allowCredentials"]],
+            [key.credential_id],
+        )
+        self.assertEqual(options["userVerification"], "discouraged")
+        # the password was the thing known: no PIN needed now
+        answer = self.finish(begun["request"],
+                             soft.get(options, ORIGIN, key, uv=False))
+        self.assertEqual(answer.status, 200, answer.body)
+        self.assertEqual(self.logins()[0]["method"], "password+passkey")
+
+    def test_a_password_alone_is_not_enough_once_there_is_a_key(self):
+        self.add_key(passwordless=True)
+        self.assertEqual(self.password()["status"], "code_required")
+
+    def test_alone_without_user_verification(self):
+        key, _ = self.add_key(passwordless=True)
+        answer = self.alone(key, uv=False)
+        self.assertEqual(answer.status, 401)
+        self.assertEqual(answer.json()["error"], "no_user_verification")
+
+    def test_a_second_factor_key_does_not_sign_in_alone(self):
+        key, _ = self.add_key(passwordless=False)
+        answer = self.alone(key)
+        self.assertEqual(answer.json()["error"], "key_second_only")
+
+    def test_another_origin(self):
+        key, _ = self.add_key(passwordless=True)
+        for origin in ("https://example.local.evil.test",
+                       "http://example.local:8443",
+                       "https://example.local"):
+            with self.subTest(origin=origin):
+                answer = self.alone(key, origin=origin)
+                self.assertEqual(answer.json()["error"], "key_refused")
+
+    def test_another_rp_id_hash(self):
+        key, _ = self.add_key(passwordless=True)
+        answer = self.alone(key, rp_id="evil.test")
+        self.assertEqual(answer.json()["error"], "key_refused")
+
+    def test_a_challenge_works_once(self):
+        key, _ = self.add_key(passwordless=True)
+        begun = self.begin().json()
+        credential = soft.get(begun["options"], ORIGIN, key)
+        self.assertEqual(self.finish(begun["request"], credential).status, 200)
+        again = self.finish(begun["request"], credential)
+        self.assertEqual(again.json()["error"], "challenge_expired")
+        # the same answer under a fresh challenge: signed over another
+        fresh = self.begin().json()
+        replayed = self.finish(fresh["request"], credential)
+        self.assertEqual(replayed.json()["error"], "key_refused")
+
+    def test_a_challenge_lasts_five_minutes(self):
+        key, _ = self.add_key(passwordless=True)
+        begun = self.begin().json()
+        credential = soft.get(begun["options"], ORIGIN, key)
+        later = time.time() + passkeys.CHALLENGE_SECONDS + 1
+        with mock.patch.object(passkeys.time, "time", return_value=later):
+            answer = self.finish(begun["request"], credential)
+        self.assertEqual(answer.json()["error"], "challenge_expired")
+
+    def test_a_key_the_service_does_not_know(self):
+        stranger = soft.SoftKey(-7, "example.local", b"x" * 32)
+        answer = self.alone(stranger)
+        self.assertEqual(answer.json()["error"], "key_unknown")
+
+    def test_whose_key_it_is(self):
+        vera, _ = self.add_key("vera", passwordless=True)
+        # a key that claims another account's handle
+        vera.user_handle = self.db.webauthn_user_id(
+            self.db.user("anton")["id"]
+        )
+        self.assertEqual(self.alone(vera).json()["error"], "key_refused")
+        # after vera's password, anton's key
+        self.db.reset_totp("anton")
+        anton, _ = self.add_key("anton", passwordless=False)
+        answer = self.after_password(anton, "vera", any_key=True)
+        self.assertEqual(answer.json()["error"], "key_refused")
+
+    def test_a_recovery_code_instead_of_the_key(self):
+        _, added = self.add_key(passwordless=False)
+        code = added.json()["recovery"][0]
+        ticket = self.password()["ticket"]
+        answer = self.post("/api/auth/totp", {"ticket": ticket, "code": code})
+        self.assertEqual(answer.status, 200, answer.body)
+        self.assertEqual(self.logins()[0]["method"], "password+recovery")
+
+    def test_keys_off(self):
+        key, _ = self.add_key(passwordless=False)
+        server.sign_in.webauthn.why = "no_fido2"
+        self.assertEqual(self.begin().json()["error"], "passkeys_off")
+        # the second step then offers what is left
+        self.assertEqual(self.password()["methods"], ["recovery"])
+
+    def test_an_administrator_with_a_key_only(self):
+        self.db.reset_totp("anton")
+        key, _ = self.add_key("anton", passwordless=True)
+        # the password alone does not do
+        self.assertEqual(self.password("anton")["status"], "code_required")
+        answer = self.alone(key)
+        cookie = answer.header("set-cookie")[0].split(";", 1)[0]
+        self.assertIsNone(self.me(cookie)["step"])
+
+
+class CounterTest(SignInCase):
+    def setUp(self):
+        super().setUp()
+        self.addCleanup(self.clear_alarms)
+        self.key, _ = self.add_key(passwordless=True)
+
+    def clear_alarms(self):
+        with server.db._lock, server.db._conn:
+            server.db._conn.execute(
+                "DELETE FROM alarms WHERE type = 'passkey_clone_suspected'"
+            )
+        server.alarm_engine._active = {
+            a for a in server.alarm_engine._active
+            if a[0] != "passkey_clone_suspected"
+        }
+
+    def clone_alarms(self):
+        return [a for a in server.db.alarms(True, 100)
+                if a["type"] == "passkey_clone_suspected"]
+
+    def test_counting_up(self):
+        for counter in (1, 2, 7):
+            self.assertEqual(self.alone(self.key, counter=counter).status, 200)
+        stored = self.db.passkeys(self.db.user("vera")["id"])[0]
+        self.assertEqual(stored["sign_count"], 7)
+        self.assertGreater(stored["last_used"], 0)
+
+    def test_going_back_is_refused_and_raises_the_alarm(self):
+        self.assertEqual(self.alone(self.key, counter=5).status, 200)
+        for counter in (5, 3):
+            with self.subTest(counter=counter):
+                answer = self.alone(self.key, counter=counter)
+                self.assertEqual(answer.status, 401)
+                self.assertEqual(answer.json()["error"], "key_refused")
+        (alarm,) = self.clone_alarms()
+        self.assertEqual(alarm["severity"], "critical")
+        self.assertIn("vera", alarm["subject"])
+        self.assertIn("remove-passkey vera 1", alarm["message"])
+        events = [e for e in server.db.journal(20)
+                  if e["event"] == "passkey_clone_suspected"]
+        self.assertEqual(len(events), 2)
+        self.assertEqual(json.loads(events[-1]["details"])["counter"], 5)
+
+    def test_a_key_that_does_not_count(self):
+        for _ in range(3):
+            self.assertEqual(self.alone(self.key, counter=0).status, 200)
+        self.assertEqual(self.clone_alarms(), [])
+
+    def test_zero_after_counting_is_taken_and_the_count_kept(self):
+        self.assertEqual(self.alone(self.key, counter=4).status, 200)
+        self.assertEqual(self.alone(self.key, counter=0).status, 200)
+        stored = self.db.passkeys(self.db.user("vera")["id"])[0]
+        self.assertEqual(stored["sign_count"], 4)
+        self.assertEqual(self.alone(self.key, counter=3).status, 401)
+
+
+class KeyFailuresTest(SignInCase):
+    def test_they_slow_the_address_down(self):
+        key, _ = self.add_key(passwordless=True)
+        for _ in range(signin.ADDRESS_FREE_FAILURES):
+            self.alone(key, origin="https://evil.test")
+        answer = self.begin()
+        self.assertEqual(answer.status, 429)
+        self.assertEqual(answer.json()["error"], "too_many_attempts")
+
+    def test_they_lock_the_account(self):
+        key, _ = self.add_key(passwordless=True)
+        for n in range(signin.ACCOUNT_LOCK_FAILURES):
+            answer = self.alone(key, origin="https://evil.test",
+                                client=f"10.0.1.{n}")
+        self.assertEqual(answer.status, 423)
+        # and the lock holds for the key as for the password
+        self.assertEqual(self.alone(key, client="10.0.2.1").status, 423)
+
+    def test_an_unknown_key_counts_for_the_address(self):
+        stranger = soft.SoftKey(-7, "example.local", b"x" * 32)
+        for _ in range(signin.ADDRESS_FREE_FAILURES):
+            self.alone(stranger)
+        self.assertEqual(self.begin().status, 429)
 
 
 if __name__ == "__main__":

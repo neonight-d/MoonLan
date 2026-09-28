@@ -564,3 +564,4 @@ alarm_notify:
   # The certificate MoonLan serves ends within two weeks
   # Сертификат, который отдаёт MoonLan, кончается в ближайшие две недели
   tls_cert_expiring: [syslog, telegram]
+  passkey_clone_suspected: [email, telegram, syslog]

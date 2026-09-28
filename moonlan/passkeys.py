@@ -175,11 +175,11 @@ class Passkeys:
         self._pending[request] = pending
         return request
 
-    def take(self, request: str, kind: str) -> Pending:
+    def take(self, request: str, *kinds: str) -> Pending:
         """The challenge an answer is for — gone from the table whatever
         happens next: an answer is checked once."""
         pending = self._pending.pop(request, None)
-        if pending is None or pending.kind != kind \
+        if pending is None or pending.kind not in kinds \
                 or pending.expires < time.time():
             raise PasskeyError("challenge_expired")
         return pending
@@ -240,3 +240,68 @@ class Passkeys:
             "user_verified": int(auth_data.is_user_verified()),
             "passwordless": int(pending.passwordless),
         }
+
+    # ---------- signing in with a key ----------
+
+    def sign_in_begin(self) -> tuple[str, dict]:
+        """Without a password. allowCredentials is empty — the key offers
+        what it keeps for this host, and says whose it is — and user
+        verification is required: the key stands for the password too,
+        so it has to have asked for its PIN or a finger."""
+        options, state = self._server.authenticate_begin(
+            [], user_verification=UserVerificationRequirement.REQUIRED
+        )
+        request = self._keep(
+            Pending("sign_in", state, time.time() + CHALLENGE_SECONDS)
+        )
+        return request, _plain(options)
+
+    def second_begin(self, user_id: int, ticket: str,
+                     keys: list[dict]) -> tuple[str, dict]:
+        """After the password: that account's keys only, and no PIN
+        needed — the password was the thing it knows, the key is the
+        thing it has."""
+        options, state = self._server.authenticate_begin(
+            [_descriptor(key) for key in keys],
+            user_verification=UserVerificationRequirement.DISCOURAGED,
+        )
+        request = self._keep(Pending(
+            "second", state, time.time() + CHALLENGE_SECONDS, user_id,
+            ticket=ticket,
+        ))
+        return request, _plain(options)
+
+    @staticmethod
+    def credential_id(answer: dict) -> bytes:
+        """Which key answered — to find it before anything is checked."""
+        try:
+            return websafe_decode(answer["rawId"])
+        except Exception:  # noqa: BLE001 — anything malformed
+            raise PasskeyError("key_refused", "no credential id") from None
+
+    def check(self, pending: Pending, key: dict,
+              answer: dict) -> tuple[int, bool, bytes | None]:
+        """The answer against the stored key: the origin, the RP ID
+        hash, the challenge, the key's presence and its signature (all
+        fido2's), then user verification where it was required. (the
+        signature counter, user verified, the user handle)."""
+        credential = AttestedCredentialData.create(
+            Aaguid.NONE, key["credential_id"],
+            CoseKey.parse(cbor.decode(key["public_key"])),
+        )
+        # user verification is checked here after the signature, not by
+        # fido2 before it: a key that did not ask for a PIN gets its own
+        # answer, and only once it is known to be the key it claims
+        state = {**pending.state,
+                 "user_verification": UserVerificationRequirement.DISCOURAGED}
+        try:
+            self._server.authenticate_complete(state, [credential], answer)
+            parsed = AuthenticationResponse.from_dict(answer)
+        except Exception as exc:  # noqa: BLE001 — any malformed answer
+            raise PasskeyError("key_refused", str(exc)) from None
+        data = parsed.response.authenticator_data
+        verified = data.is_user_verified()
+        if pending.kind == "sign_in" and not verified:
+            raise PasskeyError("no_user_verification",
+                               "the key did not verify its user")
+        return data.counter, verified, parsed.response.user_handle

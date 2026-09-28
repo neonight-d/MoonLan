@@ -208,6 +208,12 @@ class KeyAddBody(BaseModel):
     passwordless: bool = False
 
 
+class KeyBeginBody(BaseModel):
+    # the password step's ticket for a key as the second step; none for
+    # signing in with a key alone
+    ticket: str = Field(default="", max_length=128)
+
+
 class KeyAnswerBody(BaseModel):
     request: str = Field(max_length=64)
     # what navigator.credentials answered, in PublicKeyCredential's
@@ -276,6 +282,9 @@ class SignIn:
         self._was_on: bool | None = None
         self._console: str = ""    # hash of the token in the console file
         self.console_path: str = ""
+        # raises an alarm about MoonLan itself: (type, subject, message);
+        # server.py sets it to the alarm engine's
+        self.raise_alarm = None
 
     def sign_in_on(self) -> bool:
         return self.accounts.active_admins() > 0
@@ -302,6 +311,15 @@ class SignIn:
         )
         if self.transport == "http":
             log_plain_http()
+        with_keys = len(self.accounts.passkey_counts())
+        if with_keys and self.webauthn.why:
+            log.warning(
+                "Keys: %d account(s) have keys, but signing in with a key is "
+                "off (%s) — they sign in with TOTP or a recovery code; "
+                "python -m moonlan.users reset-passkeys <name> lets somebody "
+                "without either bind something new", with_keys,
+                self.webauthn.why,
+            )
 
     def _lookup(self, token: str, now: float) -> tuple[bool, Principal | None]:
         on = self.sign_in_on()
@@ -410,23 +428,26 @@ class SignIn:
 
     def _open_session(self, row: dict, second_factor: bool, address: str,
                       now: float, rehashed: str | None = None,
-                      recovery_left: int | None = None) -> str:
+                      recovery_left: int | None = None,
+                      method: str = "password") -> str:
+        """`method` goes to the journal: "password", "password+totp",
+        "password+recovery", "password+passkey" or "passkey"."""
         self.throttle.succeeded(address, auth.name_key(row["name"]))
         token = auth.new_token()
         self.accounts.add_session(
             auth.token_hash(token), row["id"], now, second_factor, address
         )
         self.accounts.record_login(row["id"], now, rehashed)
-        details = {"address": address}
+        details = {"address": address, "method": method}
         if recovery_left is not None:
             details["recovery_left"] = recovery_left
         self.journal.add_event(
             now, "login", row["name"], json.dumps(details), row["name"],
         )
         log.info(
-            "Signed in: %s from %s%s", row["name"], address,
+            "Signed in: %s from %s (%s)%s", row["name"], address, method,
             "" if recovery_left is None else
-            f" with a recovery code ({recovery_left} left)",
+            f", {recovery_left} recovery code(s) left",
         )
         return token
 
@@ -555,13 +576,24 @@ class SignIn:
             await asyncio.to_thread(auth.hash_password, password)
             if auth.needs_rehash(row["password"]) else None
         )
-        if row["totp_enabled"]:
+        keys = await asyncio.to_thread(self.accounts.passkeys, row["id"])
+        if row["totp_enabled"] or keys:
             ticket = auth.new_token()
             self._drop_old_tickets(now)
             self._tickets[auth.token_hash(ticket)] = Ticket(
                 row["id"], now + TICKET_SECONDS, address, rehashed=rehashed
             )
-            return JSONResponse({"status": "code_required", "ticket": ticket})
+            # what the second step can be, for the page to offer: a key
+            # counts only while the server can check one
+            methods = []
+            if row["totp_enabled"]:
+                methods.append("totp")
+            if keys and not self.webauthn.why:
+                methods.append("passkey")
+            if auth.recovery_left(row["recovery"]):
+                methods.append("recovery")
+            return JSONResponse({"status": "code_required", "ticket": ticket,
+                                 "methods": methods})
         token = await asyncio.to_thread(
             self._open_session, row, False, address, now, rehashed
         )
@@ -584,13 +616,16 @@ class SignIn:
         if entry is None:
             return refuse("ticket_expired", 401)
         row = await asyncio.to_thread(self.accounts.user_by_id, entry.user_id)
-        if row is None or row["disabled"] or not row["totp_enabled"]:
+        if row is None or row["disabled"]:
             del self._tickets[key]
             return refuse("ticket_expired", 401)
         if row["locked_until"] > now:
             del self._tickets[key]
             return self._locked(row["locked_until"], now)
-        step = auth.match_totp(row["totp_secret"], code, now)
+        # a code from the app, if there is one; a recovery code works for
+        # an account whose second factor is a key just the same
+        step = auth.match_totp(row["totp_secret"], code, now) \
+            if row["totp_enabled"] else None
         if step is None and len(auth.normal_recovery_code(code)) \
                 == auth.RECOVERY_LENGTH:
             # a recovery code instead: a lost phone must not be a lost
@@ -606,6 +641,7 @@ class SignIn:
                 token = await asyncio.to_thread(
                     self._open_session, row, True, address, now,
                     entry.rehashed, auth.recovery_left(left),
+                    "password+recovery",
                 )
                 return self._signed_in(token, secure)
         if step is None:
@@ -628,9 +664,155 @@ class SignIn:
             return refuse("code_used", 401)
         del self._tickets[key]
         token = await asyncio.to_thread(
-            self._open_session, row, True, address, now, entry.rehashed
+            self._open_session, row, True, address, now, entry.rehashed,
+            None, "password+totp",
         )
         return self._signed_in(token, secure)
+
+    # ---------- signing in with a key ----------
+
+    async def passkey_begin(self, ticket: str, address: str) -> JSONResponse:
+        """A challenge for a key: without a ticket, to sign in with the
+        key alone (it says whose it is); with the password step's
+        ticket, as the second step, offered that account's keys only."""
+        off = self._keys_off()
+        if off is not None:
+            return off
+        now = time.time()
+        too_soon = self._too_soon(address, now)
+        if too_soon is not None:
+            return too_soon
+        if not ticket:
+            request, options = self.webauthn.sign_in_begin()
+            return JSONResponse({"request": request, "options": options})
+        self._drop_old_tickets(now)
+        key = auth.token_hash(ticket)
+        entry = self._tickets.get(key)
+        if entry is None:
+            return refuse("ticket_expired", 401)
+        keys = await asyncio.to_thread(self.accounts.passkeys, entry.user_id)
+        if not keys:
+            return refuse("no_keys", 409)
+        request, options = self.webauthn.second_begin(entry.user_id, key, keys)
+        return JSONResponse({"request": request, "options": options})
+
+    async def passkey_finish(self, request: str, answer: dict, address: str,
+                             secure: bool = False) -> JSONResponse:
+        """The key's answer. Checked: the challenge (once, five
+        minutes), the origin, the RP ID hash, the signature, whose key it
+        is, user verification without a password, and the signature
+        counter. A failure counts like a wrong password — per address,
+        and per account once it is known whose key answered."""
+        off = self._keys_off()
+        if off is not None:
+            return off
+        now = time.time()
+        too_soon = self._too_soon(address, now)
+        if too_soon is not None:
+            return too_soon
+        try:
+            pending = self.webauthn.take(request, "sign_in", "second")
+            key = await asyncio.to_thread(
+                self.accounts.passkey_by_credential,
+                self.webauthn.credential_id(answer),
+            )
+        except passkeys.PasskeyError as error:
+            self.throttle.address_failed(address, now)
+            log.warning("Sign-in with a key failed from %s: %s", address, error)
+            return refuse(error.code, 401)
+        row = None if key is None else await asyncio.to_thread(
+            self.accounts.user_by_id, key["user_id"]
+        )
+        if row is None:
+            self.throttle.address_failed(address, now)
+            log.warning("Sign-in with a key failed from %s: a key this "
+                        "service does not know", address)
+            return refuse("key_unknown", 401)
+        second = pending.kind == "second"
+        entry = self._tickets.get(pending.ticket) if second else None
+        if second and (entry is None or entry.user_id != row["id"]):
+            # the ticket ran out, or another account's key answered
+            locked = await self._failed(
+                row["name"], row, address, now,
+                "a key that is not this account's" if entry else
+                "the ticket ran out",
+            )
+            return locked or refuse(
+                "key_refused" if entry else "ticket_expired", 401
+            )
+        if row["locked_until"] > now:
+            return self._locked(row["locked_until"], now)
+        try:
+            counter, _, handle = self.webauthn.check(pending, key, answer)
+        except passkeys.PasskeyError as error:
+            locked = await self._failed(row["name"], row, address, now,
+                                        f"key refused ({error.detail})")
+            return locked or refuse(error.code, 401)
+        if not second:
+            # the key says whose it is, and must say what the table says
+            owner = row["webauthn_user_id"] or b""
+            if not handle or not hmac.compare_digest(bytes(handle),
+                                                     bytes(owner)):
+                locked = await self._failed(
+                    row["name"], row, address, now,
+                    "the key's user handle is not its owner's",
+                )
+                return locked or refuse("key_refused", 401)
+            if not key["passwordless"]:
+                log.info("Sign-in with key %r of %s refused from %s: it was "
+                         "added to work after the password only",
+                         key["label"], row["name"], address)
+                return refuse("key_second_only", 401)
+        stored = key["sign_count"]
+        if stored > 0 and counter > 0 and counter <= stored:
+            await self._clone_suspected(row, key, counter, address, now)
+            locked = await self._failed(row["name"], row, address, now,
+                                        "the key's counter went back")
+            return locked or refuse("key_refused", 401)
+        # a key that does not count (0) is taken; the highest count seen
+        # is kept for the next comparison
+        await asyncio.to_thread(self.accounts.use_passkey, key["id"],
+                                max(stored, counter), now)
+        if row["disabled"]:
+            log.warning("Sign-in refused for %s from %s: account disabled",
+                        row["name"], address)
+            return refuse("disabled", 403)
+        if second:
+            self._tickets.pop(pending.ticket, None)
+        token = await asyncio.to_thread(
+            self._open_session, row, True, address, now,
+            entry.rehashed if entry else None, None,
+            "password+passkey" if second else "passkey",
+        )
+        return self._signed_in(token, secure)
+
+    async def _clone_suspected(self, row: dict, key: dict, counter: int,
+                               address: str, now: float) -> None:
+        """The key answered with a signature counter at or below the one
+        it had already reached. A key counts up with every signature;
+        going back means two keys hold the same secret — a copy."""
+        keys = await asyncio.to_thread(self.accounts.passkeys, row["id"])
+        number = next((k["number"] for k in keys if k["id"] == key["id"]), 0)
+        message = (
+            f"key {key['label']!r} of {row['name']} answered with signature "
+            f"counter {counter} after {key['sign_count']} (from {address}): "
+            f"a copy of the key may exist. Signing in with it was refused; "
+            f"if the key is not with its owner, remove it — python -m "
+            f"moonlan.users remove-passkey {row['name']} {number}"
+        )
+        log.error("Keys: %s", message)
+        await asyncio.to_thread(
+            self.journal.add_event, now, "passkey_clone_suspected",
+            row["name"], json.dumps({
+                "label": key["label"], "address": address,
+                "counter": counter, "stored": key["sign_count"],
+            }),
+        )
+        if self.raise_alarm is not None:
+            await self.raise_alarm(
+                "passkey_clone_suspected", f"{row['name']}: {key['label']}",
+                message,
+            )
 
     async def logout(self, who: Principal | None) -> JSONResponse:
         if who is not None and who.session:
@@ -1032,6 +1214,21 @@ def add_routes(app: FastAPI, sign_in: SignIn) -> None:
     async def auth_totp(body: CodeBody, request: Request):
         return sign_in.https_refusal(request) or await sign_in.second_step(
             body.ticket, body.code, _address(request), is_secure(request)
+        )
+
+    @app.post("/api/auth/passkey/begin")
+    async def auth_passkey_begin(body: KeyBeginBody, request: Request):
+        """Signing in with a key: the options for
+        navigator.credentials.get(), alone or after the password."""
+        if not await asyncio.to_thread(sign_in.sign_in_on):
+            return refuse("sign_in_off", 409)
+        return await sign_in.passkey_begin(body.ticket, _address(request))
+
+    @app.post("/api/auth/passkey/finish")
+    async def auth_passkey_finish(body: KeyAnswerBody, request: Request):
+        return await sign_in.passkey_finish(
+            body.request, body.credential, _address(request),
+            is_secure(request),
         )
 
     @app.post("/api/auth/logout")

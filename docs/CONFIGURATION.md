@@ -251,6 +251,7 @@ The channels (`email`, `telegram`, `syslog`) each alarm type goes to.
 | `alarm_notify.loop_detected` | email, telegram, syslog |
 | `alarm_notify.loop_detection_disabled` | syslog |
 | `alarm_notify.tls_cert_expiring` | syslog, telegram |
+| `alarm_notify.passkey_clone_suspected` | email, telegram, syslog |
 
 ## Notes on particular settings
 
