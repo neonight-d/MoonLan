@@ -222,10 +222,12 @@ class SignIn:
     journal is what the map shows."""
 
     def __init__(self, accounts: Database, journal: Database,
-                 settings: AuthConfig):
+                 settings: AuthConfig, public_url=None):
         self.accounts = accounts
         self.journal = journal
         self.settings = settings
+        # listen.public_url (https.PublicUrl), or None
+        self.public_url = public_url
         self._tickets: dict[str, Ticket] = {}
         self._purged = 0.0
         self.throttle = Throttle()
@@ -738,7 +740,7 @@ def route_key(routes, scope) -> str | None:
     return None
 
 
-def same_origin(request: Request) -> bool:
+def same_origin(request: Request, public_url=None) -> bool:
     """The page that sent this is the map itself.
 
     With SameSite=Strict on the cookie this closes cross-site request
@@ -746,12 +748,22 @@ def same_origin(request: Request) -> bool:
     not with our cookie and not with our Origin. A request without an
     Origin is refused — every browser sends one with a POST, PUT, PATCH
     or DELETE, and a script can send one too.
+
+    "The map itself" is the public address when one is set — what a
+    proxy in front shows people, whatever it forwards as the scheme —
+    or the address this request was made to: the map opened by IP or by
+    another name keeps working with a password (it is still the map, and
+    a page on another site cannot send our Host with its own Origin).
+    Behind a trusted proxy the scheme of that address is the one the
+    proxy reports (X-Forwarded-Proto, applied by uvicorn), not http.
     """
-    origin = request.headers.get("origin", "")
+    origin = request.headers.get("origin", "").lower()
+    if not origin:
+        return False
+    if public_url is not None and origin == public_url.origin:
+        return True
     host = request.headers.get("host", "")
-    return bool(origin) and origin.lower() == (
-        f"{request.url.scheme}://{host}".lower()
-    )
+    return origin == f"{request.url.scheme}://{host}".lower()
 
 
 class Guard:
@@ -778,7 +790,7 @@ class Guard:
         on, who = await self.signin.who(request)
         refusal = access.decide(key or access.STATIC, who, on)
         if refusal is None and on and method not in SAFE_METHODS \
-                and not same_origin(request):
+                and not same_origin(request, self.signin.public_url):
             refusal = access.Refusal(403, {"error": "bad_origin"})
         if refusal is not None:
             await JSONResponse(refusal.body, status_code=refusal.status)(

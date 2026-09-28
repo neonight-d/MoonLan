@@ -112,3 +112,68 @@ at least, since they are the ones signing in with keys.
   Security → Certificates → View Certificates → Authorities → Import,
   or `security.enterprise_roots.enabled = true` to make it trust the
   system's roots (the default on Windows since Firefox 120).
+
+## Behind a reverse proxy (nginx, Caddy)
+
+The proxy holds the TLS; MoonLan speaks plain HTTP to it on the local
+machine. Without `listen.trusted_proxies` this breaks two things:
+
+- every changing request (a pin, a cleared alarm, a password) is
+  refused with `bad_origin`: the browser sends
+  `Origin: https://example.local`, and MoonLan sees the request arrive
+  over `http`;
+- the delay and the lock after wrong passwords are kept per client
+  address, and every client is the proxy: five wrong passwords from
+  one person delay everybody.
+
+~~~yaml
+listen:
+  host: 127.0.0.1          # only the proxy may reach MoonLan
+  port: 8080
+  public_url: https://example.local
+  trusted_proxies: [127.0.0.1]
+~~~
+
+`run.py` hands the list to uvicorn, which then takes the client's
+address from `X-Forwarded-For` and the scheme from `X-Forwarded-Proto`
+— from those addresses only. From anybody else the headers are
+ignored; with the list empty they are ignored altogether.
+
+**Listen on 127.0.0.1.** A MoonLan listening on `0.0.0.0` behind a proxy
+can be reached around the proxy, over plain HTTP.
+
+### nginx
+
+~~~nginx
+server {
+    listen 443 ssl;
+    server_name example.local;
+    ssl_certificate     /etc/nginx/tls/example.local.pem;
+    ssl_certificate_key /etc/nginx/tls/example.local-key.pem;
+
+    location / {
+        proxy_pass http://127.0.0.1:8080;
+        proxy_set_header Host $host;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+}
+
+server {
+    listen 80;
+    server_name example.local;
+    return 307 https://$host$request_uri;
+}
+~~~
+
+### Caddy
+
+~~~text
+example.local {
+    tls /etc/caddy/tls/example.local.pem /etc/caddy/tls/example.local-key.pem
+    reverse_proxy 127.0.0.1:8080
+}
+~~~
+
+Caddy sends `X-Forwarded-For` and `X-Forwarded-Proto` and keeps `Host`
+by itself.

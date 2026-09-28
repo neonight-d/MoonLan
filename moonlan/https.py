@@ -261,3 +261,41 @@ async def serve_redirect(host: str, port: int, target: str):
             writer.close()
 
     return await asyncio.start_server(answer, host, port)
+
+
+# ---------- the proxy in front ----------
+
+def parse_trusted_proxies(values) -> tuple[list[str], list[str]]:
+    """listen.trusted_proxies: (the addresses and networks to trust,
+    what was refused). X-Forwarded-For and X-Forwarded-Proto are taken
+    from these alone; from anybody else they are ignored, or any client
+    could claim another address and walk past the delay and the lock
+    that are kept per address. "*" is refused for exactly that reason."""
+    trusted, problems = [], []
+    for value in values or []:
+        text = str(value).strip()
+        if text == "*":
+            problems.append(
+                "listen.trusted_proxies: \"*\" would let any client claim any "
+                "address — list the proxy's own address"
+            )
+            continue
+        try:
+            ipaddress.ip_network(text, strict=False)
+        except ValueError:
+            problems.append(
+                f"listen.trusted_proxies: {text!r} is not an address or a "
+                f"network"
+            )
+            continue
+        trusted.append(text)
+    return trusted, problems
+
+
+def uvicorn_proxy_options(trusted: list[str]) -> dict:
+    """What run.py gives uvicorn. With nobody trusted, proxy headers are
+    switched off altogether: uvicorn otherwise trusts 127.0.0.1 by
+    default, and any process on the machine could claim to be anybody."""
+    if not trusted:
+        return {"proxy_headers": False}
+    return {"proxy_headers": True, "forwarded_allow_ips": list(trusted)}

@@ -58,12 +58,14 @@ def main() -> None:
                 "listen.port: the redirect listens beside the service"
             )
         _ensure_port_free(cfg.listen_host, cfg.listen_http_redirect_port)
+    trusted, _ = https.parse_trusted_proxies(cfg.listen_trusted_proxies)
     uvicorn.run(
         "moonlan.server:app",
         host=cfg.listen_host,
         port=cfg.listen_port,
         log_level="info",
         **tls,
+        **https.uvicorn_proxy_options(trusted),
     )
 
 

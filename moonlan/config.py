@@ -223,6 +223,9 @@ class Config:
     # A second port answering only with a redirect to public_url
     # (0 — none)
     listen_http_redirect_port: int = 0
+    # Reverse proxies whose X-Forwarded-For / X-Forwarded-Proto are
+    # believed (addresses or networks); nobody's when empty
+    listen_trusted_proxies: list[str] = field(default_factory=list)
     snmp: SnmpConfig = field(default_factory=SnmpConfig)
     switches: list[str] = field(default_factory=list)
     # Per-switch SNMP settings, one entry per address in `switches`.
@@ -657,6 +660,9 @@ def load_config(path: Path | None = None) -> Config:
     cfg.listen_tls_key = r.get("listen.tls_key", d.listen_tls_key, str)
     cfg.listen_http_redirect_port = r.get(
         "listen.http_redirect_port", d.listen_http_redirect_port, int
+    )
+    cfg.listen_trusted_proxies = r.get(
+        "listen.trusted_proxies", d.listen_trusted_proxies, _as_str_list
     )
 
     cfg.snmp = SnmpConfig(

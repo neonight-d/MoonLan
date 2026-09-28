@@ -52,6 +52,9 @@ config: Config = load_config()
 public_url, public_url_problems = https.parse_public_url(
     config.listen_public_url
 )
+trusted_proxies, trusted_proxy_problems = https.parse_trusted_proxies(
+    config.listen_trusted_proxies
+)
 # listen.tls_cert, read once at startup: the certificate uvicorn loaded
 # is the one this process serves until it is restarted
 certificate: https.CertInfo | None = None
@@ -66,7 +69,7 @@ db = Database(":memory:" if config.demo else config.db_path)
 # they need a file python -m moonlan.users can reach (see
 # Config.users_db_path)
 accounts = Database(config.users_db_path()) if config.demo else db
-sign_in = signin.SignIn(accounts, db, config.auth)
+sign_in = signin.SignIn(accounts, db, config.auth, public_url)
 
 # Ping state of switches (they are not in the hosts table): ip -> {ping_up, last_ping_ok}
 switch_ping: dict[str, dict] = {}
@@ -1925,7 +1928,7 @@ def _log_config() -> None:
 
 def _log_public_url() -> None:
     """Where people are expected to open the map, and what follows."""
-    for problem in public_url_problems:
+    for problem in public_url_problems + trusted_proxy_problems:
         log.warning("config.yaml %s — ignored", problem)
     if public_url is None:
         log.info(

@@ -23,14 +23,14 @@ class Answer:
         return [v for k, v in self.headers if k == name.lower()]
 
 
-async def _call(app, method, path, headers, body, client):
+async def _call(app, method, path, headers, body, client, host, scheme):
     target, _, query = path.partition("?")
-    raw = [(b"host", HOST.encode())]
+    raw = [(b"host", host.encode())]
     for name, value in headers.items():
         raw.append((name.lower().encode(), value.encode()))
     scope = {
         "type": "http", "asgi": {"version": "3.0"}, "http_version": "1.1",
-        "method": method, "scheme": "http", "path": target,
+        "method": method, "scheme": scheme, "path": target,
         "raw_path": target.encode(), "query_string": query.encode(),
         "root_path": "", "headers": raw, "client": (client, 50000),
         "server": ("moonlan.test", 8080),
@@ -60,7 +60,7 @@ async def _call(app, method, path, headers, body, client):
 
 
 def call(app, method, path, *, json_body=None, cookie=None, origin=None,
-         headers=None, client="10.0.0.99"):
+         headers=None, client="10.0.0.99", host=HOST, scheme="http"):
     """One request; `origin` defaults to the map's own for anything
     but GET, as a browser on the map would send it — False sends none."""
     headers = dict(headers or {})
@@ -71,7 +71,9 @@ def call(app, method, path, *, json_body=None, cookie=None, origin=None,
     if cookie:
         headers["cookie"] = cookie
     if origin is None and method not in ("GET", "HEAD"):
-        origin = ORIGIN
+        origin = f"{scheme}://{host}"
     if origin is not None and origin is not False:
         headers["origin"] = origin
-    return asyncio.run(_call(app, method, path, headers, body, client))
+    return asyncio.run(
+        _call(app, method, path, headers, body, client, host, scheme)
+    )

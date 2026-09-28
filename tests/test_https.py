@@ -297,3 +297,118 @@ class RedirectTest(unittest.TestCase):
         for target in (b"//evil.example/", b"http://evil.example/", b"/\x7fx"):
             answer = self.ask(b"GET " + target + b" HTTP/1.1\r\n\r\n")
             self.assertIn(b"Location: https://example.local:8443/\r\n", answer)
+
+
+# ---------- behind a proxy (task 3) ----------
+
+from uvicorn.middleware.proxy_headers import ProxyHeadersMiddleware  # noqa: E402
+
+from asgi_client import call  # noqa: E402
+from moonlan import auth, signin  # noqa: E402
+
+PASSWORD = "correct horse battery"
+PROXY = "127.0.0.1"
+
+
+class ProxyTest(unittest.TestCase):
+    """nginx holds the TLS at https://example.local and forwards to
+    MoonLan over http from 127.0.0.1."""
+
+    def setUp(self):
+        logger = logging.getLogger("moonlan")
+        self.addCleanup(logger.setLevel, logger.level)
+        logger.setLevel(logging.ERROR)
+        self.db = server.accounts
+        self.clean()
+        self.addCleanup(self.clean)
+        server.sign_in.throttle = signin.Throttle()
+        self.db.add_user("anton", "admin", auth.hash_password(PASSWORD))
+        self.db.enable_totp("anton", auth.new_totp_secret(), "")
+        self.db.add_user("vera", "user", auth.hash_password(PASSWORD))
+        token = auth.new_token()
+        self.db.add_session(auth.token_hash(token),
+                            self.db.user("vera")["id"], time.time())
+        self.cookie = f"{signin.SESSION_COOKIE}={token}"
+        # as run.py sets it up with listen.trusted_proxies: [127.0.0.1]
+        self.app = ProxyHeadersMiddleware(server.app, trusted_hosts=[PROXY])
+
+    def clean(self):
+        with self.db._lock, self.db._conn:
+            self.db._conn.execute("DELETE FROM sessions")
+            self.db._conn.execute("DELETE FROM users")
+
+    def pin(self, app, client, headers, origin="https://example.local",
+            host="example.local"):
+        return call(app, "PATCH", "/api/layout", cookie=self.cookie,
+                    json_body={"nodes": {}}, origin=origin, client=client,
+                    host=host, headers=headers).status
+
+    def test_the_forwarded_scheme_from_the_proxy(self):
+        forwarded = {"x-forwarded-proto": "https", "x-forwarded-for": "192.0.2.10"}
+        # v0.7.5's failure: without the proxy headers MoonLan sees http
+        self.assertEqual(self.pin(server.app, PROXY, forwarded), 403)
+        self.assertEqual(self.pin(self.app, PROXY, forwarded), 200)
+
+    def test_the_same_header_from_anybody_else_changes_nothing(self):
+        forwarded = {"x-forwarded-proto": "https"}
+        self.assertEqual(self.pin(self.app, "10.0.0.50", forwarded), 403)
+
+    def test_the_public_address_is_the_map(self):
+        public, _ = https.parse_public_url("https://example.local")
+        with mock.patch.object(server.sign_in, "public_url", public):
+            # a proxy that does not say https: the public address decides
+            self.assertEqual(self.pin(server.app, PROXY, {}), 200)
+            # the map opened by address keeps working with a password
+            self.assertEqual(self.pin(
+                server.app, "10.0.0.50", {}, origin="http://10.0.0.5:8080",
+                host="10.0.0.5:8080"), 200)
+            # a page elsewhere does not
+            self.assertEqual(self.pin(
+                server.app, "10.0.0.50", {}, origin="https://evil.example"), 403)
+
+    def login(self, client, forwarded_for=None, password="wrong password",
+              origin="https://example.local"):
+        headers = {"x-forwarded-proto": "https"}
+        if forwarded_for:
+            headers["x-forwarded-for"] = forwarded_for
+        return call(self.app, "POST", "/api/auth/login",
+                    json_body={"name": "vera", "password": password},
+                    origin=origin, host="example.local",
+                    client=client, headers=headers).status
+
+    def test_the_delay_is_kept_per_real_client(self):
+        for _ in range(5):
+            self.assertEqual(self.login(PROXY, "192.0.2.10"), 401)
+        # the sixth attempt from that person waits…
+        self.assertEqual(self.login(PROXY, "192.0.2.10"), 429)
+        # …and somebody else behind the same proxy does not
+        self.assertEqual(self.login(PROXY, "192.0.2.11", PASSWORD), 200)
+
+    def test_nobody_else_can_claim_another_address(self):
+        # a client that is not the proxy: its X-Forwarded-Proto is
+        # ignored (so its own origin is http) and so is X-Forwarded-For —
+        # rotating it does not escape the delay
+        own = "http://example.local"
+        for n in range(5):
+            self.assertEqual(
+                self.login("10.0.0.50", f"192.0.2.{20 + n}", origin=own), 401
+            )
+        self.assertEqual(self.login("10.0.0.50", "192.0.2.99", origin=own), 429)
+
+
+class TrustedProxiesTest(unittest.TestCase):
+    def test_what_is_trusted(self):
+        trusted, problems = https.parse_trusted_proxies(
+            ["127.0.0.1", "10.0.0.0/24", "::1", "*", "nginx"]
+        )
+        self.assertEqual(trusted, ["127.0.0.1", "10.0.0.0/24", "::1"])
+        self.assertEqual(len(problems), 2)
+        self.assertIn("any client", problems[0])
+
+    def test_nobody_trusted_switches_the_headers_off(self):
+        # uvicorn trusts 127.0.0.1 by default; MoonLan does not
+        self.assertEqual(https.uvicorn_proxy_options([]),
+                         {"proxy_headers": False})
+        self.assertEqual(https.uvicorn_proxy_options(["127.0.0.1"]),
+                         {"proxy_headers": True,
+                          "forwarded_allow_ips": ["127.0.0.1"]})

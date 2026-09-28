@@ -21,6 +21,11 @@ listen:
   # A port that only redirects http:// to public_url (0 — none)
   # Порт, который только перенаправляет http:// на public_url (0 — нет)
   # http_redirect_port: 8080
+  # Behind nginx or Caddy holding the TLS: the proxy's address, whose
+  # X-Forwarded-For / X-Forwarded-Proto are believed; and host: 127.0.0.1
+  # За nginx или Caddy, которые держат TLS: адрес прокси, чьим заголовкам
+  # X-Forwarded-For / X-Forwarded-Proto верить; и host: 127.0.0.1
+  # trusted_proxies: [127.0.0.1]
 
 snmp:
   community: public # SNMP v2c community (read-only)
