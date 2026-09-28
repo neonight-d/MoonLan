@@ -46,6 +46,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import importlib.metadata
 import json
 import sqlite3
 import sys
@@ -55,7 +56,7 @@ import urllib.request
 from collections import Counter
 from pathlib import Path
 
-from . import counters, https, loopdetect, pinger, probes, stp
+from . import counters, https, loopdetect, passkeys, pinger, probes, stp
 from .anonymize import Anonymizer, AnonymizingWriter
 from .config import (
     SECRET_KEYS,
@@ -889,6 +890,7 @@ def run_config_audit(cfg) -> None:
             print(f"  {problem}")
 
     _print_node_menu(cfg)
+    _print_https(cfg)
     _print_sign_in(cfg)
 
     # The settings each switch is actually polled with. The global
@@ -963,6 +965,87 @@ def _print_node_menu(cfg) -> None:
             print(f"    {problem}")
 
 
+def _print_https(cfg) -> None:
+    """Part of `--config`: how the map reaches people, the address keys
+    are bound to, the certificate, and whether keys can work at all."""
+    public, public_problems = https.parse_public_url(cfg.listen_public_url)
+    trusted, proxy_problems = https.parse_trusted_proxies(
+        cfg.listen_trusted_proxies
+    )
+    mode = https.transport_mode(cfg.listen_tls_cert, trusted, public)
+    print("\nHTTPS and keys (listen.*):")
+    print("  mode:            " + {
+        "tls": "HTTPS served by MoonLan itself",
+        "proxy": "HTTPS at a reverse proxy in front",
+        "http": "plain HTTP — passwords and sessions cross the network in "
+                "clear text",
+    }[mode])
+    if public is not None:
+        print(f"  public address:  {public.origin}")
+        print("  passkey RP ID:   " + (
+            public.rp_id or "none — an IP address can carry no key"))
+    else:
+        print("  public address:  not set — signing in with a key is off")
+    for problem in public_problems + proxy_problems:
+        print(f"    ^ {problem} — ignored")
+    if mode == "http" and public is not None and public.secure:
+        print("    ^ https, but neither tls_cert nor trusted_proxies: every "
+              "request arrives\n      as plain http, and passwords are "
+              "refused on it")
+    print("  trusted proxies: " + (
+        ", ".join(trusted) if trusted
+        else "none — X-Forwarded-For and X-Forwarded-Proto are ignored"))
+    if cfg.listen_tls_cert or cfg.listen_tls_key:
+        _print_certificate(cfg, public)
+    print("  HSTS:            " + (
+        f"max-age={cfg.listen_hsts_max_age}" if cfg.listen_hsts_max_age
+        else "off"))
+    if cfg.listen_http_redirect_port:
+        print(f"  redirect port:   {cfg.listen_http_redirect_port} → "
+              + (public.origin if public else "nowhere: no public_url"))
+    version = passkeys.fido2_version()
+    if version:
+        try:
+            crypto = importlib.metadata.version("cryptography")
+        except importlib.metadata.PackageNotFoundError:
+            crypto = "?"
+        print(f"  fido2:           {version} (cryptography {crypto})")
+    else:
+        print("  fido2:           NOT INSTALLED — "
+              f"{passkeys.FIDO2_MISSING}; see docs/OPERATIONS.md#installing")
+    why = passkeys.unavailable(public)
+    print("  keys:            " + ("on — bound to " + public.rp_id
+                                   if why is None else f"off ({why})"))
+
+
+def _print_certificate(cfg, public) -> None:
+    cert, key = cfg.listen_tls_cert, cfg.listen_tls_key
+    print(f"  certificate:     {cert}")
+    try:
+        https.check_tls_files(cert, key)
+    except https.TlsProblem as problem:
+        print(f"    ^ {problem} — MoonLan will not start")
+        return
+    info = https.read_certificate(cert)
+    left = (info.not_after - time.time()) / 86400
+    print(f"    subject:       {info.subject}")
+    print("    names (SAN):   " + (", ".join(info.names) or "none"))
+    until = time.strftime("%Y-%m-%d", time.localtime(info.not_after))
+    if left < 0:
+        print(f"    valid until:   {until} — ENDED {-left:.0f} day(s) ago")
+    else:
+        print(f"    valid until:   {until} — in {left:.0f} day(s)"
+              + (" — replace it soon" if left < 30 else ""))
+    if public is not None:
+        print("    names the host: " + (
+            "yes" if https.covers(info.names, public.host)
+            else f"NO — browsers will refuse it at {public.host}"))
+    mode = https.key_mode_too_open(key)
+    print(f"    key:           {key} — " + (
+        f"mode {mode:o}: readable by others, chmod 600" if mode
+        else "readable by its owner only"))
+
+
 def _console_token(cfg) -> str:
     """The token the running service wrote next to its database for
     this tool (v0.7.4); "" when there is none or it cannot be read."""
@@ -984,6 +1067,12 @@ def _print_sign_in(cfg) -> None:
         conn.row_factory = sqlite3.Row
         users = [dict(r) for r in conn.execute("SELECT * FROM users")]
         sessions = conn.execute("SELECT COUNT(*) FROM sessions").fetchone()[0]
+        try:
+            keys = dict(conn.execute(
+                "SELECT user_id, COUNT(*) FROM passkeys GROUP BY user_id"
+            ).fetchall())
+        except sqlite3.Error:
+            keys = {}    # the service has not run v0.7.6 here yet
         conn.close()
     except sqlite3.Error as exc:
         print(
@@ -1009,16 +1098,21 @@ def _print_sign_in(cfg) -> None:
         f"user(s), {roles['viewer']} viewer(s)"
         + (f"; {disabled} disabled" if disabled else "")
     )
-    bare = [u["name"] for u in admins if not u["totp_enabled"]]
+    print("  keys:        " + (", ".join(
+        f"{u['name']} {keys[u['id']]}" for u in users if keys.get(u["id"])
+    ) or "none"))
+    bare = [u["name"] for u in admins
+            if not u["totp_enabled"] and not keys.get(u["id"])]
     print(
-        "  administrators without TOTP: "
+        "  administrators without a second factor: "
         + (", ".join(bare) if bare else "none")
     )
     if bare:
         print(
-            "    ^ there should be none. They can do nothing but bind it at\n"
-            "      their next sign-in; to bind it here, without the secret\n"
-            "      crossing the network: python -m moonlan.users totp <name>"
+            "    ^ there should be none. They can do nothing but bind one\n"
+            "      (TOTP or a key) at their next sign-in; TOTP here, without\n"
+            "      the secret crossing the network: "
+            "python -m moonlan.users totp <name>"
         )
     locked = [u for u in users if u["locked_until"] > now]
     print("  locked now:  " + (", ".join(
@@ -1033,18 +1127,14 @@ def _print_sign_in(cfg) -> None:
           f"{cfg.auth.session_max_days:g} days at most")
     public, _ = https.parse_public_url(cfg.listen_public_url)
     trusted, _ = https.parse_trusted_proxies(cfg.listen_trusted_proxies)
-    mode = https.transport_mode(cfg.listen_tls_cert, trusted, public)
-    if mode == "http":
+    if https.transport_mode(cfg.listen_tls_cert, trusted, public) == "http":
         print(
             "  connection:  HTTP — passwords and session cookies cross the "
             "network\n               in clear text; docs/HTTPS.md tells how "
             "to serve HTTPS"
         )
     else:
-        print("  connection:  " + (
-            "HTTPS served by MoonLan itself" if mode == "tls"
-            else "HTTPS at a reverse proxy in front"
-        ))
+        print("  connection:  HTTPS (above)")
 
 
 def _ask_service(cfg, path: str) -> dict | None:

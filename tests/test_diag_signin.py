@@ -60,10 +60,24 @@ class SignInSectionTest(unittest.TestCase):
         self.assertIn("ON — 2 enabled administrator(s)", text)
         self.assertIn("2 administrator(s), 1 user(s), 1 viewer(s); 1 disabled",
                       text)
-        self.assertIn("administrators without TOTP: boris", text)
+        self.assertIn("administrators without a second factor: boris", text)
+        self.assertIn("keys:        none", text)
         self.assertIn("locked now:  vera until", text)
         self.assertIn("unlock", text)
         self.assertIn("12 h without a request, 30 days at most", text)
+
+    def test_a_key_is_a_second_factor(self):
+        db = Database(self.path)
+        for name in ("anton", "boris"):
+            db.add_user(name, "admin", "hash")
+        for n in (1, 2):
+            db.add_passkey(db.user("boris")["id"], {
+                "credential_id": bytes([n]) * 16, "public_key": b"k",
+            })
+        db.close()
+        text = self.section()
+        self.assertIn("keys:        boris 2", text)
+        self.assertIn("administrators without a second factor: anton", text)
 
 
 class ConsoleTokenTest(unittest.TestCase):

@@ -17,7 +17,8 @@ from uvicorn.middleware.proxy_headers import ProxyHeadersMiddleware
 
 import service_fixture  # noqa: F401  (sets MOONLAN_CONFIG first)
 from asgi_client import call
-from moonlan import auth, config as config_module, https, server, signin
+from moonlan import auth, config as config_module, diag, https, server, signin
+from moonlan import passkeys as passkeys_module
 
 try:
     from cryptography import x509
@@ -630,6 +631,89 @@ class TransportTest(unittest.TestCase):
                 self.assertEqual(
                     any("clear text" in line for line in logged.output), warned
                 )
+
+
+
+# ---------- diag --config ----------
+
+class DiagTest(unittest.TestCase):
+    """What `diag --config` says about HTTPS and keys."""
+
+    def section(self, listen=""):
+        with tempfile.TemporaryDirectory() as folder:
+            self.folder = folder
+            path = Path(folder) / "config.yaml"
+            path.write_text(
+                f"db_path: {Path(folder) / 'test.db'}\n"
+                + (f"listen:\n{listen(folder) if callable(listen) else listen}"
+                   if listen else ""),
+                encoding="utf-8",
+            )
+            cfg = config_module.load_config(path)
+            out = io.StringIO()
+            with contextlib.redirect_stdout(out):
+                diag._print_https(cfg)
+        return out.getvalue()
+
+    def test_nothing_set(self):
+        text = self.section()
+        self.assertIn("mode:            plain HTTP", text)
+        self.assertIn("public address:  not set", text)
+        self.assertIn("trusted proxies: none", text)
+        self.assertIn("HSTS:            off", text)
+        self.assertRegex(text, r"fido2:           2\.\d+\.\d+ \(cryptography ")
+        self.assertIn("keys:            off (no_public_url)", text)
+
+    def test_behind_a_proxy(self):
+        text = self.section(
+            "  public_url: https://example.local\n"
+            "  trusted_proxies: [127.0.0.1, '*']\n"
+            "  hsts_max_age: 600\n"
+        )
+        self.assertIn("HTTPS at a reverse proxy in front", text)
+        self.assertIn("passkey RP ID:   example.local", text)
+        self.assertIn("trusted proxies: 127.0.0.1", text)
+        self.assertIn('"*" would let any client claim any address', text)
+        self.assertIn("HSTS:            max-age=600", text)
+        self.assertIn("keys:            on — bound to example.local", text)
+
+    def test_an_ip_address(self):
+        text = self.section("  public_url: https://10.0.0.5:8443\n")
+        self.assertIn("passkey RP ID:   none — an IP address", text)
+        self.assertIn("keys:            off (public_url_ip)", text)
+        self.assertIn("neither tls_cert nor trusted_proxies", text)
+
+    @unittest.skipIf(x509 is None, "cryptography is not installed")
+    def test_the_certificate(self):
+        def listen(folder):
+            cert, key, _ = make_certificate(folder, ("moonlan.lan",), days=20)
+            os.chmod(key, 0o644)
+            return (f"  public_url: https://example.local:8443\n"
+                    f"  tls_cert: {cert}\n  tls_key: {key}\n")
+        text = self.section(listen)
+        self.assertIn("HTTPS served by MoonLan itself", text)
+        self.assertIn("subject:       CN=moonlan.lan", text)
+        self.assertIn("names (SAN):   moonlan.lan", text)
+        self.assertRegex(text, r"valid until:   \S+ — in (19|20) day\(s\) — "
+                               r"replace it soon")
+        self.assertIn("names the host: NO — browsers will refuse it at "
+                      "example.local", text)
+        self.assertIn("mode 644: readable by others, chmod 600", text)
+
+    def test_a_certificate_that_will_not_start(self):
+        text = self.section("  tls_cert: /nonexistent/cert.pem\n"
+                            "  tls_key: /nonexistent/key.pem\n")
+        self.assertIn("does not exist — MoonLan will not start", text)
+
+    def test_without_fido2(self):
+        with mock.patch.object(passkeys_module, "Fido2Server", None), \
+                mock.patch.object(passkeys_module, "FIDO2_MISSING",
+                                  "fido2 is not installed"):
+            text = self.section("  public_url: https://example.local\n"
+                                "  trusted_proxies: [127.0.0.1]\n")
+        self.assertIn("fido2:           NOT INSTALLED — fido2 is not "
+                      "installed; see docs/OPERATIONS.md#installing", text)
+        self.assertIn("keys:            off (no_fido2)", text)
 
 
 if __name__ == "__main__":

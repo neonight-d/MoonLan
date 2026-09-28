@@ -58,6 +58,15 @@ now applies to damaged frames alone, where the default is 5. The
 service logs the same summary on startup, at WARNING level when the
 file contains keys it does not recognise.
 
+Then what the configuration makes of HTTPS and keys: the mode (HTTPS
+served by MoonLan, at a proxy, or plain HTTP), the public address and
+the host keys are bound to, the trusted proxies, the certificate —
+subject, names, the end date, whether it names the public host, whether
+its key is readable by others — HSTS, the redirect port, the installed
+`fido2` and `cryptography`, and whether keys are on and, if not, why.
+The sign-in part names the accounts that have keys and any
+administrator with neither TOTP nor a key.
+
 The last table it prints is the SNMP settings every switch is actually
 polled with, marking the ones that switch was given of its own rather
 than inheriting from `snmp:`.
