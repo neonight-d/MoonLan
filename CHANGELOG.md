@@ -6,6 +6,91 @@ for before the next one started.
 
 Русская версия — [CHANGELOG_RU.md](CHANGELOG_RU.md).
 
+## v0.7.6 — 2026-09-28
+
+HTTPS, and signing in with a key.
+
+v0.7.4 put the map behind a sign-in and said plainly what plain HTTP
+leaves open. This closes it, and adds a second factor that cannot be
+typed into a fake page.
+
+**The public address.** `listen.public_url` —
+`https://moonlan.example.local:8443` — is where people open the map.
+Changing requests are checked against it, or against the page's own
+address: a map opened by IP keeps working with a password and TOTP,
+and a page of another site passes neither. Keys are bound to its host
+name; with an IP address, or with none, keys are off and the log says
+why. Without it everything works as in v0.7.5.
+
+**HTTPS of its own.** `listen.tls_cert` and `listen.tls_key` are
+checked before uvicorn starts, and a missing file, an unreadable one or
+a key that is not the certificate's is one line instead of a traceback;
+a key readable by others is a warning. The log names the certificate,
+its names and its end — a WARNING under thirty days or when it does not
+name the public host — and `tls_cert_expiring` (warning; syslog,
+Telegram) goes out two weeks before the end, looked at daily and
+cleared once the file is replaced and MoonLan restarted.
+`listen.http_redirect_port` answers `http://` with a redirect to the
+public address.
+
+**Behind a proxy.** `listen.trusted_proxies`: X-Forwarded-For and
+X-Forwarded-Proto are believed from those addresses alone, and from
+nobody when the list is empty — uvicorn's own default believed
+127.0.0.1, so any process on the machine could claim any address. `*`
+is refused. docs/HTTPS.md: mkcert, trusting the root on Windows
+(certutil, group policy), Linux, Chrome and Firefox; nginx and Caddy;
+why MoonLan behind a proxy listens on 127.0.0.1.
+
+**Over HTTPS.** The session cookie is `__Host-moonlan_session`, with
+`Secure`; one set over plain HTTP is not carried over, so everybody
+signs in once more. With an https public address a password sent over
+plain HTTP — signing in, a new password, binding TOTP — is refused, and
+the form links to the protected address before anything is typed.
+HSTS only with `listen.hsts_max_age` (0 by default), and HTTPS.md says
+why it cannot be taken back. The log names the mode at startup — own
+TLS, a proxy, or plain HTTP — and warns about clear text only in the
+last case; the header stops saying the connection is not protected.
+
+**Signing in with a key.** The first dependency beyond the stack:
+`fido2` (≥2.2, <3), which brings `cryptography`. Without it MoonLan
+runs with keys off and says why, in the log and on the form; README
+and OPERATIONS say what to do when `cryptography` will not build. "Add
+a key" in the account card asks for the password, then the key: ES256,
+EdDSA and RS256, nothing post-quantum yet, no attestation. A key signs
+in without a password, or only after it; one that asked for no PIN or
+keeps nothing itself is kept as a second factor, and the page says why.
+Ten keys at most; the first one of an account without recovery codes
+brings them. "Sign in with a key" needs no name and no password — the
+key must verify its user, and the server checks that it did — and "Use
+the key" is the second step after the password. Checked: the origin,
+the RP ID hash, a one-time challenge under five minutes, the signature,
+whose key it is, and the signature counter: one that goes back is
+refused, journaled and raises `passkey_clone_suspected` (critical); a
+key that always says 0 is taken. Failures count in the delay and the
+lock like wrong passwords, and the journal says how each sign-in was
+made.
+
+**An administrator's second factor** is TOTP or a key. The last one is
+not removed — not from the account card, not from Users, not from the
+console; `python -m moonlan.users reset-passkeys` is the way back in,
+and the next sign-in binds a new factor before anything else. The
+console gains `passkeys`, `remove-passkey` and `reset-passkeys`; Users
+lists each account's keys, removes one and resets all. Recovery codes
+work for accounts whose second factor is a key.
+
+**Where a key cannot work** "Sign in with a key" and "Add a key" are
+greyed out with the first reason that applies: not HTTPS; not the
+public address, with a link to it; no public address, or an IP; no
+fido2 on the server; no WebAuthn in the browser. What the browser
+throws is said in words.
+
+**diag --config** has an HTTPS section: the mode, the public address
+and the host keys are bound to, the proxies, the certificate (subject,
+names, end, whether it names the host, the key's permissions), HSTS,
+fido2 and cryptography with their versions, and whether keys are on;
+the accounts part lists keys and any administrator with neither TOTP
+nor a key.
+
 ## v0.7.5 — 2026-09-25
 
 One row of controls, and documentation from the community.

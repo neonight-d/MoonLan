@@ -635,6 +635,16 @@ class SignInWithKeyTest(SignInCase):
         answer = self.after_password(anton, "vera", any_key=True)
         self.assertEqual(answer.json()["error"], "key_refused")
 
+    def test_the_ticket_runs_out_for_a_key_too(self):
+        key, _ = self.add_key(passwordless=False)
+        ticket = self.password()["ticket"]
+        begun = self.begin(ticket).json()
+        for entry in server.sign_in._tickets.values():
+            entry.expires = time.time() - 1
+        answer = self.finish(begun["request"],
+                             soft.get(begun["options"], ORIGIN, key))
+        self.assertEqual(answer.json()["error"], "ticket_expired")
+
     def test_a_recovery_code_instead_of_the_key(self):
         _, added = self.add_key(passwordless=False)
         code = added.json()["recovery"][0]

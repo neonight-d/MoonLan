@@ -23,7 +23,7 @@
 | 📈 Monitoring | Ping, traffic rates, errors, discards, flapping, loop detection |
 | 🚨 Alarms | Stateful alarms with Email, Telegram, Syslog notifications |
 | 🧭 Operations | Shared layout, pinned nodes, search, journal, port/STP/alarms panels |
-| 🔐 Access | Sign-in with three roles, TOTP for administrators, accounts from the server's shell |
+| 🔐 Access | Sign-in with three roles, TOTP or a key (passkey) for administrators, HTTPS of its own or behind a proxy, accounts from the server's shell |
 | 🧪 Diagnostics | FDB, hosts, ports, STP, loop detection, topology, arbitrary MIB walks |
 | 🛡️ Safety | Per-host poll budgets, stale-data labels, command argument validation |
 | 🌐 UI | English/Russian interface, demo mode, responsive dark network map |
@@ -94,11 +94,16 @@ python -m moonlan.users add <name> --role admin
 Sign-in switches on at once, without a restart. Three roles: a
 **viewer** looks; a **user** may also ping, rescan, pin and clear
 alarms; an **administrator** may also reset the layout and manage
-accounts, and must use TOTP. Over plain HTTP the password and the
-session cross the network in clear text — HTTPS comes in v0.7.6.
+accounts, and must have a second factor: TOTP or a key.
 
-Roles, TOTP, getting back in, what HTTP leaves open:
-**[docs/SIGN-IN.md](docs/SIGN-IN.md)**.
+A hardware key or a phone's passkey signs in without a password, or
+after it. It needs HTTPS and a host name — `listen.public_url`: MoonLan
+serves TLS with a certificate of its own, or stands behind nginx or
+Caddy. Over plain HTTP the password and the session cross the network
+in clear text, and the page says so.
+
+Roles, TOTP, keys, getting back in: **[docs/SIGN-IN.md](docs/SIGN-IN.md)**.
+Certificates, the proxy, HSTS: **[docs/HTTPS.md](docs/HTTPS.md)**.
 
 ---
 
@@ -154,6 +159,7 @@ See **[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)** for the data flow, the righ
 |---|---|---|---|
 | GET | **/api/health** | Liveness: status and version, nothing else | none |
 | POST | **/api/auth/login**, **/api/auth/totp** | Sign in: password, then the code | none |
+| POST | **/api/auth/passkey/begin**, **/finish** | Sign in with a key | none |
 | GET | **/api/status** | Scan, service, and resource state | viewer |
 | GET | **/api/topology** | Current topology and live device state | viewer |
 | GET | **/api/switch/{ip}/ports** | Port status, rates, errors, LLDP, LAG, loop state | viewer |
@@ -197,6 +203,8 @@ MoonLan/
 │   ├── auth.py             # scrypt passwords, TOTP, recovery codes
 │   ├── access.py           # the rights table: every route and its role
 │   ├── signin.py           # sessions, the guard on every request, accounts API
+│   ├── passkeys.py         # signing in with a key (WebAuthn, python-fido2)
+│   ├── https.py            # the public address, TLS, the proxy in front
 │   ├── users.py            # python -m moonlan.users
 │   ├── anonymize.py        # rewriting a diag report so it can be shared
 │   ├── diag.py             # diagnostics CLI
@@ -214,6 +222,7 @@ MoonLan/
 - **What MoonLan does** — [docs/FEATURES.md](docs/FEATURES.md)
 - **Configuration** — [docs/CONFIGURATION.md](docs/CONFIGURATION.md)
 - **Users and sign-in** — [docs/SIGN-IN.md](docs/SIGN-IN.md)
+- **HTTPS, the public address, a proxy** — [docs/HTTPS.md](docs/HTTPS.md)
 - **Operations & troubleshooting** — [docs/OPERATIONS.md](docs/OPERATIONS.md)
 - **Diagnostics** — [docs/DIAGNOSTICS.md](docs/DIAGNOSTICS.md)
 - **LLDP, STP and loop detection** — [docs/NETWORK.md](docs/NETWORK.md)
@@ -234,7 +243,7 @@ MoonLan is intended for trusted/self-hosted network environments.
 - Treat SNMP v2c communities as secrets.
 - Do not expose the service directly to an untrusted network.
 - Create an administrator to put the map behind a sign-in; until then it is open to everyone who can reach it.
-- Over plain HTTP, passwords and session cookies cross the network in clear text (HTTPS: v0.7.6).
+- Serve HTTPS — a certificate of MoonLan's own or a proxy in front: over plain HTTP, passwords and session cookies cross the network in clear text.
 - On-demand actions accept MoonLan node IDs, not arbitrary addresses, and run without a shell.
 - Configurable context-menu URLs are scheme-validated and values are URL-encoded.
 - Read **[SECURITY.md](SECURITY.md)** before exposing MoonLan beyond a lab or trusted LAN.
@@ -261,7 +270,7 @@ See **[CONTRIBUTING.md](CONTRIBUTING.md)**.
 | Version | |
 |---|---|
 | v0.7.5 ✓ | One row of controls; documentation from the community |
-| v0.7.6 | HTTPS (TLS of its own or behind a reverse proxy) and passkeys |
+| v0.7.6 ✓ | HTTPS (TLS of its own or behind a reverse proxy) and signing in with a key |
 | v0.8 | Export to PDF and Draw.io, MAC address info import |
 | v0.9 | Windows computer inventory (WMI/WinRM) |
 

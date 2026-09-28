@@ -147,16 +147,21 @@ python -m moonlan.users totp <name>
 Getting somebody back in:
 
 ~~~bash
-python -m moonlan.users list                  # roles, state, TOTP, locks, sessions
+python -m moonlan.users list                  # roles, state, TOTP, keys, locks, sessions
 python -m moonlan.users unlock <name>         # after ten wrong passwords
 python -m moonlan.users passwd <name> --temporary
 python -m moonlan.users reset-totp <name>     # a lost phone and no recovery codes
+python -m moonlan.users passkeys <name>       # the keys, numbered
+python -m moonlan.users remove-passkey <name> <number>
+python -m moonlan.users reset-passkeys <name> # every key lost
 ~~~
 
 Passwords are asked for, never taken from the command line. The last
-enabled administrator cannot be deleted, disabled or demoted.
-`diag --config` shows administrators without TOTP and accounts locked
-right now. Run `diag` as the user MoonLan runs as: it asks the service
+enabled administrator cannot be deleted, disabled or demoted, and an
+administrator's last second factor cannot be removed one by one.
+`diag --config` shows administrators without a second factor, accounts
+locked right now, and — in its HTTPS section — the certificate, the
+proxies and whether keys can work ([HTTPS.md](HTTPS.md)). Run `diag` as the user MoonLan runs as: it asks the service
 with a token only that user can read.
 
 ## Empty map

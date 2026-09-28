@@ -85,6 +85,17 @@ Everything MoonLan does, as of v0.7.5 — the list the README used to carry. The
   server, with the service running. What a role may not do is shown
   greyed out with the role it needs, never hidden. Plain HTTP is said
   to be plain HTTP: see [Users and sign-in](SIGN-IN.md).
+- Signing in with a key — a hardware key or a phone's passkey — alone
+  or after the password; an administrator's second factor is TOTP or a
+  key. A key whose signature counter goes back raises a critical alarm.
+  Where a key cannot work, the button says why and links to the address
+  where it can.
+- HTTPS: a certificate of MoonLan's own (checked before the start, its
+  end watched by an alarm, an optional port that redirects `http://`),
+  or a reverse proxy in front whose `X-Forwarded-*` headers are believed
+  from its address alone. Over HTTPS the session cookie is `Secure`, and
+  with an https public address a password is not taken over plain HTTP.
+  See [HTTPS](HTTPS.md).
 - What a person placed is kept, the rest is laid out again. Pinned
   positions live on the server, not in one browser: a map of a network
   is a shared object, and two people looking at it have to see the

@@ -730,6 +730,10 @@ class SignIn:
             return refuse("key_unknown", 401)
         second = pending.kind == "second"
         entry = self._tickets.get(pending.ticket) if second else None
+        if entry is not None and entry.expires < now:
+            # five minutes for the whole second step, a key or a code
+            self._tickets.pop(pending.ticket, None)
+            entry = None
         if second and (entry is None or entry.user_id != row["id"]):
             # the ticket ran out, or another account's key answered
             locked = await self._failed(
