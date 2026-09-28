@@ -214,3 +214,35 @@ at all — not even with a warning to click through — until the time
 runs out. Switch it on once HTTPS has run for a while and the renewal
 of the certificate is in somebody's calendar; start with a short age
 (`600`) and raise it later. It is sent on HTTPS answers only.
+
+## Why a key will not work here
+
+"Add a key" and "Sign in with a key" are greyed out with the first of
+these that applies — the order in which they have to be fixed:
+
+1. **The page is not on HTTPS.** Browsers give WebAuthn only to a
+   secure page: `https://`, or `http://localhost`. Over plain
+   `http://10.0.0.5:8080` the key does not even get asked. When the
+   public address is known, the page links to it.
+2. **The page is at another address than `listen.public_url`** — by IP
+   while the public address is a name, by a short name while it is the
+   full one, on another port. A key signs the origin it saw; MoonLan
+   takes only the public one, and the browser itself refuses to use a
+   key bound to `example.local` on any other host. The page links to the
+   right address.
+3. **`listen.public_url` is not set, or is an IP address.** A key is
+   bound to a host name — the WebAuthn standard allows nothing else —
+   so an IP address cannot carry one, however it is served. Give the
+   server a name in DNS (or in the hosts files), put it in
+   `public_url` and in the certificate.
+4. **The server lacks `fido2`** — see
+   [OPERATIONS.md](OPERATIONS.md#installing).
+5. **The browser has no WebAuthn** — a very old one, or one with it
+   switched off by policy.
+
+**A certificate error is not a detail here.** Chrome and Edge refuse
+keys on a page that opened only after clicking through "Your connection
+is not private", and the key is never asked; the page shows the
+browser's refusal in words. Trust the root on that computer (see above)
+instead of clicking through: then the padlock is plain, and keys work. The same goes for a certificate that does not name the host
+in `public_url` — the log says so at startup.

@@ -6,6 +6,7 @@ import io
 import json
 import logging
 import os
+import re
 import sqlite3
 import subprocess
 import sys
@@ -883,6 +884,82 @@ class ConsoleKeysTest(unittest.TestCase):
         self.assertIn("user_passkeys_reset", events)
         code, out = self.run_cli("list")
         self.assertIn("off!", out)
+
+
+
+# ---------- what the page says ----------
+
+WEB = ROOT / "web"
+
+
+def page_strings() -> dict[str, set[str]]:
+    """The keys of each language in web/i18n.js."""
+    text = (WEB / "i18n.js").read_text(encoding="utf-8")
+    found = {}
+    for lang in ("en", "ru"):
+        body = re.search(rf"^  {lang}: {{$(.*?)^  }},$", text,
+                         re.S | re.M).group(1)
+        found[lang] = set(re.findall(r'^    "?([\w+.-]+)"?:', body, re.M))
+    return found
+
+
+class PageTest(unittest.TestCase):
+    """Every reason and every refusal has words, in both languages."""
+
+    def setUp(self):
+        self.strings = page_strings()
+
+    def assertWords(self, key):
+        for lang in ("en", "ru"):
+            self.assertIn(key, self.strings[lang], f"{lang}: {key}")
+
+    def test_why_a_key_cannot_be_used(self):
+        # the page's own reasons, and every one the server can give
+        for code in ("insecure", "elsewhere", "no_webauthn", "no_public_url",
+                     "public_url_ip", "public_url_http", "no_fido2"):
+            self.assertWords(f"passkeyWhy_{code}")
+        for public in ("", "https://10.0.0.5", "http://example.local",
+                       "https://example.local"):
+            parsed, _ = https.parse_public_url(public)
+            code = passkeys.unavailable(parsed)
+            if code:
+                self.assertWords(f"passkeyWhy_{code}")
+
+    def test_the_reasons_come_in_this_order(self):
+        # a secure page, the address, the server's reason, the browser
+        body = (WEB / "app.js").read_text(encoding="utf-8")
+        body = body[body.index("function keyUnavailable()"):]
+        body = body[:body.index("\n}\n")]
+        order = [body.index(mark) for mark in (
+            '"passkeyWhy_insecure"', '"passkeyWhy_elsewhere"',
+            '"passkeyWhy_" + info.why', '"passkeyWhy_no_webauthn"',
+        )]
+        self.assertEqual(order, sorted(order))
+
+    def test_what_the_browser_throws(self):
+        for name in ("NotAllowedError", "InvalidStateError", "SecurityError",
+                     "NotSupportedError", "AbortError", "ConstraintError",
+                     "other"):
+            self.assertWords(f"keyErr_{name}")
+
+    def test_every_refusal_of_the_key_routes(self):
+        source = "\n".join(
+            (ROOT / "moonlan" / name).read_text(encoding="utf-8")
+            for name in ("signin.py", "passkeys.py", "db.py")
+        )
+        codes = set(re.findall(r'PasskeyError\(\s*"(\w+)"', source))
+        codes |= set(re.findall(r'AccountError\("(\w+)"', source))
+        codes |= {"passkeys_off", "key_unknown", "key_second_only",
+                  "no_keys", "wrong_password", "https_required"}
+        self.assertIn("no_user_verification", codes)
+        for code in sorted(codes):
+            self.assertWords(f"err_{code}")
+
+    def test_the_alarm_and_the_journal(self):
+        self.assertWords("al_passkey_clone_suspected")
+        for event in ("user_passkey_added", "user_passkey_removed",
+                      "user_passkeys_reset", "passkey_clone_suspected"):
+            self.assertWords(f"ev_{event}")
 
 
 if __name__ == "__main__":
