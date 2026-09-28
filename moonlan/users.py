@@ -48,6 +48,17 @@ def explain(error: AccountError) -> str:
         )
     if error.code == "unknown":
         return f"There is no account named {error.name!r}."
+    if error.code == "unknown_key":
+        return (f"{error.name} has no key with that number — see "
+                f"python -m moonlan.users passkeys {error.name}")
+    if error.code == "last_factor":
+        return (
+            f"This is the last second factor of {error.name}, an "
+            f"administrator without TOTP. Bind TOTP or add another key "
+            f"first — or, if every key is lost, remove them all:\n"
+            f"  python -m moonlan.users reset-passkeys {error.name}\n"
+            f"and a new second factor is bound at the next sign-in."
+        )
     if error.code == "last_admin":
         return (
             f"{error.name} is the last enabled administrator. Without one, "
@@ -138,8 +149,9 @@ def cmd_list(db: Database, args) -> int:
         return 0
     sessions = db.session_counts()
     now = time.time()
+    keys = db.passkey_counts()
     print(
-        f"{'name':<20} {'role':<7} {'state':<28} {'TOTP':<5} "
+        f"{'name':<20} {'role':<7} {'state':<28} {'TOTP':<5} {'keys':>4} "
         f"{'codes':>5}  {'last sign-in':<16} {'sessions':>8}"
     )
     for row in users:
@@ -154,19 +166,22 @@ def cmd_list(db: Database, args) -> int:
         else:
             state = "active"
         totp = "on" if row["totp_enabled"] else "off"
-        if row["role"] == "admin" and not row["totp_enabled"]:
+        if row["role"] == "admin" and not row["totp_enabled"] \
+                and not keys.get(row["id"]):
             totp = "off!"
         print(
             f"{row['name']:<20} {row['role']:<7} {state:<28} {totp:<5} "
+            f"{keys.get(row['id'], 0):>4} "
             f"{auth.recovery_left(row['recovery']):>5}  "
             f"{fmt_when(row['last_login']):<16} "
             f"{sessions.get(row['id'], 0):>8}"
         )
-    if any(r["role"] == "admin" and not r["totp_enabled"] for r in users):
+    if any(r["role"] == "admin" and not r["totp_enabled"]
+           and not keys.get(r["id"]) for r in users):
         print(
-            "\noff! = an administrator without a second factor: they bind "
-            "one at the next\nsign-in before anything else, or here with "
-            "python -m moonlan.users totp <name>"
+            "\noff! = an administrator without a second factor (TOTP or a "
+            "key): they bind one at\nthe next sign-in before anything "
+            "else, or TOTP here with python -m moonlan.users totp <name>"
         )
     if db.active_admins() == 0:
         print(
@@ -234,10 +249,13 @@ def cmd_reset_totp(db: Database, args) -> int:
     closed = db.reset_totp(row["name"])
     journal(db, "user_totp_reset", row["name"], sessions=closed)
     print(
-        f"{row['name']}: second factor and recovery codes removed."
+        f"{row['name']}: TOTP and recovery codes removed."
         f"{_sessions_line(closed)}"
     )
-    if row["role"] == "admin":
+    if db.passkeys(row["id"]):
+        print("  Their keys stay; python -m moonlan.users passkeys "
+              f"{row['name']} lists them.")
+    elif row["role"] == "admin":
         print(
             "  An administrator binds a new one at the next sign-in, or "
             f"here: python -m moonlan.users totp {row['name']}"
@@ -290,6 +308,66 @@ def cmd_totp(db: Database, args) -> int:
     return 0
 
 
+def cmd_passkeys(db: Database, args) -> int:
+    """An account's keys, by the numbers the other commands take."""
+    row = db.user(args.name)
+    if row is None:
+        raise AccountError("unknown", args.name)
+    keys = db.passkeys(row["id"])
+    if not keys:
+        print(f"{row['name']} has no keys.")
+        return 0
+    print(f"{row['name']}: {len(keys)} key(s)")
+    for key in keys:
+        kind = ("signs in without a password" if key["passwordless"]
+                else "a second factor after the password")
+        kept = {1: "kept on the key", 0: "not kept on the key"}.get(
+            key["discoverable"], "kept on the key: unknown")
+        print(
+            f"  {key['number']:>2}. {key['label'] or '(no name)'} — {kind}\n"
+            f"      added {fmt_when(key['created_at'])}, last used "
+            f"{fmt_when(key['last_used'])}, counter {key['sign_count']}\n"
+            f"      {kept}; PIN or finger when added: "
+            f"{'yes' if key['user_verified'] else 'no'}; transports: "
+            f"{key['transports'] or '—'}; AAGUID: {key['aaguid'] or '—'}"
+        )
+    return 0
+
+
+def cmd_remove_passkey(db: Database, args) -> int:
+    row = db.user(args.name)
+    if row is None:
+        raise AccountError("unknown", args.name)
+    key = next((k for k in db.passkeys(row["id"])
+                if k["number"] == args.number), None)
+    if key is None:
+        raise AccountError("unknown_key", row["name"])
+    removed, closed = db.remove_passkey(row["name"], key["id"])
+    journal(db, "user_passkey_removed", row["name"], label=removed["label"],
+            sessions=closed)
+    print(f"{row['name']}: key {args.number} "
+          f"({removed['label'] or 'no name'}) removed."
+          f"{_sessions_line(closed)}")
+    return 0
+
+
+def cmd_reset_passkeys(db: Database, args) -> int:
+    row = db.user(args.name)
+    if row is None:
+        raise AccountError("unknown", args.name)
+    removed, closed = db.reset_passkeys(row["name"])
+    journal(db, "user_passkeys_reset", row["name"], keys=removed,
+            sessions=closed)
+    print(f"{row['name']}: {removed} key(s) removed.{_sessions_line(closed)}")
+    if row["role"] == "admin" and not row["totp_enabled"]:
+        print(
+            "  An administrator without TOTP binds a new second factor at "
+            "the next sign-in,\n  or TOTP here: python -m moonlan.users "
+            f"totp {row['name']}"
+        )
+    return 0
+
+
 def cmd_unlock(db: Database, args) -> int:
     row = db.user(args.name)
     if row is None:
@@ -332,6 +410,9 @@ COMMANDS = {
     "totp": cmd_totp,
     "unlock": cmd_unlock,
     "delete": cmd_delete,
+    "passkeys": cmd_passkeys,
+    "remove-passkey": cmd_remove_passkey,
+    "reset-passkeys": cmd_reset_passkeys,
 }
 
 
@@ -362,12 +443,19 @@ def build_parser() -> argparse.ArgumentParser:
     for command, text in (
         ("disable", "no sign-in until enabled again"),
         ("enable", "allow sign-in again"),
-        ("reset-totp", "remove the second factor and recovery codes"),
+        ("reset-totp", "remove TOTP and the recovery codes"),
         ("totp", "bind TOTP here and print the secret"),
         ("unlock", "lift a lock after wrong passwords"),
+        ("passkeys", "list the keys, with their numbers"),
+        ("reset-passkeys", "remove every key (closes sessions)"),
     ):
         one = sub.add_parser(command, help=text)
         one.add_argument("name")
+    remove = sub.add_parser("remove-passkey",
+                            help="remove one key (closes sessions)")
+    remove.add_argument("name")
+    remove.add_argument("number", type=int,
+                        help="as python -m moonlan.users passkeys shows it")
     delete = sub.add_parser("delete", help="delete an account")
     delete.add_argument("name")
     delete.add_argument("--yes", action="store_true",

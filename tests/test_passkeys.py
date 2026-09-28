@@ -1,6 +1,8 @@
 """Signing in with a key (v0.7.6): the package, the storage, adding a
 key, signing in with it, and an administrator's second factor."""
 
+import contextlib
+import io
 import json
 import logging
 import os
@@ -18,7 +20,7 @@ import service_fixture  # noqa: F401  (sets MOONLAN_CONFIG first)
 import soft_authenticator as soft
 from asgi_client import call
 from fido2.utils import websafe_decode
-from moonlan import auth, https, passkeys, server, signin
+from moonlan import auth, https, passkeys, server, signin, users
 from moonlan.db import PASSKEYS_MAX, AccountError, Database
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -736,6 +738,151 @@ class KeyFailuresTest(SignInCase):
         for _ in range(signin.ADDRESS_FREE_FAILURES):
             self.alone(stranger)
         self.assertEqual(self.begin().status, 429)
+
+
+
+# ---------- an administrator's second factor ----------
+
+class SecondFactorTest(SignInCase):
+    """TOTP or a key; never neither, unless reset on purpose."""
+
+    def setUp(self):
+        super().setUp()
+        self.db.add_user("olga", "admin", auth.hash_password(PASSWORD))
+        self.olga, _ = self.add_key("olga", passwordless=True,
+                                    cookie=self.cookie("olga", False))
+
+    def olga_keys(self):
+        return self.db.passkeys(self.db.user("olga")["id"])
+
+    def test_her_last_key_stays_in_the_browser(self):
+        cookie = self.cookie("olga")
+        (key,) = self.olga_keys()
+        answer = call(server.app, "DELETE", f"/api/auth/passkeys/{key['id']}",
+                      cookie=cookie, scheme="https", host=HOST)
+        self.assertEqual(answer.status, 409)
+        self.assertEqual(answer.json()["error"], "last_factor")
+        # another administrator cannot take it either
+        answer = call(server.app, "DELETE",
+                      f"/api/users/olga/passkeys/{key['id']}",
+                      cookie=self.cookie("anton"), scheme="https", host=HOST)
+        self.assertEqual(answer.json()["error"], "last_factor")
+        self.assertEqual(len(self.olga_keys()), 1)
+
+    def test_with_a_second_key_one_may_go(self):
+        cookie = self.cookie("olga")
+        self.add_key("olga", cookie=cookie)
+        first = self.olga_keys()[0]
+        answer = call(server.app, "DELETE",
+                      f"/api/auth/passkeys/{first['id']}",
+                      cookie=cookie, scheme="https", host=HOST)
+        self.assertEqual(answer.status, 200, answer.body)
+        self.assertEqual(len(self.olga_keys()), 1)
+        event = server.db.journal(1)[0]
+        self.assertEqual(event["event"], "user_passkey_removed")
+
+    def test_nobody_elses_key(self):
+        (key,) = self.olga_keys()
+        answer = call(server.app, "DELETE", f"/api/auth/passkeys/{key['id']}",
+                      cookie=self.cookie("vera"), scheme="https", host=HOST)
+        self.assertEqual(answer.status, 404)
+
+    def test_a_reset_leaves_the_binding_as_the_first_thing(self):
+        answer = self.post("/api/users/olga/reset-passkeys", {},
+                           self.cookie("anton"))
+        self.assertEqual(answer.status, 200, answer.body)
+        self.assertEqual(answer.json()["removed"], 1)
+        self.assertEqual(self.olga_keys(), [])
+        # she signs in with the password alone — to bind a new factor
+        answer = self.post("/api/auth/login",
+                           {"name": "olga", "password": PASSWORD})
+        cookie = answer.header("set-cookie")[0].split(";", 1)[0]
+        self.assertEqual(self.me(cookie)["step"], "totp")
+        refused = call(server.app, "GET", "/api/topology", cookie=cookie,
+                       scheme="https", host=HOST)
+        self.assertEqual(refused.json()["error"], "step_required")
+
+    def test_the_users_panel_shows_the_keys(self):
+        answer = call(server.app, "GET", "/api/users",
+                      cookie=self.cookie("anton"), scheme="https", host=HOST)
+        olga = next(u for u in answer.json()["users"] if u["name"] == "olga")
+        self.assertEqual(len(olga["passkeys"]), 1)
+        self.assertNotIn("credential_id", olga["passkeys"][0])
+        vera = next(u for u in answer.json()["users"] if u["name"] == "vera")
+        self.assertEqual(vera["passkeys"], [])
+
+    def test_the_key_is_her_second_factor(self):
+        # a session from the password alone is not hers any more
+        answer = self.post("/api/auth/login",
+                           {"name": "olga", "password": PASSWORD})
+        self.assertEqual(answer.json()["status"], "code_required")
+        answer = self.after_password(self.olga, "olga")
+        cookie = answer.header("set-cookie")[0].split(";", 1)[0]
+        self.assertIsNone(self.me(cookie)["step"])
+
+
+class ConsoleKeysTest(unittest.TestCase):
+    """python -m moonlan.users passkeys / remove-passkey /
+    reset-passkeys, against a database of its own."""
+
+    def setUp(self):
+        folder = tempfile.TemporaryDirectory()
+        self.addCleanup(folder.cleanup)
+        self.path = Path(folder.name) / "moonlan.db"
+        config = Path(folder.name) / "config.yaml"
+        config.write_text(f"db_path: {self.path}\n", encoding="utf-8")
+        patch = mock.patch.dict(os.environ, {"MOONLAN_CONFIG": str(config)})
+        patch.start()
+        self.addCleanup(patch.stop)
+        os.environ.pop("MOONLAN_DEMO", None)
+        self.db = Database(self.path)
+        self.addCleanup(self.db.close)
+        self.olga = self.db.add_user("olga", "admin", "scrypt$x")
+        self.db.add_passkey(self.olga["id"], a_key(1, label="blue"))
+        self.db.add_passkey(self.olga["id"], a_key(2, label="red",
+                                                   passwordless=1))
+        self.db.add_session("s", self.olga["id"], time.time(), True)
+
+    def run_cli(self, *argv):
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            code = users.main(list(argv))
+        return code, out.getvalue()
+
+    def test_the_list(self):
+        code, out = self.run_cli("passkeys", "olga")
+        self.assertEqual(code, 0, out)
+        self.assertIn(" 1. blue — a second factor after the password", out)
+        self.assertIn(" 2. red — signs in without a password", out)
+        code, out = self.run_cli("list")
+        self.assertRegex(out, r"olga\s+admin\s+active\s+off\s+2 ")
+        self.assertNotIn("off!", out)
+
+    def test_remove_one_then_not_the_last(self):
+        code, out = self.run_cli("remove-passkey", "olga", "1")
+        self.assertEqual(code, 0, out)
+        self.assertIn("key 1 (blue) removed. 1 session(s) closed", out)
+        code, out = self.run_cli("remove-passkey", "olga", "1")
+        self.assertEqual(code, 1)
+        self.assertIn("last second factor", out)
+        self.assertIn("reset-passkeys olga", out)
+        self.assertEqual(len(self.db.passkeys(self.olga["id"])), 1)
+
+    def test_no_such_number(self):
+        code, out = self.run_cli("remove-passkey", "olga", "7")
+        self.assertEqual(code, 1)
+        self.assertIn("no key with that number", out)
+
+    def test_reset_all(self):
+        code, out = self.run_cli("reset-passkeys", "olga")
+        self.assertEqual(code, 0, out)
+        self.assertIn("2 key(s) removed. 1 session(s) closed", out)
+        self.assertIn("binds a new second factor at the next sign-in", out)
+        self.assertEqual(self.db.passkeys(self.olga["id"]), [])
+        events = [e["event"] for e in self.db.journal(5)]
+        self.assertIn("user_passkeys_reset", events)
+        code, out = self.run_cli("list")
+        self.assertIn("off!", out)
 
 
 if __name__ == "__main__":

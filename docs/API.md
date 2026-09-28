@@ -69,6 +69,7 @@ tests.
 | POST | `/api/auth/totp/confirm` | signed_in |
 | POST | `/api/auth/passkeys/begin` | signed_in |
 | POST | `/api/auth/passkeys/finish` | signed_in |
+| DELETE | `/api/auth/passkeys/{key_id}` | signed_in |
 | GET | `/api/topology` | viewer |
 | GET | `/api/switch/{ip}/ports` | viewer |
 | GET | `/api/stp` | viewer |
@@ -96,6 +97,8 @@ tests.
 | PATCH | `/api/users/{name}` | accounts |
 | POST | `/api/users/{name}/password` | accounts |
 | POST | `/api/users/{name}/reset-totp` | accounts |
+| DELETE | `/api/users/{name}/passkeys/{key_id}` | accounts |
+| POST | `/api/users/{name}/reset-passkeys` | accounts |
 | POST | `/api/users/{name}/unlock` | accounts |
 | POST | `/api/users/{name}/logout` | accounts |
 | DELETE | `/api/users/{name}` | accounts |
@@ -218,6 +221,10 @@ nobody (no PIN, no finger) or does not keep the credential itself is
 kept as a second factor, and `note` says why. The first key of an
 account without recovery codes brings them, shown this once.
 
+`DELETE /api/auth/passkeys/{key_id}` removes one of one's own keys and
+closes the account's other sessions; an administrator's last second
+factor is refused with **409** `last_factor`.
+
 A request is good once, for five minutes, for the account that asked.
 Errors: `wrong_password`, `too_many_keys` (ten at most),
 `passkeys_off` (**409**, with `why`), `challenge_expired`,
@@ -229,8 +236,9 @@ was wrong), `key_exists`, `https_required`.
 ### GET /api/users
 
 Every account: `name`, `role`, `disabled`, `totp`, `recovery_left`,
-`must_change`, `locked_until`, `last_login`, `created_at`, `sessions`.
-No hashes, no secrets.
+`must_change`, `locked_until`, `last_login`, `created_at`, `sessions`,
+`passkeys` (as in `/api/auth/me`'s `keys`). No hashes, no secrets, no
+key material.
 
 ### POST /api/users
 
@@ -247,13 +255,21 @@ person sets their own at the first sign-in.
 A new temporary password (answered once), remove the second factor and
 the recovery codes, lift a lock, sign the account out everywhere.
 
+### DELETE /api/users/{name}/passkeys/{key_id}, POST /api/users/{name}/reset-passkeys
+
+Remove one key of an account (not an administrator's last second
+factor: **409** `last_factor`), or all of them — `{"removed": n,
+"sessions_closed": n}`; an administrator without TOTP then binds a new
+second factor at the next sign-in. Both close the account's sessions.
+
 ### DELETE /api/users/{name}
 
 Deletes the account.
 
 The last enabled administrator cannot be demoted, disabled or deleted:
-**409** `last_admin`. Other refusals: **404** `unknown`, **409**
-`exists`, **400** `bad_name`, `bad_role`. A new password, a new role,
+**409** `last_admin`. Other refusals: **404** `unknown`,
+`unknown_key`, **409** `exists`, `last_factor`, **400** `bad_name`,
+`bad_role`. A new password, a new role,
 disabling, deleting and resetting TOTP close the account's sessions.
 
 ## Operational status

@@ -1023,6 +1023,30 @@ class SignIn:
             "recovery": codes,
         })
 
+    async def passkey_remove(self, who: Principal | None,
+                             key_id: int) -> JSONResponse:
+        """One of one's own keys. An administrator's last second factor
+        is refused. The account's other sessions are closed: a key is
+        removed because it was lost, and whoever found it may be signed
+        in with it."""
+        if who is None or who.user_id is None:
+            return refuse("sign_in_required", 401)
+        try:
+            key, closed = await asyncio.to_thread(
+                self.accounts.remove_passkey, who.name, key_id, who.session
+            )
+        except AccountError as error:
+            return refuse(error.code, 404 if error.code == "unknown_key"
+                          else 409)
+        await asyncio.to_thread(
+            self.journal.add_event, time.time(), "user_passkey_removed",
+            who.name, json.dumps({"label": key["label"], "sessions": closed}),
+            who.name,
+        )
+        log.info("Key %r removed by %s themselves; %d other session(s) "
+                 "closed", key["label"], who.name, closed)
+        return JSONResponse({"status": "removed", "sessions_closed": closed})
+
     # ---------- accounts, for an administrator ----------
 
     def users(self) -> list[dict]:
@@ -1041,6 +1065,8 @@ class SignIn:
                 "last_login": row["last_login"],
                 "created_at": row["created_at"],
                 "sessions": sessions.get(row["id"], 0),
+                "passkeys": [key_summary(key)
+                             for key in self.accounts.passkeys(row["id"])],
             }
             for row in self.accounts.users()
         ]
@@ -1256,6 +1282,10 @@ def add_routes(app: FastAPI, sign_in: SignIn) -> None:
             _address(request),
         )
 
+    @app.delete("/api/auth/passkeys/{key_id}")
+    async def auth_passkeys_remove(key_id: int):
+        return await sign_in.passkey_remove(principal(), key_id)
+
     @app.post("/api/auth/totp/confirm")
     async def auth_totp_confirm(body: BindBody, request: Request):
         return sign_in.https_refusal(request) or await sign_in.totp_confirm(
@@ -1263,7 +1293,8 @@ def add_routes(app: FastAPI, sign_in: SignIn) -> None:
         )
 
     def account_refusal(error: AccountError) -> JSONResponse:
-        status = {"unknown": 404, "exists": 409, "last_admin": 409}
+        status = {"unknown": 404, "exists": 409, "last_admin": 409,
+                  "unknown_key": 404, "last_factor": 409}
         return refuse(error.code, status.get(error.code, 400),
                       name=error.name)
 
@@ -1350,6 +1381,34 @@ def add_routes(app: FastAPI, sign_in: SignIn) -> None:
         await asyncio.to_thread(sign_in.account_event, "user_totp_reset",
                                 name, sessions=closed)
         return {"status": "reset"}
+
+    @app.delete("/api/users/{name}/passkeys/{key_id}")
+    async def users_remove_passkey(name: str, key_id: int):
+        """One key of somebody's — a lost one. Not an administrator's
+        last second factor; resetting all of them is the way for that."""
+        result, refusal = await run(
+            sign_in.accounts.remove_passkey, name, key_id
+        )
+        if refusal:
+            return refusal
+        key, closed = result
+        await asyncio.to_thread(sign_in.account_event, "user_passkey_removed",
+                                name, label=key["label"], sessions=closed)
+        return {"status": "removed", "sessions_closed": closed}
+
+    @app.post("/api/users/{name}/reset-passkeys")
+    async def users_reset_passkeys(name: str):
+        """Every key of an account: for somebody who lost them all. An
+        administrator without TOTP binds a new second factor at the next
+        sign-in, before anything else."""
+        result, refusal = await run(sign_in.accounts.reset_passkeys, name)
+        if refusal:
+            return refusal
+        removed, closed = result
+        await asyncio.to_thread(sign_in.account_event, "user_passkeys_reset",
+                                name, keys=removed, sessions=closed)
+        return {"status": "reset", "removed": removed,
+                "sessions_closed": closed}
 
     @app.post("/api/users/{name}/unlock")
     async def users_unlock(name: str):

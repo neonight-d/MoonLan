@@ -57,6 +57,7 @@ RULES: dict[str, str] = {
     "POST /api/auth/totp/confirm": SIGNED_IN,
     "POST /api/auth/passkeys/begin": SIGNED_IN,
     "POST /api/auth/passkeys/finish": SIGNED_IN,
+    "DELETE /api/auth/passkeys/{key_id}": SIGNED_IN,
 
     # looking: the map, cards, ports, STP, the journal, alarms
     "GET /api/topology": VIEWER,
@@ -95,6 +96,8 @@ RULES: dict[str, str] = {
     "PATCH /api/users/{name}": ACCOUNTS,
     "POST /api/users/{name}/password": ACCOUNTS,
     "POST /api/users/{name}/reset-totp": ACCOUNTS,
+    "DELETE /api/users/{name}/passkeys/{key_id}": ACCOUNTS,
+    "POST /api/users/{name}/reset-passkeys": ACCOUNTS,
     "POST /api/users/{name}/unlock": ACCOUNTS,
     "POST /api/users/{name}/logout": ACCOUNTS,
     "DELETE /api/users/{name}": ACCOUNTS,

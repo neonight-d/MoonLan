@@ -60,8 +60,10 @@ come from the map's own page (`Origin`), and the session cookie is
 
 ## The second factor (TOTP)
 
-Required for administrators: signed in with a password alone, an
-administrator can do nothing but bind it. Optional for everyone else.
+An administrator needs a second factor — TOTP, or a key (next
+section): signed in with a password alone and neither bound, an
+administrator can do nothing but bind one. Optional for everyone
+else.
 Standard TOTP — RFC 6238, HMAC-SHA1, six digits, thirty seconds — which
 every authenticator app accepts, and so does an OATH hardware key. A
 clock half a minute off still works; the same code never works twice.
@@ -93,9 +95,65 @@ whatever the key itself offers to load a TOTP account: the parameters
 are the defaults every OATH implementation takes.
 
 **Recovery codes**: eight, shown once when TOTP is bound (in the browser
-or by `totp`); each works once instead of a code, for a lost phone or
-key. Only their hashes are kept. The account page says how many are
-left; binding again gives a new set.
+or by `totp`) or with the first key of an account that has none; each
+works once instead of a code, for a lost phone or key. Only their
+hashes are kept. The account page says how many are left; binding TOTP
+again gives a new set.
+
+## Signing in with a key (passkeys, security keys)
+
+Since v0.7.6: a hardware key (YubiKey, Token2, an RS-Key…), or the
+passkey a phone or a computer keeps (Windows Hello, Android, iOS,
+macOS). A key signs the page's address together with a one-time
+challenge, so it cannot be typed into a fake page the way a password
+or a TOTP code can.
+
+It needs three things, and the page says which one is missing — the
+"Add a key" and "Sign in with a key" buttons are greyed out with the
+reason:
+
+1. **`listen.public_url` with a host name**, e.g.
+   `https://moonlan.example.local:8443`. A key is bound to a host name,
+   never to an IP address, and works only at that address.
+2. **HTTPS** at that address — MoonLan's own certificate or a proxy in
+   front ([HTTPS.md](HTTPS.md)); browsers offer keys only on a secure
+   page. `http://localhost` counts as secure, for trying it out.
+3. **`fido2`** installed on the server (`pip install -r
+   requirements.txt`; without it the log and the form say so).
+
+**Adding a key**: the name in the header → "Add a key" → the password
+→ touch the key (or confirm with a PIN, a finger, a face). Tick
+"Sign in with this key without a password" to make it a passkey: the
+key then asks for its PIN or a finger every time, and "Sign in with a
+key" on the sign-in form is all it takes. Unticked, the key is a second
+factor after the password, like TOTP. A key that asked for no PIN or
+does not keep the sign-in on itself is saved as a second factor, and
+the page says why. Ten keys at most per account; add a spare and keep
+it in a drawer.
+
+**Signing in**: "Sign in with a key" — no name, no password; or the
+password first and "Use the key" on the next step. Once an account has
+a key, its password alone is not enough any more. A lost key: sign in
+with a recovery code or TOTP, and remove it on the account page.
+
+**A copied key.** A key counts its signatures, and each sign-in is
+checked against the last count. A count that goes back means two keys
+hold the same secret: the sign-in is refused, the journal records it,
+and the critical alarm `passkey_clone_suspected` goes out
+(`alarm_notify.passkey_clone_suspected`). Keys that do not count —
+many passkeys always say 0 — are accepted.
+
+**USB keys on Linux.** A browser on Linux reaches a USB key through
+`/dev/hidraw*`, which only root can open unless a udev rule hands it
+to the person at the console. systemd 244 and later (Debian 11+,
+Ubuntu 20.04+) ship that rule, `60-fido-id.rules`: plug the key in
+and it works. On an older system install the rules the distribution
+packages (`sudo apt install libu2f-udev` on Debian 10 and Ubuntu 18.04),
+or copy `70-u2f.rules` from the libfido2 repository to
+`/etc/udev/rules.d/`, and run
+`sudo udevadm control --reload && sudo udevadm trigger`. This
+is about the computers people sign in from, not the MoonLan server.
+Windows and macOS need nothing.
 
 ## Getting back in
 
@@ -104,17 +162,23 @@ WAL mode and the service reads accounts from it on every request):
 
 | Command | What it does |
 |---|---|
-| `python -m moonlan.users list` | every account: role, state, TOTP, recovery codes left, last sign-in, sessions |
+| `python -m moonlan.users list` | every account: role, state, TOTP, keys, recovery codes left, last sign-in, sessions |
 | `… passwd <name> [--temporary]` | a new password; `--temporary` asks for another at the next sign-in |
 | `… role <name> viewer\|user\|admin` | change the role |
 | `… disable <name>` / `enable <name>` | no sign-in until enabled again |
-| `… reset-totp <name>` | remove the second factor and the recovery codes: a lost phone and no codes |
+| `… reset-totp <name>` | remove TOTP and the recovery codes: a lost phone and no codes |
 | `… totp <name>` | bind TOTP here and print the secret |
+| `… passkeys <name>` | the account's keys, numbered, with what each may do and when it was last used |
+| `… remove-passkey <name> <number>` | remove one key — not an administrator's last second factor |
+| `… reset-passkeys <name>` | remove every key: all of them lost |
 | `… unlock <name>` | lift a lock after wrong passwords |
 | `… delete <name>` | delete the account (asks; `--yes` does not) |
 
-A new password, a new role, disabling, deleting and resetting TOTP sign
-the account out everywhere. Every action goes into the journal as done
+A new password, a new role, disabling, deleting, resetting TOTP and
+removing keys sign the account out everywhere. An administrator
+without TOTP keeps at least one key: the last one is removed with
+`reset-passkeys`, after which a new second factor is bound at the next
+sign-in, before anything else. Every action goes into the journal as done
 from the console. Run the command where MoonLan runs, with the same
 `config.yaml` (or `MOONLAN_CONFIG`): it prints which database it works
 on.
@@ -122,11 +186,12 @@ on.
 In the browser, **Users** in the Actions menu (⋯) does the same for an
 administrator: create an account with a temporary password (generated,
 shown once; the person sets their own at the first sign-in), change a
-role, disable and enable, a new temporary password, reset TOTP, unlock,
-sign out everywhere, delete — with the same rule about the last
-administrator. Everyone's own page — the name in the header — changes
-the password, binds TOTP, says how many recovery codes are left, and
-signs out.
+role, disable and enable, a new temporary password, reset TOTP, remove
+a key or reset all of them, unlock, sign out everywhere, delete — with
+the same rules about the last administrator and an administrator's last
+second factor. Everyone's own page — the name in the header — changes
+the password, binds TOTP, adds and removes keys, says how many recovery
+codes are left, and signs out.
 
 ## Sessions and protection
 
@@ -134,17 +199,19 @@ signs out.
   request and after `auth.session_max_days` (30) in any case. An open
   map refreshes itself, and that counts: a wall monitor signed in as a
   viewer stays signed in for weeks. The cookie is `HttpOnly`,
-  `SameSite=Strict`, `Path=/`; the database keeps only its SHA-256, so
-  a copy of the database signs nobody in. A session that ends while the
+  `SameSite=Strict`, `Path=/` — and over HTTPS `Secure`, named
+  `__Host-moonlan_session`; the database keeps only its SHA-256, so a
+  copy of the database signs nobody in. A session that ends while the
   page is open brings the sign-in form up over the map, and the map
   carries on where it was.
 - A wrong name and a wrong password get the same answer in the same
   time. After five failures in a row from one address every next
   attempt waits twice as long, up to a minute. Ten in a row lock the
   account for fifteen minutes — not for good, or anybody could lock the
-  administrator out by typing the name; `unlock` lifts it early. Every
-  failure is a log line with the address; sign-in, sign-out and locks
-  are in the journal.
+  administrator out by typing the name; `unlock` lifts it early. A key
+  whose answer is refused counts the same. Every failure is a log line
+  with the address; sign-in (and how: password, TOTP, a key, a recovery
+  code), sign-out and locks are in the journal.
 
 ## What sign-in over HTTP protects against
 

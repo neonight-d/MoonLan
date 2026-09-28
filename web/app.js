@@ -1119,7 +1119,7 @@ function renderAccount() {
       h("dt", { text: t("accountRole") }), h("dd", { text: t("role_" + me.role) }),
       h("dt", { text: t("accountTotp") }), h("dd", { text: totp }),
       h("dt", { text: t("accountKeys") }),
-      h("dd", {}, keys.length ? keyList(keys) : t("keysNone"))),
+      h("dd", {}, keys.length ? keyList(keys, removeOwnKey) : t("keysNone"))),
     h("button", {
       class: "panel-btn", text: t("changePasswordBtn"),
       onclick: () => {
@@ -1141,15 +1141,43 @@ function renderAccount() {
   );
 }
 
-/* One's keys: the name, what it may do, when added and last used. */
-function keyList(keys) {
+/* Keys: the name, what it may do, when added and last used — and a
+   button to remove one when `remove` is given. */
+function keyList(keys, remove) {
   return h("ul", { class: "key-list" }, ...keys.map((key) => h("li", {},
-    h("strong", { text: key.label || "#" + key.number }),
+    h("div", { class: "key-head" },
+      h("strong", { text: key.label || "#" + key.number }),
+      remove ? h("button", {
+        type: "button", class: "key-remove", text: t("actRemoveKey"),
+        onclick: () => remove(key),
+      }) : null),
     h("div", { class: "hint-line", text: [
       t(key.passwordless ? "keyPasswordlessShort" : "keySecondShort"),
       fmt("keyAddedOn", { date: fmtDate(key.created_at) }),
       key.last_used ? fmt("keyUsedOn", { date: fmtTime(key.last_used) }) : t("keyNeverUsed"),
     ].join(" · ") }))));
+}
+
+async function removeOwnKey(key) {
+  const label = key.label || "#" + key.number;
+  if (!window.confirm(fmt("confirmRemoveOwnKey", { label: label }))) return;
+  let response;
+  try {
+    response = await api("/api/auth/passkeys/" + key.id, { method: "DELETE" });
+  } catch (e) {
+    serviceLost("removing a key");
+    return;
+  }
+  const answer = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    // the last second factor of an administrator, most likely
+    showToast(errorText(answer));
+    return;
+  }
+  await loadMe();
+  renderAccount();
+  const line = els.accountBody.querySelector(".done");
+  if (line) line.textContent = fmt("keyRemoved", { n: answer.sessions_closed });
 }
 
 /* ---------- accounts, for an administrator ---------- */
@@ -1179,9 +1207,12 @@ async function refreshUsers(error) {
   renderUsers(data.users, data.me, error);
 }
 
-/* One change to one account: the request, and the list again. */
-async function userAction(path, options, confirmKey, name) {
+/* One change to one account: the request, and the list again. The
+   question asked first is `confirmKey` for `name`, or `question` as it
+   is. */
+async function userAction(path, options, confirmKey, name, question) {
   if (confirmKey && !window.confirm(fmt(confirmKey, { name: name }))) return;
+  if (question && !window.confirm(question)) return;
   // a temporary password is shown until the next change, not forever
   usersNotice = null;
   let response;
@@ -1214,10 +1245,15 @@ function userState(user) {
     parts.push(h("span", { class: "bad", text: fmt("stateLocked", { time: fmtTime(user.locked_until) }) }));
   } else parts.push(t("stateActive"));
   if (user.must_change) parts.push(t("stateMustChange"));
+  const keys = (user.passkeys || []).length;
   if (user.totp) parts.push(t("userTotpOn"));
-  else if (user.role === "admin") {
-    parts.push(h("span", { class: "bad", text: t("userTotpAdminMissing") }));
-  } else parts.push(t("userTotpOff"));
+  if (keys) parts.push(fmt("userKeys", { n: keys }));
+  if (!user.totp && !keys) {
+    // an administrator's second factor is TOTP or a key
+    if (user.role === "admin") {
+      parts.push(h("span", { class: "bad", text: t("userTotpAdminMissing") }));
+    } else parts.push(t("userTotpOff"));
+  }
   parts.push(user.last_login
     ? fmt("userLastLogin", { time: fmtTime(user.last_login) })
     : t("userNever"));
@@ -1257,18 +1293,27 @@ function renderUsers(users, myName, errorMessage) {
         body: JSON.stringify({ role: select.value }),
       }));
     const act = (key, run) => h("button", { type: "button", text: t(key), onclick: run });
+    const keys = user.passkeys || [];
+    const removeKey = (key) => userAction(
+      path + "/passkeys/" + key.id, { method: "DELETE" }, null, user.name,
+      fmt("confirmRemoveKey", { label: key.label || "#" + key.number, name: user.name }));
     return h("li", {},
       h("div", { class: "who" },
         h("strong", { text: user.name }),
         user.name === myName ? h("span", { class: "hint-line", text: "(" + t("userYou") + ")" }) : null,
         select),
       userState(user),
+      keys.length ? keyList(keys, removeKey) : null,
       h("div", { class: "acts" },
         act("actNewPassword", () =>
           userAction(path + "/password", jsonPost(path + "/password"), "confirmNewPassword", user.name)),
         user.totp
           ? act("actResetTotp", () =>
             userAction(path + "/reset-totp", jsonPost(path + "/reset-totp"), "confirmResetTotp", user.name))
+          : null,
+        keys.length
+          ? act("actResetKeys", () =>
+            userAction(path + "/reset-passkeys", jsonPost(path + "/reset-passkeys"), "confirmResetKeys", user.name))
           : null,
         user.locked_until
           ? act("actUnlock", () => userAction(path + "/unlock", jsonPost(path + "/unlock")))
