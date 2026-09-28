@@ -1,7 +1,8 @@
 # MoonLan API
 
 The web interface is a client of this API like any other. Everything is
-JSON over HTTP on `listen.host:listen.port` (by default `0.0.0.0:8080`).
+JSON over HTTP on `listen.host:listen.port` (by default `0.0.0.0:8080`),
+or over HTTPS with `listen.tls_cert` — see [HTTPS.md](HTTPS.md).
 
 ## Signing in and rights
 
@@ -20,14 +21,19 @@ the role written for it in `moonlan/access.py`.
   signed in with something to do first: a new password after a
   temporary one, or (an administrator) binding a second factor.
 - **403** `{"error": "bad_origin"}` — a changing request (anything but
-  `GET`/`HEAD`) must carry an `Origin` equal to the map's own address.
-  Browsers send one; a script must send it too.
+  `GET`/`HEAD`) must carry an `Origin` equal to the map's own address,
+  or to `listen.public_url`. Browsers send one; a script must send it
+  too.
+- **403** `{"error": "https_required", "url": "https://…/"}` — a
+  password sent over plain HTTP while `listen.public_url` is https.
 - **403** `{"error": "sign_in_off"}` — account management and one's own
   settings while sign-in is not set up.
 
 The session is a cookie, `moonlan_session`: `HttpOnly`,
-`SameSite=Strict`, `Path=/`. It ends after `auth.session_idle_hours`
-without a request and after `auth.session_max_days` in any case.
+`SameSite=Strict`, `Path=/`; over HTTPS it is
+`__Host-moonlan_session`, also `Secure`. It ends after
+`auth.session_idle_hours` without a request and after
+`auth.session_max_days` in any case.
 
 `python -m moonlan.diag`, run on the server, reads the token the
 service writes next to its database at every start
@@ -59,6 +65,8 @@ tests.
 | POST | `/api/auth/password` | signed_in |
 | POST | `/api/auth/totp/setup` | signed_in |
 | POST | `/api/auth/totp/confirm` | signed_in |
+| POST | `/api/auth/passkeys/begin` | signed_in |
+| POST | `/api/auth/passkeys/finish` | signed_in |
 | GET | `/api/topology` | viewer |
 | GET | `/api/switch/{ip}/ports` | viewer |
 | GET | `/api/stp` | viewer |
@@ -116,7 +124,13 @@ in `/api/status`, which needs a viewer. See [HEALTHCHECK.md](HEALTHCHECK.md).
 
 `{"sign_in": false, "create_admin": "…"}` while sign-in is off; the
 signed-in account — `name`, `role`, `step` (`null`, `"password"` or
-`"totp"`), `totp`, `recovery_left` — or **401**.
+`"totp"`), `totp`, `recovery_left`, `keys` (each: `id`, `number`,
+`label`, `passwordless`, `created_at`, `last_used`) — or **401**. Both
+carry `passkeys`: `{"why": null | "no_public_url" | "public_url_ip" |
+"public_url_http" | "no_fido2", "origin": "https://…" | null}` — whether
+the server can take a key, and the address keys are bound to; and
+`https_url` when the page came over plain HTTP although the public
+address is https.
 
 ### POST /api/auth/login
 
@@ -158,6 +172,27 @@ account's other sessions are closed, this one stays. Errors:
 nothing. `confirm` takes `{"code": "…", "password": "…"}`, binds the
 secret once the code is right, and answers `{"recovery": [8 codes]}` —
 the only time they are shown.
+
+### POST /api/auth/passkeys/begin and /api/auth/passkeys/finish
+
+Adding a key to one's own account. `begin` takes `{"password": "…",
+"passwordless": true | false}` and answers `{"request": "…", "options":
+{…}}` — `options` is `PublicKeyCredentialCreationOptions` in JSON form
+(bytes in base64url) for `navigator.credentials.create()`. `finish`
+takes `{"request": "…", "credential": {…}, "label": "…"}` —
+`credential` as `PublicKeyCredential.toJSON()` makes it — and answers
+`{"status": "added", "number": n, "passwordless": …, "note": null |
+"no_user_verification" | "not_discoverable", "recovery": null | [8
+codes]}`. A key asked to sign in without a password that verified
+nobody (no PIN, no finger) or does not keep the credential itself is
+kept as a second factor, and `note` says why. The first key of an
+account without recovery codes brings them, shown this once.
+
+A request is good once, for five minutes, for the account that asked.
+Errors: `wrong_password`, `too_many_keys` (ten at most),
+`passkeys_off` (**409**, with `why`), `challenge_expired`,
+`key_refused` (the origin, the RP ID, the signature or the algorithm
+was wrong), `key_exists`, `https_required`.
 
 ## Accounts (administrators)
 

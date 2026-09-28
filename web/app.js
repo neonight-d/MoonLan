@@ -620,6 +620,7 @@ function renderBindTotp(required) {
     required ? h("p", { class: "hint-line", text: t("totpBoundOnServer") }) : null,
     area,
     h("div", { class: "buttons" }, show, leave),
+    required ? keyInsteadOfTotp() : null,
   ], () => {});
   show.addEventListener("click", async () => {
     show.disabled = true;
@@ -632,6 +633,21 @@ function renderBindTotp(required) {
     show.remove();
     renderSecret(area, result.answer, required);
   });
+}
+
+/* Under the TOTP binding an administrator is forced to: a key does as
+   well. Greyed out with the reason when this page cannot use one. */
+function keyInsteadOfTotp() {
+  const why = keyUnavailable();
+  const button = h("button", { type: "button", text: t("addKeyBtn") });
+  gateButton(button, why ? keyWhyText(why) : null);
+  button.addEventListener("click", () => {
+    if (allowed(button)) renderGateKeyAdd();
+  });
+  return h("div", { class: "key-instead" },
+    h("p", { class: "hint-line", text: t("totpOrKey") }),
+    h("div", { class: "buttons" }, button),
+    why ? keyWhyLine(why) : null);
 }
 
 function renderSecret(area, secret, required) {
@@ -708,6 +724,191 @@ function renderRecovery(codes, required) {
       if (!els.account.classList.contains("hidden")) renderAccount();
     }
   });
+}
+
+/* ---------- keys (WebAuthn) ----------
+
+   The browser talks to the key; the server checks what comes back. The
+   options arrive as JSON with the bytes in base64url and go back the
+   same way — converted here by hand rather than with
+   PublicKeyCredential.parseCreationOptionsFromJSON and toJSON, which
+   the older browsers still found in schools do not have. */
+
+function fromB64url(text) {
+  const plain = text.replace(/-/g, "+").replace(/_/g, "/");
+  const bytes = atob(plain + "===".slice((plain.length + 3) % 4));
+  return Uint8Array.from(bytes, (c) => c.charCodeAt(0));
+}
+
+function toB64url(buffer) {
+  let text = "";
+  for (const byte of new Uint8Array(buffer)) text += String.fromCharCode(byte);
+  return btoa(text).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+}
+
+function withIds(list) {
+  return (list || []).map((c) => Object.assign({}, c, { id: fromB64url(c.id) }));
+}
+
+function credentialJson(credential) {
+  const r = credential.response;
+  const json = {
+    id: credential.id,
+    rawId: toB64url(credential.rawId),
+    type: credential.type,
+    authenticatorAttachment: credential.authenticatorAttachment || null,
+    clientExtensionResults: credential.getClientExtensionResults
+      ? credential.getClientExtensionResults() : {},
+    response: { clientDataJSON: toB64url(r.clientDataJSON) },
+  };
+  if (r.attestationObject) {
+    json.response.attestationObject = toB64url(r.attestationObject);
+    json.response.transports = r.getTransports ? r.getTransports() : [];
+  } else {
+    json.response.authenticatorData = toB64url(r.authenticatorData);
+    json.response.signature = toB64url(r.signature);
+    json.response.userHandle = r.userHandle ? toB64url(r.userHandle) : null;
+  }
+  return json;
+}
+
+async function createKey(options) {
+  const publicKey = Object.assign({}, options, {
+    challenge: fromB64url(options.challenge),
+    user: Object.assign({}, options.user, { id: fromB64url(options.user.id) }),
+    excludeCredentials: withIds(options.excludeCredentials),
+  });
+  return credentialJson(await navigator.credentials.create({ publicKey: publicKey }));
+}
+
+async function getKey(options) {
+  const publicKey = Object.assign({}, options, {
+    challenge: fromB64url(options.challenge),
+    allowCredentials: withIds(options.allowCredentials),
+  });
+  return credentialJson(await navigator.credentials.get({ publicKey: publicKey }));
+}
+
+/* Why this page cannot use a key right now — the first reason that
+   applies, in the order that tells a person what to fix — or null.
+   The server's own reasons come with /api/auth/me. */
+function keyUnavailable() {
+  const info = (me && me.passkeys) || {};
+  const addressProblem = info.why && info.why !== "no_fido2";
+  // where keys would work, when that is not here
+  const there = info.origin && !addressProblem && location.origin !== info.origin
+    ? info.origin + location.pathname : null;
+  if (!window.isSecureContext) return { key: "passkeyWhy_insecure", link: there };
+  if (there) return { key: "passkeyWhy_elsewhere", link: there };
+  if (info.why) return { key: "passkeyWhy_" + info.why };
+  if (!window.PublicKeyCredential || !navigator.credentials) {
+    return { key: "passkeyWhy_no_webauthn" };
+  }
+  return null;
+}
+
+function keyWhyText(why) {
+  return why.key === "passkeyWhy_elsewhere"
+    ? fmt(why.key, { link: why.link }) : t(why.key);
+}
+
+/* The reason as a line under the button, with the address as a link. */
+function keyWhyLine(why) {
+  const line = h("p", { class: "hint-line key-why" });
+  if (why.key === "passkeyWhy_elsewhere") line.append(...withLink(why.key, why.link));
+  else {
+    line.append(t(why.key));
+    if (why.link) line.append(" ", ...withLink("passkeyWhy_elsewhere", why.link));
+  }
+  return line;
+}
+
+/* What the browser threw, in words. */
+function keyErrorText(e) {
+  const known = ["NotAllowedError", "InvalidStateError", "SecurityError",
+    "NotSupportedError", "AbortError", "ConstraintError"];
+  if (e && known.includes(e.name)) return t("keyErr_" + e.name);
+  return fmt("keyErr_other", { error: (e && (e.name || e.message)) || "?" });
+}
+
+/* Adding a key: the password (as for TOTP), whether the key may sign in
+   on its own, and a name to tell it from the others. */
+function keyAddForm(onAdded, onBack) {
+  const user = h("input", {
+    type: "text", name: "username", autocomplete: "username",
+    value: (me && me.name) || "", readonly: true, hidden: true,
+  });
+  const password = field("fieldPassword", {
+    type: "password", autocomplete: "current-password", required: true,
+  });
+  const label = field("fieldKeyLabel", {
+    maxlength: 64, autocomplete: "off", placeholder: t("keyLabelPlaceholder"),
+  });
+  const alone = h("input", { type: "checkbox", checked: true });
+  const error = h("p", { class: "error", role: "alert" });
+  const add = h("button", { type: "submit", text: t("addKeyBtn") });
+  const form = h("form", { class: "form key-add", novalidate: true },
+    h("p", { class: "hint-line", text: t("keyAddHint") }),
+    user, password.label, label.label,
+    h("label", { class: "check" }, alone, t("keyPasswordless")),
+    h("p", { class: "hint-line", text: t("keyPasswordlessHint") }),
+    error,
+    h("div", { class: "buttons" }, add,
+      onBack ? h("button", { type: "button", text: t("backBtn"), onclick: onBack }) : null));
+  form.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    error.textContent = "";
+    add.disabled = true;
+    try {
+      const begun = await authPost("/api/auth/passkeys/begin", {
+        password: password.input.value, passwordless: alone.checked,
+      });
+      if (!begun.ok) {
+        error.textContent = errorText(begun.answer);
+        return;
+      }
+      let credential;
+      try {
+        credential = await createKey(begun.answer.options);
+      } catch (e) {
+        error.textContent = keyErrorText(e);
+        return;
+      }
+      const done = await authPost("/api/auth/passkeys/finish", {
+        request: begun.answer.request, credential: credential,
+        label: label.input.value.trim(),
+      });
+      if (!done.ok) {
+        error.textContent = errorText(done.answer);
+        return;
+      }
+      done.answer.label = label.input.value.trim();
+      onAdded(done.answer);
+    } finally {
+      add.disabled = false;
+    }
+  });
+  return { form: form, focus: () => password.input.focus() };
+}
+
+/* What was added, in a sentence: with the reason when the key could
+   not be made passwordless. */
+function keyAddedText(answer) {
+  const text = fmt("keyAdded", { label: answer.label || "#" + answer.number });
+  return answer.note ? text + " " + t("keyNote_" + answer.note) : text;
+}
+
+/* The forced step of an administrator with no second factor, taking
+   the key road instead of TOTP. */
+function renderGateKeyAdd() {
+  gateView = "keyAdd";
+  const adding = keyAddForm((answer) => {
+    showToast(keyAddedText(answer));
+    if (answer.recovery) renderRecovery(answer.recovery, true);
+    else signedIn();
+  }, () => renderBindTotp(true));
+  gateForm("keyAddTitle", [adding.form], () => {});
+  adding.focus();
 }
 
 /* ---------- the header: who, and what this role may do ---------- */
@@ -831,14 +1032,36 @@ function renderAccount() {
       done.textContent = fmt("passwordChanged", { n: answer.sessions_closed });
     }
   });
+  const keys = me.keys || [];
+  const why = keyUnavailable();
+  const adding = keyAddForm(async (answer) => {
+    await loadMe();
+    renderAccount();
+    const line = els.accountBody.querySelector(".done");
+    if (line) line.textContent = keyAddedText(answer);
+    if (answer.recovery) renderRecovery(answer.recovery, false);
+  }, () => adding.form.classList.add("hidden"));
+  adding.form.classList.add("hidden");
+  const addKey = h("button", { class: "panel-btn", text: t("addKeyBtn") });
+  gateButton(addKey, why ? keyWhyText(why) : null);
+  addKey.addEventListener("click", () => {
+    if (!allowed(addKey)) return;
+    form.classList.add("hidden");
+    adding.form.classList.toggle("hidden");
+    done.textContent = "";
+    if (!adding.form.classList.contains("hidden")) adding.focus();
+  });
   els.accountBody.replaceChildren(
     h("dl", {},
       h("dt", { text: t("fieldName") }), h("dd", { text: me.name }),
       h("dt", { text: t("accountRole") }), h("dd", { text: t("role_" + me.role) }),
-      h("dt", { text: t("accountTotp") }), h("dd", { text: totp })),
+      h("dt", { text: t("accountTotp") }), h("dd", { text: totp }),
+      h("dt", { text: t("accountKeys") }),
+      h("dd", {}, keys.length ? keyList(keys) : t("keysNone"))),
     h("button", {
       class: "panel-btn", text: t("changePasswordBtn"),
       onclick: () => {
+        adding.form.classList.add("hidden");
         form.classList.toggle("hidden");
         done.textContent = "";
         if (!form.classList.contains("hidden")) fields.current.input.focus();
@@ -849,9 +1072,22 @@ function renderAccount() {
       title: me.totp ? t("rebindHint") : null,
       onclick: () => showGate("bind"),
     }),
+    addKey,
     h("button", { class: "panel-btn", text: t("logoutBtn"), onclick: signOut }),
-    done, form
+    why ? keyWhyLine(why) : null,
+    done, form, adding.form
   );
+}
+
+/* One's keys: the name, what it may do, when added and last used. */
+function keyList(keys) {
+  return h("ul", { class: "key-list" }, ...keys.map((key) => h("li", {},
+    h("strong", { text: key.label || "#" + key.number }),
+    h("div", { class: "hint-line", text: [
+      t(key.passwordless ? "keyPasswordlessShort" : "keySecondShort"),
+      fmt("keyAddedOn", { date: fmtDate(key.created_at) }),
+      key.last_used ? fmt("keyUsedOn", { date: fmtTime(key.last_used) }) : t("keyNeverUsed"),
+    ].join(" · ") }))));
 }
 
 /* ---------- accounts, for an administrator ---------- */

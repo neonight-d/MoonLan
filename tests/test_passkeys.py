@@ -2,6 +2,7 @@
 key, signing in with it, and an administrator's second factor."""
 
 import json
+import logging
 import os
 import sqlite3
 import subprocess
@@ -11,8 +12,13 @@ import textwrap
 import time
 import unittest
 from pathlib import Path
+from unittest import mock
 
-from moonlan import auth
+import service_fixture  # noqa: F401  (sets MOONLAN_CONFIG first)
+import soft_authenticator as soft
+from asgi_client import call
+from fido2.utils import websafe_decode
+from moonlan import auth, https, passkeys, server, signin
 from moonlan.db import PASSKEYS_MAX, AccountError, Database
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -250,6 +256,237 @@ class StorageTest(unittest.TestCase):
         self.db.delete_user("vera")
         self.assertIsNone(self.db.passkey_by_credential(bytes([1]) * 16))
         self.assertEqual(self.db.passkey_counts(), {})
+
+
+
+# ---------- adding a key ----------
+
+PASSWORD = "correct horse battery"
+HOST = "example.local:8443"
+ORIGIN = "https://" + HOST
+
+
+class KeysCase(unittest.TestCase):
+    """The service at https://example.local:8443, with keys on."""
+
+    def setUp(self):
+        logger = logging.getLogger("moonlan")
+        self.addCleanup(logger.setLevel, logger.level)
+        logger.setLevel(logging.ERROR)
+        self.db = server.accounts
+        self.clean()
+        self.addCleanup(self.clean)
+        server.sign_in._tickets.clear()
+        server.sign_in.throttle = signin.Throttle()
+        public, _ = https.parse_public_url(ORIGIN)
+        for name, value in (("public_url", public),
+                            ("webauthn", passkeys.Passkeys(public))):
+            patch = mock.patch.object(server.sign_in, name, value)
+            patch.start()
+            self.addCleanup(patch.stop)
+        self.db.add_user("anton", "admin", auth.hash_password(PASSWORD))
+        self.db.enable_totp("anton", auth.new_totp_secret(), "")
+        self.db.add_user("vera", "user", auth.hash_password(PASSWORD))
+
+    def clean(self):
+        with self.db._lock, self.db._conn:
+            for table in ("sessions", "passkeys", "users"):
+                self.db._conn.execute(f"DELETE FROM {table}")
+
+    def cookie(self, name, second_factor=True):
+        """A session of `name`, as the browser at the public address
+        holds it."""
+        token = auth.new_token()
+        self.db.add_session(auth.token_hash(token), self.db.user(name)["id"],
+                            time.time(), second_factor)
+        return f"{signin.SECURE_SESSION_COOKIE}={token}"
+
+    def post(self, path, body, cookie=None, **kwargs):
+        kwargs.setdefault("scheme", "https")
+        kwargs.setdefault("host", HOST)
+        return call(server.app, "POST", path, json_body=body, cookie=cookie,
+                    **kwargs)
+
+    def me(self, cookie):
+        return call(server.app, "GET", "/api/auth/me", cookie=cookie,
+                    scheme="https", host=HOST).json()
+
+    def begin_add(self, cookie, passwordless=False, password=PASSWORD):
+        return self.post("/api/auth/passkeys/begin",
+                         {"password": password, "passwordless": passwordless},
+                         cookie)
+
+    def add_key(self, name="vera", alg=-7, passwordless=False, uv=True,
+                rk=True, label="", cookie=None, origin=ORIGIN, rp_id=None):
+        """Adds a key through the API. (the key, the last answer)."""
+        cookie = cookie or self.cookie(name)
+        begun = self.begin_add(cookie, passwordless)
+        self.assertEqual(begun.status, 200, begun.body)
+        key, credential = soft.create(begun.json()["options"], origin, alg,
+                                      uv=uv, rk=rk, rp_id=rp_id)
+        answer = self.post("/api/auth/passkeys/finish", {
+            "request": begun.json()["request"], "credential": credential,
+            "label": label,
+        }, cookie)
+        return key, answer
+
+
+class AddKeyTest(KeysCase):
+    def test_the_options(self):
+        begun = self.begin_add(self.cookie("vera"))
+        options = begun.json()["options"]
+        self.assertEqual(options["rp"]["id"], "example.local")
+        self.assertEqual([p["alg"] for p in options["pubKeyCredParams"]],
+                         [-7, -8, -257])
+        selection = options["authenticatorSelection"]
+        self.assertEqual(selection["residentKey"], "preferred")
+        self.assertEqual(selection["userVerification"], "preferred")
+        self.assertEqual(options["attestation"], "none")
+        self.assertEqual(len(websafe_decode(options["challenge"])), 32)
+        handle = websafe_decode(options["user"]["id"])
+        self.assertEqual(handle, self.db.user("vera")["webauthn_user_id"])
+        self.assertEqual(options["user"]["name"], "vera")
+        self.assertEqual(options["excludeCredentials"], [])
+
+    def test_es256_and_eddsa(self):
+        for alg in (-7, -8):
+            with self.subTest(alg=alg):
+                _, answer = self.add_key(alg=alg, label=f"alg {alg}")
+                self.assertEqual(answer.status, 200, answer.body)
+        keys = self.db.passkeys(self.db.user("vera")["id"])
+        self.assertEqual([k["label"] for k in keys], ["alg -7", "alg -8"])
+        self.assertEqual([k["transports"] for k in keys], ["usb", "usb"])
+        self.assertTrue(all(k["discoverable"] == 1 and k["user_verified"]
+                            for k in keys))
+
+    def test_the_same_key_is_not_offered_twice(self):
+        key, _ = self.add_key()
+        begun = self.begin_add(self.cookie("vera")).json()["options"]
+        self.assertEqual(
+            [websafe_decode(c["id"]) for c in begun["excludeCredentials"]],
+            [key.credential_id],
+        )
+
+    def test_the_password_first(self):
+        answer = self.begin_add(self.cookie("vera"), password="wrong one!")
+        self.assertEqual(answer.status, 403)
+        self.assertEqual(answer.json()["error"], "wrong_password")
+
+    def test_not_over_plain_http(self):
+        plain = self.cookie("vera").replace(signin.SECURE_SESSION_COOKIE,
+                                            signin.SESSION_COOKIE)
+        answer = self.post("/api/auth/passkeys/begin",
+                           {"password": PASSWORD}, plain,
+                           scheme="http", host="10.0.0.5:8080")
+        self.assertEqual(answer.json()["error"], "https_required")
+
+    def refused(self, answer, code):
+        self.assertEqual(answer.status, 400, answer.body)
+        self.assertEqual(answer.json()["error"], code)
+        self.assertEqual(self.db.passkeys(self.db.user("vera")["id"]), [])
+
+    def test_another_origin(self):
+        _, answer = self.add_key(origin="https://example.local.evil.test")
+        self.refused(answer, "key_refused")
+        _, answer = self.add_key(origin="https://other.example.local:8443")
+        self.refused(answer, "key_refused")
+
+    def test_another_rp_id(self):
+        _, answer = self.add_key(rp_id="local")
+        self.refused(answer, "key_refused")
+
+    def test_a_challenge_works_once(self):
+        cookie = self.cookie("vera")
+        begun = self.begin_add(cookie).json()
+        _, credential = soft.create(begun["options"], ORIGIN)
+        body = {"request": begun["request"], "credential": credential}
+        self.assertEqual(
+            self.post("/api/auth/passkeys/finish", body, cookie).status, 200
+        )
+        again = self.post("/api/auth/passkeys/finish", body, cookie)
+        self.assertEqual(again.json()["error"], "challenge_expired")
+
+    def test_a_challenge_lasts_five_minutes(self):
+        cookie = self.cookie("vera")
+        begun = self.begin_add(cookie).json()
+        _, credential = soft.create(begun["options"], ORIGIN)
+        later = time.time() + passkeys.CHALLENGE_SECONDS + 1
+        with mock.patch.object(passkeys.time, "time", return_value=later):
+            answer = self.post("/api/auth/passkeys/finish", {
+                "request": begun["request"], "credential": credential,
+            }, cookie)
+        self.refused(answer, "challenge_expired")
+
+    def test_a_challenge_is_for_the_person_who_asked(self):
+        begun = self.begin_add(self.cookie("vera")).json()
+        _, credential = soft.create(begun["options"], ORIGIN)
+        answer = self.post("/api/auth/passkeys/finish", {
+            "request": begun["request"], "credential": credential,
+        }, self.cookie("anton"))
+        self.assertEqual(answer.json()["error"], "challenge_expired")
+
+    def test_without_a_password_or_only_after_it(self):
+        _, answer = self.add_key(passwordless=True)
+        self.assertEqual(answer.json()["passwordless"], True)
+        _, answer = self.add_key(passwordless=False)
+        self.assertEqual(answer.json()["passwordless"], False)
+        # a key that asked for no PIN, or keeps nothing itself, cannot
+        # be the only thing between a stranger and the account
+        _, answer = self.add_key(passwordless=True, uv=False)
+        self.assertEqual((answer.json()["passwordless"], answer.json()["note"]),
+                         (False, "no_user_verification"))
+        _, answer = self.add_key(passwordless=True, rk=False)
+        self.assertEqual((answer.json()["passwordless"], answer.json()["note"]),
+                         (False, "not_discoverable"))
+        flags = [k["passwordless"]
+                 for k in self.db.passkeys(self.db.user("vera")["id"])]
+        self.assertEqual(flags, [1, 0, 0, 0])
+
+    def test_the_first_key_brings_recovery_codes(self):
+        _, answer = self.add_key()
+        codes = answer.json()["recovery"]
+        self.assertGreater(len(codes), 0)
+        self.assertEqual(auth.recovery_left(self.db.user("vera")["recovery"]),
+                         len(codes))
+        _, answer = self.add_key()
+        self.assertIsNone(answer.json()["recovery"])
+
+    def test_journaled(self):
+        self.add_key(label="blue key")
+        event = next(e for e in server.db.journal(5)
+                     if e["event"] == "user_passkey_added")
+        self.assertEqual(event["user"], "vera")
+        self.assertEqual(json.loads(event["details"])["label"], "blue key")
+
+    def test_shown_in_the_account(self):
+        cookie = self.cookie("vera")
+        self.add_key(label="blue key", cookie=cookie)
+        (key,) = self.me(cookie)["keys"]
+        self.assertEqual((key["number"], key["label"], key["passwordless"]),
+                         (1, "blue key", False))
+        self.assertNotIn("credential_id", key)
+        self.assertNotIn("public_key", key)
+
+    def test_at_most_ten(self):
+        for n in range(PASSKEYS_MAX):
+            self.add_key(label=str(n))
+        answer = self.begin_add(self.cookie("vera"))
+        self.assertEqual(answer.json()["error"], "too_many_keys")
+
+    def test_keys_off(self):
+        server.sign_in.webauthn.why = "no_fido2"
+        answer = self.begin_add(self.cookie("vera"))
+        self.assertEqual(answer.status, 409)
+        self.assertEqual(answer.json(), {"error": "passkeys_off",
+                                         "why": "no_fido2"})
+
+    def test_an_administrator_without_a_factor_may_add_one(self):
+        self.db.add_user("olga", "admin", auth.hash_password(PASSWORD))
+        cookie = self.cookie("olga", second_factor=False)
+        self.assertEqual(self.me(cookie)["step"], "totp")
+        _, answer = self.add_key("olga", cookie=cookie)
+        self.assertEqual(answer.status, 200, answer.body)
+        self.assertIsNone(self.me(cookie)["step"])
 
 
 if __name__ == "__main__":

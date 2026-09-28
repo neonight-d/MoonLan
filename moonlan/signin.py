@@ -29,7 +29,7 @@ from starlette.routing import Match, Mount
 from . import access, auth, passkeys
 from .access import Principal
 from .config import AuthConfig
-from .db import AccountError, Database
+from .db import PASSKEYS_MAX, AccountError, Database
 
 log = logging.getLogger("moonlan")
 
@@ -199,6 +199,23 @@ class NewUserBody(BaseModel):
     role: str
 
 
+class KeyAddBody(BaseModel):
+    # adding a key asks for the password, as binding TOTP does: a
+    # session taken over on the way must not be able to add a key of
+    # its own to somebody else's account
+    password: str = Field(max_length=auth.PASSWORD_MAX)
+    # may the key sign in on its own, or only after the password
+    passwordless: bool = False
+
+
+class KeyAnswerBody(BaseModel):
+    request: str = Field(max_length=64)
+    # what navigator.credentials answered, in PublicKeyCredential's
+    # JSON form; fido2 checks every part of it
+    credential: dict
+    label: str = Field(default="", max_length=passkeys.LABEL_MAX)
+
+
 class UserPatch(BaseModel):
     role: str | None = None
     disabled: bool | None = None
@@ -245,6 +262,8 @@ class SignIn:
         self.settings = settings
         # listen.public_url (https.PublicUrl), or None
         self.public_url = public_url
+        # the relying party for keys: that address's host and origin
+        self.webauthn = passkeys.Passkeys(public_url)
         # how the map reaches people: "tls" (MoonLan's own), "proxy"
         # (HTTPS at a proxy in front) or "http"
         self.transport = transport
@@ -331,9 +350,10 @@ class SignIn:
         if row["must_change"]:
             step = "password"
         elif row["role"] == "admin" and not row["second_factor"]:
-            if row["totp_enabled"]:
+            if row["totp_enabled"] or row["passkeys"]:
                 # a second factor exists and this session never gave it
                 return None
+            # no second factor at all: TOTP or a key, before anything else
             step = "totp"
         return Principal(
             name=row["name"], role=row["role"], user_id=row["user_id"],
@@ -721,6 +741,106 @@ class SignIn:
                  if row["totp_enabled"] else "", closed)
         return JSONResponse({"status": "bound", "recovery": codes})
 
+    # ---------- one's own keys ----------
+
+    def _keys_off(self) -> JSONResponse | None:
+        if self.webauthn.why:
+            return refuse("passkeys_off", 409, why=self.webauthn.why)
+        return None
+
+    async def passkey_add_begin(self, who: Principal | None, password: str,
+                                passwordless: bool,
+                                address: str) -> JSONResponse:
+        """The challenge for a new key, once the password is right."""
+        if who is None or who.user_id is None:
+            return refuse("sign_in_required", 401)
+        off = self._keys_off()
+        if off is not None:
+            return off
+        row, right = await asyncio.to_thread(
+            self._check_password, who.name, password
+        )
+        if row is None or not right:
+            locked = await self._failed(who.name, row, address, time.time(),
+                                        "wrong password adding a key")
+            if locked is not None:
+                await asyncio.to_thread(self.accounts.close_sessions,
+                                        who.name)
+                return locked
+            return refuse("wrong_password", 403)
+        keys = await asyncio.to_thread(self.accounts.passkeys, row["id"])
+        if len(keys) >= PASSKEYS_MAX:
+            return refuse("too_many_keys", 409, most=PASSKEYS_MAX)
+        handle = await asyncio.to_thread(self.accounts.webauthn_user_id,
+                                         row["id"])
+        request, options = self.webauthn.add_begin(
+            row["id"], row["name"], handle, keys, passwordless
+        )
+        return JSONResponse({"request": request, "options": options})
+
+    async def passkey_add_finish(self, who: Principal | None, request: str,
+                                 answer: dict, label: str,
+                                 address: str) -> JSONResponse:
+        """The key's answer: checked, stored, journaled. The first key of
+        an account that has no recovery codes brings them — the same
+        way back in as with TOTP, shown this once."""
+        if who is None or who.user_id is None:
+            return refuse("sign_in_required", 401)
+        off = self._keys_off()
+        if off is not None:
+            return off
+        try:
+            key = self.webauthn.add_finish(request, who.user_id, answer)
+        except passkeys.PasskeyError as error:
+            log.warning("Adding a key refused for %s from %s: %s",
+                        who.name, address, error)
+            return refuse(error.code, 400)
+        # "Without a password" needs a key that keeps the credential
+        # itself (nothing to list it from) and asked for a PIN or a
+        # finger (else whoever holds it is in). One that cannot is kept
+        # as a second factor, and the answer says so.
+        note = None
+        if key["passwordless"]:
+            if not key["user_verified"]:
+                note = "no_user_verification"
+            elif key["discoverable"] == 0:
+                note = "not_discoverable"
+            if note:
+                key["passwordless"] = 0
+        row = await asyncio.to_thread(self.accounts.user_by_id, who.user_id)
+        if row is None:
+            return refuse("sign_in_required", 401)
+        keys = await asyncio.to_thread(self.accounts.passkeys, row["id"])
+        key["label"] = label.strip()[:passkeys.LABEL_MAX] or f"#{len(keys) + 1}"
+        codes, stored = None, None
+        if not row["recovery"]:
+            codes = auth.new_recovery_codes()
+            stored = await asyncio.to_thread(auth.hash_recovery_codes, codes)
+        try:
+            number, closed = await asyncio.to_thread(
+                self.accounts.add_passkey, row["id"], key, stored, who.session
+            )
+        except AccountError as error:
+            return refuse(error.code, 409)
+        await asyncio.to_thread(
+            self.journal.add_event, time.time(), "user_passkey_added",
+            row["name"], json.dumps({
+                "number": number, "label": key["label"],
+                "passwordless": bool(key["passwordless"]), "sessions": closed,
+            }), row["name"],
+        )
+        log.info(
+            "Key added by %s from %s: #%d %r, %s%s; %d other session(s) "
+            "closed", row["name"], address, number, key["label"],
+            "signs in without a password" if key["passwordless"]
+            else "a second factor", f" ({note})" if note else "", closed,
+        )
+        return JSONResponse({
+            "status": "added", "number": number,
+            "passwordless": bool(key["passwordless"]), "note": note,
+            "recovery": codes,
+        })
+
     # ---------- accounts, for an administrator ----------
 
     def users(self) -> list[dict]:
@@ -757,19 +877,32 @@ class SignIn:
         """What the page needs to offer a key, or to say why not: the
         server's reason (None when it can take one) and the address the
         keys are bound to, for the page to compare with its own."""
+        public = self.webauthn.public_url
         return {
-            "why": passkeys.unavailable(self.public_url),
-            "origin": self.public_url.origin if self.public_url else None,
+            "why": self.webauthn.why,
+            "origin": public.origin if public else None,
         }
 
     def me(self, who: Principal) -> dict:
         row = self.accounts.user(who.name) or {}
+        keys = self.accounts.passkeys(row["id"]) if row else []
         return {
             "sign_in": True, "name": who.name, "role": who.role,
             "step": who.step,
             "totp": bool(row.get("totp_enabled")),
             "recovery_left": auth.recovery_left(row.get("recovery", "")),
+            "keys": [key_summary(key) for key in keys],
         }
+
+
+def key_summary(key: dict) -> dict:
+    """A key as the page shows it: not its credential id, not its
+    public half."""
+    return {
+        "id": key["id"], "number": key["number"], "label": key["label"],
+        "passwordless": bool(key["passwordless"]),
+        "created_at": key["created_at"], "last_used": key["last_used"],
+    }
 
 
 def route_key(routes, scope) -> str | None:
@@ -908,6 +1041,23 @@ def add_routes(app: FastAPI, sign_in: SignIn) -> None:
     @app.post("/api/auth/totp/setup")
     async def auth_totp_setup():
         return await sign_in.totp_setup(principal())
+
+    @app.post("/api/auth/passkeys/begin")
+    async def auth_passkeys_begin(body: KeyAddBody, request: Request):
+        """A new key for oneself: the password, then the options for
+        navigator.credentials.create()."""
+        return sign_in.https_refusal(request) or \
+            await sign_in.passkey_add_begin(
+                principal(), body.password, body.passwordless,
+                _address(request),
+            )
+
+    @app.post("/api/auth/passkeys/finish")
+    async def auth_passkeys_finish(body: KeyAnswerBody, request: Request):
+        return await sign_in.passkey_add_finish(
+            principal(), body.request, body.credential, body.label,
+            _address(request),
+        )
 
     @app.post("/api/auth/totp/confirm")
     async def auth_totp_confirm(body: BindBody, request: Request):

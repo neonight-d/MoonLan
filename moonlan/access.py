@@ -53,6 +53,8 @@ RULES: dict[str, str] = {
     "POST /api/auth/password": SIGNED_IN,
     "POST /api/auth/totp/setup": SIGNED_IN,
     "POST /api/auth/totp/confirm": SIGNED_IN,
+    "POST /api/auth/passkeys/begin": SIGNED_IN,
+    "POST /api/auth/passkeys/finish": SIGNED_IN,
 
     # looking: the map, cards, ports, STP, the journal, alarms
     "GET /api/topology": VIEWER,
@@ -136,7 +138,9 @@ class Refusal:
 # no second factor would be only a suggestion.
 STEP_ROUTES: dict[str, set[str]] = {
     "password": {"POST /api/auth/password", "POST /api/auth/logout"},
+    # an administrator without a second factor: TOTP or a key
     "totp": {"POST /api/auth/totp/setup", "POST /api/auth/totp/confirm",
+             "POST /api/auth/passkeys/begin", "POST /api/auth/passkeys/finish",
              "POST /api/auth/logout"},
 }
 

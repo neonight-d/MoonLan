@@ -647,6 +647,21 @@ body.gated .toolbar > button { display: none; }
 #account dt { color: var(--text-dim); margin-top: 8px; }
 #account dd { margin: 2px 0 0; }
 #account .form { margin-top: 6px; }
+.form label.check {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 12px;
+  color: var(--text);
+  font-size: 0.85rem;
+}
+.form label.check input { display: inline-block; width: auto; margin: 0; }
+.key-list { list-style: none; margin: 2px 0 0; padding: 0; }
+.key-list li { padding: 3px 0; }
+.key-list li .hint-line { font-size: 0.76rem; }
+.key-why { margin: 8px 0 0; overflow-wrap: anywhere; }
+.key-instead { margin-top: 16px; padding-top: 12px; border-top: 1px solid var(--line); }
+.key-instead .buttons { margin-top: 6px; }
 
 .user-list { list-style: none; margin: 8px 0 0; padding: 0; font-size: 0.85rem; }
 .user-list > li { padding: 9px 0; border-top: 1px solid var(--line); }
