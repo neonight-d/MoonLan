@@ -245,3 +245,7 @@ docs/results/
 # would put every purged object back into the repository.
 moonlan-backup.git/
 moonlan-clean/
+# Certificates and keys for listen.tls_cert / tls_key (v0.7.6): mkcert
+# writes them into the current directory, and a key committed here would
+# be published. They belong outside the repository, e.g. /opt/moonlan/tls.
+*.pem
