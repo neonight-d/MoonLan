@@ -227,6 +227,10 @@ async function loadMe() {
     : answer;
   if (me.name) everSignedIn = true;
   applyRole();
+  // the sign-in form may have come up before this answer, on the map's
+  // first 401: what it says about HTTPS and keys is brought up to date
+  // in place, so nothing typed meanwhile is lost
+  if (gateUp() && gateView === "signIn" && signInState) signInState();
 }
 
 /* Every call to the service goes through here. Network errors are
@@ -382,6 +386,14 @@ function showGate(kind) {
   else if (kind === "bind") renderBindTotp(false);
 }
 
+/* The gate with a form drawn by `render`, from outside a sign-in. */
+function openGate(render) {
+  els.gate.classList.remove("hidden");
+  document.body.classList.add("gated");
+  fitHeader();
+  render();
+}
+
 function closeGate() {
   els.gate.classList.add("hidden");
   document.body.classList.remove("gated");
@@ -424,6 +436,7 @@ async function signOut() {
 }
 
 let gateView = null; // which form the gate shows, for the language switch
+let signInState = null; // redraws what the sign-in form says about HTTPS and keys
 
 /* The sign-in form's own language switch: the language is needed
    before anybody has signed in. */
@@ -451,9 +464,20 @@ function renderSignIn(message, typedName) {
   const error = h("p", { class: "error", role: "alert", text: message || "" });
   const button = h("button", { type: "submit", text: t("signInBtn") });
   // the key road: greyed out with the reason when this page cannot take it
-  const why = keyUnavailable();
   const withKey = h("button", { type: "button", class: "key-btn", text: t("signInKeyBtn") });
-  gateButton(withKey, why ? keyWhyText(why) : null);
+  const note = h("div");
+  const keyWhy = h("div");
+  signInState = () => {
+    // plain HTTP: said before the password is typed — and where to go
+    // instead, when the map is served over HTTPS elsewhere
+    note.replaceChildren(...(me && me.https_url
+      ? [h("p", { class: "http-note" }, ...withLink("httpsSignIn", me.https_url))]
+      : plainHttp() ? [h("p", { class: "http-note", text: t("httpSignIn") })] : []));
+    const why = keyUnavailable();
+    gateButton(withKey, why ? keyWhyText(why) : null);
+    keyWhy.replaceChildren(...(why ? [keyWhyLine(why)] : []));
+  };
+  signInState();
   withKey.addEventListener("click", () => {
     if (!allowed(withKey)) return;
     error.textContent = "";
@@ -462,12 +486,10 @@ function renderSignIn(message, typedName) {
   gateForm("signInTitle", [
     gateLangSwitch(),
     everSignedIn ? h("p", { text: t("signInAgain") }) : null,
-    me && me.https_url
-      ? h("p", { class: "http-note" }, ...withLink("httpsSignIn", me.https_url))
-      : plainHttp() ? h("p", { class: "http-note", text: t("httpSignIn") }) : null,
+    note,
     name.label, password.label, error,
     h("div", { class: "buttons" }, button, withKey),
-    why ? keyWhyLine(why) : null,
+    keyWhy,
   ], async () => {
     button.disabled = true;
     const result = await authPost("/api/auth/login", {
@@ -1101,7 +1123,9 @@ function renderAccount() {
     renderAccount();
     const line = els.accountBody.querySelector(".done");
     if (line) line.textContent = keyAddedText(answer);
-    if (answer.recovery) renderRecovery(answer.recovery, false);
+    // the first key of an account without recovery codes brings them,
+    // shown this once — over the map, like after binding TOTP
+    if (answer.recovery) openGate(() => renderRecovery(answer.recovery, false));
   }, () => adding.form.classList.add("hidden"));
   adding.form.classList.add("hidden");
   const addKey = h("button", { class: "panel-btn", text: t("addKeyBtn") });
@@ -1113,7 +1137,8 @@ function renderAccount() {
     done.textContent = "";
     if (!adding.form.classList.contains("hidden")) adding.focus();
   });
-  els.accountBody.replaceChildren(
+  // replaceChildren would write a null out as the word "null"
+  els.accountBody.replaceChildren(...[
     h("dl", {},
       h("dt", { text: t("fieldName") }), h("dd", { text: me.name }),
       h("dt", { text: t("accountRole") }), h("dd", { text: t("role_" + me.role) }),
@@ -1137,8 +1162,8 @@ function renderAccount() {
     addKey,
     h("button", { class: "panel-btn", text: t("logoutBtn"), onclick: signOut }),
     why ? keyWhyLine(why) : null,
-    done, form, adding.form
-  );
+    done, form, adding.form,
+  ].filter(Boolean));
 }
 
 /* Keys: the name, what it may do, when added and last used — and a

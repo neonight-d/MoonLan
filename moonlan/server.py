@@ -2534,7 +2534,10 @@ def _alarm_meta(
         meta["display"] = bridge.get("name") or subject
         meta["switch_ip"] = bridge.get("switch", "")
         meta["port"] = bridge.get("port", "")
-    elif row["type"] == "stp_fragmented":
+    elif row["type"] in ("stp_fragmented", "tls_cert_expiring",
+                         "passkey_clone_suspected"):
+        # not a port: a network verdict, or MoonLan itself — a host name,
+        # "person: key" — whose ":" is not a switch's
         meta["display"] = subject
     else:
         ip, sep, port = subject.partition(":")

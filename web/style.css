@@ -663,6 +663,10 @@ body.gated .toolbar > button { display: none; }
 .key-head .key-remove { margin-left: auto; padding: 1px 8px; font-size: 0.72rem; }
 .user-list .key-list { margin: 4px 0 0 12px; font-size: 0.8rem; }
 .key-why { margin: 8px 0 0; overflow-wrap: anywhere; }
+/* the address to go to: the protected one, or the one keys are bound to */
+.gate-card a, .http-note a, .key-why a, #account a, #notice a {
+  color: var(--link);
+}
 .key-instead { margin-top: 16px; padding-top: 12px; border-top: 1px solid var(--line); }
 .key-instead .buttons { margin-top: 6px; }
 

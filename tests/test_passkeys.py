@@ -698,6 +698,14 @@ class CounterTest(SignInCase):
         self.assertEqual(alarm["severity"], "critical")
         self.assertIn("vera", alarm["subject"])
         self.assertIn("remove-passkey vera 1", alarm["message"])
+        # the panel shows it as it is, not as "switch: port"
+        shown = call(server.app, "GET", "/api/alarms",
+                     cookie=self.cookie("anton"), scheme="https",
+                     host=HOST).json()["alarms"]
+        shown = next(a for a in shown
+                     if a["type"] == "passkey_clone_suspected")
+        self.assertEqual((shown["display"], shown["port"]),
+                         (alarm["subject"], ""))
         events = [e for e in server.db.journal(20)
                   if e["event"] == "passkey_clone_suspected"]
         self.assertEqual(len(events), 2)
