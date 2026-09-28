@@ -148,15 +148,16 @@ signs out.
 
 ## What sign-in over HTTP protects against
 
-MoonLan speaks plain HTTP so far. Signing in keeps out somebody at a
-computer left open, a pupil who found the address, and a guessed or
-leaked password — that is what TOTP is for. It does **not** protect
+Over plain HTTP, signing in keeps out somebody at a computer left
+open, a pupil who found the address, and a guessed or leaked
+password — that is what TOTP is for. It does **not** protect
 against somebody who can read the traffic in the same network segment:
 the password and the session cookie cross the network in clear text,
 and a session read off the wire works until it ends. The header of a
 signed-in user says so for as long as it is true, and so does the log.
-v0.7.6 closes it: HTTPS — TLS of its own or behind a reverse proxy —
-and passkeys (WebAuthn), which browsers offer only on a secure page.
+HTTPS closes it — TLS of MoonLan's own or a reverse proxy in front:
+[HTTPS.md](HTTPS.md). With an https `listen.public_url` a password is
+then not taken over plain HTTP at all.
 
 `python -m moonlan.diag --config` shows the state of sign-in: on or
 off, accounts per role, administrators without TOTP (there should be

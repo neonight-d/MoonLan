@@ -26,6 +26,11 @@ listen:
   # За nginx или Caddy, которые держат TLS: адрес прокси, чьим заголовкам
   # X-Forwarded-For / X-Forwarded-Proto верить; и host: 127.0.0.1
   # trusted_proxies: [127.0.0.1]
+  # Strict-Transport-Security, seconds (0 — not sent). Browsers that saw
+  # it refuse http:// for that long — see docs/HTTPS.md before setting it.
+  # Strict-Transport-Security, секунды (0 — не отправлять). Увидевший его
+  # браузер столько же отказывается от http:// — сначала docs/HTTPS.md.
+  # hsts_max_age: 0
 
 snmp:
   community: public # SNMP v2c community (read-only)

@@ -69,7 +69,12 @@ db = Database(":memory:" if config.demo else config.db_path)
 # they need a file python -m moonlan.users can reach (see
 # Config.users_db_path)
 accounts = Database(config.users_db_path()) if config.demo else db
-sign_in = signin.SignIn(accounts, db, config.auth, public_url)
+# "tls", "proxy" or "http": said at startup, and what the warning about
+# passwords in the clear depends on
+transport = https.transport_mode(
+    config.listen_tls_cert, trusted_proxies, public_url
+)
+sign_in = signin.SignIn(accounts, db, config.auth, public_url, transport)
 
 # Ping state of switches (they are not in the hosts table): ip -> {ping_up, last_ping_ok}
 switch_ping: dict[str, dict] = {}
@@ -1930,6 +1935,7 @@ def _log_public_url() -> None:
     """Where people are expected to open the map, and what follows."""
     for problem in public_url_problems + trusted_proxy_problems:
         log.warning("config.yaml %s — ignored", problem)
+    _log_transport()
     if public_url is None:
         log.info(
             "Public address: listen.public_url is not set — signing in with "
@@ -1955,6 +1961,32 @@ def _log_public_url() -> None:
             "Public address: %s — passkeys are bound to %s",
             public_url.origin, public_url.rp_id,
         )
+
+
+def _log_transport() -> None:
+    """One line: how the map reaches people."""
+    if transport == "tls":
+        log.info("Connection: HTTPS served by MoonLan itself (%s)",
+                 config.listen_tls_cert)
+    elif transport == "proxy":
+        log.info(
+            "Connection: behind a reverse proxy (%s) — it holds the HTTPS; "
+            "X-Forwarded-For and X-Forwarded-Proto are believed from it alone",
+            ", ".join(trusted_proxies),
+        )
+    else:
+        log.info("Connection: plain HTTP — see docs/HTTPS.md")
+        if public_url is not None and public_url.secure:
+            log.warning(
+                "listen.public_url is %s, but MoonLan neither serves TLS "
+                "(listen.tls_cert) nor believes a proxy "
+                "(listen.trusted_proxies): every request arrives as plain "
+                "http, and signing in with a password is refused on it",
+                public_url.origin,
+            )
+    if config.listen_hsts_max_age:
+        log.info("HSTS: max-age=%d on every HTTPS answer",
+                 config.listen_hsts_max_age)
 
 
 def _log_certificate() -> None:
@@ -2170,6 +2202,9 @@ app = FastAPI(title="MoonLan", version=__version__, lifespan=lifespan)
 # Every request passes the rights table in access.py before a handler
 # sees it (a no-op while sign-in is off)
 app.add_middleware(signin.Guard, signin=sign_in, router=app.router)
+if config.listen_hsts_max_age:
+    # outermost, so the refusals the guard answers carry it too
+    app.add_middleware(https.Hsts, max_age=config.listen_hsts_max_age)
 signin.add_routes(app, sign_in)
 
 

@@ -226,6 +226,9 @@ class Config:
     # Reverse proxies whose X-Forwarded-For / X-Forwarded-Proto are
     # believed (addresses or networks); nobody's when empty
     listen_trusted_proxies: list[str] = field(default_factory=list)
+    # Strict-Transport-Security max-age on HTTPS answers, seconds;
+    # 0 — not sent (see docs/HTTPS.md before switching it on)
+    listen_hsts_max_age: int = 0
     snmp: SnmpConfig = field(default_factory=SnmpConfig)
     switches: list[str] = field(default_factory=list)
     # Per-switch SNMP settings, one entry per address in `switches`.
@@ -663,6 +666,9 @@ def load_config(path: Path | None = None) -> Config:
     )
     cfg.listen_trusted_proxies = r.get(
         "listen.trusted_proxies", d.listen_trusted_proxies, _as_str_list
+    )
+    cfg.listen_hsts_max_age = max(
+        0, r.get("listen.hsts_max_age", d.listen_hsts_max_age, int)
     )
 
     cfg.snmp = SnmpConfig(

@@ -177,3 +177,40 @@ example.local {
 
 Caddy sends `X-Forwarded-For` and `X-Forwarded-Proto` and keeps `Host`
 by itself.
+
+## What changes once the map is on HTTPS
+
+- **The session cookie** becomes `__Host-moonlan_session`, with
+  `Secure`: the browser sends it over HTTPS only, and takes it only for
+  this exact host — a neighbouring subdomain cannot plant one. A
+  session opened over plain HTTP is not carried over: everybody signs
+  in once more after the switch.
+- **No password over plain HTTP.** With `listen.public_url` on https,
+  a password (signing in, changing it, binding TOTP) that arrives over
+  plain HTTP is refused, and the form links to the protected address.
+  Whoever opened the service's port directly would otherwise go on
+  sending the password in the clear although HTTPS is there. A map
+  opened by an address with a session already in hand keeps working;
+  without `public_url`, plain HTTP works exactly as before.
+- **The header** stops saying the connection is not protected.
+- **The log** says at startup how the map reaches people: HTTPS served
+  by MoonLan, HTTPS at a proxy, or plain HTTP. An https `public_url`
+  with neither `tls_cert` nor `trusted_proxies` is called out: every
+  request would arrive as plain HTTP and every password be refused.
+
+### HSTS — off unless asked for
+
+~~~yaml
+listen:
+  hsts_max_age: 31536000   # a year; 0 (the default) — not sent
+~~~
+
+`Strict-Transport-Security` makes a browser that has seen it refuse
+plain `http://` to this host name for `max-age` seconds — it stops the
+one plain request a typed `http://` would make. It is off by default
+because it cannot be taken back: if the certificate is ever let lapse,
+or HTTPS switched off, a browser that remembers it cannot open the map
+at all — not even with a warning to click through — until the time
+runs out. Switch it on once HTTPS has run for a while and the renewal
+of the certificate is in somebody's calendar; start with a short age
+(`600`) and raise it later. It is sent on HTTPS answers only.

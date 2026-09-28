@@ -55,7 +55,7 @@ import urllib.request
 from collections import Counter
 from pathlib import Path
 
-from . import counters, loopdetect, pinger, probes, stp
+from . import counters, https, loopdetect, pinger, probes, stp
 from .anonymize import Anonymizer, AnonymizingWriter
 from .config import (
     SECRET_KEYS,
@@ -1031,11 +1031,20 @@ def _print_sign_in(cfg) -> None:
     print(f"  sessions:    {sessions} open; they end after "
           f"{cfg.auth.session_idle_hours:g} h without a request, "
           f"{cfg.auth.session_max_days:g} days at most")
-    print(
-        "  connection:  HTTP — the service has no TLS of its own yet: "
-        "passwords and\n               session cookies cross the network "
-        "in clear text (HTTPS: v0.7.6)"
-    )
+    public, _ = https.parse_public_url(cfg.listen_public_url)
+    trusted, _ = https.parse_trusted_proxies(cfg.listen_trusted_proxies)
+    mode = https.transport_mode(cfg.listen_tls_cert, trusted, public)
+    if mode == "http":
+        print(
+            "  connection:  HTTP — passwords and session cookies cross the "
+            "network\n               in clear text; docs/HTTPS.md tells how "
+            "to serve HTTPS"
+        )
+    else:
+        print("  connection:  " + (
+            "HTTPS served by MoonLan itself" if mode == "tls"
+            else "HTTPS at a reverse proxy in front"
+        ))
 
 
 def _ask_service(cfg, path: str) -> dict | None:

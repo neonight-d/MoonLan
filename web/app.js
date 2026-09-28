@@ -222,7 +222,9 @@ async function loadMe() {
     return;
   }
   const answer = await response.json();
-  me = response.status === 401 ? { sign_in: true } : answer;
+  me = response.status === 401
+    ? { sign_in: true, https_url: answer.https_url }
+    : answer;
   if (me.name) everSignedIn = true;
   applyRole();
 }
@@ -323,6 +325,13 @@ async function authPost(path, body) {
 
 function plainHttp() {
   return location.protocol !== "https:";
+}
+
+/* A translated line with a link in place of {link}. */
+function withLink(key, url) {
+  return fmt(key, { link: "\u0000" }).split("\u0000").flatMap(
+    (text, i) => (i ? [h("a", { href: url, text: url }), text] : [text])
+  );
 }
 
 /* ---------- the gate ---------- */
@@ -442,7 +451,9 @@ function renderSignIn(message, typedName) {
   gateForm("signInTitle", [
     gateLangSwitch(),
     everSignedIn ? h("p", { text: t("signInAgain") }) : null,
-    plainHttp() ? h("p", { class: "http-note", text: t("httpSignIn") }) : null,
+    me && me.https_url
+      ? h("p", { class: "http-note" }, ...withLink("httpsSignIn", me.https_url))
+      : plainHttp() ? h("p", { class: "http-note", text: t("httpSignIn") }) : null,
     name.label, password.label, error,
     h("div", { class: "buttons" }, button),
   ], async () => {
@@ -459,6 +470,8 @@ function renderSignIn(message, typedName) {
       // nobody to sign in as after all: the map is open
       await loadMe();
       closeGate();
+    } else if (result.answer.error === "https_required" && result.answer.url) {
+      error.replaceChildren(...withLink("httpsSignIn", result.answer.url));
     } else {
       error.textContent = errorText(result.answer);
       password.input.select();
@@ -713,6 +726,10 @@ function renderNotice() {
     // the traffic. The page says so for as long as it is true — calmly,
     // as a fact about this installation, not as an alarm.
     parts.push(h("span", { text: t("noticeHttp") }));
+    if (me.https_url) {
+      parts.push(document.createTextNode(" "),
+                 h("span", {}, ...withLink("noticeHttpsAt", me.https_url)));
+    }
   }
   els.notice.replaceChildren(...parts);
   els.notice.classList.toggle("hidden", !parts.length);

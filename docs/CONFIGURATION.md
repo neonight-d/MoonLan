@@ -118,6 +118,7 @@ fails on a key the loader knows and this page does not.
 | `listen.tls_key` | `""` | Its PEM key, readable by the service's user only (mode 600). |
 | `listen.http_redirect_port` | `0` | A second port that only redirects to `listen.public_url` — for people who type `http://` out of habit (0 — none). |
 | `listen.trusted_proxies` | `[]` | Reverse proxies (addresses or networks) whose `X-Forwarded-For` and `X-Forwarded-Proto` are believed. Nobody's when empty — from anybody else the headers are ignored, or any client could claim another address. `*` is refused. |
+| `listen.hsts_max_age` | `0` | `Strict-Transport-Security: max-age=N` on HTTPS answers, seconds; 0 — not sent. It cannot be taken back once browsers have seen it — read [HTTPS.md](HTTPS.md#hsts--off-unless-asked-for) first. |
 | `listen.public_url` | `""` | The address people open the map at, e.g. `https://example.local:8443` — scheme and host, no path. Requests are checked against it, and signing in with a key is bound to its host name (never an IP). Unset: no passkeys, everything else as before. See [HTTPS.md](HTTPS.md). |
 
 ### snmp

@@ -1,10 +1,31 @@
-"""HTTPS (v0.7.6): the public address, the certificate, the proxy."""
+"""HTTPS (v0.7.6): the public address, the certificate, the proxy,
+the cookie and the headers."""
 
+import asyncio
+import contextlib
+import datetime
+import io
+import logging
+import os
+import tempfile
+import time
 import unittest
+from pathlib import Path
 from unittest import mock
 
+from uvicorn.middleware.proxy_headers import ProxyHeadersMiddleware
+
 import service_fixture  # noqa: F401  (sets MOONLAN_CONFIG first)
-from moonlan import https, server
+from asgi_client import call
+from moonlan import auth, config as config_module, https, server, signin
+
+try:
+    from cryptography import x509
+    from cryptography.hazmat.primitives import hashes, serialization
+    from cryptography.hazmat.primitives.asymmetric import ec
+    from cryptography.x509.oid import NameOID
+except ImportError:  # the service runs without it; these tests do not
+    x509 = None
 
 
 class PublicUrlTest(unittest.TestCase):
@@ -77,29 +98,9 @@ class StartupLineTest(unittest.TestCase):
         self.assertIn("ignored", self.line("https://example.local/map"))
 
 
-if __name__ == "__main__":
-    unittest.main()
 
+# ---------- the certificate ----------
 
-# ---------- the certificate (task 2) ----------
-
-import asyncio  # noqa: E402
-import contextlib  # noqa: E402
-import datetime  # noqa: E402
-import io  # noqa: E402
-import logging  # noqa: E402
-import os  # noqa: E402
-import tempfile  # noqa: E402
-import time  # noqa: E402
-from pathlib import Path  # noqa: E402
-
-try:
-    from cryptography import x509
-    from cryptography.hazmat.primitives import hashes, serialization
-    from cryptography.hazmat.primitives.asymmetric import ec
-    from cryptography.x509.oid import NameOID
-except ImportError:  # the service runs without it; these tests do not
-    x509 = None
 
 
 def make_certificate(folder, names=("example.local",), days=365):
@@ -299,12 +300,8 @@ class RedirectTest(unittest.TestCase):
             self.assertIn(b"Location: https://example.local:8443/\r\n", answer)
 
 
-# ---------- behind a proxy (task 3) ----------
+# ---------- behind a proxy ----------
 
-from uvicorn.middleware.proxy_headers import ProxyHeadersMiddleware  # noqa: E402
-
-from asgi_client import call  # noqa: E402
-from moonlan import auth, signin  # noqa: E402
 
 PASSWORD = "correct horse battery"
 PROXY = "127.0.0.1"
@@ -328,7 +325,10 @@ class ProxyTest(unittest.TestCase):
         token = auth.new_token()
         self.db.add_session(auth.token_hash(token),
                             self.db.user("vera")["id"], time.time())
-        self.cookie = f"{signin.SESSION_COOKIE}={token}"
+        # the session under both names: which one counts follows the
+        # scheme MoonLan sees, and that is what these tests are about
+        self.cookie = (f"{signin.SESSION_COOKIE}={token}; "
+                       f"{signin.SECURE_SESSION_COOKIE}={token}")
         # as run.py sets it up with listen.trusted_proxies: [127.0.0.1]
         self.app = ProxyHeadersMiddleware(server.app, trusted_hosts=[PROXY])
 
@@ -412,3 +412,225 @@ class TrustedProxiesTest(unittest.TestCase):
         self.assertEqual(https.uvicorn_proxy_options(["127.0.0.1"]),
                          {"proxy_headers": True,
                           "forwarded_allow_ips": ["127.0.0.1"]})
+
+
+# ---------- the cookie, the password over http, HSTS ----------
+
+PUBLIC_HOST = "example.local:8443"
+PUBLIC = "https://" + PUBLIC_HOST
+
+
+def session_header(answer):
+    """The Set-Cookie line that carries a session, whatever its name."""
+    for header in answer.header("set-cookie"):
+        name = header.split("=", 1)[0]
+        if name in (signin.SESSION_COOKIE, signin.SECURE_SESSION_COOKIE) \
+                and "max-age=0" not in header.lower():
+            return header
+    return None
+
+
+class SecureCookieCase(unittest.TestCase):
+    def setUp(self):
+        logger = logging.getLogger("moonlan")
+        self.addCleanup(logger.setLevel, logger.level)
+        logger.setLevel(logging.ERROR)
+        self.db = server.accounts
+        self.clean()
+        self.addCleanup(self.clean)
+        server.sign_in._tickets.clear()
+        server.sign_in.throttle = signin.Throttle()
+        self.db.add_user("anton", "admin", auth.hash_password(PASSWORD))
+        self.db.enable_totp("anton", auth.new_totp_secret(), "")
+        self.db.add_user("vera", "user", auth.hash_password(PASSWORD))
+
+    def clean(self):
+        with self.db._lock, self.db._conn:
+            self.db._conn.execute("DELETE FROM sessions")
+            self.db._conn.execute("DELETE FROM users")
+
+    def public(self, text):
+        public, _ = https.parse_public_url(text)
+        patch = mock.patch.object(server.sign_in, "public_url", public)
+        patch.start()
+        self.addCleanup(patch.stop)
+
+    def login(self, name="vera", **kwargs):
+        return call(server.app, "POST", "/api/auth/login",
+                    json_body={"name": name, "password": PASSWORD}, **kwargs)
+
+    def over_https(self):
+        return {"scheme": "https", "host": PUBLIC_HOST}
+
+
+class SecureCookieTest(SecureCookieCase):
+    def test_over_https_the_cookie_is_secure_and_host_only(self):
+        answer = self.login(**self.over_https())
+        self.assertEqual(answer.status, 200, answer.body)
+        header = session_header(answer)
+        self.assertTrue(header.startswith("__Host-moonlan_session="), header)
+        parts = [p.strip().lower() for p in header.split(";")]
+        self.assertIn("secure", parts)
+        self.assertIn("path=/", parts)
+        self.assertIn("httponly", parts)
+        self.assertIn("samesite=strict", parts)
+        # __Host- is refused by the browser with a Domain
+        self.assertFalse(any(p.startswith("domain=") for p in parts))
+
+    def test_the_second_step_sets_it_too(self):
+        ticket = self.login("anton", **self.over_https()).json()["ticket"]
+        code = auth.totp_code(
+            auth.secret_bytes(self.db.user("anton")["totp_secret"]),
+            time.time(),
+        )
+        answer = call(server.app, "POST", "/api/auth/totp",
+                      json_body={"ticket": ticket, "code": code},
+                      **self.over_https())
+        self.assertEqual(answer.status, 200, answer.body)
+        self.assertTrue(session_header(answer).startswith("__Host-"))
+
+    def test_over_http_nothing_changes(self):
+        header = session_header(self.login())
+        self.assertTrue(header.startswith("moonlan_session="), header)
+        self.assertNotIn("secure", header.lower().replace("samesite", ""))
+
+    def test_each_cookie_counts_only_where_it_belongs(self):
+        token = session_header(self.login(**self.over_https())) \
+            .split(";", 1)[0].split("=", 1)[1]
+        me = lambda cookie, **kw: call(  # noqa: E731
+            server.app, "GET", "/api/auth/me", cookie=cookie, **kw
+        ).status
+        self.assertEqual(me(f"__Host-moonlan_session={token}",
+                            **self.over_https()), 200)
+        # a cookie that crossed plain http is not carried over to https
+        self.assertEqual(me(f"moonlan_session={token}",
+                            **self.over_https()), 401)
+        self.assertEqual(me(f"__Host-moonlan_session={token}"), 401)
+
+    def test_signing_out_clears_both_names(self):
+        answer = self.login(**self.over_https())
+        cookie = session_header(answer).split(";", 1)[0]
+        out = call(server.app, "POST", "/api/auth/logout", cookie=cookie,
+                   **self.over_https())
+        cleared = {h.split("=", 1)[0] for h in out.header("set-cookie")
+                   if "max-age=0" in h.lower()}
+        self.assertEqual(cleared, {"moonlan_session", "__Host-moonlan_session"})
+
+
+class HttpsRequiredTest(SecureCookieCase):
+    def test_no_password_over_http_when_the_address_is_https(self):
+        self.public(PUBLIC)
+        answer = self.login()
+        self.assertEqual(answer.status, 403)
+        self.assertEqual(answer.json(),
+                         {"error": "https_required", "url": PUBLIC + "/"})
+        self.assertIsNone(session_header(answer))
+        self.assertEqual(self.login(**self.over_https()).status, 200)
+
+    def test_nor_a_password_change_or_a_code(self):
+        self.public(PUBLIC)
+        session = session_header(self.login(**self.over_https())) \
+            .split(";", 1)[0].split("=", 1)[1]
+        # a session still works over http (it is the password that is
+        # kept off the wire), but a new password is not taken there
+        self.assertEqual(call(server.app, "GET", "/api/auth/me",
+                              cookie=f"moonlan_session={session}").status, 200)
+        answer = call(server.app, "POST", "/api/auth/password",
+                      json_body={"current": PASSWORD, "new": "x" * 12},
+                      cookie=f"moonlan_session={session}")
+        self.assertEqual(answer.json()["error"], "https_required")
+        answer = call(server.app, "POST", "/api/auth/totp",
+                      json_body={"ticket": "t", "code": "123456"})
+        self.assertEqual(answer.json()["error"], "https_required")
+
+    def test_the_page_learns_where_to_go_before_typing(self):
+        self.public(PUBLIC)
+        answer = call(server.app, "GET", "/api/auth/me")
+        self.assertEqual(answer.status, 401)
+        self.assertEqual(answer.json()["https_url"], PUBLIC + "/")
+        answer = call(server.app, "GET", "/api/auth/me", **self.over_https())
+        self.assertNotIn("https_url", answer.json())
+
+    def test_without_an_https_address_http_works_as_before(self):
+        for text in ("", "http://localhost:8080"):
+            with self.subTest(public_url=text):
+                self.public(text)
+                self.assertEqual(self.login().status, 200)
+                self.assertNotIn(
+                    "https_url", call(server.app, "GET", "/api/auth/me").json()
+                )
+
+
+class HstsTest(unittest.TestCase):
+    def sts(self, app, scheme):
+        answer = call(app, "GET", "/api/health", scheme=scheme)
+        return answer.header("strict-transport-security")
+
+    def test_off_by_default(self):
+        self.assertEqual(config_module.Config().listen_hsts_max_age, 0)
+        self.assertEqual(self.sts(server.app, "https"), [])
+
+    def test_only_over_https(self):
+        app = https.Hsts(server.app, 31536000)
+        self.assertEqual(self.sts(app, "https"), ["max-age=31536000"])
+        self.assertEqual(self.sts(app, "http"), [])
+
+    def test_a_negative_age_reads_as_off(self):
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / "config.yaml"
+            path.write_text("listen:\n  hsts_max_age: -5\n", encoding="utf-8")
+            self.assertEqual(
+                config_module.load_config(path).listen_hsts_max_age, 0
+            )
+
+
+class TransportTest(unittest.TestCase):
+    def test_the_mode(self):
+        public, _ = https.parse_public_url(PUBLIC)
+        plain, _ = https.parse_public_url("http://example.local")
+        mode = https.transport_mode
+        self.assertEqual(mode("/etc/moonlan/tls/cert.pem", [], None), "tls")
+        self.assertEqual(mode("", ["127.0.0.1"], public), "proxy")
+        self.assertEqual(mode("", ["127.0.0.1"], None), "proxy")
+        self.assertEqual(mode("", ["127.0.0.1"], plain), "http")
+        self.assertEqual(mode("", [], public), "http")
+        self.assertEqual(mode("", [], None), "http")
+
+    def line(self, transport, public=None, hsts=0):
+        public, _ = https.parse_public_url(public or "")
+        with mock.patch.object(server, "transport", transport), \
+                mock.patch.object(server, "public_url", public), \
+                mock.patch.object(server.config, "listen_hsts_max_age", hsts), \
+                self.assertLogs("moonlan", "INFO") as logged:
+            server._log_transport()
+        return "\n".join(logged.output)
+
+    def test_one_line_at_startup(self):
+        self.assertIn("served by MoonLan itself", self.line("tls"))
+        self.assertIn("behind a reverse proxy", self.line("proxy"))
+        self.assertIn("Connection: plain HTTP", self.line("http"))
+        self.assertIn("HSTS: max-age=600", self.line("tls", hsts=600))
+
+    def test_an_https_address_with_nothing_behind_it_is_called_out(self):
+        self.assertIn("password is refused", self.line("http", PUBLIC))
+
+    def test_the_clear_text_warning_only_over_http(self):
+        db = server.accounts
+        with db._lock, db._conn:
+            db._conn.execute("DELETE FROM users")
+        db.add_user("anton", "admin", auth.hash_password(PASSWORD))
+        self.addCleanup(lambda: db._conn.execute("DELETE FROM users"))
+        for transport, warned in (("http", True), ("tls", False),
+                                  ("proxy", False)):
+            with self.subTest(transport=transport):
+                sign_in = signin.SignIn(db, server.db, server.config.auth,
+                                        None, transport)
+                with self.assertLogs("moonlan", "INFO") as logged:
+                    sign_in.log_state()
+                self.assertEqual(
+                    any("clear text" in line for line in logged.output), warned
+                )
+
+
+if __name__ == "__main__":
+    unittest.main()

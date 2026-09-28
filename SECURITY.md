@@ -35,7 +35,9 @@ Since v0.7.4 the map can be put behind a sign-in ([docs/SIGN-IN.md](docs/SIGN-IN
 - A wrong name and a wrong password get the same answer in the same time; failures slow an address down and lock an account for fifteen minutes after ten in a row.
 - `/api/health` answers without sign-in with the status and the version only.
 
-**Plain HTTP.** MoonLan does not speak HTTPS yet. Signing in keeps out a stranger at a computer left open, a pupil who found the address, and a guessed or leaked password. It does not protect against somebody who can read the traffic in the same network segment: the password and the session cookie cross the network in clear text, and a session read off the wire works until it ends. v0.7.6 brings HTTPS (TLS of its own or behind a reverse proxy) and passkeys. Until then, bind TOTP on the server rather than in a browser.
+**HTTP and HTTPS.** Since v0.7.6 MoonLan serves HTTPS itself (`listen.tls_cert`) or stands behind a reverse proxy that does (`listen.trusted_proxies`) — [docs/HTTPS.md](docs/HTTPS.md). Over HTTPS the session cookie is `Secure` under the `__Host-` name, and with an https `listen.public_url` a password sent over plain HTTP is refused. `X-Forwarded-For` and `X-Forwarded-Proto` are believed from the listed proxies only, or any client could claim another address and walk past the per-address delay. HSTS is off unless `listen.hsts_max_age` is set, because a lapsed certificate would then lock browsers out of the map.
+
+Over plain HTTP — without either — signing in keeps out a stranger at a computer left open, a pupil who found the address, and a guessed or leaked password. It does not protect against somebody who can read the traffic in the same network segment: the password and the session cookie cross the network in clear text, and a session read off the wire works until it ends. Bind TOTP on the server rather than in a browser then, and the header says the connection is not protected.
 
 ### On-demand actions
 

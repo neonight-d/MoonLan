@@ -34,6 +34,22 @@ from .db import AccountError, Database
 log = logging.getLogger("moonlan")
 
 SESSION_COOKIE = "moonlan_session"
+# The same over HTTPS (v0.7.6). The prefix makes the browser take the
+# cookie only with Secure, Path=/ and no Domain, so a neighbouring
+# subdomain cannot plant one. A session cookie that crossed the network
+# in the clear is not carried over to HTTPS: everybody signs in once
+# more after the switch.
+SECURE_SESSION_COOKIE = "__Host-moonlan_session"
+
+
+def is_secure(request: Request) -> bool:
+    """HTTPS to MoonLan itself, or to a trusted proxy in front of it
+    (uvicorn has put the proxy's X-Forwarded-Proto into the scheme)."""
+    return request.url.scheme == "https"
+
+
+def session_cookie(secure: bool) -> str:
+    return SECURE_SESSION_COOKIE if secure else SESSION_COOKIE
 
 # diag, on the server: python -m moonlan.diag asks the running service
 # for what only the service knows (poll times, paused OIDs, which nodes
@@ -199,9 +215,10 @@ def log_plain_http() -> None:
     log.warning(
         "Sign-in runs over plain HTTP: passwords and session cookies cross "
         "the network in clear text, and anyone who can read the traffic "
-        "can take a session. HTTPS arrives in v0.7.6; until then bind "
-        "TOTP with python -m moonlan.users totp <name> on this machine "
-        "rather than from a browser."
+        "can take a session. Serve HTTPS (listen.tls_cert, or a proxy in "
+        "front — docs/HTTPS.md); until then bind TOTP with "
+        "python -m moonlan.users totp <name> on this machine rather than "
+        "from a browser."
     )
 
 
@@ -222,12 +239,15 @@ class SignIn:
     journal is what the map shows."""
 
     def __init__(self, accounts: Database, journal: Database,
-                 settings: AuthConfig, public_url=None):
+                 settings: AuthConfig, public_url=None, transport="http"):
         self.accounts = accounts
         self.journal = journal
         self.settings = settings
         # listen.public_url (https.PublicUrl), or None
         self.public_url = public_url
+        # how the map reaches people: "tls" (MoonLan's own), "proxy"
+        # (HTTPS at a proxy in front) or "http"
+        self.transport = transport
         self._tickets: dict[str, Ticket] = {}
         self._purged = 0.0
         self.throttle = Throttle()
@@ -261,14 +281,16 @@ class SignIn:
             "Sign-in: on — %d administrator(s), %d user(s), %d viewer(s)",
             roles["admin"], roles["user"], roles["viewer"],
         )
-        log_plain_http()
+        if self.transport == "http":
+            log_plain_http()
 
     def _lookup(self, token: str, now: float) -> tuple[bool, Principal | None]:
         on = self.sign_in_on()
         if on and self._was_on is False:
             log.info("Sign-in switched on: an enabled administrator exists "
                      "now. Every open map asks to sign in.")
-            log_plain_http()
+            if self.transport == "http":
+                log_plain_http()
         self._was_on = on
         if on and now - self._purged > PURGE_SECONDS:
             self._purged = now
@@ -321,7 +343,8 @@ class SignIn:
     async def who(self, request: Request) -> tuple[bool, Principal | None]:
         """(is sign-in on, who is asking — None for nobody)."""
         on, who = await asyncio.to_thread(
-            self._lookup, request.cookies.get(SESSION_COOKIE, ""),
+            self._lookup,
+            request.cookies.get(session_cookie(is_secure(request)), ""),
             time.time(),
         )
         console = request.headers.get(CONSOLE_HEADER, "")
@@ -387,19 +410,35 @@ class SignIn:
         )
         return token
 
-    def _signed_in(self, token: str) -> JSONResponse:
+    def _signed_in(self, token: str, secure: bool = False) -> JSONResponse:
         """The cookie: HttpOnly — no script on the page reads it;
-        SameSite=Strict — no other site's page sends it; Path=/. Not
-        yet Secure: that needs HTTPS (v0.7.6). It lasts as long as a
+        SameSite=Strict — no other site's page sends it; Path=/. Over
+        HTTPS also Secure, under the __Host- name. It lasts as long as a
         session may, so a browser restart does not sign a wall monitor
         out."""
         response = JSONResponse({"status": "signed_in"})
         response.set_cookie(
-            SESSION_COOKIE, token,
+            session_cookie(secure), token,
             max_age=int(self.settings.session_max_days * 86400),
-            httponly=True, samesite="strict", path="/",
+            httponly=True, samesite="strict", path="/", secure=secure,
         )
         return response
+
+    def https_url(self, request: Request) -> str | None:
+        """The protected address to send this browser to, when it came
+        over plain HTTP although listen.public_url is https."""
+        if self.public_url is None or not self.public_url.secure \
+                or is_secure(request):
+            return None
+        return self.public_url.origin + "/"
+
+    def https_refusal(self, request: Request) -> JSONResponse | None:
+        """With an https public address, a password sent over plain HTTP
+        is refused — whoever opened the service's port directly would
+        otherwise go on sending it in the clear although HTTPS is there.
+        The answer carries the address to go to."""
+        url = self.https_url(request)
+        return refuse("https_required", 403, url=url) if url else None
 
     def _check_password(self, name: str, password: str):
         """(the account, whether the password is right) — the account
@@ -462,7 +501,7 @@ class SignIn:
         return self._locked(until, now)
 
     async def login(self, name: str, password: str,
-                    address: str) -> JSONResponse:
+                    address: str, secure: bool = False) -> JSONResponse:
         """The first step: name and password."""
         now = time.time()
         too_soon = self._too_soon(address, now)
@@ -506,14 +545,14 @@ class SignIn:
         token = await asyncio.to_thread(
             self._open_session, row, False, address, now, rehashed
         )
-        return self._signed_in(token)
+        return self._signed_in(token, secure)
 
     def _drop_old_tickets(self, now: float) -> None:
         for key in [k for k, t in self._tickets.items() if t.expires < now]:
             del self._tickets[key]
 
     async def second_step(self, ticket: str, code: str,
-                          address: str) -> JSONResponse:
+                          address: str, secure: bool = False) -> JSONResponse:
         """The second step: a code from the app or the key."""
         now = time.time()
         too_soon = self._too_soon(address, now)
@@ -548,7 +587,7 @@ class SignIn:
                     self._open_session, row, True, address, now,
                     entry.rehashed, auth.recovery_left(left),
                 )
-                return self._signed_in(token)
+                return self._signed_in(token, secure)
         if step is None:
             entry.tries += 1
             if entry.tries >= TICKET_TRIES:
@@ -571,7 +610,7 @@ class SignIn:
         token = await asyncio.to_thread(
             self._open_session, row, True, address, now, entry.rehashed
         )
-        return self._signed_in(token)
+        return self._signed_in(token, secure)
 
     async def logout(self, who: Principal | None) -> JSONResponse:
         if who is not None and who.session:
@@ -583,6 +622,7 @@ class SignIn:
             log.info("Signed out: %s", who.name)
         response = JSONResponse({"status": "signed_out"})
         response.delete_cookie(SESSION_COOKIE, path="/")
+        response.delete_cookie(SECURE_SESSION_COOKIE, path="/", secure=True)
         return response
 
     async def change_password(self, who: Principal | None, current: str,
@@ -824,12 +864,16 @@ def add_routes(app: FastAPI, sign_in: SignIn) -> None:
         on, who = await sign_in.who(request)
         if not on:
             return {"sign_in": False, "create_admin": CREATE_ADMIN}
+        # over plain HTTP with an https public address: where to go
+        # instead — the form says so before a password is typed
+        https_url = {"https_url": url} if (url := sign_in.https_url(request)) \
+            else {}
         if who is None:
             return JSONResponse(
-                {"error": "sign_in_required", "sign_in": True},
+                {"error": "sign_in_required", "sign_in": True, **https_url},
                 status_code=401,
             )
-        return await asyncio.to_thread(sign_in.me, who)
+        return {**await asyncio.to_thread(sign_in.me, who), **https_url}
 
     @app.post("/api/auth/login")
     async def auth_login(body: LoginBody, request: Request):
@@ -837,12 +881,14 @@ def add_routes(app: FastAPI, sign_in: SignIn) -> None:
         needed" and a ticket for /api/auth/totp — not a session."""
         if not await asyncio.to_thread(sign_in.sign_in_on):
             return refuse("sign_in_off", 409)
-        return await sign_in.login(body.name, body.password, _address(request))
+        return sign_in.https_refusal(request) or await sign_in.login(
+            body.name, body.password, _address(request), is_secure(request)
+        )
 
     @app.post("/api/auth/totp")
     async def auth_totp(body: CodeBody, request: Request):
-        return await sign_in.second_step(
-            body.ticket, body.code, _address(request)
+        return sign_in.https_refusal(request) or await sign_in.second_step(
+            body.ticket, body.code, _address(request), is_secure(request)
         )
 
     @app.post("/api/auth/logout")
@@ -855,7 +901,7 @@ def add_routes(app: FastAPI, sign_in: SignIn) -> None:
 
     @app.post("/api/auth/totp/confirm")
     async def auth_totp_confirm(body: BindBody, request: Request):
-        return await sign_in.totp_confirm(
+        return sign_in.https_refusal(request) or await sign_in.totp_confirm(
             principal(), body.code, body.password, _address(request)
         )
 
@@ -979,6 +1025,6 @@ def add_routes(app: FastAPI, sign_in: SignIn) -> None:
 
     @app.post("/api/auth/password")
     async def auth_password(body: PasswordBody, request: Request):
-        return await sign_in.change_password(
+        return sign_in.https_refusal(request) or await sign_in.change_password(
             principal(), body.current, body.new, _address(request)
         )

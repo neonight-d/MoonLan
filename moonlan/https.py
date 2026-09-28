@@ -299,3 +299,47 @@ def uvicorn_proxy_options(trusted: list[str]) -> dict:
     if not trusted:
         return {"proxy_headers": False}
     return {"proxy_headers": True, "forwarded_allow_ips": list(trusted)}
+
+
+# ---------- how the map reaches people ----------
+
+def transport_mode(tls_cert: str, trusted: list[str],
+                   public: PublicUrl | None) -> str:
+    """"tls" — MoonLan serves HTTPS itself; "proxy" — a trusted proxy in
+    front holds it (and, if it is set, the public address is https);
+    "http" — the password and the session cross the network in the
+    clear."""
+    if tls_cert:
+        return "tls"
+    if trusted and (public is None or public.secure):
+        return "proxy"
+    return "http"
+
+
+class Hsts:
+    """listen.hsts_max_age: Strict-Transport-Security on every answer
+    that went over HTTPS. Off unless asked for: once a browser has seen
+    it, it refuses plain http to this host name for max-age seconds —
+    and if the certificate is ever let lapse, or HTTPS switched off, that
+    browser cannot open the map at all until the time runs out."""
+
+    def __init__(self, app, max_age: int):
+        self.app = app
+        self.value = f"max-age={int(max_age)}".encode("ascii")
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] != "http" or scope.get("scheme") != "https":
+            await self.app(scope, receive, send)
+            return
+
+        async def with_header(message):
+            if message["type"] == "http.response.start":
+                headers = [
+                    (k, v) for k, v in message.get("headers", [])
+                    if k.lower() != b"strict-transport-security"
+                ]
+                headers.append((b"strict-transport-security", self.value))
+                message = {**message, "headers": headers}
+            await send(message)
+
+        await self.app(scope, receive, with_header)
