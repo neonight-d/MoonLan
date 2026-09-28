@@ -8,6 +8,7 @@ threads (check_same_thread=False), access is serialized with a Lock.
 from __future__ import annotations
 
 import logging
+import os
 import sqlite3
 import threading
 import time
@@ -21,9 +22,15 @@ log = logging.getLogger(__name__)
 DEFAULT_DB_PATH = Path("moonlan.db")
 
 
+# Keys per account (v0.7.6): enough for a key on the ring, one in the
+# drawer and the phones; a list nobody can review is not a list
+PASSKEYS_MAX = 10
+
+
 class AccountError(Exception):
     """An account change refused, with a code the caller words:
-    "exists", "unknown", "last_admin"."""
+    "exists", "unknown", "last_admin"; for keys "too_many_keys",
+    "key_exists", "unknown_key" and "last_factor"."""
 
     def __init__(self, code: str, name: str = ""):
         super().__init__(f"{code}: {name}" if name else code)
@@ -127,7 +134,11 @@ CREATE TABLE IF NOT EXISTS users (
     disabled     INTEGER DEFAULT 0,
     locked_until REAL DEFAULT 0,            -- too many wrong passwords in a row
     created_at   REAL NOT NULL,
-    last_login   REAL DEFAULT 0
+    last_login   REAL DEFAULT 0,
+    -- What a key keeps to say whose it is (v0.7.6): 32 random bytes,
+    -- made at the first key. Not the name — a key shows its handle to
+    -- whoever holds it — and not the row id, which is only a counter.
+    webauthn_user_id BLOB DEFAULT NULL
 );
 CREATE TABLE IF NOT EXISTS sessions (
     -- Signed-in browsers. The cookie carries a random token and this
@@ -140,6 +151,25 @@ CREATE TABLE IF NOT EXISTS sessions (
     address       TEXT DEFAULT ''
 );
 CREATE INDEX IF NOT EXISTS sessions_user ON sessions (user_id);
+CREATE TABLE IF NOT EXISTS passkeys (
+    -- Keys a person signs in with (v0.7.6): passkeys and security keys.
+    -- Only the public halves are kept: a copy of the database signs
+    -- nobody in.
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id       INTEGER NOT NULL,
+    credential_id BLOB NOT NULL UNIQUE,     -- the key's id for this credential
+    public_key    BLOB NOT NULL,            -- COSE_Key, CBOR-encoded
+    sign_count    INTEGER DEFAULT 0,        -- the key's counter at its last use
+    aaguid        TEXT DEFAULT '',          -- the model, if the key says
+    transports    TEXT DEFAULT '',          -- usb,nfc,ble,hybrid,internal: hints for the browser
+    discoverable  INTEGER DEFAULT NULL,     -- credProps.rk: 1 kept on the key, 0 not, NULL unknown
+    user_verified INTEGER DEFAULT 0,        -- a PIN or a finger when it was added
+    passwordless  INTEGER DEFAULT 0,        -- 1 may sign in alone; 0 only after the password
+    label         TEXT DEFAULT '',
+    created_at    REAL NOT NULL,
+    last_used     REAL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS passkeys_user ON passkeys (user_id);
 CREATE TABLE IF NOT EXISTS alarms (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     type TEXT NOT NULL,        -- host_down|switch_down|port_errors|port_util|new_mac
@@ -274,6 +304,7 @@ class Database:
             ("totp_pending", "TEXT DEFAULT ''"),
             ("totp_last_step", "INTEGER DEFAULT 0"),
             ("locked_until", "REAL DEFAULT 0"),
+            ("webauthn_user_id", "BLOB DEFAULT NULL"),
         ):
             if column not in user_columns:
                 self._conn.execute(
@@ -1290,6 +1321,9 @@ class Database:
             row = self._account(name)
             self._keep_an_admin(row)
             closed = self._close_sessions(row["id"])
+            self._conn.execute(
+                "DELETE FROM passkeys WHERE user_id = ?", (row["id"],)
+            )
             self._conn.execute("DELETE FROM users WHERE id = ?", (row["id"],))
             return closed
 
@@ -1380,7 +1414,9 @@ class Database:
             row = self._conn.execute(
                 "SELECT s.token_hash, s.user_id, s.created_at, s.last_seen, "
                 "s.second_factor, s.address, u.name, u.role, u.disabled, "
-                "u.must_change, u.totp_enabled "
+                "u.must_change, u.totp_enabled, "
+                "(SELECT COUNT(*) FROM passkeys p WHERE p.user_id = s.user_id)"
+                " AS passkeys "
                 "FROM sessions s LEFT JOIN users u ON u.id = s.user_id "
                 "WHERE s.token_hash = ?", (token_hash,),
             ).fetchone()
@@ -1471,3 +1507,145 @@ class Database:
                 "UPDATE users SET recovery = ? WHERE id = ? AND recovery = ?",
                 (after, user_id, before),
             ).rowcount > 0
+
+    # ---------- keys (v0.7.6) ----------
+    #
+    # An administrator must keep a second factor: TOTP or a key. Taking
+    # away the last one is refused — the console's reset-passkeys and
+    # reset-totp are the way back in for somebody who lost it, and they
+    # leave the binding of a new one as the first thing at sign-in.
+
+    def webauthn_user_id(self, user_id: int) -> bytes:
+        """This person's handle in their keys, made on first use."""
+        with self._lock, self._conn:
+            self._conn.execute(
+                "UPDATE users SET webauthn_user_id = ? "
+                "WHERE id = ? AND webauthn_user_id IS NULL",
+                (os.urandom(32), user_id),
+            )
+            row = self._conn.execute(
+                "SELECT webauthn_user_id FROM users WHERE id = ?", (user_id,)
+            ).fetchone()
+        return bytes(row[0]) if row and row[0] is not None else b""
+
+    def passkeys(self, user_id: int) -> list[dict]:
+        """An account's keys, oldest first, each with its number in
+        that list — what the console and the page call it by."""
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT * FROM passkeys WHERE user_id = ? ORDER BY id",
+                (user_id,),
+            ).fetchall()
+        return [dict(row, number=n) for n, row in enumerate(rows, 1)]
+
+    def passkey_by_credential(self, credential_id: bytes) -> dict | None:
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT * FROM passkeys WHERE credential_id = ?",
+                (credential_id,),
+            ).fetchone()
+        return dict(row) if row else None
+
+    def passkey_counts(self) -> dict[int, int]:
+        """user id -> keys."""
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT user_id, COUNT(*) FROM passkeys GROUP BY user_id"
+            ).fetchall()
+        return {row[0]: row[1] for row in rows}
+
+    def add_passkey(
+        self, user_id: int, key: dict, recovery: str | None = None,
+        keep_session: str = "", ts: float | None = None,
+    ) -> tuple[int, int]:
+        """Stores a key: `key` holds the passkeys columns. (its number,
+        sessions closed). With `recovery`, the account gets those
+        recovery codes if it has none. The session that added the key has
+        given a second factor now; when this is the account's first,
+        every other session is closed — they were opened without one."""
+        with self._account_change():
+            row = self._conn.execute(
+                "SELECT * FROM users WHERE id = ?", (user_id,)
+            ).fetchone()
+            if row is None:
+                raise AccountError("unknown")
+            count = self._conn.execute(
+                "SELECT COUNT(*) FROM passkeys WHERE user_id = ?", (user_id,)
+            ).fetchone()[0]
+            if count >= PASSKEYS_MAX:
+                raise AccountError("too_many_keys", row["name"])
+            try:
+                self._conn.execute(
+                    "INSERT INTO passkeys (user_id, credential_id, public_key, "
+                    "sign_count, aaguid, transports, discoverable, "
+                    "user_verified, passwordless, label, created_at) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    (user_id, key["credential_id"], key["public_key"],
+                     key.get("sign_count", 0), key.get("aaguid", ""),
+                     key.get("transports", ""), key.get("discoverable"),
+                     int(bool(key.get("user_verified"))),
+                     int(bool(key.get("passwordless"))),
+                     key.get("label", ""), time.time() if ts is None else ts),
+                )
+            except sqlite3.IntegrityError:
+                raise AccountError("key_exists", row["name"]) from None
+            if recovery is not None:
+                self._conn.execute(
+                    "UPDATE users SET recovery = ? "
+                    "WHERE id = ? AND recovery = ''", (recovery, user_id),
+                )
+            if keep_session:
+                self._conn.execute(
+                    "UPDATE sessions SET second_factor = 1 "
+                    "WHERE token_hash = ?", (keep_session,),
+                )
+            first = count == 0 and not row["totp_enabled"]
+            closed = self._close_sessions(user_id, keep_session) if first else 0
+            return count + 1, closed
+
+    def _keep_a_factor(self, row: sqlite3.Row, removing: int) -> None:
+        """An administrator without TOTP keeps at least one key."""
+        if row["role"] != "admin" or row["totp_enabled"]:
+            return
+        count = self._conn.execute(
+            "SELECT COUNT(*) FROM passkeys WHERE user_id = ?", (row["id"],)
+        ).fetchone()[0]
+        if count - removing < 1:
+            raise AccountError("last_factor", row["name"])
+
+    def remove_passkey(
+        self, name: str, key_id: int, keep_session: str = ""
+    ) -> tuple[dict, int]:
+        """(the key removed, sessions closed). Every session of the
+        account but `keep_session` is closed: a key is removed because
+        it was lost, and whoever found it may have signed in with it."""
+        with self._account_change():
+            row = self._account(name)
+            key = self._conn.execute(
+                "SELECT * FROM passkeys WHERE id = ? AND user_id = ?",
+                (key_id, row["id"]),
+            ).fetchone()
+            if key is None:
+                raise AccountError("unknown_key", row["name"])
+            self._keep_a_factor(row, 1)
+            self._conn.execute("DELETE FROM passkeys WHERE id = ?", (key_id,))
+            return dict(key), self._close_sessions(row["id"], keep_session)
+
+    def reset_passkeys(self, name: str) -> tuple[int, int]:
+        """Removes every key of an account — for the owner who lost
+        them. (keys removed, sessions closed). Allowed for an
+        administrator without TOTP too: they bind a new second factor
+        at the next sign-in, before anything else."""
+        with self._account_change():
+            row = self._account(name)
+            removed = self._conn.execute(
+                "DELETE FROM passkeys WHERE user_id = ?", (row["id"],)
+            ).rowcount
+            return removed, self._close_sessions(row["id"])
+
+    def use_passkey(self, key_id: int, sign_count: int, ts: float) -> None:
+        with self._lock, self._conn:
+            self._conn.execute(
+                "UPDATE passkeys SET sign_count = ?, last_used = ? "
+                "WHERE id = ?", (sign_count, ts, key_id),
+            )
