@@ -26,7 +26,7 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse
 from starlette.routing import Match, Mount
 
-from . import access, auth
+from . import access, auth, passkeys
 from .access import Principal
 from .config import AuthConfig
 from .db import AccountError, Database
@@ -753,6 +753,15 @@ class SignIn:
         log.info("Accounts: %s %s by %s%s", event, name, actor(),
                  f" {details}" if details else "")
 
+    def passkey_info(self) -> dict:
+        """What the page needs to offer a key, or to say why not: the
+        server's reason (None when it can take one) and the address the
+        keys are bound to, for the page to compare with its own."""
+        return {
+            "why": passkeys.unavailable(self.public_url),
+            "origin": self.public_url.origin if self.public_url else None,
+        }
+
     def me(self, who: Principal) -> dict:
         row = self.accounts.user(who.name) or {}
         return {
@@ -866,14 +875,15 @@ def add_routes(app: FastAPI, sign_in: SignIn) -> None:
             return {"sign_in": False, "create_admin": CREATE_ADMIN}
         # over plain HTTP with an https public address: where to go
         # instead — the form says so before a password is typed
-        https_url = {"https_url": url} if (url := sign_in.https_url(request)) \
-            else {}
+        extra = {"passkeys": sign_in.passkey_info()}
+        if url := sign_in.https_url(request):
+            extra["https_url"] = url
         if who is None:
             return JSONResponse(
-                {"error": "sign_in_required", "sign_in": True, **https_url},
+                {"error": "sign_in_required", "sign_in": True, **extra},
                 status_code=401,
             )
-        return {**await asyncio.to_thread(sign_in.me, who), **https_url}
+        return {**await asyncio.to_thread(sign_in.me, who), **extra}
 
     @app.post("/api/auth/login")
     async def auth_login(body: LoginBody, request: Request):

@@ -1,5 +1,29 @@
 # MoonLan Operations & Troubleshooting
 
+## Installing
+
+```bash
+python3 -m venv .venv
+.venv/bin/pip install -r requirements.txt
+```
+
+`fido2` (signing in with a key, since v0.7.6) brings `cryptography`,
+which pip installs as a ready-made wheel on x86-64 and ARM64 Linux with
+glibc or musl. Where no wheel fits — an old pip, an unusual CPU or
+libc — pip tries to build it and needs Rust and the OpenSSL headers.
+Either upgrade pip first (`.venv/bin/pip install --upgrade pip`), or
+take the distribution's package and let the virtual environment see it:
+
+```bash
+sudo apt install python3-cryptography     # Debian, Ubuntu
+python3 -m venv --system-site-packages .venv
+.venv/bin/pip install -r requirements.txt
+```
+
+Without `fido2` MoonLan runs as before: signing in with a key is off,
+the log says why at startup, and so does the sign-in form. Passwords
+and TOTP do not need it.
+
 ## Running
 
 ```bash

@@ -49,6 +49,12 @@ source .venv/bin/activate
 pip install -r requirements.txt
 ~~~
 
+`fido2` (вход по ключу) тянет `cryptography` — на обычных Linux-машинах
+это готовый wheel. Если pip взялся собирать его и упал без Rust,
+обновите pip или возьмите пакет дистрибутива `python3-cryptography`:
+[docs/OPERATIONS.md](docs/OPERATIONS.md#installing). Без него MoonLan
+работает, только вход по ключу выключен.
+
 ### Настройка
 
 ~~~bash

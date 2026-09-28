@@ -2,3 +2,6 @@ fastapi>=0.110
 uvicorn[standard]>=0.29
 pysnmp>=7.1,<8
 PyYAML>=6.0
+# Signing in with a key (WebAuthn); brings `cryptography`. Without it
+# MoonLan runs, with keys off — docs/OPERATIONS.md, "Installing".
+fido2>=2.2,<3

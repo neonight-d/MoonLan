@@ -47,6 +47,12 @@ source .venv/bin/activate
 pip install -r requirements.txt
 ~~~
 
+`fido2` (signing in with a key) brings `cryptography`, a ready-made
+wheel on common Linux machines. If pip starts building it and fails —
+no Rust — upgrade pip, or use the distribution's `python3-cryptography`:
+[docs/OPERATIONS.md](docs/OPERATIONS.md#installing). Without it
+MoonLan runs, with keys off.
+
 ### Configure
 
 ~~~bash

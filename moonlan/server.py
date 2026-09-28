@@ -20,7 +20,7 @@ from pydantic import BaseModel
 
 from . import (
     __version__, corruption, counters, demo, https, loopdetect, menu,
-    pinger, probes, signin, stp,
+    passkeys, pinger, probes, signin, stp,
 )
 from .alarms import AlarmEngine
 from .config import Config, load_config, parse_uplink_ports
@@ -1885,6 +1885,7 @@ def _log_config() -> None:
     for problem in report.menu_problems:
         log.warning("config.yaml context_menu: %s", problem)
     _log_public_url()
+    passkeys.log_state(public_url)
     links = config.context_menu.links
     if links:
         log.info(
