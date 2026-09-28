@@ -7,6 +7,11 @@ listen:
   host: 0.0.0.0     # address the web UI listens on
                     # на каком адресе слушать веб-интерфейс
   port: 8080
+  # The address people open the map at (v0.7.6): a host NAME, not an IP —
+  # signing in with a key is bound to it. Unset: as before, no passkeys.
+  # Адрес, по которому карту открывают люди (v0.7.6): ИМЯ хоста, не IP —
+  # к нему привязывается вход по ключу. Не задан — как раньше, без ключей.
+  # public_url: https://example.local:8443
 
 snmp:
   community: public # SNMP v2c community (read-only)

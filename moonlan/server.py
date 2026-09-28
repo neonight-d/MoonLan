@@ -19,8 +19,8 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from . import (
-    __version__, corruption, counters, demo, loopdetect, menu, pinger,
-    probes, signin, stp,
+    __version__, corruption, counters, demo, https, loopdetect, menu,
+    pinger, probes, signin, stp,
 )
 from .alarms import AlarmEngine
 from .config import Config, load_config, parse_uplink_ports
@@ -47,6 +47,11 @@ WEB_DIR = Path(__file__).resolve().parent.parent / "web"
 
 state = TopologyState()
 config: Config = load_config()
+# listen.public_url, taken apart: the origin requests and passkeys are
+# checked against, and the host a passkey is bound to
+public_url, public_url_problems = https.parse_public_url(
+    config.listen_public_url
+)
 # In demo mode the DB lives in memory so the real one is not polluted
 db = Database(":memory:" if config.demo else config.db_path)
 # Accounts and sessions: the same database — except in demo mode, where
@@ -1863,6 +1868,7 @@ def _log_config() -> None:
         log.warning("config.yaml switches: %s", problem)
     for problem in report.menu_problems:
         log.warning("config.yaml context_menu: %s", problem)
+    _log_public_url()
     links = config.context_menu.links
     if links:
         log.info(
@@ -1906,6 +1912,37 @@ def _log_config() -> None:
                 + ")"
                 for ip in custom
             ),
+        )
+
+
+def _log_public_url() -> None:
+    """Where people are expected to open the map, and what follows."""
+    for problem in public_url_problems:
+        log.warning("config.yaml %s — ignored", problem)
+    if public_url is None:
+        log.info(
+            "Public address: listen.public_url is not set — signing in with "
+            "a key is off; everything else works as before"
+        )
+        return
+    why = https.passkey_problem(public_url)
+    if why == "public_url_ip":
+        log.warning(
+            "Public address: %s is an IP address. A passkey is bound to a "
+            "host name, never to an address: signing in with a key is off. "
+            "Open the map by name (and set that name here) to use one.",
+            public_url.origin,
+        )
+    elif why == "public_url_http":
+        log.warning(
+            "Public address: %s is plain http. Browsers offer WebAuthn only "
+            "to a secure page (https, or localhost): signing in with a key "
+            "is off.", public_url.origin,
+        )
+    else:
+        log.info(
+            "Public address: %s — passkeys are bound to %s",
+            public_url.origin, public_url.rp_id,
         )
 
 

@@ -114,6 +114,7 @@ fails on a key the loader knows and this page does not.
 |---|---|---|
 | `listen.host` | `0.0.0.0` | Address the web interface listens on. |
 | `listen.port` | `8080` | Its port. |
+| `listen.public_url` | `""` | The address people open the map at, e.g. `https://example.local:8443` — scheme and host, no path. Requests are checked against it, and signing in with a key is bound to its host name (never an IP). Unset: no passkeys, everything else as before. See [HTTPS.md](HTTPS.md). |
 
 ### snmp
 

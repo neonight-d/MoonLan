@@ -209,6 +209,11 @@ DEFAULT_ALARM_NOTIFY: dict[str, list[str]] = {
 class Config:
     listen_host: str = "0.0.0.0"
     listen_port: int = 8080
+    # The address people open the map at, e.g. https://example.local:8443
+    # (v0.7.6). What signing in with a key binds to and what requests
+    # are checked against; unset, everything works as in v0.7.5 and
+    # signing in with a key is off.
+    listen_public_url: str = ""
     snmp: SnmpConfig = field(default_factory=SnmpConfig)
     switches: list[str] = field(default_factory=list)
     # Per-switch SNMP settings, one entry per address in `switches`.
@@ -636,6 +641,9 @@ def load_config(path: Path | None = None) -> Config:
 
     cfg.listen_host = r.get("listen.host", d.listen_host, str)
     cfg.listen_port = r.get("listen.port", d.listen_port, int)
+    cfg.listen_public_url = r.get(
+        "listen.public_url", d.listen_public_url, str
+    )
 
     cfg.snmp = SnmpConfig(
         community=r.get("snmp.community", d.snmp.community, str),
