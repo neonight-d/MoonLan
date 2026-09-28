@@ -202,6 +202,8 @@ DEFAULT_ALARM_NOTIFY: dict[str, list[str]] = {
     "loop_detected": ["email", "telegram", "syslog"],
     # …and its silent disappearance is worth a line in the log
     "loop_detection_disabled": ["syslog"],
+    # The certificate MoonLan serves runs out within two weeks
+    "tls_cert_expiring": ["syslog", "telegram"],
 }
 
 
@@ -214,6 +216,13 @@ class Config:
     # are checked against; unset, everything works as in v0.7.5 and
     # signing in with a key is off.
     listen_public_url: str = ""
+    # TLS served by MoonLan itself: PEM certificate and key. Both, or
+    # neither (then plain HTTP, or a proxy in front holds the TLS).
+    listen_tls_cert: str = ""
+    listen_tls_key: str = ""
+    # A second port answering only with a redirect to public_url
+    # (0 — none)
+    listen_http_redirect_port: int = 0
     snmp: SnmpConfig = field(default_factory=SnmpConfig)
     switches: list[str] = field(default_factory=list)
     # Per-switch SNMP settings, one entry per address in `switches`.
@@ -643,6 +652,11 @@ def load_config(path: Path | None = None) -> Config:
     cfg.listen_port = r.get("listen.port", d.listen_port, int)
     cfg.listen_public_url = r.get(
         "listen.public_url", d.listen_public_url, str
+    )
+    cfg.listen_tls_cert = r.get("listen.tls_cert", d.listen_tls_cert, str)
+    cfg.listen_tls_key = r.get("listen.tls_key", d.listen_tls_key, str)
+    cfg.listen_http_redirect_port = r.get(
+        "listen.http_redirect_port", d.listen_http_redirect_port, int
     )
 
     cfg.snmp = SnmpConfig(

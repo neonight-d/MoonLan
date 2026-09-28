@@ -116,6 +116,8 @@ SEVERITIES = {
     "port_flapping": "warning",
     "loop_detected": "critical",
     "loop_detection_disabled": "info",
+    # alarms about MoonLan itself rather than the network (service_alarm)
+    "tls_cert_expiring": "warning",
 }
 
 HOST_DOWN_AFTER = 3    # consecutive failed pings
@@ -1013,6 +1015,18 @@ class AlarmEngine:
             alarm_type, subject, severity, message, cleared=True,
             display=display_subject(subject),
         )
+
+    async def service_alarm(
+        self, alarm_type: str, subject: str, active: bool, message: str
+    ) -> None:
+        """An alarm about MoonLan itself rather than the network — the
+        certificate it serves running out, say: raised or cleared by
+        whoever watches the condition, routed and journalled like any
+        other."""
+        if active:
+            await self._raise(alarm_type, subject, message)
+        else:
+            await self._clear(alarm_type, subject, message)
 
     # ---------- flap damping ----------
 

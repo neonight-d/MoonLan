@@ -114,6 +114,9 @@ fails on a key the loader knows and this page does not.
 |---|---|---|
 | `listen.host` | `0.0.0.0` | Address the web interface listens on. |
 | `listen.port` | `8080` | Its port. |
+| `listen.tls_cert` | `""` | PEM certificate MoonLan serves itself (with `listen.tls_key`; both or neither). Checked before start; read at startup, so a new file needs a restart. |
+| `listen.tls_key` | `""` | Its PEM key, readable by the service's user only (mode 600). |
+| `listen.http_redirect_port` | `0` | A second port that only redirects to `listen.public_url` — for people who type `http://` out of habit (0 — none). |
 | `listen.public_url` | `""` | The address people open the map at, e.g. `https://example.local:8443` — scheme and host, no path. Requests are checked against it, and signing in with a key is bound to its host name (never an IP). Unset: no passkeys, everything else as before. See [HTTPS.md](HTTPS.md). |
 
 ### snmp
@@ -245,6 +248,7 @@ The channels (`email`, `telegram`, `syslog`) each alarm type goes to.
 | `alarm_notify.port_flapping` | telegram, syslog |
 | `alarm_notify.loop_detected` | email, telegram, syslog |
 | `alarm_notify.loop_detection_disabled` | syslog |
+| `alarm_notify.tls_cert_expiring` | syslog, telegram |
 
 ## Notes on particular settings
 

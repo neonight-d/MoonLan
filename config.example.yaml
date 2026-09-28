@@ -12,6 +12,15 @@ listen:
   # Адрес, по которому карту открывают люди (v0.7.6): ИМЯ хоста, не IP —
   # к нему привязывается вход по ключу. Не задан — как раньше, без ключей.
   # public_url: https://example.local:8443
+  # HTTPS served by MoonLan itself: certificate and key, PEM (both or
+  # neither). See docs/HTTPS.md for making them with mkcert.
+  # HTTPS самим MoonLan: сертификат и ключ в PEM (оба или ни одного).
+  # Как выпустить их через mkcert — docs/HTTPS.md.
+  # tls_cert: /opt/moonlan/tls/example.local.pem
+  # tls_key: /opt/moonlan/tls/example.local-key.pem
+  # A port that only redirects http:// to public_url (0 — none)
+  # Порт, который только перенаправляет http:// на public_url (0 — нет)
+  # http_redirect_port: 8080
 
 snmp:
   community: public # SNMP v2c community (read-only)
@@ -542,3 +551,6 @@ alarm_notify:
   # …and a switch that quietly stopped watching is worth a log line
   # …а коммутатор, тихо переставший следить, стоит строки в журнале
   loop_detection_disabled: [syslog]
+  # The certificate MoonLan serves ends within two weeks
+  # Сертификат, который отдаёт MoonLan, кончается в ближайшие две недели
+  tls_cert_expiring: [syslog, telegram]

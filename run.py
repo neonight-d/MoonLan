@@ -7,6 +7,7 @@ import sys
 
 import uvicorn
 
+from moonlan import https
 from moonlan.config import load_config
 
 
@@ -27,17 +28,42 @@ def _ensure_port_free(host: str, port: int) -> None:
         )
 
 
+def _tls_options(cfg) -> dict:
+    """ssl_certfile / ssl_keyfile for uvicorn, checked first: a missing
+    file or a key that does not fit the certificate is one line and an
+    exit here, not a traceback from inside uvicorn."""
+    if not cfg.listen_tls_cert and not cfg.listen_tls_key:
+        return {}
+    try:
+        https.check_tls_files(cfg.listen_tls_cert, cfg.listen_tls_key)
+    except https.TlsProblem as problem:
+        sys.exit(str(problem))
+    return {
+        "ssl_certfile": cfg.listen_tls_cert,
+        "ssl_keyfile": cfg.listen_tls_key,
+    }
+
+
 def main() -> None:
     # MOONLAN_CONFIG points at an alternative config.yaml, so a second
     # instance can be started in the project directory without taking
     # the running service's database and port with it
     cfg = load_config()
+    tls = _tls_options(cfg)
     _ensure_port_free(cfg.listen_host, cfg.listen_port)
+    if cfg.listen_http_redirect_port:
+        if cfg.listen_http_redirect_port == cfg.listen_port:
+            sys.exit(
+                "listen.http_redirect_port must be another port than "
+                "listen.port: the redirect listens beside the service"
+            )
+        _ensure_port_free(cfg.listen_host, cfg.listen_http_redirect_port)
     uvicorn.run(
         "moonlan.server:app",
         host=cfg.listen_host,
         port=cfg.listen_port,
         log_level="info",
+        **tls,
     )
 
 

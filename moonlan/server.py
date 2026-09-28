@@ -52,6 +52,14 @@ config: Config = load_config()
 public_url, public_url_problems = https.parse_public_url(
     config.listen_public_url
 )
+# listen.tls_cert, read once at startup: the certificate uvicorn loaded
+# is the one this process serves until it is restarted
+certificate: https.CertInfo | None = None
+# how long before the end tls_cert_expiring is raised, and how often
+# that is looked at
+CERT_ALARM_DAYS = 14
+CERT_WARN_DAYS = 30
+CERT_CHECK_SECONDS = 86400
 # In demo mode the DB lives in memory so the real one is not polluted
 db = Database(":memory:" if config.demo else config.db_path)
 # Accounts and sessions: the same database — except in demo mode, where
@@ -1946,6 +1954,105 @@ def _log_public_url() -> None:
         )
 
 
+def _log_certificate() -> None:
+    """listen.tls_cert at startup: who it is for, until when, and what
+    will go wrong with it — before a browser finds out."""
+    global certificate
+    if not config.listen_tls_cert:
+        return
+    try:
+        certificate = https.read_certificate(config.listen_tls_cert)
+    except (OSError, ValueError) as exc:
+        log.error("TLS: could not read %s: %s", config.listen_tls_cert, exc)
+        return
+    days = (certificate.not_after - time.time()) / 86400
+    ends = time.strftime("%Y-%m-%d", time.localtime(certificate.not_after))
+    log.info(
+        "TLS: serving %s — %s; names: %s; valid until %s",
+        config.listen_tls_cert, certificate.subject,
+        ", ".join(certificate.names) or "none", ends,
+    )
+    if days < 0:
+        log.warning(
+            "TLS: the certificate ENDED on %s. Browsers refuse the page; "
+            "replace the file and restart MoonLan.", ends,
+        )
+    elif days < CERT_WARN_DAYS:
+        log.warning(
+            "TLS: the certificate ends on %s, in %d day(s). Replace the file "
+            "and restart MoonLan — it is read at startup.", ends, int(days),
+        )
+    if public_url and not https.covers(certificate.names, public_url.host):
+        log.warning(
+            "TLS: the certificate does not name %s (it names: %s). Browsers "
+            "will not accept it at listen.public_url, and signing in with a "
+            "key will not work there.",
+            public_url.host, ", ".join(certificate.names) or "nothing",
+        )
+    mode = https.key_mode_too_open(config.listen_tls_key)
+    if mode is not None:
+        log.warning(
+            "TLS: the key %s is readable by others (mode %o) — chmod 600 it",
+            config.listen_tls_key, mode,
+        )
+
+
+async def check_certificate_end() -> None:
+    """tls_cert_expiring: raised two weeks before the end of the
+    certificate this process serves, cleared at the start of a process
+    serving one that is not about to end."""
+    if certificate is None:
+        return
+    left = certificate.not_after - time.time()
+    ends = time.strftime("%Y-%m-%d", time.localtime(certificate.not_after))
+    subject = public_url.host if public_url else config.listen_tls_cert
+    if left < CERT_ALARM_DAYS * 86400:
+        await alarm_engine.service_alarm(
+            "tls_cert_expiring", subject, True,
+            f"the certificate MoonLan serves ends on {ends} "
+            f"({max(0, int(left // 86400))} day(s) left). Replace "
+            f"{config.listen_tls_cert} and restart MoonLan: the certificate "
+            f"is read at startup, so a new file alone changes nothing",
+        )
+    else:
+        await alarm_engine.service_alarm(
+            "tls_cert_expiring", subject, False,
+            f"a certificate valid until {ends} is being served",
+        )
+
+
+async def periodic_certificate_check() -> None:
+    while True:
+        await asyncio.sleep(CERT_CHECK_SECONDS)
+        try:
+            await check_certificate_end()
+        except Exception:
+            log.exception("Certificate check failed")
+
+
+async def start_redirect_listener():
+    """listen.http_redirect_port: a port that only sends people to the
+    public address. Needs one to send them to."""
+    port = config.listen_http_redirect_port
+    if not port:
+        return None
+    if public_url is None:
+        log.warning(
+            "listen.http_redirect_port %d needs listen.public_url to send "
+            "people to — not started", port,
+        )
+        return None
+    try:
+        listener = await https.serve_redirect(
+            config.listen_host, port, public_url.origin
+        )
+    except OSError as exc:
+        log.error("listen.http_redirect_port %d: %s — not started", port, exc)
+        return None
+    log.info("Port %d redirects every request to %s", port, public_url.origin)
+    return listener
+
+
 async def drop_unpinned_positions() -> None:
     """Startup: the layout keeps what a person placed, and nothing else.
 
@@ -2038,15 +2145,21 @@ async def lifespan(app: FastAPI):
     await alarm_engine.clear_missing_hosts(
         set(await asyncio.to_thread(db.hosts_by_mac))
     )
+    _log_certificate()
+    await check_certificate_end()
+    redirect = await start_redirect_listener()
     tasks = [
         asyncio.create_task(periodic_scan()),
         asyncio.create_task(periodic_ping()),
         asyncio.create_task(periodic_counters()),
         asyncio.create_task(periodic_resource_log()),
+        asyncio.create_task(periodic_certificate_check()),
     ]
     yield
     for task in tasks:
         task.cancel()
+    if redirect is not None:
+        redirect.close()
     sign_in.remove_console_token()
 
 
