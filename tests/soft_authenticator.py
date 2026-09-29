@@ -4,7 +4,10 @@ JSON with base64url strings, as PublicKeyCredential.toJSON() makes it.
 
 Everything a real key could get wrong, it can be told to get wrong: the
 origin the browser saw, the RP ID it hashed, user verification, the
-signature counter.
+signature counter — and what the browser leaves out: `cred_props=False`
+answers without credProps at all, as Chrome on Windows often does. Until
+v0.7.7 every test answered it, and the server read its absence as "keeps
+the sign-in" without anything noticing.
 """
 
 from __future__ import annotations
@@ -60,9 +63,11 @@ def _client_data(kind: str, challenge: str, origin: str) -> bytes:
 
 
 def create(options: dict, origin: str, alg: int = -7, *, uv: bool = True,
-           rk: bool | None = True, rp_id: str | None = None,
+           rk: bool = True, cred_props: bool = True,
+           rp_id: str | None = None,
            transports=("usb",)) -> tuple[SoftKey, dict]:
-    """navigator.credentials.create() — (the new key, the response)."""
+    """navigator.credentials.create() — (the new key, the response).
+    `rk` is what credProps says; `cred_props=False` says nothing."""
     public = options["publicKey"] if "publicKey" in options else options
     offered = [p["alg"] for p in public["pubKeyCredParams"]]
     if alg not in offered:
@@ -82,7 +87,7 @@ def create(options: dict, origin: str, alg: int = -7, *, uv: bool = True,
                  + credential_data)
     attestation = cbor.encode({"fmt": "none", "attStmt": {},
                                "authData": auth_data})
-    extensions = {} if rk is None else {"credProps": {"rk": rk}}
+    extensions = {"credProps": {"rk": rk}} if cred_props else {}
     return key, {
         "id": b64(key.credential_id), "rawId": b64(key.credential_id),
         "type": "public-key",

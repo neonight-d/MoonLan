@@ -321,13 +321,15 @@ class KeysCase(unittest.TestCase):
                          cookie)
 
     def add_key(self, name="vera", alg=-7, passwordless=False, uv=True,
-                rk=True, label="", cookie=None, origin=ORIGIN, rp_id=None):
+                rk=True, cred_props=True, label="", cookie=None,
+                origin=ORIGIN, rp_id=None):
         """Adds a key through the API. (the key, the last answer)."""
         cookie = cookie or self.cookie(name)
         begun = self.begin_add(cookie, passwordless)
         self.assertEqual(begun.status, 200, begun.body)
         key, credential = soft.create(begun.json()["options"], origin, alg,
-                                      uv=uv, rk=rk, rp_id=rp_id)
+                                      uv=uv, rk=rk, cred_props=cred_props,
+                                      rp_id=rp_id)
         answer = self.post("/api/auth/passkeys/finish", {
             "request": begun.json()["request"], "credential": credential,
             "label": label,
@@ -445,9 +447,9 @@ class AddKeyTest(KeysCase):
                 for k in self.db.passkeys(self.db.user("vera")["id"])]
 
     def test_without_a_password(self):
-        for rk in (True, None):
-            with self.subTest(credProps=rk):
-                _, answer = self.add_key(passwordless=True, rk=rk)
+        for said in (True, False):
+            with self.subTest(credProps=said):
+                _, answer = self.add_key(passwordless=True, cred_props=said)
                 self.assertEqual(answer.status, 200, answer.body)
                 self.assertEqual(answer.json()["passwordless"], True)
         # asked with "required", a key that registered keeps the sign-in
@@ -455,9 +457,9 @@ class AddKeyTest(KeysCase):
         self.assertEqual(self.stored(), [(1, 1), (1, 1)])
 
     def test_only_after_the_password(self):
-        for rk in (True, False, None):
-            with self.subTest(credProps=rk):
-                _, answer = self.add_key(passwordless=False, rk=rk)
+        for kwargs in ({"rk": True}, {"rk": False}, {"cred_props": False}):
+            with self.subTest(**kwargs):
+                _, answer = self.add_key(passwordless=False, **kwargs)
                 self.assertEqual(answer.json()["passwordless"], False)
         # asked with "preferred", silence is not a yes (v0.7.6 read it as
         # one): unknown stays unknown
@@ -654,6 +656,16 @@ class SignInWithKeyTest(SignInCase):
         key, _ = self.add_key(passwordless=False)
         answer = self.alone(key)
         self.assertEqual(answer.json()["error"], "key_second_only")
+
+    def test_a_browser_that_says_nothing_about_credprops(self):
+        # the v0.7.6 case on Windows, end to end: the tick is what counts
+        ticked, _ = self.add_key(passwordless=True, cred_props=False)
+        self.assertEqual(self.alone(ticked).status, 200)
+        unticked, _ = self.add_key(passwordless=False, cred_props=False)
+        self.assertEqual(self.alone(unticked).json()["error"],
+                         "key_second_only")
+        # …and after the password either one does
+        self.assertEqual(self.after_password(unticked).status, 200)
 
     def test_another_origin(self):
         key, _ = self.add_key(passwordless=True)
