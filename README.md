@@ -271,6 +271,7 @@ See **[CONTRIBUTING.md](CONTRIBUTING.md)**.
 |---|---|
 | v0.7.5 ✓ | One row of controls; documentation from the community |
 | v0.7.6 ✓ | HTTPS (TLS of its own or behind a reverse proxy) and signing in with a key |
+| v0.7.7 ✓ | "Without a password" means without a password |
 | v0.8 | Export to PDF and Draw.io, MAC address info import |
 | v0.9 | Windows computer inventory (WMI/WinRM) |
 

@@ -6,6 +6,46 @@ for before the next one started.
 
 Русская версия — [CHANGELOG_RU.md](CHANGELOG_RU.md).
 
+## v0.7.7 — 2026-09-29
+
+"Without a password" means without a password.
+
+On the production machine v0.7.6 signed in with the password and then
+the key, but not with the key alone: Windows answered that the security
+key did not look familiar. The key had been added with the box ticked,
+and still kept no sign-in for the site — "Sign in with a key" gives the
+key nothing to look up, so it found nothing.
+
+**The tick decides what is asked of the key.** Ticked, the key is
+registered with residentKey and userVerification "required": it keeps
+the sign-in on itself and asks for its PIN or a finger, or it refuses;
+a key without a PIN gets one offered while being added. v0.7.6 asked
+"preferred" whatever the tick said, which on Windows let the system
+make a credential the key does not keep. Unticked, "preferred" as
+before: a second factor after the password.
+
+**Silence is not a yes.** Asked with "required", a key that registered
+keeps the sign-in, and is stored so even when the browser sends no
+credProps — which Windows often leaves out. Asked with "preferred", a
+missing credProps now stays unknown. v0.7.6 checked only for an
+explicit "no", so a browser that said nothing gave the key the
+"without a password" mark nothing had confirmed. A key that cannot be
+a passkey is refused with a message that says to untick the box,
+rather than kept quietly as a second factor.
+
+**Keys added before.** Where "without a password" was never confirmed
+by the key, the account page and Users say so — "remove the key and add
+it again" — and so do `python -m moonlan.users passkeys` and
+`diag --config`. Nothing in the database is changed by itself: such a
+key may also be a true passkey from a browser that did not say.
+
+**Browser errors by their cause.** On a page with a certificate error
+Chrome turns keys off at once, and MoonLan said the key did not answer;
+it now says the browser does not trust the site's certificate and
+points to HTTPS.md. "Sign in with a key" names the likeliest cause
+after a cancel: a key added as a second factor keeps no sign-in for
+the site.
+
 ## v0.7.6 — 2026-09-28
 
 HTTPS, and signing in with a key.
