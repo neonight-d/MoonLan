@@ -122,6 +122,16 @@ def log_state(public_url) -> None:
         )
 
 
+def unconfirmed(key: dict) -> bool:
+    """A key marked "without a password" that never confirmed it keeps
+    the sign-in on itself: added before v0.7.7, when a browser that sent
+    no credProps left `discoverable` NULL and the mark was given anyway.
+    It may be a true passkey from such a browser, or a key that keeps
+    nothing — which one is not known, so nothing is rewritten; people
+    are told, and adding the key again settles it."""
+    return bool(key["passwordless"]) and key["discoverable"] != 1
+
+
 def _descriptor(key: dict) -> "PublicKeyCredentialDescriptor":
     transports = [t for t in (key.get("transports") or "").split(",") if t]
     return PublicKeyCredentialDescriptor(

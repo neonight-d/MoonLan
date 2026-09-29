@@ -1071,8 +1071,15 @@ def _print_sign_in(cfg) -> None:
             keys = dict(conn.execute(
                 "SELECT user_id, COUNT(*) FROM passkeys GROUP BY user_id"
             ).fetchall())
+            # "without a password" that the key never confirmed (added
+            # before v0.7.7) — see passkeys.unconfirmed
+            unconfirmed = dict(conn.execute(
+                "SELECT user_id, COUNT(*) FROM passkeys WHERE passwordless "
+                "AND (discoverable IS NULL OR discoverable <> 1) "
+                "GROUP BY user_id"
+            ).fetchall())
         except sqlite3.Error:
-            keys = {}    # the service has not run v0.7.6 here yet
+            keys, unconfirmed = {}, {}  # no v0.7.6 here yet
         conn.close()
     except sqlite3.Error as exc:
         print(
@@ -1101,6 +1108,16 @@ def _print_sign_in(cfg) -> None:
     print("  keys:        " + (", ".join(
         f"{u['name']} {keys[u['id']]}" for u in users if keys.get(u["id"])
     ) or "none"))
+    if unconfirmed:
+        print(
+            "    ^ not confirmed by the key: " + ", ".join(
+                f"{u['name']} {unconfirmed[u['id']]}" for u in users
+                if unconfirmed.get(u["id"])
+            ) + "\n      marked \"without a password\" before v0.7.7, and "
+            "the key never said it\n      keeps the sign-in: remove it and "
+            "add it again (python -m moonlan.users\n      passkeys <name> "
+            "shows which)"
+        )
     bare = [u["name"] for u in admins
             if not u["totp_enabled"] and not keys.get(u["id"])]
     print(

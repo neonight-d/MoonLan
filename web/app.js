@@ -1185,11 +1185,16 @@ function keyList(keys, remove) {
         type: "button", class: "key-remove", text: t("actRemoveKey"),
         onclick: () => remove(key),
       }) : null),
-    h("div", { class: "hint-line", text: [
-      t(key.passwordless ? "keyPasswordlessShort" : "keySecondShort"),
-      fmt("keyAddedOn", { date: fmtDate(key.created_at) }),
-      key.last_used ? fmt("keyUsedOn", { date: fmtTime(key.last_used) }) : t("keyNeverUsed"),
-    ].join(" · ") }))));
+    h("div", { class: "hint-line" },
+      // "without a password" that the key never confirmed (added before
+      // v0.7.7): said so, with what to do — nothing is rewritten quietly
+      key.unconfirmed
+        ? h("span", { class: "bad", text: t("keyUnconfirmed") })
+        : t(key.passwordless ? "keyPasswordlessShort" : "keySecondShort"),
+      " · " + [
+        fmt("keyAddedOn", { date: fmtDate(key.created_at) }),
+        key.last_used ? fmt("keyUsedOn", { date: fmtTime(key.last_used) }) : t("keyNeverUsed"),
+      ].join(" · ")))));
 }
 
 async function removeOwnKey(key) {

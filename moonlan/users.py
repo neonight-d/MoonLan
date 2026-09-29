@@ -25,7 +25,7 @@ import sys
 import time
 from pathlib import Path
 
-from . import auth
+from . import auth, passkeys
 from .config import load_config
 from .db import AccountError, Database
 
@@ -321,6 +321,10 @@ def cmd_passkeys(db: Database, args) -> int:
     for key in keys:
         kind = ("signs in without a password" if key["passwordless"]
                 else "a second factor after the password")
+        if passkeys.unconfirmed(key):
+            kind = ("marked to sign in without a password, NOT confirmed "
+                    "by the key —\n      remove it and add it again "
+                    "(added before v0.7.7)")
         kept = {1: "kept on the key", 0: "not kept on the key"}.get(
             key["discoverable"], "kept on the key: unknown")
         print(

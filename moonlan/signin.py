@@ -1108,6 +1108,8 @@ def key_summary(key: dict) -> dict:
     return {
         "id": key["id"], "number": key["number"], "label": key["label"],
         "passwordless": bool(key["passwordless"]),
+        # "without a password", never confirmed by the key (v0.7.6)
+        "unconfirmed": passkeys.unconfirmed(key),
         "created_at": key["created_at"], "last_used": key["last_used"],
     }
 

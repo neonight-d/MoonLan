@@ -78,6 +78,20 @@ class SignInSectionTest(unittest.TestCase):
         text = self.section()
         self.assertIn("keys:        boris 2", text)
         self.assertIn("administrators without a second factor: anton", text)
+        self.assertNotIn("not confirmed", text)
+
+    def test_without_a_password_never_confirmed(self):
+        db = Database(self.path)
+        db.add_user("anton", "admin", "hash")
+        anton = db.user("anton")["id"]
+        db.add_passkey(anton, {"credential_id": b"1" * 16, "public_key": b"k",
+                               "passwordless": 1, "discoverable": None})
+        db.add_passkey(anton, {"credential_id": b"2" * 16, "public_key": b"k",
+                               "passwordless": 1, "discoverable": 1})
+        db.close()
+        text = self.section()
+        self.assertIn("not confirmed by the key: anton 1", text)
+        self.assertIn("remove it and add it again", text)
 
 
 class ConsoleTokenTest(unittest.TestCase):

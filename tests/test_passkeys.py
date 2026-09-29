@@ -520,6 +520,53 @@ class AddKeyTest(KeysCase):
 
 
 
+
+class AddedBeforeV077Test(KeysCase):
+    """"Without a password" given to a key that never said it keeps the
+    sign-in: shown for what it is, and left alone in the database."""
+
+    def setUp(self):
+        super().setUp()
+        vera = self.db.user("vera")["id"]
+        self.db.add_passkey(vera, a_key(1, label="old", passwordless=1,
+                                        discoverable=None))
+        self.db.add_passkey(vera, a_key(2, label="sure", passwordless=1,
+                                        discoverable=1))
+        self.db.add_passkey(vera, a_key(3, label="second", passwordless=0,
+                                        discoverable=None))
+
+    def test_the_account_says_so(self):
+        keys = self.me(self.cookie("vera"))["keys"]
+        self.assertEqual([(k["label"], k["passwordless"], k["unconfirmed"])
+                          for k in keys],
+                         [("old", True, True), ("sure", True, False),
+                          ("second", False, False)])
+
+    def test_the_database_is_not_rewritten(self):
+        self.me(self.cookie("vera"))
+        rows = self.db.passkeys(self.db.user("vera")["id"])
+        self.assertEqual([(k["passwordless"], k["discoverable"]) for k in rows],
+                         [(1, None), (1, 1), (0, None)])
+
+    def test_the_console_says_so(self):
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / "moonlan.db"
+            config = Path(folder) / "config.yaml"
+            config.write_text(f"db_path: {path}\n", encoding="utf-8")
+            db = Database(path)
+            vera = db.add_user("vera", "user", "scrypt$x")
+            db.add_passkey(vera["id"], a_key(1, label="old", passwordless=1,
+                                             discoverable=None))
+            db.close()
+            out = io.StringIO()
+            with mock.patch.dict(os.environ, {"MOONLAN_CONFIG": str(config)}), \
+                    contextlib.redirect_stdout(out):
+                os.environ.pop("MOONLAN_DEMO", None)
+                self.assertEqual(users.main(["passkeys", "vera"]), 0)
+        self.assertIn("NOT confirmed by the key", out.getvalue())
+        self.assertIn("remove it and add it again", out.getvalue())
+
+
 # ---------- signing in with a key ----------
 
 class SignInCase(KeysCase):

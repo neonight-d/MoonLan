@@ -130,7 +130,9 @@ in `/api/status`, which needs a viewer. See [HEALTHCHECK.md](HEALTHCHECK.md).
 `{"sign_in": false, "create_admin": "…"}` while sign-in is off; the
 signed-in account — `name`, `role`, `step` (`null`, `"password"` or
 `"totp"`), `totp`, `recovery_left`, `keys` (each: `id`, `number`,
-`label`, `passwordless`, `created_at`, `last_used`) — or **401**. Both
+`label`, `passwordless`, `unconfirmed` — marked "without a password"
+before v0.7.7 and never confirmed by the key — `created_at`,
+`last_used`) — or **401**. Both
 carry `passkeys`: `{"why": null | "no_public_url" | "public_url_ip" |
 "public_url_http" | "no_fido2", "origin": "https://…" | null}` — whether
 the server can take a key, and the address keys are bound to; and

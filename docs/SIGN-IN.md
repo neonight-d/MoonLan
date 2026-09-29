@@ -132,8 +132,20 @@ for its PIN or a finger**, every time. MoonLan asks for both as
 required: a key that cannot do them refuses, and the page says to
 untick the box. A key with no PIN set gets one offered by Windows or
 the browser while it is being added; a hardware key keeps a limited
-number of sign-ins, and a full one refuses too. Ten
-keys at most per account; add a spare and keep it in a drawer.
+number of sign-ins, and a full one refuses too. Ten keys at most per
+account; add a spare and keep it in a drawer.
+
+**A key added "without a password" before v0.7.7** may not keep the
+sign-in at all: v0.7.6 asked for that only as "preferred", and on
+Windows a key could be added that "Sign in with a key" then did not
+find ("this security key doesn't look familiar"). Where the key never
+confirmed it keeps the sign-in, the account page says "sign-in without
+a password not confirmed by the key", and so do
+`python -m moonlan.users passkeys <name>` and `diag --config`. Remove
+the key and add it again with the box ticked; the password followed by
+the key keeps working meanwhile. Nothing is changed in the database by
+itself: such a key may also be a true passkey from a browser that did
+not say.
 
 **Signing in**: "Sign in with a key" — no name, no password; or the
 password first and "Use the key" on the next step. Once an account has
