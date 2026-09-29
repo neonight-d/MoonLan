@@ -122,14 +122,18 @@ reason:
    requirements.txt`; without it the log and the form say so).
 
 **Adding a key**: the name in the header → "Add a key" → the password
-→ touch the key (or confirm with a PIN, a finger, a face). Tick
-"Sign in with this key without a password" to make it a passkey: the
-key then asks for its PIN or a finger every time, and "Sign in with a
-key" on the sign-in form is all it takes. Unticked, the key is a second
-factor after the password, like TOTP. A key that asked for no PIN or
-does not keep the sign-in on itself is saved as a second factor, and
-the page says why. Ten keys at most per account; add a spare and keep
-it in a drawer.
+→ touch the key (or confirm with a PIN, a finger, a face). Unticked,
+"Sign in with this key without a password" makes the key a second
+factor after the password, like TOTP: any key will do. Ticked, it makes
+it a passkey, and that asks two things of the key. It has to **keep the
+sign-in on itself** — "Sign in with a key" gives it no name to look up,
+so a key that keeps nothing has nothing to offer — and it has to **ask
+for its PIN or a finger**, every time. MoonLan asks for both as
+required: a key that cannot do them refuses, and the page says to
+untick the box. A key with no PIN set gets one offered by Windows or
+the browser while it is being added; a hardware key keeps a limited
+number of sign-ins, and a full one refuses too. Ten
+keys at most per account; add a spare and keep it in a drawer.
 
 **Signing in**: "Sign in with a key" — no name, no password; or the
 password first and "Use the key" on the next step. Once an account has

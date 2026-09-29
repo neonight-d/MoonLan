@@ -874,11 +874,22 @@ function keyWhyLine(why) {
 }
 
 /* What the browser threw, in words. */
-function keyErrorText(e) {
+function keyErrorText(e, context) {
+  const name = e && e.name;
+  if (context === "addPasswordless") {
+    // Asked to keep the sign-in and ask for a PIN, a key that cannot
+    // does not say so: the browser answers as if it were cancelled
+    // (NotAllowedError), or, rarely, that it cannot (ConstraintError,
+    // NotSupportedError). Either way, say what to do about it.
+    if (name === "NotAllowedError") return t("keyErr_addPasswordless");
+    if (name === "ConstraintError" || name === "NotSupportedError") {
+      return t("err_cannot_passwordless");
+    }
+  }
   const known = ["NotAllowedError", "InvalidStateError", "SecurityError",
     "NotSupportedError", "AbortError", "ConstraintError"];
-  if (e && known.includes(e.name)) return t("keyErr_" + e.name);
-  return fmt("keyErr_other", { error: (e && (e.name || e.message)) || "?" });
+  if (known.includes(name)) return t("keyErr_" + name);
+  return fmt("keyErr_other", { error: name || (e && e.message) || "?" });
 }
 
 /* Adding a key: the password (as for TOTP), whether the key may sign in
@@ -921,7 +932,7 @@ function keyAddForm(onAdded, onBack) {
       try {
         credential = await createKey(begun.answer.options);
       } catch (e) {
-        error.textContent = keyErrorText(e);
+        error.textContent = keyErrorText(e, alone.checked ? "addPasswordless" : "add");
         return;
       }
       const done = await authPost("/api/auth/passkeys/finish", {
@@ -975,11 +986,9 @@ async function signInWithKey(ticket, error, button) {
   }
 }
 
-/* What was added, in a sentence: with the reason when the key could
-   not be made passwordless. */
+/* What was added, in a sentence. */
 function keyAddedText(answer) {
-  const text = fmt("keyAdded", { label: answer.label || "#" + answer.number });
-  return answer.note ? text + " " + t("keyNote_" + answer.note) : text;
+  return fmt("keyAdded", { label: answer.label || "#" + answer.number });
 }
 
 /* The forced step of an administrator with no second factor, taking

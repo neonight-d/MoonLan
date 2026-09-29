@@ -981,18 +981,14 @@ class SignIn:
             log.warning("Adding a key refused for %s from %s: %s",
                         who.name, address, error)
             return refuse(error.code, 400)
-        # "Without a password" needs a key that keeps the credential
-        # itself (nothing to list it from) and asked for a PIN or a
-        # finger (else whoever holds it is in). One that cannot is kept
-        # as a second factor, and the answer says so.
-        note = None
-        if key["passwordless"]:
-            if not key["user_verified"]:
-                note = "no_user_verification"
-            elif key["discoverable"] == 0:
-                note = "not_discoverable"
-            if note:
-                key["passwordless"] = 0
+        # "Without a password" is stored only when the key confirmed it:
+        # it keeps the credential itself (discoverable 1 — not merely "not
+        # 0", which is how an unanswered credProps passed in v0.7.6) and
+        # asked for a PIN or a finger. passkeys.add_finish refuses the
+        # rest; this holds the rule where the row is written.
+        if key["passwordless"] and (key["discoverable"] != 1
+                                    or not key["user_verified"]):
+            return refuse("cannot_passwordless", 400)
         row = await asyncio.to_thread(self.accounts.user_by_id, who.user_id)
         if row is None:
             return refuse("sign_in_required", 401)
@@ -1016,15 +1012,14 @@ class SignIn:
             }), row["name"],
         )
         log.info(
-            "Key added by %s from %s: #%d %r, %s%s; %d other session(s) "
+            "Key added by %s from %s: #%d %r, %s; %d other session(s) "
             "closed", row["name"], address, number, key["label"],
             "signs in without a password" if key["passwordless"]
-            else "a second factor", f" ({note})" if note else "", closed,
+            else "a second factor", closed,
         )
         return JSONResponse({
             "status": "added", "number": number,
-            "passwordless": bool(key["passwordless"]), "note": note,
-            "recovery": codes,
+            "passwordless": bool(key["passwordless"]), "recovery": codes,
         })
 
     async def passkey_remove(self, who: Principal | None,

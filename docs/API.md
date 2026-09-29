@@ -211,15 +211,19 @@ the only time they are shown.
 Adding a key to one's own account. `begin` takes `{"password": "…",
 "passwordless": true | false}` and answers `{"request": "…", "options":
 {…}}` — `options` is `PublicKeyCredentialCreationOptions` in JSON form
-(bytes in base64url) for `navigator.credentials.create()`. `finish`
+(bytes in base64url) for `navigator.credentials.create()`. With
+`passwordless` true, `residentKey` and `userVerification` are
+`required` — the key must keep the sign-in on itself and ask for its
+PIN or a finger, or refuse; otherwise both are `preferred`. `finish`
 takes `{"request": "…", "credential": {…}, "label": "…"}` —
 `credential` as `PublicKeyCredential.toJSON()` makes it — and answers
-`{"status": "added", "number": n, "passwordless": …, "note": null |
-"no_user_verification" | "not_discoverable", "recovery": null | [8
-codes]}`. A key asked to sign in without a password that verified
-nobody (no PIN, no finger) or does not keep the credential itself is
-kept as a second factor, and `note` says why. The first key of an
-account without recovery codes brings them, shown this once.
+`{"status": "added", "number": n, "passwordless": …, "recovery": null |
+[8 codes]}`. Asked for without a password, a key that answers without
+user verification, or with `credProps.rk` false, is refused with
+`cannot_passwordless`; one whose browser sends no `credProps` is taken
+as keeping the sign-in, which is what `required` means. Asked for as a
+second factor, a missing `credProps` is stored as unknown. The first
+key of an account without recovery codes brings them, shown this once.
 
 `DELETE /api/auth/passkeys/{key_id}` removes one of one's own keys and
 closes the account's other sessions; an administrator's last second
@@ -229,7 +233,7 @@ A request is good once, for five minutes, for the account that asked.
 Errors: `wrong_password`, `too_many_keys` (ten at most),
 `passkeys_off` (**409**, with `why`), `challenge_expired`,
 `key_refused` (the origin, the RP ID, the signature or the algorithm
-was wrong), `key_exists`, `https_required`.
+was wrong), `cannot_passwordless`, `key_exists`, `https_required`.
 
 ## Accounts (administrators)
 

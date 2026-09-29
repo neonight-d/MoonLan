@@ -190,17 +190,29 @@ class Passkeys:
                   keys: list[dict], passwordless: bool) -> tuple[str, dict]:
         """(the request id, the options for navigator.credentials.create).
 
-        residentKey and userVerification "preferred": a key that can
-        keep the credential and ask for a PIN does, one that cannot is
-        still a good second factor. No attestation: which make of key it
-        is does not decide anything here. The keys already added are
-        excluded, so the same key is not added twice."""
+        Without a password, residentKey and userVerification are
+        "required": the key has to keep the sign-in on itself — signing
+        in without a name offers it nothing to look up — and ask for its
+        PIN or a finger, or refuse; a key without a PIN gets one offered
+        by Windows or the browser. "Preferred" left that to the browser,
+        the system and the key, and on Windows the result was a key that
+        kept nothing (v0.7.6). As a second factor after the password,
+        "preferred" and "preferred" are right: any key will do.
+
+        No attestation: which make of key it is does not decide anything
+        here. The keys already added are excluded, so the same key is
+        not added twice."""
+        required = (UserVerificationRequirement.REQUIRED if passwordless
+                    else UserVerificationRequirement.PREFERRED)
         options, state = self._server.register_begin(
             PublicKeyCredentialUserEntity(name=name, id=handle,
                                           display_name=name),
             [_descriptor(key) for key in keys],
-            resident_key_requirement=ResidentKeyRequirement.PREFERRED,
-            user_verification=UserVerificationRequirement.PREFERRED,
+            resident_key_requirement=(
+                ResidentKeyRequirement.REQUIRED if passwordless
+                else ResidentKeyRequirement.PREFERRED
+            ),
+            user_verification=required,
             extensions={"credProps": True},
         )
         request = self._keep(Pending(
@@ -214,8 +226,12 @@ class Passkeys:
         pending = self.take(request, "add")
         if pending.user_id != user_id:
             raise PasskeyError("challenge_expired", "made for somebody else")
+        # user verification is checked below, after everything else: a
+        # key that did not ask for a PIN gets its own answer
+        state = {**pending.state,
+                 "user_verification": UserVerificationRequirement.DISCOURAGED}
         try:
-            auth_data = self._server.register_complete(pending.state, answer)
+            auth_data = self._server.register_complete(state, answer)
         except Exception as exc:  # noqa: BLE001 — any malformed answer
             raise PasskeyError("key_refused", str(exc)) from None
         credential = auth_data.credential_data
@@ -226,6 +242,24 @@ class Passkeys:
             raise PasskeyError("key_refused", f"algorithm {algorithm}")
         extensions = answer.get("clientExtensionResults") or {}
         rk = (extensions.get("credProps") or {}).get("rk")
+        verified = auth_data.is_user_verified()
+        if pending.passwordless:
+            # Asked with residentKey "required", a key that registered at
+            # all keeps the credential itself — whether or not the
+            # browser says so in credProps, which Windows often leaves
+            # out. Only a key that says otherwise, or skipped the PIN, is
+            # refused.
+            if rk is False or not verified:
+                raise PasskeyError(
+                    "cannot_passwordless",
+                    "credProps.rk false" if rk is False else "no user "
+                    "verification",
+                )
+            discoverable = 1
+        else:
+            # Asked with "preferred", a missing credProps is not known:
+            # nothing is assumed from silence
+            discoverable = None if rk is None else int(bool(rk))
         transports = (answer.get("response") or {}).get("transports") or []
         return {
             "credential_id": bytes(credential.credential_id),
@@ -236,8 +270,8 @@ class Passkeys:
             "transports": ",".join(
                 t for t in transports if isinstance(t, str) and t in TRANSPORTS
             ),
-            "discoverable": None if rk is None else int(bool(rk)),
-            "user_verified": int(auth_data.is_user_verified()),
+            "discoverable": discoverable,
+            "user_verified": int(verified),
             "passwordless": int(pending.passwordless),
         }
 

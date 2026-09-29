@@ -337,14 +337,24 @@ class KeysCase(unittest.TestCase):
 
 class AddKeyTest(KeysCase):
     def test_the_options(self):
+        # the tick decides what is asked of the key: to keep the sign-in
+        # and ask for a PIN, or whatever it can
+        for passwordless, asked in ((True, "required"), (False, "preferred")):
+            with self.subTest(passwordless=passwordless):
+                options = self.begin_add(
+                    self.cookie("vera"), passwordless
+                ).json()["options"]
+                selection = options["authenticatorSelection"]
+                self.assertEqual(selection["residentKey"], asked)
+                self.assertEqual(selection["requireResidentKey"],
+                                 passwordless)
+                self.assertEqual(selection["userVerification"], asked)
+                self.assertEqual(options["extensions"], {"credProps": True})
         begun = self.begin_add(self.cookie("vera"))
         options = begun.json()["options"]
         self.assertEqual(options["rp"]["id"], "example.local")
         self.assertEqual([p["alg"] for p in options["pubKeyCredParams"]],
                          [-7, -8, -257])
-        selection = options["authenticatorSelection"]
-        self.assertEqual(selection["residentKey"], "preferred")
-        self.assertEqual(selection["userVerification"], "preferred")
         self.assertEqual(options["attestation"], "none")
         self.assertEqual(len(websafe_decode(options["challenge"])), 32)
         handle = websafe_decode(options["user"]["id"])
@@ -429,22 +439,38 @@ class AddKeyTest(KeysCase):
         }, self.cookie("anton"))
         self.assertEqual(answer.json()["error"], "challenge_expired")
 
-    def test_without_a_password_or_only_after_it(self):
-        _, answer = self.add_key(passwordless=True)
-        self.assertEqual(answer.json()["passwordless"], True)
-        _, answer = self.add_key(passwordless=False)
-        self.assertEqual(answer.json()["passwordless"], False)
-        # a key that asked for no PIN, or keeps nothing itself, cannot
-        # be the only thing between a stranger and the account
-        _, answer = self.add_key(passwordless=True, uv=False)
-        self.assertEqual((answer.json()["passwordless"], answer.json()["note"]),
-                         (False, "no_user_verification"))
-        _, answer = self.add_key(passwordless=True, rk=False)
-        self.assertEqual((answer.json()["passwordless"], answer.json()["note"]),
-                         (False, "not_discoverable"))
-        flags = [k["passwordless"]
-                 for k in self.db.passkeys(self.db.user("vera")["id"])]
-        self.assertEqual(flags, [1, 0, 0, 0])
+    def stored(self):
+        """(passwordless, discoverable) of vera's keys, oldest first."""
+        return [(k["passwordless"], k["discoverable"])
+                for k in self.db.passkeys(self.db.user("vera")["id"])]
+
+    def test_without_a_password(self):
+        for rk in (True, None):
+            with self.subTest(credProps=rk):
+                _, answer = self.add_key(passwordless=True, rk=rk)
+                self.assertEqual(answer.status, 200, answer.body)
+                self.assertEqual(answer.json()["passwordless"], True)
+        # asked with "required", a key that registered keeps the sign-in
+        # itself, whether or not the browser says so in credProps
+        self.assertEqual(self.stored(), [(1, 1), (1, 1)])
+
+    def test_only_after_the_password(self):
+        for rk in (True, False, None):
+            with self.subTest(credProps=rk):
+                _, answer = self.add_key(passwordless=False, rk=rk)
+                self.assertEqual(answer.json()["passwordless"], False)
+        # asked with "preferred", silence is not a yes (v0.7.6 read it as
+        # one): unknown stays unknown
+        self.assertEqual(self.stored(), [(0, 1), (0, 0), (0, None)])
+
+    def test_a_key_that_cannot_is_refused_not_downgraded(self):
+        # asked to keep the sign-in and ask for a PIN, a key that says it
+        # did neither is not quietly turned into a second factor: the
+        # person is told to untick
+        for kwargs in ({"uv": False}, {"rk": False}):
+            with self.subTest(**kwargs):
+                _, answer = self.add_key(passwordless=True, **kwargs)
+                self.refused(answer, "cannot_passwordless")
 
     def test_the_first_key_brings_recovery_codes(self):
         _, answer = self.add_key()
