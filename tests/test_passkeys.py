@@ -1030,8 +1030,25 @@ class PageTest(unittest.TestCase):
     def test_what_the_browser_throws(self):
         for name in ("NotAllowedError", "InvalidStateError", "SecurityError",
                      "NotSupportedError", "AbortError", "ConstraintError",
-                     "other"):
+                     "other", "certificate", "signIn", "addPasswordless"):
             self.assertWords(f"keyErr_{name}")
+
+    def test_the_cause_before_the_exception(self):
+        # a certificate error arrives as NotAllowedError too: the text of
+        # the error is looked at before its name, or it reads "the key
+        # did not answer" again
+        body = (WEB / "app.js").read_text(encoding="utf-8")
+        body = body[body.index("function keyErrorText("):]
+        body = body[:body.index("\n}\n")]
+        order = [body.index(mark) for mark in (
+            "/certificate/i", 'context === "signIn"',
+            'context === "addPasswordless"', "known.includes(name)",
+        )]
+        self.assertEqual(order, sorted(order))
+        page = (WEB / "app.js").read_text(encoding="utf-8")
+        self.assertIn('keyErrorText(e, ticket ? "second" : "signIn")', page)
+        self.assertIn('keyErrorText(e, alone.checked ? "addPasswordless" : "add")',
+                      page)
 
     def test_every_refusal_of_the_key_routes(self):
         source = "\n".join(

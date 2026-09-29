@@ -873,9 +873,21 @@ function keyWhyLine(why) {
   return line;
 }
 
-/* What the browser threw, in words. */
+/* What the browser threw, in words — by its cause where the browser
+   gives it away. `context`: "add", "addPasswordless", "signIn" (a key
+   alone) or "second" (after the password). */
 function keyErrorText(e, context) {
   const name = e && e.name;
+  // Chrome turns WebAuthn off on a page with a certificate error and
+  // answers NotAllowedError at once — "WebAuthn is not supported on
+  // sites with TLS certificate errors". It is the certificate, not the
+  // key, and "the key did not answer" sent people to the wrong place.
+  if (/certificate/i.test((e && e.message) || "")) return t("keyErr_certificate");
+  if (context === "signIn" && name === "NotAllowedError") {
+    // with nothing to look up, a key that keeps no sign-in for this
+    // site looks exactly like a cancel to the page
+    return t("keyErr_signIn");
+  }
   if (context === "addPasswordless") {
     // Asked to keep the sign-in and ask for a PIN, a key that cannot
     // does not say so: the browser answers as if it were cancelled
@@ -967,7 +979,7 @@ async function signInWithKey(ticket, error, button) {
     try {
       credential = await getKey(begun.answer.options);
     } catch (e) {
-      error.textContent = keyErrorText(e);
+      error.textContent = keyErrorText(e, ticket ? "second" : "signIn");
       return;
     }
     const done = await authPost("/api/auth/passkey/finish", {

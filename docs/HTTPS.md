@@ -242,7 +242,8 @@ these that applies — the order in which they have to be fixed:
 
 **A certificate error is not a detail here.** Chrome and Edge refuse
 keys on a page that opened only after clicking through "Your connection
-is not private", and the key is never asked; the page shows the
-browser's refusal in words. Trust the root on that computer (see above)
+is not private", and the key is never asked; the page then says the
+browser does not trust the site's certificate (since v0.7.7 — before,
+it said the key did not answer, which it never got the chance to do). Trust the root on that computer (see above)
 instead of clicking through: then the padlock is plain, and keys work. The same goes for a certificate that does not name the host
 in `public_url` — the log says so at startup.
