@@ -202,7 +202,7 @@ CHAIN_BRIDGES = (
 # alarms. They must produce neither: the LLDP data belongs on each
 # camera's own host card.
 CAMERA_PORT = 9
-CAMERAS = [f"18:c0:4d:00:0a:{n:02x}" for n in range(1, 11)]
+CAMERAS = [f"3c:ef:8c:00:0a:{n:02x}" for n in range(1, 11)]  # a Dahua block
 CAMERA_DESC = "IPC-B140 v2.800.0000000.16.R"
 
 # The MikroTik router on core-sw Gi0/21. It fills lldpRemTable with
@@ -210,7 +210,7 @@ CAMERA_DESC = "IPC-B140 v2.800.0000000.16.R"
 # address — 38 rows for one device on one cable. The card must show one
 # device and all of its addresses.
 ROUTER_PORT = 21
-ROUTER_CHASSIS = "00:0e:04:b7:79:ab"
+ROUTER_CHASSIS = "4c:5e:0c:b7:79:ab"  # a MikroTik (Routerboard.com) block
 ROUTER_IPS = ["10.0.0.1", "10.0.1.1"] + [f"10.3.{n}.1" for n in range(1, 9)]
 
 # An edge router behind core-sw Gi0/22: it announces `router` and a
@@ -219,7 +219,7 @@ ROUTER_IPS = ["10.0.0.1", "10.0.1.1"] + [f"10.3.{n}.1" for n in range(1, 9)]
 # dot labelled with its MAC, while LLDP had been calling it by name
 # the whole time.
 EDGE_ROUTER_PORT = 22
-EDGE_ROUTER_CHASSIS = "00:0e:04:aa:bb:cc"
+EDGE_ROUTER_CHASSIS = "4c:5e:0c:aa:bb:cc"
 EDGE_ROUTER_IPS = ["10.9.0.1", "10.9.1.1"]
 
 # The provider handover on core-sw Gi0/26. Their switch announces
@@ -1039,10 +1039,13 @@ STALE_HOSTS = [
     ("00:ee:00:00:0a:14", "10.0.99.84", "desk-d.demo.lan", ACCESS_4, "Gi0/7", 6.5),
     ("00:ee:00:00:0a:15", "10.0.99.85", "desk-e.demo.lan", ACCESS_4, "Gi0/7", 7.0),
     ("00:ee:00:00:0a:16", "10.0.99.86", "desk-f.demo.lan", ACCESS_4, "Gi0/7", 7.5),
-    # The mixed case: two offline devices on the port that also carries
-    # five live ones, so they hang off the pseudo-switch there
+    # The mixed case: offline devices on the port that also carries five
+    # live ones, so they hang off the pseudo-switch there. The two access
+    # points come from a real maker's block (MERCUSYS, 08:8A:F1), so that
+    # searching "mercusys" finds them both (v0.7.8)
     ("00:ee:00:00:0a:21", "10.0.99.91", "tv-lobby.demo.lan", ACCESS_2, "Gi0/5", 4.0),
-    ("00:ee:00:00:0a:22", "10.0.99.92", "ap-lobby.demo.lan", ACCESS_2, "Gi0/5", 8.0),
+    ("08:8a:f1:00:0a:22", "10.0.99.92", "ap-lobby.demo.lan", ACCESS_2, "Gi0/5", 8.0),
+    ("08:8a:f1:00:0a:23", "10.0.99.93", "ap-hall.demo.lan", ACCESS_2, "Gi0/5", 6.0),
 ]
 
 # Devices ARP knows but no switch port ever showed — a subnet behind a

@@ -96,6 +96,14 @@ Everything MoonLan does, as of v0.7.5 — the list the README used to carry. The
   from its address alone. Over HTTPS the session cookie is `Secure`, and
   with an https public address a password is not taken over plain HTTP.
   See [HTTPS](HTTPS.md).
+- Who made a device, by its MAC address and the IEEE register — MA-L,
+  MA-M, MA-S and IAB, the longest prefix first, so a device from a block
+  IEEE carved up is not named "IEEE Registration Authority". In the
+  card, in the search ("mercusys" finds every MERCUSYS device), and in
+  the new-device alarm that goes to Telegram and the mail. A random or
+  hand-set address says so instead of "unknown". The register is
+  fetched with `python -m moonlan.oui update`, or copied by hand to a
+  machine without the internet.
 - What a person placed is kept, the rest is laid out again. Pinned
   positions live on the server, not in one browser: a map of a network
   is a shared object, and two people looking at it have to see the

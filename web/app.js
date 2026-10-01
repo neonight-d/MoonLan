@@ -3082,8 +3082,9 @@ function renderSidebar() {
           .join(" · "),
         statusClass(h),
         () => focusNode(h.merged_into || "host:" + h.mac),
-        // VLAN is intentionally excluded from search
-        [hostLabel(h), h.ip, h.mac].filter(Boolean).join(" "),
+        // VLAN is intentionally excluded from search; the maker is in:
+        // "mercusys" finds every MERCUSYS device
+        [hostLabel(h), h.ip, h.mac, h.vendor].filter(Boolean).join(" "),
         h.stale ? "stale" : ""
       )
     )
@@ -3100,7 +3101,7 @@ function renderSidebar() {
           .join(" · "),
         statusClass(h),
         () => showDetails("unloc:" + h.mac),
-        [hostLabel(h), h.ip, h.mac].filter(Boolean).join(" "),
+        [hostLabel(h), h.ip, h.mac, h.vendor].filter(Boolean).join(" "),
         "stale"
       )
     )
@@ -3781,6 +3782,39 @@ function switchName(ip) {
    Each branch below writes its title as part of the HTML — that is
    where it belongs, next to the thing it titles — and the head is
    where it has to end up, so it stays put while the card scrolls. */
+/* Text from outside the page — a maker's name from the IEEE register —
+   into one of the cards built as HTML. */
+function escapeHtml(text) {
+  return String(text).replace(/[&<>"']/g, (ch) => ({
+    "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;",
+  })[ch]);
+}
+
+/* Who made a device, from `vendor` and `vendor_status`: the name as the
+   IEEE register has it, or which of the other cases it is — a random
+   or hand-set address has no maker at all, which is not the same as one
+   the register does not list. Plain text, for a tooltip or a search. */
+function vendorText(item) {
+  if (!item || !item.vendor_status) return "";
+  return item.vendor_status === "found" ? item.vendor : t("vendor_" + item.vendor_status);
+}
+
+/* The card's "Maker" row; none for an address that is no MAC. */
+function vendorRow(item) {
+  if (!item || !item.vendor_status || item.vendor_status === "invalid") return "";
+  let value = escapeHtml(vendorText(item));
+  if (item.vendor_status !== "found") value = `<span class="muted">${value}</span>`;
+  if (item.vendor_status === "no_registry") {
+    // the cure is a command on the server: said to whoever can run it
+    value = `<span class="muted" title="${escapeHtml(fmt("vendorNoRegistryHint", {
+      command: "python -m moonlan.oui update" }))}">${escapeHtml(t("vendor_no_registry"))}</span>`;
+    if (me && (me.sign_in === false || me.role === "admin")) {
+      value += `<div class="hint-line"><code>python -m moonlan.oui update</code></div>`;
+    }
+  }
+  return `<dt>${t("vendorLabel")}</dt><dd>${value}</dd>`;
+}
+
 function setDetails(html) {
   els.detailsBody.innerHTML = html;
   const heading = els.detailsBody.querySelector("h3");
@@ -3854,6 +3888,7 @@ function showDetails(nodeId) {
         : ""}<dl>
       <dt>${t("ipAddr")}</dt><dd>${sw.ip}</dd>
       <dt>${t("bridgeMac")}</dt><dd>${sw.mac || "—"}</dd>
+      ${vendorRow(sw)}
       <dt>${t("portsUpTotal")}</dt><dd>${sw.ports_up} / ${sw.ports_total}</dd>
       <dt>${t("lastReply")}</dt><dd>${fmtTime(sw.last_ping_ok)}</dd>
       ${sw.over_budget
@@ -3875,7 +3910,7 @@ function showDetails(nodeId) {
     const members = topology.hosts.filter((h) => h.via === nodeId);
     const rows = members
       .map(
-        (h) => `<li data-mac="${h.mac}"><span>${hostLabel(h)}</span>
+        (h) => `<li data-mac="${h.mac}" title="${escapeHtml(h.mac + " · " + vendorText(h))}"><span>${hostLabel(h)}</span>
           <span class="sub">${fmtTime(h.last_seen)}</span></li>`
       )
       .join("");
@@ -3896,7 +3931,7 @@ function showDetails(nodeId) {
     const members = topology.hosts.filter((h) => h.via === nodeId);
     const rows = members
       .map(
-        (h) => `<li data-mac="${h.mac}"><span>${hostLabel(h)}</span>
+        (h) => `<li data-mac="${h.mac}" title="${escapeHtml(h.mac + " · " + vendorText(h))}"><span>${hostLabel(h)}</span>
           <span class="sub">${h.ip ? h.mac : ""}</span></li>`
       )
       .join("");
@@ -3944,6 +3979,8 @@ function showDetails(nodeId) {
       <dl>
       <dt>${t("descr")}</dt><dd>${bridge.sys_desc || "—"}</dd>
       <dt>${t("chassisId")}</dt><dd>${bridge.chassis_id}</dd>
+      ${bridge.vendor_status === "found" || bridge.vendor_status === "unregistered"
+        || bridge.vendor_status === "no_registry" ? vendorRow(bridge) : ""}
       ${bridge.dns_name ? `<dt>${t("name")}</dt><dd>${bridge.dns_name}</dd>` : ""}
       <dt>${t("mgmtIp")}</dt><dd>${link}</dd>
       ${bridge.ip && !(bridge.mgmt_ips || []).includes(bridge.ip)
@@ -3981,7 +4018,7 @@ function showDetails(nodeId) {
     // and the name column would just repeat it
     const rows = members
       .map(
-        (h) => `<li data-mac="${h.mac}"><span>${h.ip || hostLabel(h)}</span>
+        (h) => `<li data-mac="${h.mac}" title="${escapeHtml(h.mac + " · " + vendorText(h))}"><span>${h.ip || hostLabel(h)}</span>
           <span class="sub">${h.ip ? h.mac : ""}</span></li>`
       )
       .join("");
@@ -4048,6 +4085,7 @@ function showDetails(nodeId) {
       <dt>${t("macAddr")}</dt><dd>${host.mac}${
         host.random_mac ? ` <span class="chip" title="${t("randomMacHint")}">${t("randomMac")}</span>` : ""
       }</dd>
+      ${vendorRow(host)}
       ${(host.seen_on || []).length
         ? `<dt>${t("uplinkOnlySeenOn")}</dt><dd>${host.seen_on
             .map((s) => `${switchName(s.switch)} ${s.port}`)
@@ -4502,6 +4540,7 @@ function renderPorts(data) {
             .map((n) =>
               [
                 t("lldpNeighbour") + ": " + (n.sys_name || n.chassis_id),
+                n.vendor || "",
                 n.port_id ? t("portLabel") + " " + n.port_id : "",
                 fmtAddresses(n.mgmt_ips),
                 n.cap_known
@@ -4957,6 +4996,12 @@ function renderJournal(events) {
       host.className = "ev-host";
       host.textContent =
         accountEventText(ev) || ev.name || ev.ip || ev.mac || layoutEventText(ev);
+      if (ev.vendor) {
+        // a new device says who made it; any other event keeps it to
+        // the tooltip
+        if (ev.event === "new_mac") host.textContent += " · " + ev.vendor;
+        host.title = (ev.mac || "") + " · " + ev.vendor;
+      }
       item.append(time, type, host);
       // who did it: a pin, a reset, a cleared alarm, somebody else's
       // account — not a sign-in, where it would only repeat the name

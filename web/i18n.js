@@ -102,7 +102,7 @@ const I18N = {
       + "their places. This cannot be undone.",
     unfreezeBtn: "Unfreeze",
     rescanBtn: "Rescan network",
-    searchPlaceholder: "Search: name, IP or MAC…",
+    searchPlaceholder: "Search: name, IP, MAC or manufacturer…",
     switchesHeader: "Switches",
     devicesHeader: "Devices",
     journalTitle: "Event journal",
@@ -474,6 +474,12 @@ const I18N = {
     ipConfirmedLabel: "IP confirmed (ARP)",
     ipNotConfirmed: "not confirmed",
     randomMac: "random MAC",
+    vendorLabel: "Manufacturer",
+    vendor_unregistered: "not in the IEEE register",
+    vendor_local: "random or hand-set address",
+    vendor_group: "group address",
+    vendor_no_registry: "register not loaded",
+    vendorNoRegistryHint: "The IEEE register of MAC blocks is not on the server. An administrator loads it there: {command}",
     randomMacHint:
       "A locally administered address. Phones and laptops randomize it "
       + "per network, so such devices keep reappearing under new MACs.",
@@ -826,7 +832,7 @@ const I18N = {
       + "Отменить это будет нельзя.",
     unfreezeBtn: "Разморозить",
     rescanBtn: "Опросить сеть",
-    searchPlaceholder: "Поиск: имя, IP или MAC…",
+    searchPlaceholder: "Поиск: имя, IP, MAC или производитель…",
     switchesHeader: "Коммутаторы",
     devicesHeader: "Устройства",
     journalTitle: "Журнал событий",
@@ -1196,6 +1202,12 @@ const I18N = {
     ipConfirmedLabel: "IP подтверждён (ARP)",
     ipNotConfirmed: "не подтверждён",
     randomMac: "случайный MAC",
+    vendorLabel: "Производитель",
+    vendor_unregistered: "нет в реестре IEEE",
+    vendor_local: "случайный или заданный вручную адрес",
+    vendor_group: "групповой адрес",
+    vendor_no_registry: "реестр не загружен",
+    vendorNoRegistryHint: "Реестра IEEE блоков MAC-адресов на сервере нет. Администратор загружает его там: {command}",
     randomMacHint:
       "Локально администрируемый адрес. Телефоны и ноутбуки меняют его "
       + "для каждой сети, поэтому такие устройства появляются снова и "

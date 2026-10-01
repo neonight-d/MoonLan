@@ -8,13 +8,16 @@ import io
 import logging
 import os
 import tempfile
+import types
 import time
 import unittest
 import urllib.error
 from pathlib import Path
 from unittest import mock
 
-from moonlan import oui
+import service_fixture  # noqa: F401  (sets MOONLAN_CONFIG first)
+from asgi_client import call
+from moonlan import notify, oui, server
 from moonlan.config import Config, load_config
 
 HEADER = "Registry,Assignment,Organization Name,Organization Address\r\n"
@@ -302,6 +305,124 @@ class LookupTest(Folder):
                           "vendor_status": "found"})
         self.assertEqual(self.registry.fields("00:11:22:33:44:55"),
                          {"vendor": None, "vendor_status": "unregistered"})
+
+
+# ---------- where the maker is seen ----------
+
+GIGA = "10:ff:e0:00:00:01"
+MERCUSYS = ("08:8a:f1:00:00:01", "08:8a:f1:00:00:02")
+PHONE = "da:a1:19:00:00:01"      # locally administered: a random address
+NOBODY = "00:11:22:33:44:55"     # global, and not in the sample register
+
+
+class ServiceTest(Folder):
+    def setUp(self):
+        super().setUp()
+        write_sample(self.folder)
+        self.use(oui.Registry.load(self.folder))
+        saved = (server.state.switches, server.state.hosts,
+                 server.state.unlocated, server.state.bridges)
+        self.addCleanup(self.restore, saved)
+        server.state.switches = [
+            {"ip": "10.0.0.1", "name": "core", "mac": "10:ff:e0:00:00:aa"},
+        ]
+        server.state.hosts = [
+            {"mac": mac, "switch": "10.0.0.1", "port": f"Gi0/{n}"}
+            for n, mac in enumerate((GIGA, *MERCUSYS, PHONE, NOBODY), 1)
+        ]
+        server.state.unlocated = []
+        server.state.bridges = [
+            {"id": "bridge:08:8a:f1:00:00:09", "chassis_id": "08:8a:f1:00:00:09",
+             "name": "ap-hall", "switch": "10.0.0.1", "port": "Gi0/9"},
+            {"id": "bridge:router-7", "chassis_id": "router-7",
+             "name": "router-7", "switch": "10.0.0.1", "port": "Gi0/10"},
+        ]
+
+    def use(self, registry):
+        patch = mock.patch.object(server, "vendors", registry)
+        patch.start()
+        self.addCleanup(patch.stop)
+
+    def restore(self, saved):
+        (server.state.switches, server.state.hosts, server.state.unlocated,
+         server.state.bridges) = saved
+
+    def topology(self):
+        return call(server.app, "GET", "/api/topology").json()
+
+    def test_every_host_says_who_made_it(self):
+        hosts = {h["mac"]: (h["vendor"], h["vendor_status"])
+                 for h in self.topology()["hosts"]}
+        self.assertEqual(hosts[GIGA],
+                         ("GIGA-BYTE TECHNOLOGY CO.,LTD.", "found"))
+        self.assertEqual(hosts[MERCUSYS[1]][1], "found")
+        # three different ways of having no name, kept apart
+        self.assertEqual(hosts[PHONE], (None, "local"))
+        self.assertEqual(hosts[NOBODY], (None, "unregistered"))
+
+    def test_bridges_and_switches_by_their_chassis_mac(self):
+        topo = self.topology()
+        bridges = {b["chassis_id"]: b for b in topo["bridges"]}
+        self.assertEqual(bridges["08:8a:f1:00:00:09"]["vendor"],
+                         "MERCUSYS TECHNOLOGIES CO., LTD.")
+        # a chassis id that is a name says nothing about a maker
+        self.assertNotIn("vendor_status", bridges["router-7"])
+        self.assertEqual(topo["switches"][0]["vendor"],
+                         "GIGA-BYTE TECHNOLOGY CO.,LTD.")
+
+    def test_without_a_register_the_service_runs_and_says_so(self):
+        self.use(oui.Registry.load(self.folder / "nowhere"))
+        hosts = {h["mac"]: (h["vendor"], h["vendor_status"])
+                 for h in self.topology()["hosts"]}
+        self.assertEqual(hosts[GIGA], (None, "no_registry"))
+        self.assertEqual(hosts[PHONE], (None, "local"))
+
+    def test_search_by_maker(self):
+        found = call(server.app, "GET", "/api/search?q=MercuSys").json()
+        self.assertEqual(sorted(r["mac"] for r in found["results"]),
+                         sorted(MERCUSYS))
+
+    def test_the_journal_names_the_maker(self):
+        with server.db._lock, server.db._conn:
+            server.db._conn.execute(
+                "INSERT INTO journal (ts, event, mac, details) "
+                "VALUES (?, 'new_mac', ?, '10.0.0.1 / Gi0/1')",
+                (time.time() + 3600, GIGA),
+            )
+        self.addCleanup(lambda: server.db._conn.execute(
+            "DELETE FROM journal WHERE mac = ?", (GIGA,)))
+        events = call(server.app, "GET", "/api/journal?limit=5").json()
+        event = next(e for e in events["events"] if e["mac"] == GIGA)
+        self.assertEqual(event["vendor"], "GIGA-BYTE TECHNOLOGY CO.,LTD.")
+
+    def test_a_new_device_is_announced_with_its_maker(self):
+        where = {"switch_ip": "10.0.0.1", "port": "Gi0/15"}
+        text = server._new_device_text(GIGA, where)
+        self.assertEqual(
+            text, "new device by GIGA-BYTE TECHNOLOGY CO.,LTD. on core "
+                  "(10.0.0.1) Gi0/15"
+        )
+        # what Telegram and the mail carry
+        self.assertIn("GIGA-BYTE TECHNOLOGY CO.,LTD.", notify.format_text(
+            "new_mac", GIGA, "info", text, False))
+        self.assertIn("random or hand-set address",
+                      server._new_device_text(PHONE, where))
+        self.assertIn("not in the IEEE register",
+                      server._new_device_text(NOBODY, where))
+        self.use(oui.Registry.load(self.folder / "nowhere"))
+        self.assertEqual(server._new_device_text(GIGA, where),
+                         "new device on core (10.0.0.1) Gi0/15")
+
+    def test_lldp_neighbours_in_the_ports_panel(self):
+        neighbour = types.SimpleNamespace(
+            chassis_id="08:8a:f1:00:00:09", port_id="1", port_desc="",
+            sys_name="ap-hall", sys_desc="", cap_enabled=set(),
+            cap_known=False, mgmt_ip="", mgmt_ips=[], rows=1,
+        )
+        self.assertEqual(server._lldp_dict(neighbour)["vendor"],
+                         "MERCUSYS TECHNOLOGIES CO., LTD.")
+        neighbour.chassis_id = "router-7"
+        self.assertIsNone(server._lldp_dict(neighbour)["vendor"])
 
 
 class ConfigTest(unittest.TestCase):

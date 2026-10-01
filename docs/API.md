@@ -302,6 +302,14 @@ The OIDs paused after answering nothing but timeouts — what
 Switches, links, hosts, unlocated devices, pseudo-switches,
 LLDP-discovered bridges, VLAN names, and current monitoring fields.
 
+Hosts, switches, and bridges whose chassis id is a MAC carry who made
+them, from the IEEE register: `vendor` — the name exactly as the
+register has it, or `null` — and `vendor_status`, which says why it is
+`null`: `found`, `unregistered` (a global address the register does not
+list), `local` (locally administered: a random or hand-set address,
+which has no maker), `group`, or `no_registry` (the register is not
+loaded — `python -m moonlan.oui update`).
+
 ### GET /api/switch/{ip}/ports
 
 Port status, speed, traffic rates, errors, discards, LAG membership,
@@ -326,13 +334,15 @@ Manually clears an active alarm; the journal records who did.
 
 Recent journal events, newest first; `limit` up to 1000. Each carries
 `user`: who did it, `"@console"` for `python -m moonlan.users`, empty
-for what MoonLan did itself.
+for what MoonLan did itself. An event about a device the IEEE register
+knows carries its `vendor`, looked up when asked.
 
 ## Inventory
 
 ### GET /api/search?q=...
 
-Searches known devices by name, IP and MAC.
+Searches known devices by name, IP, MAC and maker: `mercusys` finds
+every MERCUSYS device. A substring, in any letter case.
 
 ### PATCH /api/host/{mac}
 

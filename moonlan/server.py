@@ -702,10 +702,8 @@ async def run_scan() -> None:
             rows = await asyncio.to_thread(db.hosts_by_mac)
             await alarm_engine.on_new_macs(
                 new_macs,
-                {
-                    mac: f"{rows[mac]['switch_ip']} / {rows[mac]['port']}"
-                    for mac in new_macs if mac in rows
-                },
+                {mac: _new_device_text(mac, rows[mac])
+                 for mac in new_macs if mac in rows},
             )
         first_scan_done = True
         log.info(
@@ -1357,6 +1355,26 @@ def _effective_monitored(row: dict) -> bool:
     return config.monitored_by_default or bool(row.get("monitored", 0))
 
 
+def _new_device_text(mac: str, row: dict) -> str:
+    """The text of new_mac — in the alarms, the journal, Telegram and the
+    mail: who made the device and where it came in, so the administrator
+    knows who joined the network without opening the map. "new device by
+    GIGA-BYTE TECHNOLOGY CO.,LTD. on access-sw-1 (10.0.0.21) Gi0/9"."""
+    maker = vendors.lookup(mac)
+    who = {
+        "found": f"new device by {maker.name}",
+        "unregistered": "new device, its maker not in the IEEE register,",
+        "local": "new device with a random or hand-set address",
+    }.get(maker.status, "new device")
+    switch = row.get("switch_ip", "")
+    if not switch:
+        return who
+    name = next((sw["name"] for sw in state.as_dict()["switches"]
+                 if sw["ip"] == switch), "")
+    where = f"{name} ({switch})" if name and name != switch else switch
+    return f"{who} on {where} {row.get('port', '')}".rstrip()
+
+
 def _merge_db_fields(hosts: list[dict], db_hosts: dict[str, dict]) -> None:
     """Enriches topology hosts with DB fields (IP, name, ping state)."""
     for h in hosts:
@@ -1373,6 +1391,8 @@ def _merge_db_fields(hosts: list[dict], db_hosts: dict[str, dict]) -> None:
         # phones and laptops randomize their MAC per network, which is
         # why one device can leave a trail of one-off entries
         h["random_mac"] = is_random_mac(h["mac"])
+        # who made it: the name, or why there is none (vendor_status)
+        h.update(vendors.fields(h["mac"]))
 
 
 async def collect_arp(collector: SnmpCollector) -> dict[str, str]:
@@ -2240,6 +2260,10 @@ async def api_topology() -> JSONResponse:
     bridges = []
     for bridge in topo.get("bridges", []):
         bridge = dict(bridge)
+        if oui.normalize(bridge["chassis_id"]):
+            # its maker by the chassis MAC; a chassis id that is a name
+            # or a local address says nothing about who made it
+            bridge.update(vendors.fields(bridge["chassis_id"]))
         row = db_hosts.get(bridge["chassis_id"], {})
         if row:
             bridge["ip"] = row.get("ip", "") or bridge.get("mgmt_ip", "")
@@ -2250,6 +2274,7 @@ async def api_topology() -> JSONResponse:
     topo["switches"] = [
         {
             **sw,
+            **(vendors.fields(sw["mac"]) if sw.get("mac") else {}),
             "ping_up": switch_ping.get(sw["ip"], {}).get("ping_up", False),
             "last_ping_ok": switch_ping.get(sw["ip"], {}).get("last_ping_ok", 0),
             # loop detection is polled at the counters cadence, not by
@@ -2508,6 +2533,8 @@ def _lldp_dict(neighbor) -> dict:
         "mgmt_ips": list(neighbor.mgmt_ips),
         # how many lldpRemTable rows this one device sent
         "rows": neighbor.rows,
+        # who made it, when the chassis id is a MAC the register knows
+        "vendor": vendors.lookup(neighbor.chassis_id).name,
     }
 
 
@@ -2611,7 +2638,14 @@ async def api_clear_alarm(alarm_id: int):
 
 @app.get("/api/journal")
 async def api_journal(limit: int = Query(default=100, ge=1, le=1000)) -> dict:
-    return {"events": await asyncio.to_thread(db.journal, limit)}
+    events = await asyncio.to_thread(db.journal, limit)
+    for event in events:
+        # who made the device an event is about — looked up now, not
+        # stored: the register is updated, the journal is not
+        name = vendors.lookup(event.get("mac") or "").name
+        if name:
+            event["vendor"] = name
+    return {"events": events}
 
 
 class HostPatch(BaseModel):
@@ -3116,7 +3150,18 @@ async def api_scan() -> dict:
 
 @app.get("/api/search")
 async def api_search(q: str = Query(default="")) -> dict:
-    return {"query": q, "results": state.search(q)}
+    results = state.search(q)
+    # …and by maker: "mercusys" finds every MERCUSYS device
+    needle = q.strip().lower()
+    if needle:
+        seen = {r.get("mac") for r in results}
+        topo = state.as_dict()
+        for host in topo["hosts"] + topo.get("unlocated", []):
+            name = vendors.lookup(host["mac"]).name
+            if name and needle in name.lower() and host["mac"] not in seen:
+                results.append({"type": "host", **host, "vendor": name})
+                seen.add(host["mac"])
+    return {"query": q, "results": results}
 
 
 @app.get("/api/skipped-oids")
