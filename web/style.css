@@ -322,6 +322,7 @@ main { flex: 1; display: flex; min-height: 0; position: relative; }
 #details dl { margin: 0; font-size: 0.85rem; }
 #details dt { color: var(--text-dim); margin-top: 8px; }
 #details dd { margin: 2px 0 0; font-family: ui-monospace, monospace; word-break: break-all; }
+#details dd .vendor { word-break: normal; overflow-wrap: anywhere; }
 #details dd .muted { color: var(--text-dim); font-family: inherit; }
 #details dd .hint-line code { font-family: ui-monospace, monospace; }
 /* ---------- event journal ---------- */

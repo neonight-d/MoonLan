@@ -3881,8 +3881,9 @@ function vendorText(item) {
 /* The card's "Maker" row; none for an address that is no MAC. */
 function vendorRow(item) {
   if (!item || !item.vendor_status || item.vendor_status === "invalid") return "";
-  let value = escapeHtml(vendorText(item));
-  if (item.vendor_status !== "found") value = `<span class="muted">${value}</span>`;
+  // words, not an address: wrapped between words, unlike the MAC above
+  let value = `<span class="vendor${item.vendor_status === "found" ? "" : " muted"}">${
+    escapeHtml(vendorText(item))}</span>`;
   if (item.vendor_status === "no_registry") {
     // the cure is a command on the server: said to whoever can run it
     value = `<span class="muted" title="${escapeHtml(fmt("vendorNoRegistryHint", {
