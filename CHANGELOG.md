@@ -6,6 +6,52 @@ for before the next one started.
 
 Русская версия — [CHANGELOG_RU.md](CHANGELOG_RU.md).
 
+## v0.7.8 — 2026-10-01
+
+Who made the device, and one menu per account.
+
+**The maker of a device.** MoonLan knew a device's address, name, port
+and VLAN, but not what it is. The first bytes of a MAC address name
+the organisation IEEE gave the block to, and the register is public.
+`python -m moonlan.oui update` fetches its four files — MA-L, MA-M,
+MA-S and IAB, because blocks come in 24, 28 and 36 bits — into `oui/`
+next to the database (`oui.path` for elsewhere). Every file must parse
+and have the rows a complete register has before any old one is
+replaced, so a download cut short leaves the register as it was. IEEE
+turns away Python's own User-Agent, so the command says what it is;
+when IEEE refuses anyway, or there is no internet, it prints the four
+URLs and the folder to put them in by hand. The register is read at
+startup, is not in the repository, and is not needed: without it
+nothing else changes, and the log says how to get it.
+
+The longest prefix wins — 36 bits, then 28, then 24 — so a device from
+a block IEEE carved up is named by its maker, not "IEEE Registration
+Authority". A locally administered address — a phone's random one, a
+virtual machine's, one set by hand — is not looked up and says so; it
+has no maker, and "unknown" would suggest a gap in the register. Names
+are given exactly as the register has them, for the search on the
+internet that comes next.
+
+Where it is seen: a "Manufacturer" row in the device card, and in the
+cards of bridges and switches by their chassis MAC; the search ("mercusys"
+finds every MERCUSYS device); the new-device alarm — "new device by
+GIGA-BYTE TECHNOLOGY CO.,LTD. on access-sw-1 (10.0.0.21) Gi0/9" in
+Telegram and the mail; the journal; the tooltips of LLDP neighbours
+and of a port's device lists. `/api/topology` gives `vendor` and
+`vendor_status`, which keeps apart a maker not in the register, a
+random address and a register not loaded. `diag --oui <mac>` says why a
+device shows the maker it does; `--config` shows the register's files
+and age; `--hosts` counts the makers. OPERATIONS.md has the command,
+the manual way and a monthly systemd timer.
+
+**One menu per account.** Users had six buttons for every account in
+two rows — eighteen for three people, with "Delete" beside "Sign out
+everywhere". Each row now keeps the role, the state and the keys, and
+one ⋯ holds the rest, built from data like the header's Actions: what
+cannot be done is greyed out with the reason — no TOTP, no keys, no
+sessions — and one's own account or the last administrator is not
+offered to be disabled or deleted.
+
 ## v0.7.7 — 2026-09-29
 
 "Without a password" means without a password.

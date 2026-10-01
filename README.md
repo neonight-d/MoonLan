@@ -18,7 +18,7 @@
 
 | Area | Capabilities |
 |---|---|
-| 🔭 Discovery | SNMP v2c, FDB/MAC tables, LLDP, LACP, VLAN/PVID, ARP/DNS |
+| 🔭 Discovery | SNMP v2c, FDB/MAC tables, LLDP, LACP, VLAN/PVID, ARP/DNS, the maker of each device by the IEEE register |
 | 🗺️ Topology | Direct-link inference, trunk awareness, STP-aware rings, unmanaged bridges |
 | 📈 Monitoring | Ping, traffic rates, errors, discards, flapping, loop detection |
 | 🚨 Alarms | Stateful alarms with Email, Telegram, Syslog notifications |
@@ -272,6 +272,7 @@ See **[CONTRIBUTING.md](CONTRIBUTING.md)**.
 | v0.7.5 ✓ | One row of controls; documentation from the community |
 | v0.7.6 ✓ | HTTPS (TLS of its own or behind a reverse proxy) and signing in with a key |
 | v0.7.7 ✓ | "Without a password" means without a password |
+| v0.7.8 ✓ | Who made each device (IEEE register); one menu per account in Users |
 | v0.8 | Export to PDF and Draw.io, MAC address info import |
 | v0.9 | Windows computer inventory (WMI/WinRM) |
 
