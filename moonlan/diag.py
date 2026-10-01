@@ -6,6 +6,7 @@ Usage:  python -m moonlan.diag <ip> [--community public] [--timeout 2]
         python -m moonlan.diag --port <ip> [--iface Gi0/1] [--watch 3]
         python -m moonlan.diag --config
         python -m moonlan.diag --host <ip|mac>
+        python -m moonlan.diag --oui <mac>
         python -m moonlan.diag --fdb <ip> [--iface 1/3]
         python -m moonlan.diag --stp
         python -m moonlan.diag --loop
@@ -56,7 +57,7 @@ import urllib.request
 from collections import Counter
 from pathlib import Path
 
-from . import counters, https, loopdetect, passkeys, pinger, probes, stp
+from . import counters, https, loopdetect, oui, passkeys, pinger, probes, stp
 from .anonymize import Anonymizer, AnonymizingWriter
 from .config import (
     SECRET_KEYS,
@@ -789,6 +790,8 @@ async def run_host_inventory(community: str, timeout: int, cfg) -> None:
         note = "" if located else "   <- no device of this subnet is on any port"
         print(f"  {subnet}: {total} devices, {located} on switch ports{note}")
 
+    _print_makers(cfg, fdb_macs | arp_macs)
+
     print(f"\nDatabase ({cfg.db_path}):")
     rows = _db_snapshot(cfg.db_path)
     if rows is None:
@@ -817,6 +820,124 @@ async def run_host_inventory(community: str, timeout: int, cfg) -> None:
     )
     print(f"  without an IP: {sum(1 for r in rows if not r['ip'])}")
     print(f"  without a name: {sum(1 for r in rows if not r['name'])}")
+
+
+def _maker_line(registry, mac: str) -> str:
+    """Who made it, in one line for a report."""
+    maker = registry.lookup(mac)
+    if maker.status == "found":
+        return f"{maker.name}  ({maker.registry}, {maker.prefix})"
+    return {
+        "unregistered": "not in the IEEE register",
+        "local": "none — a random or hand-set (locally administered) address",
+        "group": "none — a group (multicast or broadcast) address",
+        "no_registry": f"unknown — no IEEE register in {registry.folder}; "
+                       f"{oui.UPDATE_COMMAND}",
+        "invalid": "not a MAC address",
+    }[maker.status]
+
+
+def _print_makers(cfg, macs: set[str], top: int = 15) -> None:
+    """Part of --hosts: who made the devices in the FDB and ARP tables —
+    the makers, most first, and how many have none to name."""
+    registry = oui.Registry.load(cfg.oui_folder())
+    print(f"\nMakers of these devices (IEEE register, {len(macs)} MACs):")
+    if not registry.loaded:
+        print(f"  no IEEE register in {registry.folder} — "
+              f"{oui.UPDATE_COMMAND} fetches it")
+        return
+    names: Counter = Counter()
+    other: Counter = Counter()
+    for mac in macs:
+        maker = registry.lookup(mac)
+        if maker.status == "found":
+            names[maker.name] += 1
+        else:
+            other[maker.status] += 1
+    width = max((len(name) for name, _ in names.most_common(top)), default=0)
+    for name, count in names.most_common(top):
+        print(f"  {name:<{width}}  {count}")
+    if len(names) > top:
+        rest = sum(names.values()) - sum(c for _, c in names.most_common(top))
+        print(f"  … {len(names) - top} more makers: {rest}")
+    if other["local"]:
+        print(f"  random or hand-set addresses (no maker): {other['local']}")
+    if other["unregistered"]:
+        print(f"  not in the IEEE register: {other['unregistered']}")
+
+
+def run_oui_lookup(target: str, cfg) -> None:
+    """Section 17: who made a device, and why the register says so —
+    which register, which prefix, and what the shorter prefix over it
+    would have said."""
+    _section(f"17. Maker of {target}")
+    digits = oui.normalize(target)
+    if digits is None:
+        sys.exit(f"{target!r} is not a MAC address (12 hex digits, any "
+                 f"separators)")
+    registry = oui.Registry.load(cfg.oui_folder())
+    pretty = ":".join(digits[i:i + 2] for i in range(0, 12, 2))
+    print(f"address:   {pretty}")
+    if registry.files:
+        print(f"register:  {registry.folder} — " + ", ".join(
+            f"{f.source.registry} {f.rows}" for f in registry.files
+        ) + ", files from " + time.strftime(
+            "%Y-%m-%d", time.localtime(registry.oldest())))
+    else:
+        print(f"register:  none in {registry.folder}")
+    maker = registry.lookup(digits)
+    print(f"maker:     {_maker_line(registry, digits)}")
+    if maker.status == "found":
+        print(f"matched:   {maker.registry}, {len(maker.prefix)} hex digits "
+              f"({len(maker.prefix) * 4} bits): {maker.prefix}")
+        if len(maker.prefix) > 6:
+            # the block it is carved from, which a lookup by the first
+            # three bytes alone would have reported
+            parent = registry.tables[6].get(digits[:6])
+            if parent:
+                print(f"carved from the MA-L block {digits[:6]}: "
+                      f"{parent[0]}")
+    elif maker.status in ("local", "group"):
+        first = int(digits[:2], 16)
+        print(f"first byte {digits[:2]} = {first:08b}: "
+              + ("bit 0 (group) is set" if maker.status == "group"
+                 else "bit 1 (locally administered) is set")
+              + " — such an address is not looked up")
+    elif maker.status == "unregistered":
+        print(f"looked up: {digits[:9]} (MA-S, IAB), {digits[:7]} (MA-M), "
+              f"{digits[:6]} (MA-L) — none listed")
+
+
+def _print_oui(cfg) -> None:
+    """Part of --config: the IEEE register — where, how much, how old."""
+    registry = oui.Registry.load(cfg.oui_folder())
+    print(f"\nIEEE register of MAC blocks (oui.path): {registry.folder}")
+    have = {f.source.registry: f for f in registry.files}
+    now = time.time()
+    for source in oui.SOURCES:
+        loaded = have.get(source.registry)
+        if loaded is None:
+            print(f"  {source.registry:<5} {source.file:<10} missing")
+            continue
+        age = (now - loaded.modified) / 86400
+        print(
+            f"  {source.registry:<5} {source.file:<10} {loaded.rows:>6} rows, "
+            f"{time.strftime('%Y-%m-%d', time.localtime(loaded.modified))} "
+            f"({age:.0f} days)"
+            + ("  <- older than " + str(oui.STALE_DAYS) + " days"
+               if age > oui.STALE_DAYS else "")
+        )
+    for problem in registry.problems:
+        print(f"    ^ {problem} — not used")
+    if not registry.loaded:
+        print(f"  no register: devices show no maker. {oui.UPDATE_COMMAND} "
+              f"fetches it, or copy the four files there by hand "
+              f"(docs/OPERATIONS.md)")
+    elif len(registry.files) < len(oui.SOURCES):
+        print("  ^ a register is missing: devices from its blocks show the "
+              "block's owner, or none")
+    elif (now - (registry.oldest() or now)) / 86400 > oui.STALE_DAYS:
+        print(f"  ^ old: the newest makers are missing — {oui.UPDATE_COMMAND}")
 
 
 def _mask(key: str, value) -> str:
@@ -890,6 +1011,7 @@ def run_config_audit(cfg) -> None:
             print(f"  {problem}")
 
     _print_node_menu(cfg)
+    _print_oui(cfg)
     _print_https(cfg)
     _print_sign_in(cfg)
 
@@ -1566,6 +1688,8 @@ async def run_host_diag(
             print(f"  {key:<13} {value}")
     if not mac and not ip:
         sys.exit("give an IP address or a MAC address")
+    if mac:
+        print(f"\nmaker: {_maker_line(oui.Registry.load(cfg.oui_folder()), mac)}")
 
     collector = _make_collector(community, timeout)
 
@@ -2174,6 +2298,12 @@ def main() -> None:
              "and why it is considered offline",
     )
     parser.add_argument(
+        "--oui", metavar="MAC",
+        help="who made a device: the maker by the IEEE register, which "
+             "register (MA-L, MA-M, MA-S, IAB) and how long a prefix "
+             "matched — for \"why does this device show this maker\"",
+    )
+    parser.add_argument(
         "--fdb", metavar="SWITCH_IP",
         help="dump the raw MAC table of a switch: OID, suffix length, "
              "parsed address and whether the row was rejected",
@@ -2240,12 +2370,12 @@ def main() -> None:
     modes = (
         args.topology or args.hosts or args.port or args.config
         or args.host or args.fdb or args.stp or args.walk or args.loop
-        or args.skipped or args.layout
+        or args.skipped or args.layout or args.oui
     )
     if not modes and not args.ip:
         parser.error(
-            "an ip is required unless --topology, --hosts, --host, --fdb, "
-            "--stp, --loop, --walk, --port, --skipped, --layout or "
+            "an ip is required unless --topology, --hosts, --host, --oui, "
+            "--fdb, --stp, --loop, --walk, --port, --skipped, --layout or "
             "--config is given"
         )
     cfg = load_config()
@@ -2263,6 +2393,8 @@ def main() -> None:
         sys.stdout = AnonymizingWriter(sys.stdout, _ANON)
     if args.config:
         run_config_audit(cfg)
+    elif args.oui:
+        run_oui_lookup(args.oui, cfg)
     elif args.skipped:
         run_skipped_view(cfg)
     elif args.layout:

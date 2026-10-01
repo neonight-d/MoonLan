@@ -2,6 +2,7 @@
 without ever being left without one, and looking a maker up — on small
 registers made here, never from the network."""
 
+import contextlib
 import csv
 import dataclasses
 import io
@@ -17,7 +18,7 @@ from unittest import mock
 
 import service_fixture  # noqa: F401  (sets MOONLAN_CONFIG first)
 from asgi_client import call
-from moonlan import notify, oui, server
+from moonlan import diag, notify, oui, server
 from moonlan.config import Config, load_config
 
 HEADER = "Registry,Assignment,Organization Name,Organization Address\r\n"
@@ -423,6 +424,70 @@ class ServiceTest(Folder):
                          "MERCUSYS TECHNOLOGIES CO., LTD.")
         neighbour.chassis_id = "router-7"
         self.assertIsNone(server._lldp_dict(neighbour)["vendor"])
+
+
+# ---------- diag ----------
+
+class DiagTest(Folder):
+    def setUp(self):
+        super().setUp()
+        write_sample(self.folder)
+        self.cfg = Config(oui_path=str(self.folder))
+
+    def run_diag(self, function, *args):
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            function(*args)
+        return out.getvalue()
+
+    def test_why_this_maker(self):
+        text = self.run_diag(diag.run_oui_lookup, "70-B3-D5-F2-1A-BC", self.cfg)
+        self.assertIn("address:   70:B3:D5:F2:1A:BC", text)
+        self.assertIn("MA-L 5, MA-M 1, MA-S 1, IAB 1", text)
+        self.assertIn("maker:     Example Small Maker (MA-S)", text)
+        self.assertIn("matched:   MA-S, 9 hex digits (36 bits): 70B3D5F21",
+                      text)
+        self.assertIn("carved from the MA-L block 70B3D5: IEEE Registration "
+                      "Authority", text)
+
+    def test_what_is_not_looked_up(self):
+        text = self.run_diag(diag.run_oui_lookup, "da:a1:19:00:00:01", self.cfg)
+        self.assertIn("random or hand-set", text)
+        self.assertIn("bit 1 (locally administered) is set", text)
+        text = self.run_diag(diag.run_oui_lookup, "00:11:22:33:44:55", self.cfg)
+        self.assertIn("not in the IEEE register", text)
+        self.assertIn("001122334 (MA-S, IAB), 0011223 (MA-M), 001122 (MA-L)",
+                      text)
+        with self.assertRaises(SystemExit):
+            self.run_diag(diag.run_oui_lookup, "10:ff:e0", self.cfg)
+
+    def test_config_says_what_is_read(self):
+        text = self.run_diag(diag._print_oui, self.cfg)
+        self.assertIn(f"(oui.path): {self.folder}", text)
+        self.assertRegex(text, r"MA-L  oui\.csv\s+5 rows, \d{4}-\d\d-\d\d")
+        (self.folder / "iab.csv").unlink()
+        text = self.run_diag(diag._print_oui, self.cfg)
+        self.assertIn("IAB   iab.csv    missing", text)
+        self.assertIn("a register is missing", text)
+        old = time.time() - (oui.STALE_DAYS + 1) * 86400
+        for path in self.folder.iterdir():
+            os.utime(path, (old, old))
+        (self.folder / "iab.csv").write_bytes(csv_bytes("IAB", SAMPLE["IAB"]))
+        os.utime(self.folder / "iab.csv", (old, old))
+        text = self.run_diag(diag._print_oui, self.cfg)
+        self.assertIn(f"older than {oui.STALE_DAYS} days", text)
+        self.assertIn("old: the newest makers are missing", text)
+        empty = Config(oui_path=str(self.folder / "nowhere"))
+        self.assertIn("python -m moonlan.oui update",
+                      self.run_diag(diag._print_oui, empty))
+
+    def test_hosts_counts_the_makers(self):
+        macs = {GIGA, "10:ff:e0:00:00:02", *MERCUSYS, PHONE, NOBODY}
+        text = self.run_diag(diag._print_makers, self.cfg, macs)
+        self.assertRegex(text, r"GIGA-BYTE TECHNOLOGY CO\.,LTD\.\s+2")
+        self.assertRegex(text, r"MERCUSYS TECHNOLOGIES CO\., LTD\.\s+2")
+        self.assertIn("random or hand-set addresses (no maker): 1", text)
+        self.assertIn("not in the IEEE register: 1", text)
 
 
 class ConfigTest(unittest.TestCase):

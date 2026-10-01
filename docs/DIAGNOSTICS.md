@@ -37,7 +37,28 @@ settle whether devices on some port are real: rows whose OID suffix
 does not match the table (a walk that left it, or an agent with its own
 indexing) used to become phantom addresses, and they are now listed as
 rejected. `--iface` narrows the listing to one port, while rejected
-rows are always shown — they carry no usable port.
+rows are always shown — they carry no usable port. For a MAC, `--host`
+also names its maker.
+
+## Who made a device
+
+```bash
+python -m moonlan.diag --oui 10:ff:e0:00:00:01     # any case, any separators
+```
+
+The maker by the IEEE register, which register named it (MA-L, MA-M,
+MA-S or IAB) and how long a prefix matched. When a 28- or 36-bit block
+matched, it also prints the MA-L block it was carved from — that row
+reads "IEEE Registration Authority", which is what a lookup by the
+first three bytes alone would have said. A random or hand-set address
+(the second bit of the first byte) and a group address are not looked
+up, and the line says which bit decided it; an address the register
+does not list shows the three prefixes that were tried.
+
+`--config` shows the register itself: the folder (`oui.path`), each of
+the four files with its rows and date, a file missing, and a register
+older than 180 days. To fetch or refresh it, see
+[OPERATIONS.md](OPERATIONS.md#the-maker-of-a-device-ieee-register).
 
 ## Updating the configuration
 
@@ -101,6 +122,9 @@ router, then compares them with the database:
   polled switch;
 - known IP addresses grouped by /24, each with the number of devices
   and how many of them are on a switch port;
+- who made the devices in the MAC and ARP tables: the makers, most
+  first, and how many addresses are random or hand-set, or not in the
+  IEEE register;
 - database totals: hosts, how many are missing from the current MAC
   tables (and how many of those are still inside the grace window),
   never located, without an IP, without a name.
