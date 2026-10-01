@@ -1,6 +1,17 @@
 """The IEEE register of MAC blocks (v0.7.8): reading it, updating it
 without ever being left without one, and looking a maker up — on small
-registers made here, never from the network."""
+registers made here, never from the network.
+
+What the v0.7.8 brief asked of these tests, and where it is:
+  MA-S over "IEEE Registration Authority"   LookupTest.test_ma_s_wins_over_ieee_itself
+  MA-M over MA-L                            LookupTest.test_ma_m_wins_over_ma_l
+  local and group addresses not looked up   LookupTest.test_local_and_group_are_not_looked_up
+  case and separators                       LookupTest.test_case_and_separators
+  a broken or empty file replaces nothing   UpdateTest.test_one_bad_file_replaces_nothing,
+                                            UpdateTest.test_too_few_rows_replaces_nothing
+  no register: the service starts, `vendor` ServiceTest.test_the_service_starts_without_a_register
+    empty with the reason
+"""
 
 import contextlib
 import csv
@@ -377,6 +388,22 @@ class ServiceTest(Folder):
                  for h in self.topology()["hosts"]}
         self.assertEqual(hosts[GIGA], (None, "no_registry"))
         self.assertEqual(hosts[PHONE], (None, "local"))
+
+    def test_the_service_starts_without_a_register(self):
+        # the configuration the tests run with has no register: the
+        # service imported, answers, and says in one line what to do
+        self.assertFalse(oui.Registry.load(server.config.oui_folder()).loaded)
+        self.use(oui.Registry.load(server.config.oui_folder()))
+        self.assertEqual(call(server.app, "GET", "/api/health").status, 200)
+        with self.assertLogs("moonlan", "INFO") as logged:
+            server._log_config()
+        lines = [line for line in logged.output if "Vendors:" in line]
+        self.assertEqual(len(lines), 1)
+        self.assertIn("no IEEE register", lines[0])
+        self.assertIn("python -m moonlan.oui update", lines[0])
+        host = self.topology()["hosts"][0]
+        self.assertEqual((host["vendor"], host["vendor_status"]),
+                         (None, "no_registry"))
 
     def test_search_by_maker(self):
         found = call(server.app, "GET", "/api/search?q=MercuSys").json()
