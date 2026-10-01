@@ -201,11 +201,15 @@ on.
 
 In the browser, **Users** in the Actions menu (⋯) does the same for an
 administrator: create an account with a temporary password (generated,
-shown once; the person sets their own at the first sign-in), change a
-role, disable and enable, a new temporary password, reset TOTP, remove
-a key or reset all of them, unlock, sign out everywhere, delete — with
-the same rules about the last administrator and an administrator's last
-second factor. Everyone's own page — the name in the header — changes
+shown once; the person sets their own at the first sign-in), and in
+each account's row its role, its keys (each with its own "Remove") and
+one ⋯ with the rest — a new temporary password, reset TOTP, reset the
+keys, sign out everywhere, unlock; disable or enable; delete, last and
+apart. What cannot be done to that account is in the menu greyed out
+with the reason: no TOTP, no keys, no sessions, not locked — and one's
+own account, or the last administrator, cannot be disabled or deleted
+from there. The same rules hold on the server, about the last
+administrator and an administrator's last second factor. Everyone's own page — the name in the header — changes
 the password, binds TOTP, adds and removes keys, says how many recovery
 codes are left, and signs out.
 

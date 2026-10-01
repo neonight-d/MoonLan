@@ -42,6 +42,7 @@ const els = {
   actionsClose: document.getElementById("actions-close"),
   moreBtn: document.getElementById("more-btn"),
   moreMenu: document.getElementById("more-menu"),
+  userMenu: document.getElementById("user-menu"),
   notice: document.getElementById("notice"),
   userChip: document.getElementById("user-chip"),
   gate: document.getElementById("gate"),
@@ -1318,6 +1319,8 @@ function userState(user) {
 }
 
 function renderUsers(users, myName, errorMessage) {
+  // a menu drawn for the list being replaced acts on stale state
+  closeUserMenu(false);
   const name = h("input", {
     autocomplete: "off", autocapitalize: "none", spellcheck: "false",
     required: true,
@@ -1343,7 +1346,17 @@ function renderUsers(users, myName, errorMessage) {
         method: "PATCH", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ role: select.value }),
       }));
-    const act = (key, run) => h("button", { type: "button", text: t(key), onclick: run });
+    // everything else done to the account: one ⋯, a menu with reasons
+    const more = h("button", {
+      type: "button", class: "user-more", title: t("userMenuHint"),
+      "aria-label": fmt("userMenuFor", { name: user.name }),
+      "aria-haspopup": "menu", "aria-expanded": "false", text: "⋯",
+    });
+    more.addEventListener("click", (event) => {
+      event.stopPropagation();
+      if (userMenuButton === more) closeUserMenu(true);
+      else openUserMenu(more, user, myName, users);
+    });
     const keys = user.passkeys || [];
     const removeKey = (key) => userAction(
       path + "/passkeys/" + key.id, { method: "DELETE" }, null, user.name,
@@ -1352,37 +1365,9 @@ function renderUsers(users, myName, errorMessage) {
       h("div", { class: "who" },
         h("strong", { text: user.name }),
         user.name === myName ? h("span", { class: "hint-line", text: "(" + t("userYou") + ")" }) : null,
-        select),
+        select, more),
       userState(user),
-      keys.length ? keyList(keys, removeKey) : null,
-      h("div", { class: "acts" },
-        act("actNewPassword", () =>
-          userAction(path + "/password", jsonPost(path + "/password"), "confirmNewPassword", user.name)),
-        user.totp
-          ? act("actResetTotp", () =>
-            userAction(path + "/reset-totp", jsonPost(path + "/reset-totp"), "confirmResetTotp", user.name))
-          : null,
-        keys.length
-          ? act("actResetKeys", () =>
-            userAction(path + "/reset-passkeys", jsonPost(path + "/reset-passkeys"), "confirmResetKeys", user.name))
-          : null,
-        user.locked_until
-          ? act("actUnlock", () => userAction(path + "/unlock", jsonPost(path + "/unlock")))
-          : null,
-        user.sessions
-          ? act("actSignOut", () => userAction(path + "/logout", jsonPost(path + "/logout")))
-          : null,
-        user.disabled
-          ? act("actEnable", () => userAction(path, {
-            method: "PATCH", headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ disabled: false }),
-          }))
-          : act("actDisable", () => userAction(path, {
-            method: "PATCH", headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ disabled: true }),
-          }, "confirmDisable", user.name)),
-        act("actDelete", () =>
-          userAction(path, { method: "DELETE" }, "confirmDelete", user.name))));
+      keys.length ? keyList(keys, removeKey) : null);
   }));
   // replaceChildren would write a null out as the word "null"
   els.usersBody.replaceChildren(...[
@@ -1391,6 +1376,100 @@ function renderUsers(users, myName, errorMessage) {
     usersNotice ? h("p", { class: "secret-once", text: usersNotice }) : null,
     list,
   ].filter(Boolean));
+}
+
+/* ---------- one account's actions ----------
+
+   Six buttons per account in two rows — eighteen for three people, with
+   "Delete" next to "Sign out everywhere" — became one ⋯ (v0.7.8), the
+   cure the header got in v0.7.5. The menu is built from data by the
+   same menuButtons as the node menu and the header's Actions; what
+   cannot be done to this account is in it greyed out with the reason. */
+
+const USER_GROUPS = ["account", "state", "danger"];
+
+function userMenuItems(user, myName, users) {
+  const path = "/api/users/" + encodeURIComponent(user.name);
+  const enabledAdmins = users.filter((u) => u.role === "admin" && !u.disabled);
+  // what the server would refuse anyway is not offered: one's own
+  // account, and the last administrator, without whom the map is open
+  const kept = user.name === myName
+    ? t("reasonYourAccount")
+    : user.role === "admin" && !user.disabled && enabledAdmins.length === 1
+    ? t("reasonLastAdmin")
+    : null;
+  const post = (suffix, confirmKey) => () =>
+    userAction(path + suffix, jsonPost(path + suffix), confirmKey, user.name);
+  const patch = (body, confirmKey) => () => userAction(path, {
+    method: "PATCH", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  }, confirmKey, user.name);
+  const now = Date.now() / 1000;
+  return [
+    { key: "password", group: "account", label: t("actNewPassword"),
+      run: post("/password", "confirmNewPassword") },
+    { key: "totp", group: "account", label: t("actResetTotp"),
+      disabled: user.totp ? null : t("reasonNoTotp"),
+      run: post("/reset-totp", "confirmResetTotp") },
+    { key: "keys", group: "account", label: t("actResetKeys"),
+      disabled: (user.passkeys || []).length ? null : t("reasonNoKeys"),
+      run: post("/reset-passkeys", "confirmResetKeys") },
+    { key: "sessions", group: "account", label: t("actSignOut"),
+      disabled: user.sessions ? null : t("reasonNoSessions"),
+      run: post("/logout") },
+    { key: "unlock", group: "account", label: t("actUnlock"),
+      disabled: user.locked_until > now ? null : t("reasonNotLocked"),
+      run: post("/unlock") },
+    user.disabled
+      ? { key: "enable", group: "state", label: t("actEnable"),
+          run: patch({ disabled: false }) }
+      : { key: "disable", group: "state", label: t("actDisable"),
+          disabled: kept, run: patch({ disabled: true }, "confirmDisable") },
+    { key: "delete", group: "danger", label: t("actDelete"), danger: true,
+      disabled: kept, run: () => userAction(path, { method: "DELETE" },
+        "confirmDelete", user.name) },
+  ];
+}
+
+let userMenuButton = null; // the ⋯ the open menu belongs to
+
+function openUserMenu(button, user, myName, users) {
+  closeUserMenu(false);
+  closeMoreMenu(false);
+  closeNodeMenu();
+  userMenuButton = button;
+  els.userMenu.setAttribute("aria-label", fmt("userMenuFor", { name: user.name }));
+  els.userMenu.replaceChildren(
+    ...menuButtons(userMenuItems(user, myName, users), USER_GROUPS, (item) => {
+      closeUserMenu(true);
+      item.run();
+    })
+  );
+  els.userMenu.classList.remove("hidden");
+  button.setAttribute("aria-expanded", "true");
+  // under the button, its right edge on the button's
+  const at = button.getBoundingClientRect();
+  const width = els.userMenu.offsetWidth;
+  const height = els.userMenu.offsetHeight;
+  els.userMenu.style.left =
+    Math.max(4, Math.min(at.right - width, window.innerWidth - width - 8)) + "px";
+  // above the button when there is no room under it
+  els.userMenu.style.top = (at.bottom + 6 + height > window.innerHeight
+    ? Math.max(4, at.top - 6 - height) : at.bottom + 6) + "px";
+  const first = els.userMenu.querySelector('[role="menuitem"]');
+  if (first) first.focus();
+}
+
+function closeUserMenu(returnFocus) {
+  if (els.userMenu.classList.contains("hidden")) return;
+  els.userMenu.classList.add("hidden");
+  els.userMenu.replaceChildren();
+  const button = userMenuButton;
+  userMenuButton = null;
+  if (button) {
+    button.setAttribute("aria-expanded", "false");
+    if (returnFocus && button.isConnected) button.focus();
+  }
 }
 
 /* ---------- layout freeze ---------- */
@@ -5131,6 +5210,7 @@ els.freezeBtn.addEventListener("click", toggleFreeze);
 els.arrangeBtn.addEventListener("click", () => allowed(els.arrangeBtn) && toggleArrangeMode());
 document.addEventListener("click", (event) => {
   if (!els.nodeMenu.contains(event.target)) closeNodeMenu();
+  if (!els.userMenu.contains(event.target)) closeUserMenu(false);
   if (!els.moreMenu.contains(event.target) && !els.moreBtn.contains(event.target)) {
     closeMoreMenu(false);
   }
@@ -5142,7 +5222,13 @@ els.moreBtn.addEventListener("click", () => {
 els.moreMenu.addEventListener("keydown", (event) =>
   menuKeys(event, els.moreMenu, closeMoreMenu)
 );
-els.usersClose.addEventListener("click", () => els.users.classList.add("hidden"));
+els.userMenu.addEventListener("keydown", (event) =>
+  menuKeys(event, els.userMenu, closeUserMenu)
+);
+els.usersClose.addEventListener("click", () => {
+  closeUserMenu(false);
+  els.users.classList.add("hidden");
+});
 els.userChip.addEventListener("click", toggleAccount);
 els.accountClose.addEventListener("click", () => els.account.classList.add("hidden"));
 els.actionsClose.addEventListener("click", closeActions);
