@@ -267,6 +267,15 @@ auth:
   # наблюдателем остаётся в системе неделями.
   session_max_days: 30
 
+# The IEEE register of MAC blocks, which names the maker of a device.
+# Empty — oui/ next to the database. Fill it with
+# python -m moonlan.oui update, or copy the four CSV files by hand.
+# Реестр IEEE блоков MAC-адресов — по нему виден производитель. Пусто —
+# папка oui/ рядом с базой. Заполняется python -m moonlan.oui update
+# или копированием четырёх CSV-файлов вручную.
+oui:
+  path: ""
+
 # Periodic scan, minutes (0 — manual only via /api/scan)
 # Периодический автоопрос, минут (0 — только вручную через /api/scan)
 scan_interval_minutes: 10

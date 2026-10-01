@@ -308,6 +308,9 @@ class Config:
     alarm_notify: dict[str, list[str]] = field(
         default_factory=lambda: dict(DEFAULT_ALARM_NOTIFY)
     )
+    # The folder with the IEEE register of MAC blocks (v0.7.8); "" —
+    # `oui/` next to the database (see oui_folder)
+    oui_path: str = ""
     demo: bool = False
     # filled in by load_config: which settings came from the file
     report: "ConfigReport | None" = None
@@ -336,6 +339,13 @@ class Config:
     def web_scheme(self, ip: str) -> str:
         """How this switch's web interface is opened from the menu."""
         return self.switch_web_scheme.get(ip) or self.context_menu.web_scheme
+
+    def oui_folder(self) -> Path:
+        """Where the IEEE register lives: oui.path, or `oui/` beside the
+        database — the service's own data, kept where its data is."""
+        if self.oui_path:
+            return Path(self.oui_path)
+        return Path(self.db_path).resolve().parent / "oui"
 
     def users_db_path(self) -> str:
         """Where the accounts live: the database itself — or, in demo
@@ -787,6 +797,8 @@ def load_config(path: Path | None = None) -> Config:
         allowed_schemes=sorted(allowed),
         links=links,
     )
+
+    cfg.oui_path = r.get("oui.path", d.oui_path, str)
 
     cfg.auth = AuthConfig(
         session_idle_hours=r.get(

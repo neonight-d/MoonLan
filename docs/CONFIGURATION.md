@@ -188,6 +188,12 @@ fails on a key the loader knows and this page does not.
 | `auth.session_idle_hours` | `12` | A session ends after this long without a request. An open map refreshes itself, which counts. |
 | `auth.session_max_days` | `30` | …and after this long in any case. A wall monitor signed in as a viewer stays signed in for weeks. |
 
+### oui
+
+| Key | Default | Meaning |
+|---|---|---|
+| `oui.path` | `""` | The folder with the IEEE register of MAC blocks, which names a device's maker; empty — `oui/` next to `db_path`. `python -m moonlan.oui update` fills it; on a machine without the internet, copy the four CSV files there by hand ([OPERATIONS.md](OPERATIONS.md#the-maker-of-a-device-ieee-register)). Read at startup. |
+
 ### thresholds
 
 | Key | Default | Meaning |

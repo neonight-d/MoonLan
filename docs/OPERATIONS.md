@@ -99,6 +99,77 @@ always clear which instance is talking to what. The database runs in
 WAL mode, so a `diag` run or a test alongside the service does not
 hand it `database is locked`.
 
+## The maker of a device (IEEE register)
+
+MoonLan names who made a device from the first bytes of its MAC address,
+by the register IEEE publishes. The register is not in the repository —
+it is several megabytes and changes every week. Fetch it:
+
+```bash
+.venv/bin/python -m moonlan.oui update
+```
+
+It downloads four CSV files (MA-L, MA-M, MA-S, IAB) into `oui/` next to
+the database (`oui.path` to put them elsewhere), checks that each one
+is a complete register, and only then replaces the old files: a
+download cut short leaves the register as it was. MoonLan reads it at
+startup, so restart the service afterwards. Without it the map works
+as before and devices show "registry not loaded".
+
+IEEE turns away some clients it takes for robots (HTTP 403 or 418), and
+a machine may have no way out to the internet at all. Then download the
+four files in a browser and copy them into the folder the command
+printed, under these names:
+
+| File | Register | URL |
+|---|---|---|
+| `oui.csv` | MA-L | https://standards-oui.ieee.org/oui/oui.csv |
+| `mam.csv` | MA-M | https://standards-oui.ieee.org/oui28/mam.csv |
+| `oui36.csv` | MA-S | https://standards-oui.ieee.org/oui36/oui36.csv |
+| `iab.csv` | IAB | https://standards-oui.ieee.org/iab/iab.csv |
+
+`python -m moonlan.diag --config` says what MoonLan reads: the folder,
+rows per register and the date of the files. A register older than
+180 days is a line in the log at startup.
+
+Monthly, with systemd — the update as the service's user, then a
+restart of the map:
+
+```ini
+# /etc/systemd/system/moonlan-oui.service
+[Unit]
+Description=Update the IEEE register for MoonLan
+
+[Service]
+Type=oneshot
+User=<user>                # the same as in moonlan.service
+WorkingDirectory=/opt/moonlan
+ExecStart=/opt/moonlan/.venv/bin/python -m moonlan.oui update
+ExecStartPost=+/usr/bin/systemctl try-restart moonlan.service
+```
+
+```ini
+# /etc/systemd/system/moonlan-oui.timer
+[Unit]
+Description=Update the IEEE register for MoonLan monthly
+
+[Timer]
+OnCalendar=monthly
+RandomizedDelaySec=1d
+Persistent=true
+
+[Install]
+WantedBy=timers.target
+```
+
+```bash
+sudo systemctl daemon-reload
+sudo systemctl enable --now moonlan-oui.timer
+```
+
+A failed update leaves the old register and the service untouched:
+`ExecStartPost` runs only after a successful `ExecStart`.
+
 ## Startup
 
 Check the startup log first. It reports the configuration path, database path, enabled features, and configuration problems.

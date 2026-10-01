@@ -249,3 +249,6 @@ moonlan-clean/
 # writes them into the current directory, and a key committed here would
 # be published. They belong outside the repository, e.g. /opt/moonlan/tls.
 *.pem
+# The IEEE register of MAC blocks (v0.7.8): several megabytes that
+# change every week — fetched with python -m moonlan.oui update
+oui/

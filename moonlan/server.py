@@ -19,7 +19,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from . import (
-    __version__, corruption, counters, demo, https, loopdetect, menu,
+    __version__, corruption, counters, demo, https, loopdetect, menu, oui,
     passkeys, pinger, probes, signin, stp,
 )
 from .alarms import AlarmEngine
@@ -63,6 +63,9 @@ certificate: https.CertInfo | None = None
 CERT_ALARM_DAYS = 14
 CERT_WARN_DAYS = 30
 CERT_CHECK_SECONDS = 86400
+# The IEEE register of MAC blocks: who made a device. Read once, at
+# startup; without it every maker is "unknown" and nothing else changes
+vendors = oui.Registry.load(config.oui_folder())
 # In demo mode the DB lives in memory so the real one is not polluted
 db = Database(":memory:" if config.demo else config.db_path)
 # Accounts and sessions: the same database — except in demo mode, where
@@ -1886,6 +1889,7 @@ def _log_config() -> None:
         log.warning("config.yaml context_menu: %s", problem)
     _log_public_url()
     passkeys.log_state(public_url)
+    oui.log_state(vendors)
     links = config.context_menu.links
     if links:
         log.info(
