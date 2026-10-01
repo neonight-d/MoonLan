@@ -129,6 +129,38 @@ def _is_hex(text: str) -> bool:
     return True
 
 
+@dataclass(frozen=True)
+class Maker:
+    """What the register says about one address.
+
+    `status` keeps apart what an empty name would blur:
+      found         — `name` from `registry`, by `prefix`;
+      unregistered  — a global address the register does not list;
+      local         — a locally administered address: chosen at random
+                      by a phone or a laptop, by a virtual machine, or
+                      set by hand. It has no maker by definition, and
+                      "unknown" would wrongly suggest a gap in the
+                      register;
+      group         — a multicast or broadcast address, nobody's device;
+      no_registry   — the register is not loaded;
+      invalid       — not a MAC address.
+    """
+
+    status: str
+    name: str | None = None
+    registry: str | None = None
+    prefix: str = ""
+
+
+def normalize(mac: str) -> str | None:
+    """Twelve upper-case hex digits, whatever the separators and the
+    case (00:1A:2B…, 00-1a-2b…, 001a.2b…, 001A2B…), or None."""
+    digits = "".join(ch for ch in str(mac) if ch not in ":-. \t").upper()
+    if len(digits) != 12 or not _is_hex(digits):
+        return None
+    return digits
+
+
 @dataclass
 class Loaded:
     """One register file as read at startup."""
@@ -154,6 +186,33 @@ class Registry:
     @property
     def loaded(self) -> bool:
         return any(self.tables.values())
+
+    def lookup(self, mac: str) -> Maker:
+        """The maker of the device with this address. The longest
+        prefix first: MA-S and IAB (9 digits), then MA-M (7), then MA-L
+        (6) — the MA-L row over a carved-up block says only "IEEE
+        Registration Authority", which is worse than nothing."""
+        digits = normalize(mac)
+        if digits is None:
+            return Maker("invalid")
+        first = int(digits[:2], 16)
+        if first & 0x01:
+            return Maker("group")
+        if first & 0x02:
+            return Maker("local")
+        if not self.loaded:
+            return Maker("no_registry")
+        for length in (9, 7, 6):
+            hit = self.tables[length].get(digits[:length])
+            if hit:
+                return Maker("found", hit[0], hit[1], digits[:length])
+        return Maker("unregistered")
+
+    def fields(self, mac: str) -> dict:
+        """The maker as the API gives it: `vendor`, the name or null, and
+        `vendor_status`, which says why it is null."""
+        maker = self.lookup(mac)
+        return {"vendor": maker.name, "vendor_status": maker.status}
 
     def oldest(self) -> float | None:
         """When the oldest of the files was written, or None."""

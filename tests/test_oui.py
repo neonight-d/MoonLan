@@ -227,6 +227,83 @@ class UpdateTest(Folder):
         self.assertNotIn("Python-urllib", oui.USER_AGENT)
 
 
+class LookupTest(Folder):
+    def setUp(self):
+        super().setUp()
+        write_sample(self.folder)
+        # a "maker" for a locally administered and a group prefix too, to
+        # show they are never looked up
+        with open(self.folder / "oui.csv", "ab") as handle:
+            handle.write(csv_bytes("MA-L", [("0A1B2C", "Nobody's local"),
+                                            ("01005E", "Nobody's group")]
+                                   )[len(HEADER):])
+        self.registry = oui.Registry.load(self.folder)
+
+    def maker(self, mac):
+        return self.registry.lookup(mac)
+
+    def test_ma_l(self):
+        found = self.maker("10:ff:e0:00:00:01")
+        self.assertEqual((found.status, found.name, found.registry, found.prefix),
+                         ("found", "GIGA-BYTE TECHNOLOGY CO.,LTD.", "MA-L",
+                          "10FFE0"))
+
+    def test_ma_s_wins_over_ieee_itself(self):
+        found = self.maker("70:b3:d5:f2:1a:bc")
+        self.assertEqual((found.name, found.registry, len(found.prefix)),
+                         ("Example Small Maker (MA-S)", "MA-S", 9))
+        # outside that small block, the MA-L row is all there is
+        self.assertEqual(self.maker("70:b3:d5:00:00:01").name,
+                         "IEEE Registration Authority")
+
+    def test_ma_m_wins_over_ma_l(self):
+        found = self.maker("f0:ac:d7:4f:00:01")
+        self.assertEqual((found.name, found.registry, len(found.prefix)),
+                         ("Example Block Maker (MA-M)", "MA-M", 7))
+
+    def test_iab(self):
+        found = self.maker("00:50:c2:a1:bf:ff")
+        self.assertEqual((found.name, found.registry),
+                         ("Example Old Block (IAB)", "IAB"))
+
+    def test_local_and_group_are_not_looked_up(self):
+        self.assertEqual(self.maker("0a:1b:2c:00:00:01").status, "local")
+        self.assertEqual(self.maker("da:a1:19:00:00:01").status, "local")
+        self.assertEqual(self.maker("01:00:5e:00:00:fb").status, "group")
+        self.assertEqual(self.maker("ff:ff:ff:ff:ff:ff").status, "group")
+        self.assertIsNone(self.maker("0a:1b:2c:00:00:01").name)
+
+    def test_not_in_the_register(self):
+        self.assertEqual(self.maker("00:11:22:33:44:55").status,
+                         "unregistered")
+
+    def test_case_and_separators(self):
+        for mac in ("10:FF:E0:12:34:56", "10-ff-e0-12-34-56", "10ffe0123456",
+                    "10FFE0123456", "10ff.e012.3456", "  10:ff:e0:12:34:56 "):
+            with self.subTest(mac=mac):
+                self.assertEqual(self.maker(mac).name,
+                                 "GIGA-BYTE TECHNOLOGY CO.,LTD.")
+        for mac in ("", "10:ff:e0", "zz:ff:e0:12:34:56", "10ffe012345600"):
+            with self.subTest(mac=mac):
+                self.assertEqual(self.maker(mac).status, "invalid")
+
+    def test_without_a_register(self):
+        empty = oui.Registry.load(self.folder / "nowhere")
+        self.assertEqual(empty.lookup("10:ff:e0:00:00:01").status,
+                         "no_registry")
+        # what an address is does not depend on the register
+        self.assertEqual(empty.lookup("0a:1b:2c:00:00:01").status, "local")
+        self.assertEqual(empty.fields("10:ff:e0:00:00:01"),
+                         {"vendor": None, "vendor_status": "no_registry"})
+
+    def test_the_api_fields(self):
+        self.assertEqual(self.registry.fields("088af1000001"),
+                         {"vendor": "MERCUSYS TECHNOLOGIES CO., LTD.",
+                          "vendor_status": "found"})
+        self.assertEqual(self.registry.fields("00:11:22:33:44:55"),
+                         {"vendor": None, "vendor_status": "unregistered"})
+
+
 class ConfigTest(unittest.TestCase):
     def test_next_to_the_database_unless_told(self):
         cfg = Config(db_path="/srv/moonlan/moonlan.db")
