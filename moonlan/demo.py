@@ -414,6 +414,9 @@ def demo_network() -> list[SwitchData]:
     _rng.seed(7)  # identical base network on every scan
     core = _switch("10.0.0.10", "core-sw", 1)
     ray1 = _switch("10.0.0.21", "access-sw-1", 2)
+    # a maker the search can find by sysDescr even without the IEEE
+    # register: "d-link" finds this switch (v0.8.0)
+    ray1.sys_descr = "D-Link DES-1210-28/ME Metro Ethernet Switch"
     ray2 = _switch("10.0.0.22", "access-sw-2", 3)
     ray3 = _switch("10.0.0.23", "access-sw-3", 4)
     ray4 = _switch("10.0.0.24", "access-sw-4", 5)

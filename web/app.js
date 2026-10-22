@@ -3189,7 +3189,10 @@ function renderSidebar() {
         sw.named === false ? sw.model || "" : sw.ip,
         sw.ping_up ? "up" : "down",
         () => focusNode("sw:" + sw.ip),
-        undefined,
+        // what the card says about it is what finds it: "d-link" finds
+        // the D-Links by their maker, "es3528m" one by its sysDescr
+        [sw.name, sw.ip, sw.mac, sw.vendor, sw.model, sw.descr]
+          .filter(Boolean).join(" "),
         // greyed the way an old host record is: the switch is there,
         // its numbers are from the last poll that finished
         sw.over_budget ? "stale" : "",
@@ -3235,9 +3238,6 @@ function renderSidebar() {
     )
   );
   els.unlocatedSection.classList.toggle("hidden", unlocated.length === 0);
-  els.unlocatedCount.textContent = unlocated.length;
-  els.switchCount.textContent = topology.switches.length;
-  els.hostCount.textContent = topology.hosts.length;
   applySearchFilter();
 }
 
@@ -5956,13 +5956,30 @@ async function toggleJournal() {
 
 /* ---------- search and rescan ---------- */
 
+/* The lists that the search goes through, each with its counter */
+function searchedLists() {
+  return [
+    [els.switchList, els.switchCount],
+    [els.hostList, els.hostCount],
+    [els.unlocatedList, els.unlocatedCount],
+  ];
+}
+
+/* Hides what the query does not match. With a query, a header counts
+   what is left of how many: "Switches 2 of 9". */
 function applySearchFilter() {
   const q = els.search.value.trim().toLowerCase();
-  for (const item of document.querySelectorAll(".device-list li")) {
-    item.classList.toggle(
-      "hidden-by-search",
-      q !== "" && !item.dataset.search.includes(q)
-    );
+  for (const [list, count] of searchedLists()) {
+    const items = list.querySelectorAll("li");
+    let shown = 0;
+    for (const item of items) {
+      const hidden = q !== "" && !item.dataset.search.includes(q);
+      item.classList.toggle("hidden-by-search", hidden);
+      if (!hidden) shown++;
+    }
+    count.textContent = q
+      ? fmt("searchCount", { n: shown, total: items.length })
+      : String(items.length);
   }
 }
 
