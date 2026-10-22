@@ -66,11 +66,13 @@ async def _call(app, method, path, headers, body, client, host, scheme):
 
 
 def call(app, method, path, *, json_body=None, cookie=None, origin=None,
-         headers=None, client="10.0.0.99", host=HOST, scheme="http"):
+         headers=None, client="10.0.0.99", host=HOST, scheme="http",
+         data=None):
     """One request; `origin` defaults to the map's own for anything
-    but GET, as a browser on the map would send it — False sends none."""
+    but GET, as a browser on the map would send it — False sends none.
+    `data` is a raw body (a file being uploaded)."""
     headers = dict(headers or {})
-    body = b""
+    body = data or b""
     if json_body is not None:
         body = json.dumps(json_body).encode()
         headers["content-type"] = "application/json"
