@@ -1,0 +1,9 @@
+mac;label;note
+00:4d:4c:0b:ec:b5;Accounting;Desk 105
+02-4D-4C-00-00-01;Server room;
+18fd.74fd.b5cf;Sports hall;Bridge on the wall by the door
+02005E100001;Printer, 2nd floor;"Not on the network yet:
+connect it to port 12."
+4c:5e:0c:aa:bb:cc;Provider;Written by hand in the demo, so skipped
+00:4d:4c:0b:ec:b5;Accounting dept.;The second line for the same MAC counts
+not-a-mac;Nobody;

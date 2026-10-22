@@ -14,7 +14,7 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI, Query, Request
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
@@ -3238,6 +3238,78 @@ async def api_notes() -> dict:
         ],
         "missing_scans": notes.MISSING_SCANS,
     }
+
+
+def _mac_directory() -> dict[str, str]:
+    """MAC -> the node an imported note goes on: a device (on the map
+    or off it; one drawn as a bridge is that bridge), then a switch by
+    its bridge MAC, then an LLDP bridge by its chassis MAC."""
+    topo = state.as_dict()
+    found: dict[str, str] = {}
+    for host in topo["hosts"]:
+        found.setdefault(host["mac"], host.get("merged_into") or "host:" + host["mac"])
+    for host in topo.get("unlocated") or ():
+        found.setdefault(host["mac"], "host:" + host["mac"])
+    for sw in topo["switches"]:
+        mac = notes.mac_key(sw.get("mac"))
+        if mac:
+            found.setdefault(mac, "sw:" + sw["ip"])
+    for bridge in topo.get("bridges") or ():
+        mac = notes.mac_key(bridge.get("chassis_id"))
+        if mac:
+            found.setdefault(mac, bridge["id"])
+    return found
+
+
+@app.post("/api/notes/import")
+async def api_import_notes(request: Request, dry_run: bool = Query(default=False)):
+    """Names and notes from a CSV (mac;label;note), the body of the
+    request. With dry_run, what would be written and nothing written —
+    the page shows that first. A note written by hand is never
+    overwritten; one line per MAC, the last one counts."""
+    data = await request.body()
+    if len(data) > notes.IMPORT_MAX_BYTES:
+        return _refuse("too_big", 413, text="a CSV of notes is at most 2 MB")
+    rows, errors, warnings = notes.parse_csv(data)
+    existing = await asyncio.to_thread(db.notes)
+    plan = notes.plan_import(rows, existing, _mac_directory())
+    report = notes.import_report(plan, errors, warnings, dry_run)
+    if dry_run:
+        return report
+    ts = time.time()
+    for write in plan["writes"]:
+        await asyncio.to_thread(
+            db.set_note, write["node_id"], write["label"], write["note"],
+            "import", signin.actor(), ts, seen=write["found"],
+        )
+    summary = {"written": report["written"], "skipped": len(report["skipped_manual"]),
+               "errors": len(report["errors"])}
+    await asyncio.to_thread(
+        db.add_event, ts, "notes_imported", "", json.dumps(summary), signin.actor()
+    )
+    log.info(
+        "Notes imported%s: %d written (%d on the map, %d not found yet), "
+        "%d skipped (written by hand), %d error(s)",
+        f" by {signin.actor()}" if signin.actor() else "", report["written"],
+        report["on_map"], report["not_found"], summary["skipped"], summary["errors"],
+    )
+    return report
+
+
+@app.get("/api/notes/export")
+async def api_export_notes(preview: bool = Query(default=False)):
+    """The notes that have a MAC, as the CSV the import takes: UTF-8
+    with a BOM, `;`. With preview, only how many go in and how many
+    cannot — notes of nodes without a MAC."""
+    rows = await asyncio.to_thread(db.notes)
+    switch_macs = {sw["ip"]: sw.get("mac") or "" for sw in state.as_dict()["switches"]}
+    data, left_out = notes.export_csv(rows, switch_macs)
+    if preview:
+        return {"exported": len(rows) - left_out, "left_out": left_out}
+    return Response(
+        content=data, media_type="text/csv; charset=utf-8",
+        headers={"Content-Disposition": 'attachment; filename="moonlan-notes.csv"'},
+    )
 
 
 @app.put("/api/notes/{node_id:path}")

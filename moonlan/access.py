@@ -69,6 +69,7 @@ RULES: dict[str, str] = {
     "GET /api/actions": VIEWER,
     "GET /api/layout": VIEWER,
     "GET /api/notes": VIEWER,
+    "GET /api/notes/export": VIEWER,
     "GET /api/search": VIEWER,
     "GET /api/skipped-oids": VIEWER,
     "GET /api/polling": VIEWER,
@@ -94,6 +95,8 @@ RULES: dict[str, str] = {
     # the whole shared picture at once, for everybody at once
     "PUT /api/layout": ADMIN,
     "DELETE /api/layout": ADMIN,
+    # names and notes from a file, for the whole map at once
+    "POST /api/notes/import": ADMIN,
 
     # accounts: administrators, and only once sign-in is on
     "GET /api/users": ACCOUNTS,
@@ -155,6 +158,14 @@ STEP_ROUTES: dict[str, set[str]] = {
 }
 
 
+# What the server's console may write besides reading (v0.8.0): importing
+# notes, `python -m moonlan.notes import`. Its token is a file only the
+# service's own user can read — whoever can read it can write the
+# database directly anyway; through the API the import gets the same
+# checks, the same report and a journal entry as "@console".
+CONSOLE_WRITES = {"POST /api/notes/import"}
+
+
 def decide(key: str, principal: Principal | None,
            sign_in_on: bool) -> Refusal | None:
     """None when the request may go ahead; otherwise why not."""
@@ -169,6 +180,8 @@ def decide(key: str, principal: Principal | None,
         return Refusal(401, {"error": "sign_in_required"})
     if principal.console:
         if rule == VIEWER and key.startswith("GET "):
+            return None
+        if key in CONSOLE_WRITES:
             return None
         return Refusal(403, {"error": "forbidden", "need": rule})
     if principal.step:

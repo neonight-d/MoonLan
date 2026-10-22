@@ -170,6 +170,67 @@ sudo systemctl enable --now moonlan-oui.timer
 A failed update leaves the old register and the service untouched:
 `ExecStartPost` runs only after a successful `ExecStart`.
 
+## Names and notes from a file
+
+A node's name and note (v0.8.0) are written in its card. For many at
+once — an inventory kept in a spreadsheet, or moving notes to another
+installation — there is a CSV, imported by MAC address.
+
+```
+mac;label;note
+10:FF:E0:44:02:5E;Accounting;Desk 105
+088AF15E3910;;Wi-Fi in the library
+```
+
+- **The first line** names the columns: `mac;label;note`, or in
+  Russian `mac;подпись;заметка`, in any case. `note` may be left out.
+- **The separator** is `;` — what Excel saves in a Russian Windows —
+  or `,` or a tab, whichever the first line uses.
+- **The encoding** is UTF-8, with a BOM or without; a file that is not
+  UTF-8 is read as cp1251, which is how Excel saves CSV in a Russian
+  Windows.
+- **Quotes** as Excel writes them (RFC 4180); a note in quotes may run
+  over several lines.
+- **A MAC** in any common writing: `aa:bb:cc:dd:ee:ff`,
+  `AA-BB-CC-DD-EE-FF`, `aabb.ccdd.eeff`, `AABBCCDDEEFF`.
+- A name is at most 40 characters on one line, a note at most 2000; a
+  longer one makes the line an error, not a cut.
+
+A MAC goes on a device first, then on the switch whose bridge MAC it
+is, then on the LLDP bridge whose chassis id it is. A MAC nobody has is
+kept for the device that has it, under "Device not found yet" in
+"Notes without a node", and is on its node as soon as it appears.
+
+- **An empty cell changes nothing**; deleting is done in the card.
+- **A note written by hand is never overwritten** by an import; the
+  line is reported as skipped. A note from an earlier import is
+  overwritten — and becomes a hand-written one once somebody edits it.
+- **A MAC twice** in the file: the last line counts, with a remark.
+
+**On the map** (administrators): Actions (⋯) → "Import notes (CSV)…".
+The file is checked and nothing written until the preview — how many
+would be written, how many of them are on the map and how many not
+found yet, how many skipped, every error with its line — has been
+answered with "Import". "Export notes (CSV)" (anyone) downloads the
+notes of nodes that have a MAC in the same format, UTF-8 with a BOM and
+`;`; notes of switches without SNMP, external networks and groups have
+no MAC to be written by, and the export says how many stayed out. The
+journal gets one entry per import.
+
+**On the server**, through the running service — the same checks and
+the same report:
+
+```bash
+python -m moonlan.notes import notes.csv --dry-run
+python -m moonlan.notes import notes.csv
+python -m moonlan.notes export notes.csv
+```
+
+Run it as the user MoonLan runs as, in its directory: with sign-in on,
+it is let in by the token the service writes next to its database at
+startup, the one `diag` uses, and the journal names it "the server
+console". `docs/notes_example.csv` is a file to try it on the demo.
+
 ## Startup
 
 Check the startup log first. It reports the configuration path, database path, enabled features, and configuration problems.

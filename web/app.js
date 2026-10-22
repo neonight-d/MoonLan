@@ -2264,6 +2264,12 @@ function moreItems() {
       run: openOrphans,
     },
     {
+      key: "import", group: "notes", label: t("menuImportNotes"),
+      disabled: needRole("admin"),
+      run: chooseNotesFile,
+    },
+    { key: "export", group: "notes", label: t("menuExportNotes"), run: openNotesExport },
+    {
       key: "reset", group: "danger", label: t("resetLayoutBtn"), danger: true,
       disabled: needRole("admin"),
       run: resetLayout,
@@ -5114,6 +5120,107 @@ async function moveNoteHere(source, nodeId) {
   showDetails(nodeId);
 }
 
+/* ---------- names and notes from a file, and into one ----------
+
+   A CSV of mac;label;note — what Excel saves. Nothing is written before
+   the person has seen what would be: the file goes to the server once
+   for a preview and once more for real. */
+
+function chooseNotesFile() {
+  const input = h("input", { type: "file", accept: ".csv,text/csv,text/plain" });
+  input.addEventListener("change", () => {
+    if (input.files && input.files[0]) previewNotesImport(input.files[0]);
+  });
+  input.click();
+}
+
+function showNotesPanel(kind, title) {
+  hidePanelsFor(els.notesPanel);
+  notesPanelShows = kind;
+  els.notesTitle.textContent = title;
+  els.notesPanel.classList.remove("hidden");
+}
+
+async function sendNotesFile(data, dryRun) {
+  const response = await api("/api/notes/import" + (dryRun ? "?dry_run=1" : ""), {
+    method: "POST", headers: { "Content-Type": "text/csv" }, body: data,
+  });
+  const body = await response.json().catch(() => ({}));
+  return response.ok ? body : { failed: body.error || String(response.status) };
+}
+
+async function previewNotesImport(file) {
+  const data = await file.arrayBuffer();
+  showNotesPanel("import", t("importTitle"));
+  els.notesBody.replaceChildren(h("p", { class: "hint", text: file.name }));
+  const report = await sendNotesFile(data, true);
+  if (report.failed) {
+    els.notesBody.replaceChildren(h("p", { class: "note-error", text: noteErrorText(report.failed) }));
+    return;
+  }
+  const go = h("button", { type: "button", class: "panel-btn", text: t("importGo") });
+  go.disabled = report.written === 0;
+  go.addEventListener("click", async () => {
+    go.disabled = true;
+    const done = await sendNotesFile(data, false);
+    if (done.failed) {
+      showToast(noteErrorText(done.failed));
+      go.disabled = false;
+      return;
+    }
+    renderImportReport(file.name, done, []);
+    await loadTopologyOnce();
+  });
+  const cancel = h("button", { type: "button", class: "panel-btn", text: t("noteCancel"),
+                               onclick: () => els.notesPanel.classList.add("hidden") });
+  renderImportReport(file.name, report, [go, cancel]);
+}
+
+function renderImportReport(name, report, buttons) {
+  const lines = (rows, words) => rows.length
+    ? [h("ul", { class: "import-lines" }, ...rows.map((row) =>
+        h("li", { text: fmt("importLine", { line: row.line }) + " " + words(row) })))]
+    : [];
+  const problem = (row) => {
+    const text = t("csvErr_" + row.error);
+    return (text === "csvErr_" + row.error ? row.error : text) + (row.mac ? " · " + row.mac : "");
+  };
+  els.notesBody.replaceChildren(
+    h("p", { class: "hint", text: name }),
+    h("p", { class: "import-sum", text: fmt(report.dry_run ? "importWill" : "importDone",
+      { n: report.written, on_map: report.on_map, not_found: report.not_found }) }),
+    h("p", { class: "import-sum", text: fmt("importSkipped", { n: report.skipped_manual.length }) }),
+    ...lines(report.skipped_manual, (row) => row.mac),
+    h("p", { class: "import-sum", text: fmt("importErrors", { n: report.errors.length }) }),
+    ...lines(report.errors, problem),
+    ...(report.warnings.length
+      ? [h("p", { class: "import-sum", text: fmt("importWarnings", { n: report.warnings.length }) }),
+         ...lines(report.warnings, (row) => fmt("csvWarn_" + row.error, { mac: row.mac, first: row.first }))]
+      : []),
+    h("div", { class: "note-actions" }, ...buttons),
+  );
+}
+
+async function openNotesExport() {
+  showNotesPanel("export", t("exportTitle"));
+  let summary;
+  try {
+    summary = await (await api("/api/notes/export?preview=1")).json();
+  } catch (e) {
+    serviceLost("the notes");
+    return;
+  }
+  els.notesBody.replaceChildren(
+    h("p", { class: "import-sum", text: fmt("exportWill", { n: summary.exported }) }),
+    summary.left_out
+      ? h("p", { class: "hint", text: fmt("exportLeftOut", { n: summary.left_out }) })
+      : null,
+    h("div", { class: "note-actions" },
+      h("a", { class: "panel-btn", href: "/api/notes/export", download: "moonlan-notes.csv",
+               text: t("exportGo") })),
+  );
+}
+
 /* The words for a refusal of the server, or the code itself */
 function noteErrorText(code) {
   const text = t("noteErr_" + code);
@@ -6444,13 +6551,14 @@ function layoutEventText(ev) {
 /* A name or a note changed, deleted or moved: the node, then what
    happened to it — the data is the server's, the words the page's */
 function noteEventText(ev) {
-  if (ev.event !== "note_changed" && ev.event !== "note_moved") return "";
+  if (!["note_changed", "note_moved", "notes_imported"].includes(ev.event)) return "";
   let data = {};
   try {
     data = ev.details ? JSON.parse(ev.details) : {};
   } catch (e) {
     data = {};
   }
+  if (ev.event === "notes_imported") return fmt("evNotesImported", data);
   // a node no longer on the map is said in words, not by its id
   const title = (id) => (nodesDs && nodesDs.get(id) ? nodeTitle(id) : nodeWords(id));
   if (ev.event === "note_moved") {

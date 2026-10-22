@@ -79,6 +79,7 @@ tests.
 | GET | `/api/actions` | viewer |
 | GET | `/api/layout` | viewer |
 | GET | `/api/notes` | viewer |
+| GET | `/api/notes/export` | viewer |
 | GET | `/api/search` | viewer |
 | GET | `/api/skipped-oids` | viewer |
 | GET | `/api/polling` | viewer |
@@ -96,6 +97,7 @@ tests.
 | POST | `/api/scan` | user |
 | PUT | `/api/layout` | admin |
 | DELETE | `/api/layout` | admin |
+| POST | `/api/notes/import` | admin |
 | GET | `/api/users` | accounts |
 | POST | `/api/users` | accounts |
 | PATCH | `/api/users/{name}` | accounts |
@@ -424,6 +426,22 @@ Journalled as `note_changed`.
 ### DELETE /api/notes/{node_id}
 
 Deletes the note; `note_changed` in the journal.
+
+### POST /api/notes/import
+
+The body is a CSV — `mac;label;note`, see [OPERATIONS.md](OPERATIONS.md#names-and-notes-from-a-file).
+With `?dry_run=1` nothing is written and the answer says what would
+be: `written` (`on_map`, `not_found`), `skipped_manual` (a note written
+by hand is never overwritten), `errors` and `warnings`, each with its
+line. Journalled once as `notes_imported`. Administrators, and the
+server's console (`python -m moonlan.notes import`).
+
+### GET /api/notes/export
+
+The notes of nodes that have a MAC, as the CSV the import takes
+(UTF-8 with a BOM, `;`). `?preview=1` answers `{exported, left_out}`:
+notes of switches without SNMP, external networks and groups have no
+MAC to be written by.
 
 ### POST /api/notes/{node_id}/move
 

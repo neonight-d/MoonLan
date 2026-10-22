@@ -328,6 +328,10 @@ main { flex: 1; display: flex; min-height: 0; position: relative; }
 #notes-panel .orphan-where, #notes-panel .orphan-since { color: var(--text-dim); font-size: 0.78rem; margin-top: 2px; }
 #notes-panel .panel-btn { margin-top: 6px; }
 #notes-panel .panel-btn.danger { color: #e39a9a; }
+#notes-panel .import-sum { margin: 6px 0 2px; font-size: 0.85rem; }
+#notes-panel .import-lines { margin: 2px 0 6px; padding-left: 16px; font-size: 0.8rem; color: var(--text-dim); }
+#notes-panel .note-actions { display: flex; gap: 6px; flex-wrap: wrap; }
+#notes-panel a.panel-btn { display: inline-block; text-decoration: none; color: var(--text); }
 #alarms  { width: min(380px, calc(100vw - 28px)); }
 #stp     { width: min(760px, calc(100vw - 28px)); }
 #ports   { width: min(820px, calc(100vw - 28px)); }
