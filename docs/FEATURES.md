@@ -1,6 +1,6 @@
 # What MoonLan does
 
-Everything MoonLan does, as of v0.7.10 — the list the README used to carry. The README keeps the summary; each item here links to the page that explains it.
+Everything MoonLan does, as of v0.8.0 — the list the README used to carry. The README keeps the summary; each item here links to the page that explains it.
 
 ![Alarms panel](img/alarms.png)
 
@@ -199,6 +199,26 @@ Everything MoonLan does, as of v0.7.10 — the list the README used to carry. Th
   unknown", "This node is pinned" — and why, and what to do about it,
   is the line's tooltip and, behind ⓘ, a paragraph that opens in the
   card (a phone has no hover).
+- Names and notes on nodes: a switch, a device, an LLDP bridge, a
+  switch without SNMP, an external network or a group behind a trunk
+  can be given a **name** — one line of up to 40 characters, the first
+  line of its caption on the map, in bold above what MoonLan calls it
+  ("Room 214", and "switch without SNMP" small under it) — and a
+  **note**, free text in its card, with who changed it and when.
+  "Name and note…" in the card and in the node menu opens an editor in
+  the card; for a switch without SNMP it offers the names of its
+  devices, LLDP first, to pick from. An offline group has none: it is
+  whatever is missing from the tables right now. A note stays when its
+  node goes — a cable moved to another port — and after three scans in
+  a row without it is listed under "Notes without a node", with the
+  node in words and since when, to be deleted or moved to a node of
+  the map; a node that comes back takes its note back. MoonLan never
+  deletes a note by itself. Names and notes can be imported from a CSV
+  by MAC — Excel's `;` and cp1251 included — with a preview first, a
+  note written by hand never overwritten, and exported in the same
+  format ([OPERATIONS.md](OPERATIONS.md#names-and-notes-from-a-file)).
+  The topology itself is never edited by hand: it is built only from
+  what the switches report over SNMP and LLDP.
 - Continuous ping monitoring of all hosts and switches: green/grey status
   indicator, time of the last reply. Pings follow IP ownership: a host
   whose MAC left every switch table and whose address ARP no longer
@@ -334,8 +354,14 @@ Everything MoonLan does, as of v0.7.10 — the list the README used to carry. Th
   which has only just started shows.
 - Event journal: new MAC addresses, hosts going down and coming back,
   alarm raises/clears. Data is stored in SQLite and survives restarts.
-- Two-panel web UI: device list with search (name, IP or MAC) on the left,
-  interactive auto-refreshing network map on the right. English and Russian
+- Two-panel web UI: device list with search on the left, interactive
+  auto-refreshing network map on the right. The search finds a switch
+  by its name, address, bridge MAC, maker, model and sysDescr, a device
+  by its name, address, MAC and maker, and both by their name and note;
+  with a query, each list counts what is left of how many ("Switches 2
+  of 9"). Named nodes that have no list of their own — switches without
+  SNMP, bridges, external networks, groups — are in a "Named" list
+  above the switches. English and Russian
   interface languages. On a phone (720 px and narrower) the list stands
   over the map, and a "List and search" bar between the header and the
   map folds it away: the map takes the whole height at once, looking at

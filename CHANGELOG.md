@@ -6,6 +6,60 @@ for before the next one started.
 
 Русская версия — [CHANGELOG_RU.md](CHANGELOG_RU.md).
 
+## v0.8.0 — 2026-10-22
+
+Names and notes on the map, import by MAC, switches found by maker.
+
+**Switches found by their maker.** "d-link" found D-Link devices and
+not one of the D-Link switches being polled: a switch was searched by
+its name and the line under it. It is searched now by its name,
+address, bridge MAC, maker, model and the whole sysDescr — which
+names the maker and the model where the MAC register does not. With a
+query, each list counts what is left of how many: "Switches 2 of 9".
+
+**Names and notes.** A switch without SNMP stands in a classroom, and
+on the map every one of them was called "Switch without SNMP". A node
+— a switch, a device, an LLDP bridge, a switch without SNMP, an
+external network, a group behind a trunk — can now have a name, one
+line of up to 40 characters, and a note, free text in its card. The
+name is the first line of the caption, in bold, and what MoonLan calls
+the node stays under it: "Room 214", with "switch without SNMP" small
+below. A person's word and MoonLan's inference, both in sight. vis
+reads such a caption as markup, so a name cannot become markup:
+nothing in it can form a tag. "Name and note…" in the card and the node
+menu opens an editor in the card — Enter saves, Escape cancels, a
+refusal stays under the fields with what was typed — and for a switch
+without SNMP offers the names of its devices to pick from, LLDP names
+first: the switch is often one of them, but which one MoonLan cannot
+tell. Greyed with the reason for a viewer and for an offline group,
+which is whatever is missing from the tables right now and has no
+name. Names and notes are searched with the rest, and named nodes that
+no list has are in a new list, "Named". Every change is in the
+journal, with who made it.
+
+**Notes without a node.** A note is kept by the node's id, and for a
+switch without SNMP that has a port in it: a cable moved to another
+port leaves the note without its node. A note is never deleted by
+MoonLan — what it says is known nowhere else. After three scans in a
+row without its node it is listed under "Notes without a node" in
+Actions, with the node in words and since when; it can be deleted, or
+moved to a node of the map from that node's editor. A node that comes
+back takes its note back by itself.
+
+**Import and export by MAC.** A CSV of mac;label;note — what Excel
+saves in a Russian Windows, `;` and cp1251, as well as `,`, tabs and
+UTF-8 — imported by administrators with a preview first: how many
+would be written, how many of them are on the map, how many skipped,
+every error by its line. A MAC goes on a device, a switch by its
+bridge MAC or an LLDP bridge; one nobody has waits for its device. An
+empty cell changes nothing and a note written by hand is never
+overwritten. Export gives the notes that have a MAC in the same
+format. `python -m moonlan.notes import|export` does the same on the
+server, through the running service.
+
+Hand-drawn links and nodes are not made, for good: the topology is
+built only from what the switches report over SNMP and LLDP.
+
 ## v0.7.10 — 2026-10-21
 
 The layout of v0.7.8, tags that keep apart, numbers only. Goes out
