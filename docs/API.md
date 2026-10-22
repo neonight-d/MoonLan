@@ -78,6 +78,7 @@ tests.
 | GET | `/api/node-menu` | viewer |
 | GET | `/api/actions` | viewer |
 | GET | `/api/layout` | viewer |
+| GET | `/api/notes` | viewer |
 | GET | `/api/search` | viewer |
 | GET | `/api/skipped-oids` | viewer |
 | GET | `/api/polling` | viewer |
@@ -89,6 +90,9 @@ tests.
 | PATCH | `/api/layout` | user |
 | PATCH | `/api/layout/{node_id:path}` | user |
 | DELETE | `/api/layout/{node_id:path}` | user |
+| PUT | `/api/notes/{node_id:path}` | user |
+| DELETE | `/api/notes/{node_id:path}` | user |
+| POST | `/api/notes/{node_id:path}/move` | user |
 | POST | `/api/scan` | user |
 | PUT | `/api/layout` | admin |
 | DELETE | `/api/layout` | admin |
@@ -386,6 +390,47 @@ Pins or unpins nodes in one action (one journal entry);
 ### DELETE /api/layout
 
 Resets the shared layout for everybody.
+
+## Names and notes
+
+A node's **name** (`label`: one line, at most 40 characters, on the
+map) and **note** (`note`: free text with line breaks, at most 2000
+characters, in its card), kept by the node id the layout uses:
+`sw:<ip>`, `host:<mac>` (a device off the map, `unloc:<mac>`, has the
+same note), `bridge:<chassis id>`, `pseudo:<switch>:<port>`,
+`external:<switch>:<port>`, `trunk:<switch>:<port>`. An offline group
+(`offline:`) has none: the server refuses it with `offline_group`.
+
+In `/api/topology` every node with a name or a note has
+`note: {label, note, source, updated_at, updated_by}`; `source` is
+`manual` or `import`. A node without one has no `note` field.
+
+### GET /api/notes
+
+Every note, with `state`: `present`, `missing` — its node has not
+been on the map for `missing_scans` scans in a row (dated by
+`missing_since`) — or `not_found`, an import whose device has not been
+seen yet. MoonLan never deletes a note by itself.
+
+### PUT /api/notes/{node_id}
+
+`{"label": "...", "note": "..."}`. Both are trimmed; both empty deletes
+the note. Refused: a name with a line break or another control
+character (`label_control`), over 40 characters (`label_long`), a
+note over 2000 (`note_long`), an offline group, and a node the map
+does not have (`no_node`, 404) — unless the note is already there.
+Journalled as `note_changed`.
+
+### DELETE /api/notes/{node_id}
+
+Deletes the note; `note_changed` in the journal.
+
+### POST /api/notes/{node_id}/move
+
+`{"to": "<node id>", "replace": false}` puts the note on another node
+on the map — the one a cable was moved to. A target with a note of its
+own answers 409 `target_has_note` unless `replace` is true. Journalled
+as `note_moved`, with both ids.
 
 ## Node actions
 

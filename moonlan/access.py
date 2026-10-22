@@ -68,6 +68,7 @@ RULES: dict[str, str] = {
     "GET /api/node-menu": VIEWER,
     "GET /api/actions": VIEWER,
     "GET /api/layout": VIEWER,
+    "GET /api/notes": VIEWER,
     "GET /api/search": VIEWER,
     "GET /api/skipped-oids": VIEWER,
     "GET /api/polling": VIEWER,
@@ -84,6 +85,10 @@ RULES: dict[str, str] = {
     "PATCH /api/layout": USER,
     "PATCH /api/layout/{node_id:path}": USER,
     "DELETE /api/layout/{node_id:path}": USER,
+    # a node's name and note: a person's word, on the shared map
+    "PUT /api/notes/{node_id:path}": USER,
+    "DELETE /api/notes/{node_id:path}": USER,
+    "POST /api/notes/{node_id:path}/move": USER,
     "POST /api/scan": USER,
 
     # the whole shared picture at once, for everybody at once

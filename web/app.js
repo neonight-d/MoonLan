@@ -5851,8 +5851,8 @@ function renderJournal(events) {
       type.textContent = translated === "ev_" + ev.event ? ev.event : translated;
       const host = document.createElement("span");
       host.className = "ev-host";
-      host.textContent =
-        accountEventText(ev) || ev.name || ev.ip || ev.mac || layoutEventText(ev);
+      host.textContent = accountEventText(ev) || noteEventText(ev) ||
+        ev.name || ev.ip || ev.mac || layoutEventText(ev);
       if (ev.vendor) {
         // a new device says who made it; any other event keeps it to
         // the tooltip
@@ -5935,6 +5935,28 @@ function layoutEventText(ev) {
   return fmt(more > 0 ? "evNodesMore" : "evNodes", {
     n: data.n, names: names.join(", "), more: more,
   });
+}
+
+/* A name or a note changed, deleted or moved: the node, then what
+   happened to it — the data is the server's, the words the page's */
+function noteEventText(ev) {
+  if (ev.event !== "note_changed" && ev.event !== "note_moved") return "";
+  let data = {};
+  try {
+    data = ev.details ? JSON.parse(ev.details) : {};
+  } catch (e) {
+    data = {};
+  }
+  if (ev.event === "note_moved") {
+    return fmt("evNoteMoved", { from: nodeTitle(data.from || ""), to: nodeTitle(data.to || ev.mac) });
+  }
+  const what = [];
+  if (data.deleted) what.push(t("evNoteDeleted"));
+  if (data.label !== undefined) {
+    what.push(data.label ? fmt("evNoteLabel", { label: data.label }) : t("evNoteLabelGone"));
+  }
+  if (data.note !== undefined) what.push(t("evNoteText"));
+  return [nodeTitle(ev.mac), ...what].join(" · ");
 }
 
 async function toggleJournal() {

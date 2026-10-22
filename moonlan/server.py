@@ -19,8 +19,8 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from . import (
-    __version__, corruption, counters, demo, https, loopdetect, menu, oui,
-    passkeys, pinger, probes, signin, stp,
+    __version__, corruption, counters, demo, https, loopdetect, menu, notes,
+    oui, passkeys, pinger, probes, signin, stp,
 )
 from .alarms import AlarmEngine
 from .config import Config, load_config, parse_uplink_ports
@@ -2295,7 +2295,30 @@ async def api_topology() -> JSONResponse:
             link["load"] = load
         links.append(link)
     topo["links"] = links
+    _attach_notes(topo, await asyncio.to_thread(db.notes))
     return JSONResponse(topo)
+
+
+def _attach_notes(topo: dict, rows: dict[str, dict]) -> None:
+    """Every node with a name or a note carries it as `note`. A device
+    off the map has the note of the same device on it."""
+    if not rows:
+        return
+    for sw in topo["switches"]:
+        row = rows.get("sw:" + sw["ip"])
+        if row:
+            sw["note"] = notes.public(row)
+    for key in ("hosts", "unlocated"):
+        for host in topo.get(key) or ():
+            row = rows.get("host:" + host["mac"])
+            if row:
+                host["note"] = notes.public(row)
+    for key in ("bridges", "pseudo_switches", "external_networks",
+                "trunk_groups"):
+        for node in topo.get(key) or ():
+            row = rows.get(node.get("id", ""))
+            if row:
+                node["note"] = notes.public(row)
 
 
 @app.get("/api/switch/{ip}/ports")
@@ -3129,6 +3152,132 @@ async def api_clear_layout() -> dict:
     # the page that asked for it must not mistake its own reset for
     # somebody else's on the next refresh
     return {"removed": removed, "cleared_at": cleared_at}
+
+
+# ---------- names and notes on nodes (v0.8.0) ----------
+
+
+class NoteBody(BaseModel):
+    label: str = ""
+    note: str = ""
+
+
+class NoteMove(BaseModel):
+    to: str
+    # the target has a note of its own: replace it (the page asks first)
+    replace: bool = False
+
+
+def _noted_node_ids() -> set[str]:
+    """The nodes a note can be written on now: everything on the map,
+    and the devices MoonLan knows that are not on it."""
+    ids = _layout_node_ids()
+    ids |= {"host:" + h["mac"] for h in state.as_dict().get("unlocated") or ()}
+    return ids
+
+
+def _note_refused(exc: notes.NoteError) -> JSONResponse:
+    return _refuse(exc.code, 400, text=str(exc))
+
+
+async def _journal_note(event: str, node_id: str, details: dict) -> None:
+    """One entry per change, as data the page words: the node, and what
+    happened to its name and note. The log gets the same in a line."""
+    await asyncio.to_thread(
+        db.add_event, time.time(), event, node_id, json.dumps(details),
+        signin.actor(),
+    )
+    log.info(
+        "Note %s on %s%s: %s", event.replace("note_", ""), node_id,
+        f" by {signin.actor()}" if signin.actor() else "",
+        json.dumps(details, ensure_ascii=False),
+    )
+
+
+@app.get("/api/notes")
+async def api_notes() -> dict:
+    """Every name and note, those without a node on the map included."""
+    rows = await asyncio.to_thread(db.notes)
+    return {
+        "notes": [
+            {
+                "node_id": node_id, **notes.public(row),
+                "state": notes.state(row),
+                "missing_since": row["missing_since"],
+            }
+            for node_id, row in sorted(rows.items())
+        ],
+        "missing_scans": notes.MISSING_SCANS,
+    }
+
+
+@app.put("/api/notes/{node_id:path}")
+async def api_put_note(node_id: str, body: NoteBody):
+    """A node's name and note, as a person wrote them. Both empty
+    deletes the note. A note is written only on a node the map has:
+    one without a node comes from a node that has gone, or an import."""
+    try:
+        key = notes.note_key(node_id)
+        label = notes.clean_label(body.label)
+        text = notes.clean_note(body.note)
+    except notes.NoteError as exc:
+        return _note_refused(exc)
+    before = await asyncio.to_thread(db.note, key)
+    if before is None and key not in _noted_node_ids():
+        return _refuse("no_node", 404, text="no such node on the map")
+    row = await asyncio.to_thread(
+        db.set_note, key, label, text, "manual", signin.actor(), time.time()
+    )
+    if row is None:
+        if before is not None:
+            await _journal_note("note_changed", key, {"deleted": True})
+        return {"node_id": key, "note": None}
+    details = {}
+    if before is None or before["label"] != label:
+        details["label"] = label
+    if before is None or before["note"] != text:
+        details["note"] = bool(text)
+    if details:
+        await _journal_note("note_changed", key, details)
+    return {"node_id": key, "note": notes.public(row)}
+
+
+@app.delete("/api/notes/{node_id:path}")
+async def api_delete_note(node_id: str):
+    try:
+        key = notes.note_key(node_id)
+    except notes.NoteError as exc:
+        return _note_refused(exc)
+    if not await asyncio.to_thread(db.delete_note, key):
+        return _refuse("no_note", 404, text="this node has no note")
+    await _journal_note("note_changed", key, {"deleted": True})
+    return {"node_id": key, "deleted": True}
+
+
+@app.post("/api/notes/{node_id:path}/move")
+async def api_move_note(node_id: str, body: NoteMove):
+    """A note whose node is gone, put on a node that is there — a cable
+    moved to another port. A target with a note of its own is replaced
+    only when asked to."""
+    try:
+        source = notes.note_key(node_id)
+        target = notes.note_key(body.to)
+    except notes.NoteError as exc:
+        return _note_refused(exc)
+    if source == target:
+        return _refuse("same_node", 400, text="the note is already there")
+    if await asyncio.to_thread(db.note, source) is None:
+        return _refuse("no_note", 404, text="this node has no note")
+    if target not in _noted_node_ids():
+        return _refuse("no_node", 404, text="no such node on the map")
+    if not body.replace and await asyncio.to_thread(db.note, target):
+        return _refuse("target_has_note", 409,
+                       text="the target node has a note of its own")
+    row = await asyncio.to_thread(
+        db.move_note, source, target, signin.actor(), time.time()
+    )
+    await _journal_note("note_moved", target, {"from": source, "to": target})
+    return {"node_id": target, "note": notes.public(row)}
 
 
 async def _scan_once() -> None:

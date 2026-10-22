@@ -183,6 +183,23 @@ CREATE TABLE IF NOT EXISTS alarms (
 -- Every open map asks "when was the layout last reset?" every thirty
 -- seconds, and the journal only grows
 CREATE INDEX IF NOT EXISTS journal_event_ts ON journal (event, ts);
+-- A name and a note a person gave a node (v0.8.0), by the node id the
+-- layout uses. Never deleted by MoonLan: what is written here is known
+-- nowhere else. A note whose node is gone is counted in scans
+-- (missing_scans) and dated (missing_since); `seen_at` is the last
+-- scan the node was there, NULL for an import whose device has not
+-- been found yet.
+CREATE TABLE IF NOT EXISTS notes (
+    node_id       TEXT PRIMARY KEY,
+    label         TEXT DEFAULT '',
+    note          TEXT DEFAULT '',
+    source        TEXT DEFAULT 'manual',   -- manual | import
+    updated_at    REAL NOT NULL,
+    updated_by    TEXT DEFAULT '',
+    missing_since REAL DEFAULT NULL,
+    missing_scans INTEGER DEFAULT 0,
+    seen_at       REAL DEFAULT NULL
+);
 """
 
 
@@ -849,6 +866,79 @@ class Database:
                     "DELETE FROM layout WHERE node_id = ?", (node_id,)
                 )
         return gone
+
+    # ---------- names and notes on nodes ----------
+
+    def notes(self) -> dict[str, dict]:
+        """node id -> its note, with or without a node on the map."""
+        with self._lock:
+            rows = self._conn.execute("SELECT * FROM notes").fetchall()
+        return {row["node_id"]: dict(row) for row in rows}
+
+    def note(self, node_id: str) -> dict | None:
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT * FROM notes WHERE node_id = ?", (node_id,)
+            ).fetchone()
+        return dict(row) if row else None
+
+    def set_note(
+        self, node_id: str, label: str, note: str, source: str, by: str,
+        ts: float, *, seen: bool = True,
+    ) -> dict | None:
+        """Writes a node's name and note; both empty deletes it — "no
+        note" and "an empty note" are one thing. `seen` is false for an
+        import whose device is not on the map yet: it is counted as
+        missing from the start. Returns the row, None when deleted."""
+        with self._lock, self._conn:
+            if not label and not note:
+                self._conn.execute(
+                    "DELETE FROM notes WHERE node_id = ?", (node_id,)
+                )
+                return None
+            self._conn.execute(
+                "INSERT INTO notes (node_id, label, note, source, updated_at, "
+                "updated_by, missing_since, missing_scans, seen_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?) "
+                "ON CONFLICT(node_id) DO UPDATE SET label = excluded.label, "
+                "note = excluded.note, source = excluded.source, "
+                "updated_at = excluded.updated_at, "
+                "updated_by = excluded.updated_by",
+                (node_id, label, note, source, ts, by,
+                 None if seen else ts, ts if seen else None),
+            )
+            row = self._conn.execute(
+                "SELECT * FROM notes WHERE node_id = ?", (node_id,)
+            ).fetchone()
+        return dict(row)
+
+    def delete_note(self, node_id: str) -> bool:
+        with self._lock, self._conn:
+            cur = self._conn.execute(
+                "DELETE FROM notes WHERE node_id = ?", (node_id,)
+            )
+        return cur.rowcount > 0
+
+    def move_note(self, source: str, target: str, by: str, ts: float) -> dict | None:
+        """Puts the note of `source` on `target`, replacing whatever note
+        the target had; the target is on the map, so it counts as seen."""
+        with self._lock, self._conn:
+            row = self._conn.execute(
+                "SELECT * FROM notes WHERE node_id = ?", (source,)
+            ).fetchone()
+            if row is None:
+                return None
+            self._conn.execute("DELETE FROM notes WHERE node_id = ?", (target,))
+            self._conn.execute(
+                "UPDATE notes SET node_id = ?, updated_at = ?, updated_by = ?, "
+                "missing_since = NULL, missing_scans = 0, seen_at = ? "
+                "WHERE node_id = ?",
+                (target, ts, by, ts, source),
+            )
+            moved = self._conn.execute(
+                "SELECT * FROM notes WHERE node_id = ?", (target,)
+            ).fetchone()
+        return dict(moved)
 
     def hosts_by_mac(self) -> dict[str, dict]:
         with self._lock:
