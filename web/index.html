@@ -62,6 +62,12 @@
             aria-controls="sidebar" aria-expanded="true"></button>
     <aside id="sidebar">
       <input id="search" type="search" autocomplete="off">
+      <!-- Named nodes no other list has: switches without SNMP, bridges,
+           external networks, groups behind a trunk (v0.8.0) -->
+      <section id="named-section" class="hidden">
+        <h2><span data-i18n="namedHeader"></span> <span id="named-count" class="count"></span></h2>
+        <ul id="named-list" class="device-list"></ul>
+      </section>
       <section>
         <h2><span data-i18n="switchesHeader"></span> <span id="switch-count" class="count"></span></h2>
         <ul id="switch-list" class="device-list"></ul>

@@ -575,6 +575,11 @@ const I18N = {
       "The MAC address is missing from the current switch tables — " +
       "the device is shown at the port where it was seen last.",
     unlocatedHeader: "Not on map",
+    namedHeader: "Named",
+    kindLine_pseudo: "switch without SNMP",
+    kindLine_bridge: "bridge",
+    kindLine_external: "external network",
+    kindLine_trunk: "behind the trunk",
     unlocatedHint:
       "The device is known from ARP but was not found on any port of " +
       "the polled switches — it is most likely behind a router or an " +
@@ -1387,6 +1392,11 @@ const I18N = {
       "MAC-адреса нет в текущих таблицах коммутаторов — устройство " +
       "показано на порту, где оно было замечено в последний раз.",
     unlocatedHeader: "Вне карты",
+    namedHeader: "Подписанные",
+    kindLine_pseudo: "коммутатор без SNMP",
+    kindLine_bridge: "мост",
+    kindLine_external: "внешняя сеть",
+    kindLine_trunk: "за магистралью",
     unlocatedHint:
       "Устройство известно по ARP, но не найдено на портах опрашиваемых " +
       "коммутаторов — вероятно, находится за маршрутизатором или " +

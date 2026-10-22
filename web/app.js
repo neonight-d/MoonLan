@@ -3,6 +3,9 @@
 const els = {
   network: document.getElementById("network"),
   switchList: document.getElementById("switch-list"),
+  namedSection: document.getElementById("named-section"),
+  namedList: document.getElementById("named-list"),
+  namedCount: document.getElementById("named-count"),
   hostList: document.getElementById("host-list"),
   unlocatedSection: document.getElementById("unlocated-section"),
   unlocatedList: document.getElementById("unlocated-list"),
@@ -3206,18 +3209,47 @@ function li(main, sub, dotClass, onClick, searchText, cssClass, title) {
   return item;
 }
 
+/* A name and a note are searched like the rest of what is known */
+function noteSearchText(item) {
+  return item && item.note ? [item.note.label, item.note.note].filter(Boolean).join(" ") : "";
+}
+
+/* The nodes with a name that no list below has: they would not be found
+   by their name otherwise — a switch without SNMP is in no list at all */
+function namedNodes() {
+  const rows = [];
+  const add = (item, kind, where) => {
+    if (!nameOf(item)) return;
+    rows.push({ id: item.id, name: nameOf(item), line: t("kindLine_" + kind) + " · " + where, item });
+  };
+  for (const ps of topology.pseudo_switches || []) add(ps, "pseudo", switchName(ps.switch) + " " + ps.port);
+  for (const bridge of topology.bridges || []) add(bridge, "bridge", bridge.name);
+  for (const ext of topology.external_networks || []) add(ext, "external", switchName(ext.switch) + " " + ext.port);
+  for (const group of topology.trunk_groups || []) add(group, "trunk", switchName(group.switch) + " " + group.port);
+  return rows.sort((a, b) => a.name.localeCompare(b.name, locale()));
+}
+
 function renderSidebar() {
+  const named = namedNodes();
+  els.namedList.replaceChildren(
+    ...named.map((row) =>
+      li(row.name, row.line, null, () => focusNode(row.id),
+         [row.name, row.line, noteSearchText(row.item)].join(" ")))
+  );
+  els.namedSection.classList.toggle("hidden", named.length === 0);
   els.switchList.replaceChildren(
     ...topology.switches.map((sw) =>
       li(
-        sw.name,
+        // a name a person gave it first, what MoonLan calls it under it
+        nameOf(sw) || sw.name,
         // same rule as the map caption: no address over the address
-        sw.named === false ? sw.model || "" : sw.ip,
+        [nameOf(sw) ? sw.name : "", sw.named === false ? sw.model || "" : sw.ip]
+          .filter(Boolean).join(" · "),
         sw.ping_up ? "up" : "down",
         () => focusNode("sw:" + sw.ip),
         // what the card says about it is what finds it: "d-link" finds
         // the D-Links by their maker, "es3528m" one by its sysDescr
-        [sw.name, sw.ip, sw.mac, sw.vendor, sw.model, sw.descr]
+        [sw.name, sw.ip, sw.mac, sw.vendor, sw.model, sw.descr, noteSearchText(sw)]
           .filter(Boolean).join(" "),
         // greyed the way an old host record is: the switch is there,
         // its numbers are from the last poll that finished
@@ -3232,16 +3264,16 @@ function renderSidebar() {
   els.hostList.replaceChildren(
     ...topology.hosts.map((h) =>
       li(
-        hostLabel(h) + (h.monitored ? " ★" : ""),
-        [h.ip, h.mac, h.random_mac ? t("randomMac") : "",
+        (nameOf(h) || hostLabel(h)) + (h.monitored ? " ★" : ""),
+        [nameOf(h) ? hostLabel(h) : "", h.ip, h.mac, h.random_mac ? t("randomMac") : "",
          h.vlan ? "VLAN " + h.vlan : ""]
-          .filter(Boolean)
+          .filter((part, i, all) => part && all.indexOf(part) === i)
           .join(" · "),
         statusClass(h),
         () => focusNode(h.merged_into || "host:" + h.mac),
         // VLAN is intentionally excluded from search; the maker is in:
         // "mercusys" finds every MERCUSYS device
-        [hostLabel(h), h.ip, h.mac, h.vendor].filter(Boolean).join(" "),
+        [hostLabel(h), h.ip, h.mac, h.vendor, noteSearchText(h)].filter(Boolean).join(" "),
         h.stale ? "stale" : ""
       )
     )
@@ -3252,13 +3284,13 @@ function renderSidebar() {
   els.unlocatedList.replaceChildren(
     ...unlocated.map((h) =>
       li(
-        hostLabel(h) + (h.monitored ? " ★" : ""),
-        [h.ip, h.mac, h.random_mac ? t("randomMac") : ""]
-          .filter(Boolean)
+        (nameOf(h) || hostLabel(h)) + (h.monitored ? " ★" : ""),
+        [nameOf(h) ? hostLabel(h) : "", h.ip, h.mac, h.random_mac ? t("randomMac") : ""]
+          .filter((part, i, all) => part && all.indexOf(part) === i)
           .join(" · "),
         statusClass(h),
         () => showDetails("unloc:" + h.mac),
-        [hostLabel(h), h.ip, h.mac, h.vendor].filter(Boolean).join(" "),
+        [hostLabel(h), h.ip, h.mac, h.vendor, noteSearchText(h)].filter(Boolean).join(" "),
         "stale"
       )
     )
@@ -6455,6 +6487,7 @@ async function toggleJournal() {
 /* The lists that the search goes through, each with its counter */
 function searchedLists() {
   return [
+    [els.namedList, els.namedCount],
     [els.switchList, els.switchCount],
     [els.hostList, els.hostCount],
     [els.unlocatedList, els.unlocatedCount],
