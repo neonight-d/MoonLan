@@ -319,6 +319,15 @@ main { flex: 1; display: flex; min-height: 0; position: relative; }
 /* Widths: wanted, but never wider than the window. */
 #details { width: min(320px, calc(100vw - 28px)); }
 #journal { width: min(360px, calc(100vw - 28px)); }
+#notes-panel { width: min(400px, calc(100vw - 28px)); }
+#notes-panel .orphan-list { list-style: none; margin: 0 0 10px; padding: 0; font-size: 0.85rem; }
+#notes-panel .orphan-list li { padding: 8px 0; border-top: 1px solid var(--line); }
+#notes-panel .orphan-list li:first-child { border-top: none; }
+#notes-panel .orphan-label { font-weight: 600; overflow-wrap: anywhere; }
+#notes-panel .orphan-note { white-space: pre-wrap; overflow-wrap: anywhere; color: var(--text); margin-top: 2px; }
+#notes-panel .orphan-where, #notes-panel .orphan-since { color: var(--text-dim); font-size: 0.78rem; margin-top: 2px; }
+#notes-panel .panel-btn { margin-top: 6px; }
+#notes-panel .panel-btn.danger { color: #e39a9a; }
 #alarms  { width: min(380px, calc(100vw - 28px)); }
 #stp     { width: min(760px, calc(100vw - 28px)); }
 #ports   { width: min(820px, calc(100vw - 28px)); }

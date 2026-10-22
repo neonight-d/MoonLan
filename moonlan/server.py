@@ -711,8 +711,36 @@ async def run_scan() -> None:
             len(switches), len(links), len(hosts),
         )
         await _purge_layout_once()
+        # A scan where no switch answered says nothing about where the
+        # nodes are: it would count every note as one scan without its
+        # node, and an outage of half an hour would empty the map of
+        # them
+        if answered:
+            await _reconcile_notes()
     finally:
         state.scan_ended(over_budget)
+
+
+async def _reconcile_notes() -> None:
+    """Marks the notes whose node is not on the map after this scan, and
+    unmarks those whose node is back (a cable put back in its port). A
+    note is "without a node" only after notes.MISSING_SCANS scans in a
+    row; it is never deleted."""
+    changed = await asyncio.to_thread(
+        db.reconcile_notes, _noted_node_ids(), time.time()
+    )
+    if changed["lost"]:
+        log.info(
+            "Notes: %d note(s) whose node has not been on the map for %d "
+            "scans — kept, and listed under \"Notes without a node\": %s",
+            len(changed["lost"]), notes.MISSING_SCANS,
+            ", ".join(sorted(changed["lost"])[:10]),
+        )
+    if changed["back"]:
+        log.info(
+            "Notes: the node of %d note(s) is on the map again: %s",
+            len(changed["back"]), ", ".join(sorted(changed["back"])[:10]),
+        )
 
 
 def _dropped_link_text(dropped: dict) -> str:
@@ -2189,6 +2217,7 @@ async def lifespan(app: FastAPI):
     _log_config()
     if config.demo:
         log.info("MoonLan started in DEMO mode (virtual network)")
+        await asyncio.to_thread(demo.seed_notes, db)
     elif not config.switches:
         log.warning(
             "No switches are configured in config.yaml. Add addresses to "

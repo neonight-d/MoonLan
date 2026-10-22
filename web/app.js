@@ -19,6 +19,10 @@ const els = {
   journalBtn: document.getElementById("journal-btn"),
   journalList: document.getElementById("journal-list"),
   journalClose: document.getElementById("journal-close"),
+  notesPanel: document.getElementById("notes-panel"),
+  notesTitle: document.getElementById("notes-title"),
+  notesBody: document.getElementById("notes-body"),
+  notesClose: document.getElementById("notes-close"),
   ports: document.getElementById("ports"),
   portsTitle: document.getElementById("ports-title"),
   portsBody: document.getElementById("ports-body"),
@@ -1102,7 +1106,7 @@ function hideAccountPanels() {
 
 function hidePanelsFor(panel) {
   for (const other of [els.details, els.journal, els.alarms, els.stp,
-    els.account, els.users]) {
+    els.account, els.users, els.notesPanel]) {
     if (other !== panel) other.classList.add("hidden");
   }
   if (panel !== els.details) shownDetails = null;
@@ -2235,7 +2239,7 @@ function menuItemsFor(ids, info, tools) {
    in the menu all the same, greyed out with the role it needs: a viewer
    opens it and finds every item grey, with the reason. */
 
-const MORE_GROUPS = ["network", "danger"];
+const MORE_GROUPS = ["network", "notes", "danger"];
 
 function moreItems() {
   const scanning = isScanning || topology.scanning;
@@ -2249,6 +2253,12 @@ function moreItems() {
       key: "users", group: "network", label: t("usersBtn"),
       disabled: accountsReason(),
       run: toggleUsers,
+    },
+    {
+      key: "orphans", group: "notes",
+      label: fmt("menuOrphans", { n: orphanNotes().length }),
+      disabled: orphanNotes().length ? null : t("reasonNoOrphans"),
+      run: openOrphans,
     },
     {
       key: "reset", group: "danger", label: t("resetLayoutBtn"), danger: true,
@@ -3110,12 +3120,14 @@ async function loadTopologyOnce() {
   let topo;
   let alarms;
   let layout;
+  let noteList;
   const askedAt = performance.now();
   try {
-    [topo, alarms, layout] = await Promise.all([
+    [topo, alarms, layout, noteList] = await Promise.all([
       api("/api/topology").then((r) => r.json()),
       fetchAlarms("active=1"),
       api("/api/layout").then((r) => r.json()),
+      api("/api/notes").then((r) => r.json()),
     ]);
   } catch (e) {
     // Whatever is on screen stays there. This is the moment somebody
@@ -3126,6 +3138,10 @@ async function loadTopologyOnce() {
   serviceBack();
   topology = topo;
   activeAlarms = alarms;
+  allNotes = noteList.notes || [];
+  if (!els.notesPanel.classList.contains("hidden") && notesPanelShows === "orphans") {
+    renderOrphans();
+  }
   renderBadge();
   renderSidebar();
   if (takeServerLayout(layout, askedAt) === "rebuild" && network) {
@@ -4914,6 +4930,7 @@ function noteEditor(nodeId, draft) {
     h("label", { class: "note-field", for: "note-text" }, h("span", { text: t("noteText") })),
     text,
     error,
+    moveHereMenu(nodeId),
     h("div", { class: "note-actions" },
       h("button", { type: "button", id: "note-save", class: "panel-btn", text: t("noteSave"), onclick: save }),
       h("button", { type: "button", id: "note-cancel", class: "panel-btn", text: t("noteCancel"),
@@ -4937,6 +4954,132 @@ function noteEditor(nodeId, draft) {
     }
   });
   return editor;
+}
+
+/* ---------- notes without a node ----------
+
+   A note stays when its node goes — a cable moved to another port, a
+   port renamed in the firmware — because what it says is known nowhere
+   else. After three scans without its node it is listed here, with the
+   node it was on in words and since when; it can be deleted, or put on
+   a node of the map from that node's editor. A node that comes back
+   takes its note back by itself. */
+
+// every note, from the last refresh
+let allNotes = [];
+// what the notes panel shows: "orphans", "import" or "export"
+let notesPanelShows = "";
+
+function orphanNotes() {
+  return allNotes.filter((note) => note.state === "missing" || note.state === "not_found");
+}
+
+/* A node by its id, in words, whether or not it is on the map:
+   "switch without SNMP behind access-sw-3 Gi0/9" */
+function nodeWords(nodeId) {
+  const at = nodeId.indexOf(":");
+  const kind = nodeId.slice(0, at);
+  const rest = nodeId.slice(at + 1);
+  if (kind === "pseudo" || kind === "external" || kind === "trunk") {
+    const cut = rest.indexOf(":");
+    const ip = rest.slice(0, cut);
+    return fmt("nodeWords_" + kind, { switch: switchName(ip), port: rest.slice(cut + 1) });
+  }
+  if (kind === "sw") return fmt("nodeWords_sw", { name: switchName(rest) });
+  if (kind === "host") {
+    const host = findHost(nodeId) || findHost("unloc:" + rest);
+    return fmt("nodeWords_host", { name: host ? hostLabel(host) : rest });
+  }
+  if (kind === "bridge") return fmt("nodeWords_bridge", { name: rest });
+  return nodeId;
+}
+
+function openOrphans() {
+  hidePanelsFor(els.notesPanel);
+  notesPanelShows = "orphans";
+  els.notesTitle.textContent = t("orphansTitle");
+  els.notesPanel.classList.remove("hidden");
+  renderOrphans();
+}
+
+function renderOrphans() {
+  const section = (title, notes) => {
+    if (!notes.length) return [];
+    return [
+      h("h4", { class: "card-sub", text: title }),
+      h("ul", { class: "orphan-list" }, ...notes.map(orphanRow)),
+    ];
+  };
+  const orphans = orphanNotes();
+  const parts = [
+    ...section(t("orphansMissing"), orphans.filter((n) => n.state === "missing")),
+    ...section(t("orphansNotFound"), orphans.filter((n) => n.state === "not_found")),
+  ];
+  els.notesBody.replaceChildren(...(parts.length ? parts : [h("p", { class: "hint", text: t("orphansNone") })]));
+}
+
+function orphanRow(note) {
+  const remove = h("button", { type: "button", class: "panel-btn danger", text: t("noteDelete") });
+  gateButton(remove, needRole("user"));
+  remove.addEventListener("click", async () => {
+    if (!allowed(remove) || !window.confirm(t("noteDeleteConfirm"))) return;
+    const response = await api("/api/notes/" + nodePath(note.node_id), { method: "DELETE" });
+    if (!response.ok) {
+      showToast(noteErrorText((await response.json().catch(() => ({}))).error));
+      return;
+    }
+    await loadTopologyOnce();
+    renderOrphans();
+  });
+  return h("li", {},
+    note.label ? h("div", { class: "orphan-label", text: note.label }) : null,
+    note.note ? h("div", { class: "orphan-note", text: note.note }) : null,
+    h("div", { class: "orphan-where", text: nodeWords(note.node_id) }),
+    h("div", { class: "orphan-since", text: note.state === "missing"
+      ? fmt("orphanSince", { time: fmtTime(note.missing_since) })
+      : fmt("orphanImported", { date: fmtDate(note.updated_at) }) }),
+    remove);
+}
+
+/* In a node's editor: the notes without a node, to put on this one */
+function moveHereMenu(nodeId) {
+  const orphans = orphanNotes();
+  if (!orphans.length) return null;
+  const list = h("div", { class: "note-pick-list hidden", role: "menu" },
+    ...orphans.map((note) => h("button", {
+      type: "button", role: "menuitem", class: "note-pick-item",
+      text: (note.label || note.note.split("\n")[0]) + " · " + nodeWords(note.node_id),
+      onclick: () => {
+        list.classList.add("hidden");
+        moveNoteHere(note.node_id, nodeId);
+      },
+    })));
+  const open = h("button", {
+    type: "button", class: "note-pick panel-btn", "aria-haspopup": "menu",
+    text: t("noteMoveHere"),
+    onclick: () => list.classList.toggle("hidden"),
+  });
+  return h("div", { class: "note-pick-wrap" }, open, list);
+}
+
+async function moveNoteHere(source, nodeId) {
+  const target = noteKeyOf(nodeId);
+  const own = (noteItemOf(nodeId) || {}).note;
+  if (own && !window.confirm(t("noteReplaceConfirm"))) return;
+  const response = await api("/api/notes/" + nodePath(source) + "/move",
+    jsonPost("", { to: target, replace: !!own }));
+  const data = await response.json().catch(() => ({}));
+  const error = document.querySelector("#note-slot .note-error");
+  if (!response.ok) {
+    if (error) {
+      error.textContent = noteErrorText(data.error);
+      error.classList.remove("hidden");
+    }
+    return;
+  }
+  noteEditorFor = null;
+  await loadTopologyOnce();
+  showDetails(nodeId);
 }
 
 /* The words for a refusal of the server, or the code itself */
@@ -6276,8 +6419,10 @@ function noteEventText(ev) {
   } catch (e) {
     data = {};
   }
+  // a node no longer on the map is said in words, not by its id
+  const title = (id) => (nodesDs && nodesDs.get(id) ? nodeTitle(id) : nodeWords(id));
   if (ev.event === "note_moved") {
-    return fmt("evNoteMoved", { from: nodeTitle(data.from || ""), to: nodeTitle(data.to || ev.mac) });
+    return fmt("evNoteMoved", { from: title(data.from || ""), to: title(data.to || ev.mac) });
   }
   const what = [];
   if (data.deleted) what.push(t("evNoteDeleted"));
@@ -6285,7 +6430,7 @@ function noteEventText(ev) {
     what.push(data.label ? fmt("evNoteLabel", { label: data.label }) : t("evNoteLabelGone"));
   }
   if (data.note !== undefined) what.push(t("evNoteText"));
-  return [nodeTitle(ev.mac), ...what].join(" · ");
+  return [title(ev.mac), ...what].join(" · ");
 }
 
 async function toggleJournal() {
@@ -6354,6 +6499,7 @@ els.detailsBody.addEventListener("click", (event) => {
   more.setAttribute("aria-expanded", String(open));
 });
 els.journalBtn.addEventListener("click", toggleJournal);
+els.notesClose.addEventListener("click", () => els.notesPanel.classList.add("hidden"));
 els.journalClose.addEventListener("click", () =>
   els.journal.classList.add("hidden")
 );

@@ -407,6 +407,30 @@ def _synthetic_trunk(sw: SwitchData, bridge_port: int, members: tuple[int, ...])
 _scan_count = 0
 
 
+# Names and notes a person would have written (v0.8.0): two switches
+# without SNMP named after the rooms they stand in, a device with a
+# note, and a note whose node has gone — a cable moved to another port
+# — waiting under "Notes without a node".
+DEMO_NOTES = [
+    ("pseudo:10.0.0.23:Gi0/9", "Room 214", "Cameras of the main hall."),
+    ("pseudo:10.0.0.21:Gi0/14", "Room 118", ""),
+    (f"host:{EDGE_ROUTER_CHASSIS}", "Edge router",
+     "The provider's line ends here.\nAsk them before a reboot."),
+]
+DEMO_GONE_NOTE = ("pseudo:10.0.0.24:Gi0/12", "Room 109",
+                  "Moved to another port in the summer?")
+
+
+def seed_notes(db) -> None:
+    """The demo's notes, written at start like a person's"""
+    now = time.time()
+    for node_id, label, note in DEMO_NOTES:
+        db.set_note(node_id, label, note, "manual", "", now - 86400)
+    node_id, label, note = DEMO_GONE_NOTE
+    db.set_note(node_id, label, note, "manual", "", now - 7 * 86400)
+    db.mark_note_missing(node_id, now - 2 * 3600)
+
+
 def demo_network() -> list[SwitchData]:
     """A star: core + four rays, LACP, a LAG trunk, a pseudo-switch, VLANs."""
     global _scan_count

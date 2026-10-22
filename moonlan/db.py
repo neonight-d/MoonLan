@@ -940,6 +940,51 @@ class Database:
             ).fetchone()
         return dict(moved)
 
+    def mark_note_missing(self, node_id: str, since: float) -> None:
+        """A note whose node has been gone since `since` and long enough
+        to count as without one — for the demo, which starts with one."""
+        from .notes import MISSING_SCANS
+        with self._lock, self._conn:
+            self._conn.execute(
+                "UPDATE notes SET missing_since = ?, missing_scans = ?, "
+                "seen_at = ? WHERE node_id = ?",
+                (since, MISSING_SCANS, since, node_id),
+            )
+
+    def reconcile_notes(self, present: set[str], ts: float) -> dict[str, list[str]]:
+        """After a scan: a note whose node is on the map is seen now; one
+        whose node is not counts another scan without it, dated from the
+        first. Nothing is deleted. Returns the node ids that came back
+        and those that have just gone missing for `scans` in a row —
+        for the log."""
+        from .notes import MISSING_SCANS
+        back, lost = [], []
+        with self._lock, self._conn:
+            rows = self._conn.execute(
+                "SELECT node_id, missing_scans, seen_at FROM notes"
+            ).fetchall()
+            for row in rows:
+                node_id = row["node_id"]
+                if node_id in present:
+                    if row["missing_scans"] >= MISSING_SCANS or row["seen_at"] is None:
+                        back.append(node_id)
+                    self._conn.execute(
+                        "UPDATE notes SET missing_since = NULL, "
+                        "missing_scans = 0, seen_at = ? WHERE node_id = ?",
+                        (ts, node_id),
+                    )
+                else:
+                    scans = row["missing_scans"] + 1
+                    if scans == MISSING_SCANS and row["seen_at"] is not None:
+                        lost.append(node_id)
+                    self._conn.execute(
+                        "UPDATE notes SET missing_scans = ?, "
+                        "missing_since = COALESCE(missing_since, ?) "
+                        "WHERE node_id = ?",
+                        (scans, ts, node_id),
+                    )
+        return {"back": back, "lost": lost}
+
     def hosts_by_mac(self) -> dict[str, dict]:
         with self._lock:
             rows = self._conn.execute("SELECT * FROM hosts").fetchall()
