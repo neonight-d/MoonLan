@@ -335,6 +335,40 @@ main { flex: 1; display: flex; min-height: 0; position: relative; }
 #details .hint-more:focus-visible { outline: 2px solid var(--link); outline-offset: 1px; border-radius: 3px; }
 #details .hint-full { padding-left: 8px; border-left: 2px solid var(--line); }
 #details dl + .hint, #details ul + .hint, #details .panel-btn + .hint { margin-top: 10px; }
+/* a node's name and note (v0.8.0), right under the title */
+#details .note-block { margin: 0 0 10px; }
+#details .note-dl dd.note-label { font-family: inherit; font-weight: 600; word-break: normal; overflow-wrap: anywhere; }
+#details .note-dl dd.note-text {
+  font-family: inherit; white-space: pre-wrap; word-break: normal; overflow-wrap: anywhere;
+}
+#details .note-meta { margin: 6px 0 8px; font-size: 0.75rem; color: var(--text-dim); }
+#details .note-editor { display: flex; flex-direction: column; gap: 4px; margin: 0 0 10px; }
+#details .note-field {
+  display: flex; justify-content: space-between; font-size: 0.8rem; color: var(--text-dim); margin-top: 4px;
+}
+#details .note-count { font-variant-numeric: tabular-nums; }
+#details .note-editor input,
+#details .note-editor textarea {
+  width: 100%; box-sizing: border-box; padding: 5px 7px; font: inherit; font-size: 0.85rem;
+  color: var(--text); background: var(--bg); border: 1px solid var(--line); border-radius: 4px;
+}
+#details .note-editor textarea { resize: vertical; min-height: 5em; }
+#details .note-error { margin: 2px 0 0; font-size: 0.8rem; color: var(--warn); }
+#details .note-actions { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 4px; }
+#details .note-pick-wrap { position: relative; }
+#details .note-pick { font-size: 0.78rem; padding: 2px 8px; }
+#details .note-pick-list {
+  position: absolute; z-index: 5; left: 0; top: 100%; min-width: 100%; margin-top: 2px; padding: 4px;
+  background: var(--bg-panel); border: 1px solid var(--line); border-radius: 6px;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.45);
+}
+#details .note-pick-item {
+  display: block; width: 100%; padding: 5px 8px; border: none; background: none; color: var(--text);
+  font: inherit; font-size: 0.82rem; text-align: left; border-radius: 4px; cursor: pointer;
+}
+#details .note-pick-item:hover, #details .note-pick-item:focus-visible { background: var(--bg-hover); }
+#details .note-block .panel-btn, #details .note-editor .panel-btn { margin-top: 0; }
+#details .note-editor .panel-btn.danger { color: #e39a9a; }
 #details dl { margin: 0; font-size: 0.85rem; }
 #details dt { color: var(--text-dim); margin-top: 8px; }
 #details dd { margin: 2px 0 0; font-family: ui-monospace, monospace; word-break: break-all; }

@@ -2197,6 +2197,16 @@ function menuItemsFor(ids, info, tools) {
       run: () => rememberNeighbours(single),
     });
   }
+  if (single) {
+    items.push({
+      key: "note", group: "layout", label: t("noteBtn"),
+      disabled: noteReason(single),
+      run: () => {
+        setSelectedNode(single);
+        openNoteEditor(single);
+      },
+    });
+  }
   // one node, one card: there is nothing to show for a crowd
   if (single) {
     items.push({
@@ -4741,6 +4751,250 @@ function hintKey(key, params = {}) {
   return hintBlock(fmt(key + "Short", params), fmt(key, params));
 }
 
+/* ---------- a node's name and note (v0.8.0) ----------
+
+   In the card under the title: the name, the note, who changed them
+   and when, and "Name and note…", which opens an editor in the card
+   itself — no window over it. */
+
+// the card whose editor is open, or null
+let noteEditorFor = null;
+
+/* The key a card's note is kept under: a device off the map is the
+   same device */
+function noteKeyOf(nodeId) {
+  return nodeId.startsWith("unloc:") ? "host:" + nodeId.slice("unloc:".length) : nodeId;
+}
+
+/* Why this node can get no name or note from here, or null */
+function noteReason(nodeId) {
+  if (nodeId.startsWith("offline:")) return t("reasonOfflineGroup");
+  return needRole("user");
+}
+
+/* The item of the topology a card is about, the one with `note` */
+function noteItemOf(nodeId) {
+  const kind = nodeId.slice(0, nodeId.indexOf(":"));
+  if (kind === "sw") return topology.switches.find((s) => "sw:" + s.ip === nodeId) || null;
+  if (kind === "host" || kind === "unloc") return findHost(nodeId) || null;
+  const list = {
+    bridge: topology.bridges, pseudo: topology.pseudo_switches,
+    external: topology.external_networks, trunk: topology.trunk_groups,
+  }[kind];
+  return (list || []).find((node) => node.id === nodeId) || null;
+}
+
+/* What is in the open editor of this card, or null */
+function noteDraft(nodeId) {
+  if (noteEditorFor !== nodeId) return null;
+  const label = document.getElementById("note-label");
+  const text = document.getElementById("note-text");
+  const error = document.querySelector("#note-slot .note-error");
+  if (!label || !text) return null;
+  return { label: label.value, note: text.value, error: error ? error.textContent : "" };
+}
+
+/* "Changed: neonight, 22.10.2026 11:30", or "Import, 22.10.2026" */
+function noteMeta(note) {
+  if (note.source === "import") return fmt("noteImported", { date: fmtDate(note.updated_at) });
+  return note.updated_by
+    ? fmt("noteChangedBy", { user: note.updated_by, time: fmtTime(note.updated_at) })
+    : fmt("noteChanged", { time: fmtTime(note.updated_at) });
+}
+
+function renderNoteSlot(nodeId, draft) {
+  const slot = document.getElementById("note-slot");
+  if (!slot) return;
+  if (noteEditorFor === nodeId && !noteReason(nodeId)) {
+    slot.replaceChildren(noteEditor(nodeId, draft));
+    return;
+  }
+  if (noteEditorFor === nodeId) noteEditorFor = null;
+  const note = (noteItemOf(nodeId) || {}).note;
+  const parts = [];
+  if (note) {
+    const rows = [];
+    if (note.label) rows.push(h("dt", { text: t("noteLabel") }), h("dd", { class: "note-label", text: note.label }));
+    if (note.note) rows.push(h("dt", { text: t("noteText") }), h("dd", { class: "note-text", text: note.note }));
+    parts.push(h("dl", { class: "note-dl" }, ...rows), h("p", { class: "note-meta", text: noteMeta(note) }));
+  }
+  const button = h("button", { id: "note-btn", class: "panel-btn", type: "button", text: t("noteBtn") });
+  gateButton(button, noteReason(nodeId));
+  button.addEventListener("click", () => allowed(button) && openNoteEditor(nodeId));
+  parts.push(button);
+  slot.replaceChildren(h("div", { class: "note-block" }, ...parts));
+}
+
+function openNoteEditor(nodeId) {
+  const why = noteReason(nodeId);
+  if (why) {
+    showToast(why);
+    return;
+  }
+  noteEditorFor = nodeId;
+  if (shownDetails && shownDetails.type === "node" && shownDetails.id === nodeId &&
+      !els.details.classList.contains("hidden")) {
+    renderNoteSlot(nodeId, null);
+  } else {
+    showDetails(nodeId);
+  }
+  const label = document.getElementById("note-label");
+  if (label) label.focus();
+}
+
+function closeNoteEditor(nodeId) {
+  noteEditorFor = null;
+  renderNoteSlot(nodeId, null);
+}
+
+/* The names of the devices of a switch without SNMP, for its own name:
+   the switch itself is often one of them — named by LLDP — but which
+   one, MoonLan cannot tell, so they are offered and the person picks.
+   LLDP names first, then DNS, each by address; at most eight. */
+function groupNames(nodeId) {
+  const ipKey = (ip) => (ip || "").split(".").reduce((n, part) => n * 256 + (+part || 0), 0) || Infinity;
+  const seen = new Set();
+  return topology.hosts
+    .filter((h) => h.via === nodeId)
+    .map((h) => {
+      const lldp = h.lldp && h.lldp.sys_name;
+      if (lldp) return { name: lldp, by: 0, ip: h.ip };
+      if (h.name) return { name: h.name, by: 1, ip: h.ip };
+      return null;
+    })
+    .filter(Boolean)
+    .sort((a, b) => a.by - b.by || ipKey(a.ip) - ipKey(b.ip))
+    .filter((entry) => !seen.has(entry.name) && seen.add(entry.name))
+    .slice(0, 8);
+}
+
+function noteEditor(nodeId, draft) {
+  const note = (noteItemOf(nodeId) || {}).note;
+  const label = h("input", {
+    id: "note-label", type: "text", maxlength: 40, autocomplete: "off",
+    "aria-label": t("noteLabel"),
+  });
+  label.value = draft ? draft.label : note ? note.label : "";
+  const count = h("span", { class: "note-count" });
+  const counted = () => { count.textContent = fmt("noteCount", { n: label.value.length, max: 40 }); };
+  counted();
+  label.addEventListener("input", counted);
+  const text = h("textarea", { id: "note-text", rows: 5, maxlength: 2000, "aria-label": t("noteText") });
+  text.value = draft ? draft.note : note ? note.note : "";
+  const error = h("p", { class: "note-error" + (draft && draft.error ? "" : " hidden"), role: "alert",
+                         text: (draft && draft.error) || "" });
+  const save = () => saveNote(nodeId, false);
+  const parts = [
+    h("label", { class: "note-field", for: "note-label" }, h("span", { text: t("noteLabel") }), count),
+    label,
+  ];
+  // a switch without SNMP: the names of its devices, to pick from
+  if (nodeId.startsWith("pseudo:")) {
+    const names = groupNames(nodeId);
+    const list = h("div", { class: "note-pick-list hidden", role: "menu" },
+      ...names.map((entry) => h("button", {
+        type: "button", role: "menuitem", class: "note-pick-item",
+        text: entry.name + (entry.ip ? " · " + entry.ip : ""),
+        onclick: () => {
+          label.value = entry.name;
+          counted();
+          list.classList.add("hidden");
+          label.focus();
+        },
+      })));
+    const pick = h("button", {
+      type: "button", class: "note-pick panel-btn", "aria-haspopup": "menu",
+      text: t("notePickName"),
+      onclick: () => allowed(pick) && list.classList.toggle("hidden"),
+    });
+    gateButton(pick, names.length ? null : t("reasonNoGroupNames"));
+    parts.push(h("div", { class: "note-pick-wrap" }, pick, list));
+  }
+  parts.push(
+    h("label", { class: "note-field", for: "note-text" }, h("span", { text: t("noteText") })),
+    text,
+    error,
+    h("div", { class: "note-actions" },
+      h("button", { type: "button", id: "note-save", class: "panel-btn", text: t("noteSave"), onclick: save }),
+      h("button", { type: "button", id: "note-cancel", class: "panel-btn", text: t("noteCancel"),
+                    onclick: () => closeNoteEditor(nodeId) }),
+      note ? h("button", { type: "button", id: "note-delete", class: "panel-btn danger", text: t("noteDelete"),
+                           onclick: () => saveNote(nodeId, true) }) : null),
+  );
+  const editor = h("div", { class: "note-editor" }, ...parts);
+  // Enter in the name saves, Escape anywhere in the editor cancels
+  label.addEventListener("keydown", (event) => {
+    if (event.key === "Enter") {
+      event.preventDefault();
+      save();
+    }
+  });
+  editor.addEventListener("keydown", (event) => {
+    if (event.key === "Escape") {
+      event.preventDefault();
+      event.stopPropagation();
+      closeNoteEditor(nodeId);
+    }
+  });
+  return editor;
+}
+
+/* The words for a refusal of the server, or the code itself */
+function noteErrorText(code) {
+  const text = t("noteErr_" + code);
+  return text === "noteErr_" + code ? fmt("noteErrOther", { code: code || "?" }) : text;
+}
+
+/* A node id in the path of a request: a port name may have a slash */
+function nodePath(nodeId) {
+  return nodeId.split("/").map(encodeURIComponent).join("/");
+}
+
+/* The map and the lists take a note as soon as the server has it */
+function takeNote(nodeId, note) {
+  const key = noteKeyOf(nodeId);
+  const items = [noteItemOf(nodeId), noteItemOf(key)];
+  for (const item of items) {
+    if (!item) continue;
+    if (note) item.note = note;
+    else delete item.note;
+  }
+  renderGraph();
+  renderSidebar();
+}
+
+async function saveNote(nodeId, remove) {
+  const key = noteKeyOf(nodeId);
+  const label = document.getElementById("note-label");
+  const text = document.getElementById("note-text");
+  const error = document.querySelector("#note-slot .note-error");
+  if (remove && !window.confirm(t("noteDeleteConfirm"))) return;
+  let response;
+  let data = {};
+  try {
+    response = await api("/api/notes/" + nodePath(key), remove
+      ? { method: "DELETE" }
+      : {
+        method: "PUT", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ label: label ? label.value : "", note: text ? text.value : "" }),
+      });
+    data = await response.json().catch(() => ({}));
+  } catch (e) {
+    response = null;
+  }
+  if (!response || !response.ok) {
+    // what was typed stays where it is; the reason goes under it
+    if (error) {
+      error.textContent = response ? noteErrorText(data.error) : t("noteErrNetwork");
+      error.classList.remove("hidden");
+    }
+    return;
+  }
+  noteEditorFor = null;
+  takeNote(nodeId, remove ? null : data.note);
+  showDetails(nodeId);
+}
+
 /* Fills the details card, hoisting its own <h3> into the panel head.
    Each branch below writes its title as part of the HTML — that is
    where it belongs, next to the thing it titles — and the head is
@@ -4800,6 +5054,9 @@ function switchLinksHtml(ip) {
 }
 
 function showDetails(nodeId) {
+  // what is being typed into an open editor of this card survives the
+  // card being drawn again — a change of language or of role
+  const draft = noteDraft(nodeId);
   let html = "";
   if (nodeId.startsWith("sw:")) {
     const sw = topology.switches.find((s) => "sw:" + s.ip === nodeId);
@@ -5057,6 +5314,8 @@ function showDetails(nodeId) {
       hintKey("pinnedHint") +
       `<button id="unpin-btn" class="panel-btn${needRole("user") ? " off" : ""}">${t("unpinBtn")}</button>`;
   }
+  // the node's name and note, right under the title
+  html = html.replace("</h3>", '</h3><div id="note-slot"></div>');
   shownDetails = { type: "node", id: nodeId };
   setDetails(html);
   els.details.classList.remove("hidden");
@@ -5065,6 +5324,7 @@ function showDetails(nodeId) {
   els.alarms.classList.add("hidden");
   els.stp.classList.add("hidden");
   closePorts();
+  renderNoteSlot(nodeId, draft);
   const unpinBtn = document.getElementById("unpin-btn");
   if (unpinBtn) {
     gateButton(unpinBtn, needRole("user"));
