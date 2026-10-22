@@ -3241,8 +3241,22 @@ function renderSidebar() {
   applySearchFilter();
 }
 
-/* Caption style of a node; the selected one is brighter than the rest */
+/* Caption style of a node; the selected one is brighter than the rest.
+   A node with a name a person gave it reads its caption as markup
+   (namedCaption): the name in bold, a line in the small style. */
 function nodeFont(id) {
+  const base = plainNodeFont(id);
+  if (!nodeNames.has(id)) return base;
+  const size = base.size || 14;
+  return {
+    ...base,
+    multi: "html",
+    bold: { color: colors.text, size: size + 1 },
+    ital: { color: colors.dim, size: Math.max(size - 2, 9), mod: "" },
+  };
+}
+
+function plainNodeFont(id) {
   const selected = id === selectedNodeId;
   if (id.startsWith("sw:")) {
     return { color: colors.text, face: "system-ui" };
@@ -3258,9 +3272,51 @@ function nodeFont(id) {
   return { color: selected ? colors.text : colors.dim, size: 11 };
 }
 
+// node id -> the name a person gave it (v0.8.0), as of the last
+// buildGraphData; nodeFont reads it
+let nodeNames = new Map();
+
+/* Text into a caption vis reads as markup. vis knows <b>, <i> and
+   <code> there, lowercase and exact, and no entities at all: "&lt;"
+   would be drawn as it is. So text from outside — a name a person
+   typed, a DNS or LLDP name — cannot be escaped, only kept from making
+   a tag: a zero-width space after every "<" breaks it and shows as
+   nothing. (Markdown, the other mode, is no better: vis crashes on a
+   backslash before a star.) */
+function markupSafe(text) {
+  return String(text).replace(/</g, "<\u200b");
+}
+
+/* The caption of a node with a name: the name first, in bold — a
+   person's word — and under it what MoonLan calls the node, in the
+   small style when `small`. */
+function namedCaption(name, lines, small) {
+  return [
+    "<b>" + markupSafe(name) + "</b>",
+    ...lines.filter(Boolean).map((line) =>
+      small ? "<i>" + markupSafe(line) + "</i>" : markupSafe(line)),
+  ].join("\n");
+}
+
+/* A caption as words: the markup of a named one taken out */
+function plainCaption(label) {
+  return String(label || "").replace(/<\/?(b|i|code)>/g, "").replace(/\u200b/g, "");
+}
+
+/* The name a person gave a node, or "" */
+function nameOf(item) {
+  return (item && item.note && item.note.label) || "";
+}
+
 function buildGraphData() {
   const nodes = [];
   const edges = [];
+  nodeNames = new Map();
+  const named = (id, item) => {
+    const name = nameOf(item);
+    if (name) nodeNames.set(id, name);
+    return name;
+  };
 
   // Ports the switches' own Loop Detection reports a loop on, as
   // "<switch ip>|<port name>". Polled on the counters cycle, so this
@@ -3321,12 +3377,14 @@ function buildGraphData() {
     // repeating the address underneath tells nobody anything. The
     // model out of sysDescr goes there instead, or nothing at all.
     const second = sw.named === false ? sw.model || "" : sw.ip;
+    const swLines = [
+      sw.name, second, sw.stp_root ? t("stpRootMark") : "",
+      looping ? t("loopMark") : "",
+    ].filter(Boolean);
+    const swName = named("sw:" + sw.ip, sw);
     nodes.push(applyLayout({
       id: "sw:" + sw.ip,
-      label:
-        sw.name + (second ? "\n" + second : "") +
-        (sw.stp_root ? "\n" + t("stpRootMark") : "") +
-        (looping ? "\n" + t("loopMark") : ""),
+      label: swName ? namedCaption(swName, swLines) : swLines.join("\n"),
       shape: "box",
       color: {
         background: colors.panel,
@@ -3392,7 +3450,10 @@ function buildGraphData() {
   for (const ps of topology.pseudo_switches || []) {
     nodes.push(applyLayout({
       id: ps.id,
-      label: t("pseudoTitle"),
+      // named: the name, and what kind of node it is, small
+      label: named(ps.id, ps)
+        ? namedCaption(nameOf(ps), [t("pseudoKind")], true)
+        : t("pseudoTitle"),
       shape: "square",
       size: 14,
       color: {
@@ -3429,7 +3490,9 @@ function buildGraphData() {
     const bridgeAddress = bridge.router_ip || bridge.ip || bridge.mgmt_ip;
     nodes.push(applyLayout({
       id: bridge.id,
-      label: bridge.name + (bridgeAddress ? "\n" + bridgeAddress : ""),
+      label: named(bridge.id, bridge)
+        ? namedCaption(nameOf(bridge), [bridge.name, bridgeAddress])
+        : bridge.name + (bridgeAddress ? "\n" + bridgeAddress : ""),
       shape: "box",
       color: {
         background: "#1b2436",
@@ -3456,7 +3519,9 @@ function buildGraphData() {
   for (const external of topology.external_networks || []) {
     nodes.push(applyLayout({
       id: external.id,
-      label: t("externalNetwork") + " · " + external.count,
+      label: named(external.id, external)
+        ? namedCaption(nameOf(external), [t("externalNetwork") + " · " + external.count])
+        : t("externalNetwork") + " · " + external.count,
       shape: "hexagon",
       size: 16,
       color: {
@@ -3486,7 +3551,9 @@ function buildGraphData() {
   for (const group of topology.trunk_groups || []) {
     nodes.push(applyLayout({
       id: group.id,
-      label: t("trunkGroup") + " · " + group.count,
+      label: named(group.id, group)
+        ? namedCaption(nameOf(group), [t("trunkGroup") + " · " + group.count])
+        : t("trunkGroup") + " · " + group.count,
       shape: "ellipse",
       color: {
         background: "#232c3d",
@@ -3552,7 +3619,9 @@ function buildGraphData() {
       host.router_ip && host.router_ip !== caption ? "\n" + host.router_ip : "";
     nodes.push(applyLayout({
       id: "host:" + host.mac,
-      label: caption + second,
+      label: named("host:" + host.mac, host)
+        ? namedCaption(nameOf(host), [caption, second.trim()])
+        : caption + second,
       shape: isRouter ? "diamond" : "dot",
       size: isRouter ? 14 : 9,
       opacity: host.stale ? 0.4 : 1,
@@ -4612,7 +4681,7 @@ function loopCardTitle(loop) {
    graph has one, its id otherwise. */
 function nodeTitle(id) {
   const node = nodesDs && nodesDs.get(id);
-  const label = node && node.label ? String(node.label).split("\n")[0] : "";
+  const label = node && node.label ? plainCaption(String(node.label).split("\n")[0]) : "";
   // the pin mark is a state of the node, not a part of its name
   return label.replace(" " + t("pinnedMark"), "").trim() || id;
 }

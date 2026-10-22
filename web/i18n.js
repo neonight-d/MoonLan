@@ -147,6 +147,7 @@ const I18N = {
     descr: "Description",
     speed: "Speed",
     pseudoTitle: "Switch without SNMP",
+    pseudoKind: "switch without SNMP",
     pseudoHint:
       "An unmanaged switch or access point is visible behind this port " +
       "({n} devices).",
@@ -919,6 +920,7 @@ const I18N = {
     descr: "Описание",
     speed: "Скорость",
     pseudoTitle: "Коммутатор без SNMP",
+    pseudoKind: "коммутатор без SNMP",
     pseudoHint:
       "За этим портом виден неуправляемый коммутатор или точка доступа " +
       "({n} устройств).",
