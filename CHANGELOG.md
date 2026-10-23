@@ -6,6 +6,67 @@ for before the next one started.
 
 Русская версия — [CHANGELOG_RU.md](CHANGELOG_RU.md).
 
+## v0.8.1 — 2026-10-23
+
+The map on paper and in Draw.io, an offline room keeps its name, About.
+
+**An offline room keeps its name.** A classroom's switch without SNMP
+is on the map only while something behind it answers. In the evening,
+with the computers off, the same port held an offline group instead —
+and "Room 305" went with the switch, and after three scans into "Notes
+without a node". An offline group now carries the name of the switch
+without SNMP on its port while that switch is not drawn: the same name,
+"Offline · 2" small under it, in the "Named" list too, and the note is
+not without a node while the group is there. A name written through
+the group is the switch's; a group on a port nobody named takes none,
+as before. A name deleted from the map no longer stays on it until the
+next scan.
+
+**Names only where there is a place.** A group behind a trunk is a
+guess at where its devices are, and a name on it named a guess: it
+takes none now, greyed with the reason, by hand, by a move or by an
+import. One written in v0.8.0 is under "Notes without a node" at once,
+marked, to be moved to a real node or deleted. A named LLDP bridge
+showed its name's raw `<b>` until it was selected: the bridge set a
+font of its own, without the markup. Every kind of node takes its font
+from one place now, and a selection changes its brightness, never its
+size.
+
+**The map on paper and in Draw.io.** "Export the map…" in Actions, for
+every role, exports what is on the screen — the same nodes, lines and
+layout; the layout lives in the browser, so the picture is made there.
+"Infrastructure", with the devices as a number under their switch
+("23 devices"), or "Everything"; the port numbers as the map words
+them, "numbers only" included, or none. The dark map's colours mean
+nothing on paper, so nodes and lines are drawn by what they mean —
+measured by LLDP or by the MAC tables, a guess, a ring nothing
+explains, STP blocking, a loop, LACP, a trunk — in a light palette, and
+a legend of only what the drawing has says which is which. PDF comes
+out of the browser's own printing, "Save as PDF": vector, with its
+fonts, Cyrillic included, and no new dependency. A4, A3 or A2,
+landscape or portrait; the title, the time of the last scan and of the
+export, who exported it and the version; and on the following pages
+"Names and notes": every named node with what it is and where, sorted
+by name — the sheet for the cabinet door. Draw.io: an uncompressed
+.drawio for diagrams.net and draw.io desktop; a node carries its
+MoonLan id, IP, MAC and note as data ("Edit Data", search), the port
+numbers are labels of their line and go with it when a node is moved,
+and a name with markup in it stays text through both levels of
+escaping. SVG: the same drawing with its legend. An export writes
+nothing to the journal: it changes nothing.
+
+**About.** The last item of Actions, for everybody, sign-in off
+included: the version and the build — the commit the service started
+from, read out of .git without running git: whoever pulls main between
+tags cannot tell otherwise which code runs. The copyright and the MIT
+licence, its full text on request; the repository, Issues,
+SECURITY.md, this version's changelog and the docs; the components
+with the versions installed and their licences; the IEEE register. An
+administrator also sees the server — Python, the system, uptime,
+sign-in, HTTPS — and nobody else does. "Copy the details for a bug
+report" puts it all on the clipboard as plain text. `GET /api/about`,
+`GET /api/about/license`.
+
 ## v0.8.0 — 2026-10-22
 
 Names and notes on the map, import by MAC, switches found by maker.

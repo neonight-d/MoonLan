@@ -1,6 +1,6 @@
 # What MoonLan does
 
-Everything MoonLan does, as of v0.8.0 — the list the README used to carry. The README keeps the summary; each item here links to the page that explains it.
+Everything MoonLan does, as of v0.8.1 — the list the README used to carry. The README keeps the summary; each item here links to the page that explains it.
 
 ![Alarms panel](img/alarms.png)
 
@@ -200,15 +200,19 @@ Everything MoonLan does, as of v0.8.0 — the list the README used to carry. The
   is the line's tooltip and, behind ⓘ, a paragraph that opens in the
   card (a phone has no hover).
 - Names and notes on nodes: a switch, a device, an LLDP bridge, a
-  switch without SNMP, an external network or a group behind a trunk
-  can be given a **name** — one line of up to 40 characters, the first
+  switch without SNMP or an external network can be given a **name** — one line of up to 40 characters, the first
   line of its caption on the map, in bold above what MoonLan calls it
   ("Room 214", and "switch without SNMP" small under it) — and a
   **note**, free text in its card, with who changed it and when.
   "Name and note…" in the card and in the node menu opens an editor in
   the card; for a switch without SNMP it offers the names of its
-  devices, LLDP first, to pick from. An offline group has none: it is
-  whatever is missing from the tables right now. A note stays when its
+  devices, LLDP first, to pick from. An offline group carries the name
+  of the switch without SNMP on its port while that switch is not on
+  the map — the room whose computers are off at night — and a name
+  written through it is the switch's; a group on a port nobody named
+  has none. A group behind a trunk has none either: it is a guess at a
+  place, and a name there would name a guess (one written in v0.8.0 is
+  under "Notes without a node", marked). A note stays when its
   node goes — a cable moved to another port — and after three scans in
   a row without it is listed under "Notes without a node", with the
   node in words and since when, to be deleted or moved to a node of
@@ -219,6 +223,26 @@ Everything MoonLan does, as of v0.8.0 — the list the README used to carry. The
   format ([OPERATIONS.md](OPERATIONS.md#names-and-notes-from-a-file)).
   The topology itself is never edited by hand: it is built only from
   what the switches report over SNMP and LLDP.
+- The map exported: "Export the map…" in Actions, for every role,
+  takes what is on the screen — the same nodes, lines and layout — as
+  "Infrastructure" (switches, switches without SNMP, bridges, external
+  networks, groups, with the number of devices under a switch) or
+  "Everything", with the port numbers as the map words them or
+  without. On paper nodes and lines are drawn by what they mean, not by
+  their colour on the dark map — measured by LLDP or by the MAC tables,
+  a guess, a ring nothing explains, STP blocking, a loop, LACP, a trunk
+  — and a legend of only what the drawing has says which is which.
+  **PDF** through the browser's own printing ("Save as PDF": vector,
+  fonts embedded, Cyrillic included): A4, A3 or A2, landscape or
+  portrait, a title, the times of the last scan and of the export, who
+  and which version, and on the following pages "Names and notes" —
+  every named node with what it is and where, the sheet for the
+  cabinet door. **Draw.io**: an uncompressed `.drawio` for diagrams.net
+  and draw.io desktop, each node with its MoonLan id, IP, MAC and note
+  as data ("Edit Data", search), the port numbers as labels of their
+  line that go with it when a node is moved. **SVG**: the same drawing
+  with its legend. The choices are kept in the browser; nothing is
+  written to the journal.
 - Continuous ping monitoring of all hosts and switches: green/grey status
   indicator, time of the last reply. Pings follow IP ownership: a host
   whose MAC left every switch table and whose address ARP no longer
@@ -360,12 +384,20 @@ Everything MoonLan does, as of v0.8.0 — the list the README used to carry. The
   by its name, address, MAC and maker, and both by their name and note;
   with a query, each list counts what is left of how many ("Switches 2
   of 9"). Named nodes that have no list of their own — switches without
-  SNMP, bridges, external networks, groups — are in a "Named" list
+  SNMP, bridges, external networks, offline groups — are in a "Named" list
   above the switches. English and Russian
   interface languages. On a phone (720 px and narrower) the list stands
   over the map, and a "List and search" bar between the header and the
   map folds it away: the map takes the whole height at once, looking at
   the same spot, and the choice is kept in the browser.
+- About, the last item of Actions, for everybody: the version and the
+  build — the commit the service was started from, read out of `.git`
+  without running git — the MIT licence and its text, links to the
+  repository, Issues, SECURITY.md, this version's changelog and the
+  docs, the components with the versions installed and their licences,
+  and the IEEE register; for an administrator also the server (Python,
+  the system, uptime, sign-in, HTTPS). "Copy the details for a bug
+  report" puts it all on the clipboard as plain text.
 - Demo mode with a virtual network — explore the UI without real switches.
 - SNMP diagnostic tool: `python -m moonlan.diag <ip>`.
 

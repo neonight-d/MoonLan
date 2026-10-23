@@ -22,7 +22,7 @@
 | 🗺️ Topology | Direct-link inference, trunk awareness, STP-aware rings, unmanaged bridges |
 | 📈 Monitoring | Ping, traffic rates, errors, discards, flapping, loop detection |
 | 🚨 Alarms | Stateful alarms with Email, Telegram, Syslog notifications |
-| 🧭 Operations | Shared layout, pinned nodes, names and notes on nodes (CSV import by MAC), port numbers on the lines, search, journal, port/STP/alarms panels |
+| 🧭 Operations | Shared layout, pinned nodes, names and notes on nodes (CSV import by MAC), port numbers on the lines, the map exported to PDF, Draw.io and SVG, search, journal, port/STP/alarms panels |
 | 🔐 Access | Sign-in with three roles, TOTP or a key (passkey) for administrators, HTTPS of its own or behind a proxy, accounts from the server's shell |
 | 🧪 Diagnostics | FDB, hosts, ports, STP, loop detection, topology, arbitrary MIB walks |
 | 🛡️ Safety | Per-host poll budgets, stale-data labels, command argument validation |
