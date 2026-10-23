@@ -74,6 +74,9 @@ RULES: dict[str, str] = {
     "GET /api/skipped-oids": VIEWER,
     "GET /api/polling": VIEWER,
     "GET /api/status": VIEWER,
+    # About (v0.8.1): what runs; the server block inside for admins only
+    "GET /api/about": VIEWER,
+    "GET /api/about/license": VIEWER,
 
     # doing: the server runs something, or the shared picture changes.
     # Even a ping is the server acting on somebody's request, so a

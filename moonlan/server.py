@@ -19,8 +19,8 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from . import (
-    __version__, corruption, counters, demo, https, loopdetect, menu, notes,
-    oui, passkeys, pinger, probes, signin, stp,
+    __version__, about, corruption, counters, demo, https, loopdetect, menu,
+    notes, oui, passkeys, pinger, probes, signin, stp,
 )
 from .alarms import AlarmEngine
 from .config import Config, load_config, parse_uplink_ports
@@ -78,6 +78,12 @@ transport = https.transport_mode(
     config.listen_tls_cert, trusted_proxies, public_url
 )
 sign_in = signin.SignIn(accounts, db, config.auth, public_url, transport)
+# For About (v0.8.1): when this process started, and the commit it was
+# started from — read once, as a pull after the start changes .git and
+# not the code that is running
+STARTED_AT = time.time()
+BUILD = about.build_hash()
+COPYRIGHT = about.copyright_line(about.license_text())
 
 # Ping state of switches (they are not in the hosts table): ip -> {ping_up, last_ping_ok}
 switch_ping: dict[str, dict] = {}
@@ -2272,6 +2278,39 @@ async def api_health() -> dict:
     """For monitoring from outside, without signing in: is it up, and
     which version. Nothing about the network."""
     return {"status": "ok", "version": __version__}
+
+
+@app.get("/api/about")
+async def api_about() -> dict:
+    """What MoonLan is, which build, what it runs on and with which
+    versions, and the IEEE register. The server itself — Python, the
+    system, uptime, sign-in, HTTPS — only to an administrator, or to
+    everybody while sign-in is off, when everybody is one."""
+    on = await asyncio.to_thread(sign_in.sign_in_on)
+    who = signin.principal()
+    body = {
+        "version": __version__,
+        "build": BUILD,
+        "copyright": COPYRIGHT,
+        "components": about.components(),
+        "ieee": {
+            "loaded": vendors.loaded,
+            "date": vendors.oldest(),
+            "command": oui.UPDATE_COMMAND,
+        },
+    }
+    if not on or (who is not None and who.role == "admin"):
+        body["server"] = about.server(STARTED_AT, on, transport)
+    return body
+
+
+@app.get("/api/about/license")
+async def api_about_license() -> Response:
+    """The LICENSE file, as text: MIT asks for it to go with every copy"""
+    text = await asyncio.to_thread(about.license_text)
+    if text is None:
+        return _refuse("no_license", 404)
+    return Response(text, media_type="text/plain; charset=utf-8")
 
 
 @app.get("/api/topology")

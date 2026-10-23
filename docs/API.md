@@ -84,6 +84,8 @@ tests.
 | GET | `/api/skipped-oids` | viewer |
 | GET | `/api/polling` | viewer |
 | GET | `/api/status` | viewer |
+| GET | `/api/about` | viewer |
+| GET | `/api/about/license` | viewer |
 | POST | `/api/actions` | user |
 | GET | `/api/actions/{job_id}` | user |
 | POST | `/api/alarms/{alarm_id}/clear` | user |
@@ -128,6 +130,49 @@ nothing about the network:
 
 Scan progress, the last error and the switches that ran out of time are
 in `/api/status`, which needs a viewer. See [HEALTHCHECK.md](HEALTHCHECK.md).
+
+## About
+
+### GET /api/about
+
+What the page's "About" shows: the version, the build — the short hash
+of the commit the service was started from, read out of `.git` at
+startup without running `git`; `null` when it runs from no clone — the
+copyright line of `LICENSE`, the components with the versions
+**installed** (`null` for one that is not: `fido2` is optional) and
+their licences, and the IEEE register of makers.
+
+~~~json
+{
+  "version": "0.8.1",
+  "build": "317bd0c",
+  "copyright": "2026 neonight-d",
+  "components": [
+    {"name": "FastAPI", "version": "0.141.1", "license": "MIT", "where": "server"},
+    {"name": "fido2", "version": null, "license": "BSD-2-Clause, Apache-2.0, MPL-2.0", "where": "server"},
+    {"name": "vis-network", "version": "9.1.9", "license": "Apache-2.0 OR MIT", "where": "browser"}
+  ],
+  "ieee": {"loaded": true, "date": 1792050000.0, "command": "python -m moonlan.oui update"},
+  "server": {
+    "python": "3.13.5", "os": "Linux, Debian GNU/Linux 13 (trixie)",
+    "started_at": 1792750000.0, "uptime": 7260,
+    "sign_in": true, "https": "own"
+  }
+}
+~~~
+
+`ieee.date` is when the oldest of the register's files was written.
+`server` is in the answer to an administrator only — and to everybody
+while sign-in is off: the system and its distribution are something to
+look exploits up for, not something a reader of the map needs. `https`
+is `own` (MoonLan serves it), `proxy` (a trusted proxy in front) or
+`off`.
+
+### GET /api/about/license
+
+The `LICENSE` file as `text/plain`: MIT asks for the text to go with
+every copy. `404 {"error": "no_license"}` when the service runs without
+it.
 
 ## Signing in
 

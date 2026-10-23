@@ -25,6 +25,9 @@ const els = {
   notesPanel: document.getElementById("notes-panel"),
   printSheet: document.getElementById("print-sheet"),
   exportDialog: document.getElementById("export-dialog"),
+  about: document.getElementById("about"),
+  aboutBody: document.getElementById("about-body"),
+  aboutClose: document.getElementById("about-close"),
   exportTitle: document.getElementById("export-title"),
   exportBody: document.getElementById("export-body"),
   exportClose: document.getElementById("export-close"),
@@ -1108,14 +1111,16 @@ function applyRole() {
 
 /* ---------- your own account ---------- */
 
+// …and About: the panels the header's menus open
 function hideAccountPanels() {
   els.account.classList.add("hidden");
   els.users.classList.add("hidden");
+  els.about.classList.add("hidden");
 }
 
 function hidePanelsFor(panel) {
   for (const other of [els.details, els.journal, els.alarms, els.stp,
-    els.account, els.users, els.notesPanel]) {
+    els.account, els.users, els.notesPanel, els.about]) {
     if (other !== panel) other.classList.add("hidden");
   }
   if (panel !== els.details) shownDetails = null;
@@ -2248,7 +2253,7 @@ function menuItemsFor(ids, info, tools) {
    in the menu all the same, greyed out with the role it needs: a viewer
    opens it and finds every item grey, with the reason. */
 
-const MORE_GROUPS = ["network", "notes", "danger"];
+const MORE_GROUPS = ["network", "notes", "danger", "about"];
 
 function moreItems() {
   const scanning = isScanning || topology.scanning;
@@ -2282,6 +2287,8 @@ function moreItems() {
       disabled: needRole("admin"),
       run: resetLayout,
     },
+    // last, on its own, for everybody — sign-in off included
+    { key: "about", group: "about", label: t("menuAbout"), run: openAbout },
   ];
 }
 
@@ -2486,7 +2493,7 @@ function downloadRdp(node) {
 /* navigator.clipboard exists only on a secure page — https, or
    localhost. MoonLan is usually opened over plain http by address,
    where it is simply undefined, so the old way stays as the fallback. */
-async function copyText(text) {
+async function copyText(text, shown = text) {
   let done = false;
   if (navigator.clipboard && window.isSecureContext) {
     try {
@@ -2511,7 +2518,7 @@ async function copyText(text) {
     }
     area.remove();
   }
-  showToast(done ? fmt("copied", { text: text }) : fmt("copyFailed", { text: text }));
+  showToast(done ? fmt("copied", { text: shown }) : fmt("copyFailed", { text: shown }));
 }
 
 let toastTimer = null;
@@ -5566,6 +5573,170 @@ els.exportDialog.addEventListener("click", (event) => {
   if (event.target === els.exportDialog) closeExportDialog();
 });
 els.exportClose.addEventListener("click", closeExportDialog);
+
+/* ---------- About (v0.8.1) ----------
+
+   What MoonLan is, which build is running, what it runs on, who wrote
+   it and under which licence, where to report a bug — and all of that
+   as plain text for the bug report. The server's own block (Python,
+   the system, uptime) the service sends to an administrator only. */
+const REPO_URL = "https://github.com/neonight-d/MoonLan";
+const AUTHOR_URL = "https://github.com/neonight-d";
+let aboutData = null;
+let licenseText = null;
+
+async function openAbout() {
+  hidePanelsFor(els.about);
+  els.about.classList.remove("hidden");
+  try {
+    aboutData = await (await api("/api/about")).json();
+  } catch (e) {
+    serviceLost("about");
+    return;
+  }
+  renderAbout();
+}
+
+// "3 d 4 h" for a service up for days, "2 h 5 m" for less
+function fmtUptime(seconds) {
+  const days = Math.floor(seconds / 86400);
+  if (!days) return fmtDuration(seconds);
+  return days + t("durD") + " " + Math.floor((seconds % 86400) / 3600) + t("durH");
+}
+
+/* A sentence with links in it: "Built with {claude} by {anthropic}" */
+function withLinks(text, links) {
+  return text.split(/(\{\w+\})/).map((part) => {
+    const link = links[part.slice(1, -1)];
+    return link && /^\{\w+\}$/.test(part)
+      ? h("a", { href: link[1], target: "_blank", rel: "noopener noreferrer", text: link[0] })
+      : part;
+  });
+}
+
+function renderAbout() {
+  const data = aboutData;
+  if (!data) return;
+  const link = (href, text) =>
+    h("a", { href, target: "_blank", rel: "noopener noreferrer", text });
+  const rows = (pairs) => h("dl", { class: "about-rows" },
+    ...pairs.flatMap(([term, value]) => [h("dt", { text: term }), h("dd", {}, value)]));
+  const changelog = `${REPO_URL}/blob/v${data.version}/` +
+    (lang === "ru" ? "CHANGELOG_RU.md" : "CHANGELOG.md");
+
+  const licence = h("div", { class: "about-license hidden" });
+  // the file's own line breaks are for an 80-column terminal: its
+  // paragraphs, each as one, fit the panel
+  const reflowed = (text) => (text || "").replace(/([^\n])\n(?!\n)/g, "$1 ");
+  const showLicence = h("button", {
+    type: "button", class: "panel-btn", "aria-expanded": "false",
+    text: t("aboutShowLicense"),
+    onclick: async () => {
+      const open = licence.classList.toggle("hidden") === false;
+      showLicence.setAttribute("aria-expanded", open ? "true" : "false");
+      showLicence.textContent = t(open ? "aboutHideLicense" : "aboutShowLicense");
+      if (!open || licenseText !== null) {
+        licence.textContent = reflowed(licenseText);
+        return;
+      }
+      try {
+        const response = await api("/api/about/license");
+        licenseText = response.ok ? await response.text() : t("aboutNoLicense");
+      } catch (e) {
+        serviceLost("the licence");
+        licenseText = null;
+      }
+      licence.textContent = reflowed(licenseText);
+    },
+  });
+
+  const components = h("table", { class: "about-components" }, h("tbody", {},
+    ...data.components.map((c) => h("tr", {},
+      h("td", { text: c.name + (c.where === "browser" ? " " + t("aboutInBrowser") : "") }),
+      h("td", {
+        class: c.version ? "" : "muted",
+        text: c.version || t(c.name === "fido2" ? "aboutFido2Missing" : "aboutNotInstalled"),
+      }),
+      h("td", { class: "muted", text: c.license })))));
+
+  // the cure is a command on the server: said, as on a card, to whoever
+  // can run it, and in a tooltip to the rest
+  const canRun = me && (me.sign_in === false || me.role === "admin");
+  const ieee = data.ieee.loaded
+    ? fmt("aboutIeeeLoaded", { date: fmtDate(data.ieee.date) })
+    : canRun
+    ? h("span", {}, t("aboutIeeeMissing") + ": ", h("code", { text: data.ieee.command }))
+    : h("span", { title: fmt("vendorNoRegistryHint", { command: data.ieee.command }),
+                  text: t("aboutIeeeMissing") });
+
+  const server = data.server && [
+    h("h4", { class: "card-sub", text: t("aboutServer") }),
+    rows([
+      ["Python", data.server.python],
+      [t("aboutOs"), data.server.os],
+      [t("aboutUptime"), fmt("aboutUptimeSince", {
+        uptime: fmtUptime(data.server.uptime), time: fmtTime(data.server.started_at),
+      })],
+      [t("aboutSignIn"), t(data.server.sign_in ? "aboutSignInOn" : "aboutSignInOff")],
+      ["HTTPS", t("aboutHttps_" + data.server.https)],
+    ]),
+  ];
+
+  els.aboutBody.replaceChildren(
+    h("div", { class: "about-head" },
+      h("span", { class: "moon", "aria-hidden": "true" }),
+      h("div", {},
+        h("div", {}, h("strong", { text: "MoonLan" }), " ",
+          h("span", { class: "muted", text: t("tagline") })),
+        h("div", { class: "about-version" }, fmt("aboutVersion", { version: data.version }),
+          data.build ? h("span", { class: "muted", text: " · " + fmt("aboutBuild", { hash: data.build }) }) : null))),
+    h("p", { text: t("aboutDescription") }),
+    h("p", { class: "about-principle", text: t("aboutPrinciple") }),
+    h("p", {}, data.copyright ? "© " : "", data.copyright
+      ? link(AUTHOR_URL, data.copyright) : null),
+    h("p", { class: "about-mit", text: t("aboutMit") }),
+    showLicence, licence,
+    h("ul", { class: "about-links" },
+      h("li", {}, link(REPO_URL, t("aboutRepo"))),
+      h("li", {}, link(REPO_URL + "/issues", t("aboutIssues"))),
+      h("li", {}, link(REPO_URL + "/blob/main/SECURITY.md", t("aboutSecurity"))),
+      h("li", {}, link(changelog, fmt("aboutChangelog", { version: data.version }))),
+      h("li", {}, link(REPO_URL + "/tree/main/docs", t("aboutDocs")))),
+    h("p", { class: "about-thanks" }, ...withLinks(t("aboutThanks"), {
+      claude: ["Claude Code", "https://github.com/anthropics/claude-code"],
+      anthropic: ["Anthropic", "https://www.anthropic.com/"],
+    })),
+    h("h4", { class: "card-sub", text: t("aboutComponents") }),
+    components,
+    h("h4", { class: "card-sub", text: t("aboutData") }),
+    rows([[t("aboutIeee"), ieee]]),
+    ...(server || []),
+    h("button", {
+      type: "button", class: "panel-btn", text: t("aboutCopy"),
+      onclick: () => copyText(aboutReport(data), t("aboutCopied")),
+    }),
+  );
+}
+
+/* The facts a bug report is asked for first, as plain text — in English
+   whatever the page's language, so that every report reads the same */
+function aboutReport(data) {
+  const lines = [`MoonLan ${data.version}` + (data.build ? `, build ${data.build}` : "")];
+  lines.push("", "Components:");
+  for (const c of data.components) {
+    lines.push(`  ${c.name} ${c.version || "not installed"}` + (c.where === "browser" ? " (browser)" : ""));
+  }
+  lines.push("", `Browser: ${navigator.userAgent}`, `Interface language: ${lang}`);
+  if (data.server) {
+    const s = data.server;
+    lines.push("", "Server:", `  Python ${s.python}`, `  OS: ${s.os}`,
+      `  Uptime: ${Math.floor(s.uptime / 3600)} h ${Math.floor((s.uptime % 3600) / 60)} min`,
+      `  Sign-in: ${s.sign_in ? "on" : "off"}`, `  HTTPS: ${s.https}`);
+  }
+  return lines.join("\n") + "\n";
+}
+
+els.aboutClose.addEventListener("click", () => els.about.classList.add("hidden"));
 
 /* ---------- a node's name and note (v0.8.0) ----------
 
