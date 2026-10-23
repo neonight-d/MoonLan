@@ -23,6 +23,8 @@ const els = {
   journalList: document.getElementById("journal-list"),
   journalClose: document.getElementById("journal-close"),
   notesPanel: document.getElementById("notes-panel"),
+  printSheet: document.getElementById("print-sheet"),
+  printPage: document.getElementById("print-page"),
   notesTitle: document.getElementById("notes-title"),
   notesBody: document.getElementById("notes-body"),
   notesClose: document.getElementById("notes-close"),
@@ -4966,6 +4968,56 @@ function xmlEscape(text) {
     .replace(/\r?\n/g, "&#10;").replace(/\t/g, "&#9;");
 }
 
+/* The paper palette, by what a thing is — one for every format, so a
+   dashed line means the same in the Draw.io file, the SVG and the PDF,
+   and the legend can say what. */
+const EXPORT_SHAPES = {
+  switch: { fill: "#ffffff", stroke: "#333333", width: 2 },
+  pseudo: { fill: "#eeeeee", stroke: "#666666", width: 1.5, dash: "4 3" },
+  bridge: { fill: "#eef4fb", stroke: "#4a7fb0", width: 1.5, dash: "5 3" },
+  external: { fill: "#fbf3e6", stroke: "#b07a2a", width: 1.5 },
+  trunk: { fill: "#eef4fb", stroke: "#4a7fb0", width: 1.5, dash: "4 3" },
+  offline: { fill: "#dddddd", stroke: "#999999", width: 1.5, dash: "2 3" },
+  host: { fill: "#7fc98f", stroke: "#4f8f5d", width: 1 },
+  router: { fill: "#7fc98f", stroke: "#333333", width: 1.5 },
+};
+
+function exportNodeLook(kind, flags) {
+  const look = { ...(EXPORT_SHAPES[kind] || EXPORT_SHAPES.bridge) };
+  if (flags.includes("root")) Object.assign(look, { stroke: "#3a9a50", width: 3 });
+  if (flags.includes("loop")) Object.assign(look, { stroke: "#d23f3f", width: 3 });
+  if (flags.includes("stale")) Object.assign(look, { fill: "#cccccc", stroke: "#aaaaaa" });
+  return look;
+}
+
+/* A line on paper: measured (LLDP darker than the MAC tables), guessed
+   or unexplained (dashed), held by STP or looping (red), aggregated
+   (thicker), a device's (thin), not seen for a while (pale) */
+function exportLineLook(semantic) {
+  const has = (tag) => semantic.includes(tag);
+  let color = "#555555";
+  let width = 2;
+  let dash = "";
+  if (has("lldp")) color = "#222222";
+  if (has("fdb")) color = "#6b6b6b";
+  if (has("device")) { color = "#8fb3cf"; width = 1; }
+  if (has("pseudo") || has("offline")) color = "#888888";
+  if (has("bridge") || has("trunk-group")) color = "#4a7fb0";
+  if (has("external")) color = "#b07a2a";
+  if (has("lacp")) width = 4;
+  else if (has("trunk")) width = 3;
+  if (has("ring")) color = "#999999";
+  if (has("stale")) color = "#c8c8c8";
+  if (has("blocking") || has("loop")) color = "#d23f3f";
+  if (has("loop")) width = Math.max(width, 3);
+  if (has("guess")) dash = "4 6";
+  else if (has("ring")) dash = "2 4";
+  else if (has("blocking")) dash = "6 4";
+  else if (has("approximate")) dash = "2 4";
+  else if (["stale", "pseudo", "offline", "bridge", "trunk-group"].some(has)) dash = "3 3";
+  return { color, width, dash };
+}
+
 /* The map as a Draw.io file (diagrams.net, draw.io desktop): an
    uncompressed mxfile. Pure — the model in, the text out.
 
@@ -4982,40 +5034,24 @@ function xmlEscape(text) {
    are labels of the line itself (relative, ±0.8), so they go with it
    when somebody moves the nodes in draw.io. */
 function drawioXml(model, title) {
-  const NODE = {
-    switch: "rounded=1;arcSize=12;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#333333;strokeWidth=2;fontColor=#111111;fontSize=12;",
-    pseudo: "rounded=0;whiteSpace=wrap;html=1;dashed=1;fillColor=#eeeeee;strokeColor=#666666;fontColor=#222222;fontSize=11;",
-    bridge: "rounded=0;whiteSpace=wrap;html=1;dashed=1;fillColor=#eef4fb;strokeColor=#4a7fb0;fontColor=#222222;fontSize=11;",
-    external: "shape=hexagon;perimeter=hexagonPerimeter2;size=0.25;whiteSpace=wrap;html=1;fillColor=#fbf3e6;strokeColor=#b07a2a;fontColor=#222222;fontSize=11;",
-    trunk: "ellipse;whiteSpace=wrap;html=1;dashed=1;fillColor=#eef4fb;strokeColor=#4a7fb0;fontColor=#222222;fontSize=10;",
-    offline: "rounded=0;whiteSpace=wrap;html=1;dashed=1;fillColor=#dddddd;strokeColor=#999999;fontColor=#555555;fontSize=10;",
-    host: "ellipse;aspect=fixed;html=1;fillColor=#7fc98f;strokeColor=#4f8f5d;fontColor=#333333;fontSize=9;",
-    router: "rhombus;html=1;fillColor=#7fc98f;strokeColor=#333333;fontColor=#333333;fontSize=9;",
+  const SHAPE = {
+    switch: "rounded=1;arcSize=12;fontColor=#111111;fontSize=12;",
+    pseudo: "rounded=0;fontColor=#222222;fontSize=11;",
+    bridge: "rounded=0;fontColor=#222222;fontSize=11;",
+    external: "shape=hexagon;perimeter=hexagonPerimeter2;size=0.25;fontColor=#222222;fontSize=11;",
+    trunk: "ellipse;fontColor=#222222;fontSize=10;",
+    offline: "rounded=0;fontColor=#555555;fontSize=10;",
+    host: "ellipse;aspect=fixed;fontColor=#333333;fontSize=9;",
+    router: "rhombus;fontColor=#333333;fontSize=9;",
   };
+  // a caption under a small shape is not wrapped to the shape's width
+  const INSIDE = "whiteSpace=wrap;";
   const BELOW = "verticalLabelPosition=bottom;verticalAlign=top;labelPosition=center;align=center;";
   const edgeStyle = (semantic) => {
-    const has = (tag) => semantic.includes(tag);
-    let style = "endArrow=none;startArrow=none;html=1;curved=1;rounded=0;fontSize=10;fontColor=#333333;labelBackgroundColor=#ffffff;";
-    let color = "#555555";
-    let width = 2;
-    if (has("device")) { color = "#8fb3cf"; width = 1; }
-    if (has("pseudo") || has("offline")) color = "#888888";
-    if (has("bridge") || has("trunk-group")) color = "#4a7fb0";
-    if (has("external")) color = "#b07a2a";
-    if (has("lldp")) color = "#333333";
-    if (has("lacp")) width = 4;
-    else if (has("trunk")) width = 3;
-    if (has("stale")) color = "#c8c8c8";
-    if (has("blocking") || has("loop")) color = "#d23f3f";
-    if (has("loop")) width = Math.max(width, 3);
-    style += `strokeColor=${color};strokeWidth=${width};`;
-    if (has("guess") || has("ring")) style += "dashed=1;dashPattern=4 6;";
-    else if (has("blocking")) style += "dashed=1;dashPattern=6 4;";
-    else if (has("approximate")) style += "dashed=1;dashPattern=2 4;";
-    else if (has("stale") || has("pseudo") || has("offline") || has("bridge") || has("trunk-group")) {
-      style += "dashed=1;dashPattern=3 3;";
-    }
-    return style;
+    const look = exportLineLook(semantic);
+    return "endArrow=none;startArrow=none;html=1;curved=1;rounded=0;fontSize=10;fontColor=#333333;labelBackgroundColor=#ffffff;" +
+      `strokeColor=${look.color};strokeWidth=${look.width};` +
+      (look.dash ? `dashed=1;dashPattern=${look.dash};` : "");
   };
   const html = (text) => xmlEscape(text).replace(/&#10;/g, "<br>");
   const label = (node) => {
@@ -5037,12 +5073,11 @@ function drawioXml(model, title) {
   const ids = new Map(model.nodes.map((node, i) => [node.id, "n" + i]));
   const cells = [];
   for (const node of model.nodes) {
-    // a caption under a small shape is not wrapped to the shape's width
-    const style = (NODE[node.kind] || NODE.bridge).replace(node.captionInside ? "" : "whiteSpace=wrap;", "") +
-      (node.captionInside ? "" : BELOW) +
-      (node.flags.includes("root") ? "strokeColor=#3a9a50;strokeWidth=3;" : "") +
-      (node.flags.includes("loop") ? "strokeColor=#d23f3f;strokeWidth=3;" : "") +
-      (node.flags.includes("stale") ? "fillColor=#cccccc;strokeColor=#aaaaaa;" : "");
+    const look = exportNodeLook(node.kind, node.flags);
+    const style = (SHAPE[node.kind] || SHAPE.bridge) + "html=1;" +
+      (node.captionInside ? INSIDE : BELOW) +
+      `fillColor=${look.fill};strokeColor=${look.stroke};strokeWidth=${look.width};` +
+      (look.dash ? `dashed=1;dashPattern=${look.dash};` : "");
     cells.push(
       `<object id="${ids.get(node.id)}" label="${xmlEscape(label(node))}" ` +
       `moonlan_id="${xmlEscape(node.id)}" ip="${xmlEscape(node.ip)}" ` +
@@ -5083,6 +5118,287 @@ function drawioXml(model, title) {
     `<mxCell id="0"/><mxCell id="1" parent="0"/>` +
     cells.join("") +
     `</root></mxGraphModel></diagram></mxfile>\n`;
+}
+
+const EXPORT_FONT = "system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif";
+
+/* A node's shape in SVG, centred on (x, y), by its kind */
+function svgShape(kind, x, y, width, height, look) {
+  const n = (v) => Math.round(v * 10) / 10;
+  const paint = `fill="${look.fill}" stroke="${look.stroke}" stroke-width="${look.width}"` +
+    (look.dash ? ` stroke-dasharray="${look.dash}"` : "");
+  const hw = width / 2;
+  const hh = height / 2;
+  if (kind === "host") return `<circle cx="${n(x)}" cy="${n(y)}" r="${n(Math.min(hw, hh))}" ${paint}/>`;
+  if (kind === "trunk") return `<ellipse cx="${n(x)}" cy="${n(y)}" rx="${n(hw)}" ry="${n(hh)}" ${paint}/>`;
+  if (kind === "router") {
+    return `<polygon points="${n(x)},${n(y - hh)} ${n(x + hw)},${n(y)} ${n(x)},${n(y + hh)} ${n(x - hw)},${n(y)}" ${paint}/>`;
+  }
+  if (kind === "external") {
+    const q = hw / 2;
+    return `<polygon points="${n(x - hw)},${n(y)} ${n(x - q)},${n(y - hh)} ${n(x + q)},${n(y - hh)} ` +
+      `${n(x + hw)},${n(y)} ${n(x + q)},${n(y + hh)} ${n(x - q)},${n(y + hh)}" ${paint}/>`;
+  }
+  return `<rect x="${n(x - hw)}" y="${n(y - hh)}" width="${n(width)}" height="${n(height)}" ` +
+    `rx="${kind === "switch" ? n(Math.min(6, hh / 2)) : 0}" ${paint}/>`;
+}
+
+/* What the legend shows for one of its items, in a box 30 by 14 */
+function legendSwatch(item) {
+  if (item.line) {
+    const look = exportLineLook(item.line);
+    return `<line x1="1" y1="7" x2="29" y2="7" stroke="${look.color}" stroke-width="${look.width}"` +
+      (look.dash ? ` stroke-dasharray="${look.dash}"` : "") + "/>";
+  }
+  const look = exportNodeLook(item.kind, item.flags || []);
+  const small = item.kind === "host" || item.kind === "router";
+  return svgShape(item.kind, 15, 7, small ? 11 : 26, small ? 11 : 12, look);
+}
+
+// the meanings of lines a legend can have, each drawn as it looks alone
+const LEGEND_LINES = [
+  ["lldp", ["lldp"]], ["fdb", ["fdb"]], ["lacp", ["lldp", "lacp"]],
+  ["trunk", ["lldp", "trunk"]], ["guess", ["fdb", "guess"]], ["ring", ["fdb", "ring"]],
+  ["blocking", ["lldp", "blocking"]], ["loop", ["lldp", "loop"]],
+  // not seen for a while: the grey device says it, its line goes with it
+  ["approximate", ["device", "approximate"]],
+];
+
+/* The legend of a drawing: the kinds of nodes and lines it has, and
+   nothing it has not — [{kind, flags} | {line}, text] */
+function exportLegend(model) {
+  const items = [];
+  const kinds = new Set(model.nodes.map((node) => node.kind));
+  for (const kind of Object.keys(EXPORT_SHAPES)) {
+    if (kinds.has(kind)) items.push({ kind, text: t("legend_" + kind) });
+  }
+  for (const flag of ["root", "loop", "stale"]) {
+    const node = model.nodes.find((n) => n.flags.includes(flag));
+    if (node) items.push({ kind: node.kind, flags: [flag], text: t("legendFlag_" + flag) });
+  }
+  for (const [tag, line] of LEGEND_LINES) {
+    if (model.edges.some((edge) => edge.semantic.includes(tag))) {
+      items.push({ line, text: t("legendLine_" + tag) });
+    }
+  }
+  return items;
+}
+
+/* The map as SVG, from the model — for the file and for the printed
+   page. Pure: `measure(text, size, bold)` gives a text's width (a
+   canvas in the page, an estimate in a test); `legend` is
+   exportLegend's items with their title, or null for none. Nodes by
+   their kind, lines with their bend (a quadratic curve through the
+   middle), the speed in the middle, the port numbers placed as on the
+   map — placePortTags, in the drawing's own units; those with no room
+   are left out, as "everywhere" leaves them — and under the drawing
+   the legend: on paper a dashed line means nothing unless it says
+   what. */
+function schemaSvg(model, { measure, legend = null }) {
+  const esc = xmlEscape;
+  const ROW = 13;
+  // a caption: the name in bold, then the node's own lines
+  const caption = (node) => [
+    ...(node.name ? [{ text: node.name, size: 12, bold: true }] : []),
+    ...node.lines.map((text, i) => ({
+      text, size: node.name || i ? 10 : 11, bold: !node.name && i === 0 && node.captionInside,
+    })),
+  ];
+  const boxOf = (node) => {
+    if (node.captionInside) {
+      return { left: node.x - node.w / 2, right: node.x + node.w / 2,
+               top: node.y - node.h / 2, bottom: node.y + node.h / 2 };
+    }
+    const rows = caption(node);
+    const width = Math.max(node.w, ...rows.map((r) => measure(r.text, r.size, r.bold)));
+    return { left: node.x - width / 2, right: node.x + width / 2,
+             top: node.y - node.h / 2, bottom: node.y + node.h / 2 + 4 + rows.length * ROW };
+  };
+  const byId = new Map(model.nodes.map((node) => [node.id, node]));
+  const boxes = new Map(model.nodes.map((node) => [node.id, boxOf(node)]));
+
+  // the port numbers, placed along their lines from their own end
+  const curve = (a, c, b, t) => ({
+    x: (1 - t) * (1 - t) * a.x + 2 * (1 - t) * t * c.x + t * t * b.x,
+    y: (1 - t) * (1 - t) * a.y + 2 * (1 - t) * t * c.y + t * t * b.y,
+  });
+  const tags = [];
+  for (const edge of model.edges) {
+    const ends = Object.entries(edge.ports);
+    for (const [end, text] of ends) {
+      const own = byId.get(end);
+      const far = byId.get(end === edge.from ? edge.to : edge.from);
+      if (!own || !far) continue;
+      const points = [];
+      for (let i = 0; i <= PORT_TAG_SAMPLES; i++) points.push(curve(own, edge.control, far, i / PORT_TAG_SAMPLES));
+      tags.push({
+        text, alarm: edge.semantic.includes("blocking") || edge.semantic.includes("loop"),
+        w: measure(text, 10, false) + PORT_TAG_PAD_X * 2, h: 14, line: points,
+        own: boxes.get(own.id), far: boxes.get(far.id), shared: ends.length > 1,
+        // between switches first, as on the map
+        rank: edge.id.startsWith("link:") ? 0 : 1, node: end,
+      });
+    }
+  }
+  const placed = placePortTags(tags, "all");
+
+  // the extent, with the captions under the shapes and a margin
+  const all = boxes.size ? [...boxes.values()] : [{ left: 0, right: 0, top: 0, bottom: 0 }];
+  const left = Math.min(...all.map((b) => b.left)) - 30;
+  const top = Math.min(...all.map((b) => b.top)) - 30;
+  const width = Math.max(...all.map((b) => b.right)) + 30 - left;
+  let height = Math.max(...all.map((b) => b.bottom)) + 30 - top;
+  const X = (v) => Math.round((v - left) * 10) / 10;
+  const Y = (v) => Math.round((v - top) * 10) / 10;
+  const out = [];
+
+  for (const edge of model.edges) {
+    const a = byId.get(edge.from);
+    const b = byId.get(edge.to);
+    const look = exportLineLook(edge.semantic);
+    out.push(`<path d="M${X(a.x)} ${Y(a.y)} Q${X(edge.control.x)} ${Y(edge.control.y)} ${X(b.x)} ${Y(b.y)}" ` +
+      `fill="none" stroke="${look.color}" stroke-width="${look.width}"` +
+      (look.dash ? ` stroke-dasharray="${look.dash}"` : "") + "/>");
+  }
+  for (const edge of model.edges) {
+    if (!edge.label) continue;
+    out.push(`<text x="${X(edge.mid.x)}" y="${Y(edge.mid.y + 3)}" font-size="9" text-anchor="middle" ` +
+      `fill="#444444" stroke="#ffffff" stroke-width="3" paint-order="stroke">${esc(edge.label)}</text>`);
+  }
+  for (const node of model.nodes) {
+    const look = exportNodeLook(node.kind, node.flags);
+    out.push(svgShape(node.kind, X(node.x), Y(node.y), node.w, node.h, look));
+    const rows = caption(node);
+    let y = node.captionInside ? node.y - (rows.length * ROW) / 2 + ROW - 3 : node.y + node.h / 2 + ROW;
+    for (const row of rows) {
+      out.push(`<text x="${X(node.x)}" y="${Y(y)}" font-size="${row.size}" text-anchor="middle" fill="#111111"` +
+        (row.bold ? ' font-weight="bold"' : "") +
+        (node.captionInside ? "" : ' stroke="#ffffff" stroke-width="3" paint-order="stroke"') +
+        `>${esc(row.text)}</text>`);
+      y += ROW;
+    }
+  }
+  placed.forEach((at, i) => {
+    if (!at) return;
+    const tag = tags[i];
+    out.push(`<rect x="${X(at.x - tag.w / 2)}" y="${Y(at.y - tag.h / 2)}" width="${Math.round(tag.w * 10) / 10}" ` +
+      `height="${tag.h}" rx="3" fill="${tag.alarm ? "#f5c6c6" : "#cdeed4"}" ` +
+      `stroke="${tag.alarm ? "#d23f3f" : "#4f8f5d"}" stroke-width="0.6"/>` +
+      `<text x="${X(at.x)}" y="${Y(at.y + 3.5)}" font-size="10" text-anchor="middle" ` +
+      `fill="${tag.alarm ? "#7a1d1d" : "#1d3b24"}">${esc(tag.text)}</text>`);
+  });
+
+  if (legend && legend.items.length) {
+    const column = Math.max(...legend.items.map((item) => measure(item.text, 10, false))) + 52;
+    const columns = Math.max(1, Math.floor((width - 40) / column));
+    const rows = Math.ceil(legend.items.length / columns);
+    const at = height;
+    out.push(`<text x="20" y="${at + 12}" font-size="11" font-weight="bold" fill="#111111">${esc(legend.title)}</text>`);
+    legend.items.forEach((item, i) => {
+      const x = 20 + Math.floor(i / rows) * column;
+      const y = at + 22 + (i % rows) * 18;
+      out.push(`<g transform="translate(${x} ${y})">${legendSwatch(item)}</g>` +
+        `<text x="${x + 38}" y="${y + 11}" font-size="10" fill="#333333">${esc(item.text)}</text>`);
+    });
+    height = at + 30 + rows * 18;
+  }
+  const sizeX = Math.ceil(width);
+  const sizeY = Math.ceil(height);
+  return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${sizeX} ${sizeY}" ` +
+    `width="${sizeX}" height="${sizeY}" font-family="${esc(EXPORT_FONT)}">` +
+    `<rect width="${sizeX}" height="${sizeY}" fill="#ffffff"/>` +
+    out.join("") + "</svg>\n";
+}
+
+/* A text's width in the export's font, measured by a canvas of the page */
+function exportMeasure() {
+  const ctx = document.createElement("canvas").getContext("2d");
+  return (text, size, bold) => {
+    ctx.font = `${bold ? "bold " : ""}${size}px ${EXPORT_FONT}`;
+    return ctx.measureText(text).width;
+  };
+}
+
+// sheets of paper, in millimetres, the short side first
+const PAPER = { A4: [210, 297], A3: [297, 420], A2: [420, 594] };
+const PAPER_MARGIN = 10;
+
+/* The map on paper, through the browser's own printing: a PDF comes out
+   of "Save as PDF" vector, with the fonts in it — Cyrillic included,
+   which no PDF library would bring without a font file of its own. The
+   sheet is a block of this page shown only in print (@media print); the
+   size of the paper is an @page rule written here. First page: the
+   title, when, who and which MoonLan, the drawing fitted to the paper
+   and its legend; then the names and notes of the named nodes on it,
+   the sheet for the cabinet door. */
+async function printSchema({ contents, ports, notesTable, title, paper, orientation }) {
+  const model = exportModel({ contents, ports });
+  const svg = schemaSvg(model, { measure: exportMeasure() });
+  let version = "";
+  try {
+    version = (await (await api("/api/health")).json()).version || "";
+  } catch (e) { /* the sheet says less, and still prints */ }
+  const [short, long] = PAPER[paper] || PAPER.A3;
+  const [pageW, pageH] = orientation === "portrait" ? [short, long] : [long, short];
+  const legend = exportLegend(model);
+  const meta = [
+    t("sheetScan") + " " + (topology.last_scan
+      ? new Date(topology.last_scan * 1000).toLocaleString(locale()) : t("noData")),
+    t("sheetExported") + " " + new Date().toLocaleString(locale()),
+    me && me.name ? t("sheetBy") + " " + me.name : "",
+    version ? "MoonLan " + version : "MoonLan",
+  ].filter(Boolean);
+  const first = h("section", {
+    class: "sheet-first",
+    // a millimetre short of the page: a page and a hair would be two
+    style: `width:${pageW - 2 * PAPER_MARGIN}mm;height:${pageH - 2 * PAPER_MARGIN - 1}mm`,
+  },
+    h("div", { class: "sheet-head" },
+      h("h1", { text: title }),
+      h("div", { class: "sheet-meta", text: meta.join("  ·  ") })),
+    h("div", { class: "sheet-map" }),
+    legend.length ? h("div", { class: "sheet-legend" },
+      h("strong", { text: t("legendTitle") }),
+      ...legend.map((item) => {
+        const row = h("span", { class: "sheet-legend-item" });
+        row.innerHTML = `<svg viewBox="0 0 30 14" width="30" height="14">${legendSwatch(item)}</svg>`;
+        row.append(item.text);
+        return row;
+      })) : null,
+  );
+  first.querySelector(".sheet-map").innerHTML = svg;
+  const parts = [first];
+  const named = model.nodes.filter((node) => node.name)
+    .sort((a, b) => a.name.localeCompare(b.name, locale()));
+  if (notesTable && named.length) {
+    parts.push(h("section", { class: "sheet-notes" },
+      h("h2", { text: t("sheetNotesTitle") }),
+      h("table", {},
+        h("thead", {}, h("tr", {},
+          h("th", { text: t("sheetColName") }), h("th", { text: t("sheetColWhat") }),
+          h("th", { text: t("sheetColNote") }))),
+        h("tbody", {}, ...named.map((node) =>
+          h("tr", {}, h("td", { text: node.name }), h("td", { text: nodeWhere(node.id) }),
+            h("td", { class: "sheet-note", text: node.note })))))));
+  }
+  els.printSheet.replaceChildren(...parts);
+  els.printPage.textContent =
+    `@page { size: ${pageW}mm ${pageH}mm; margin: ${PAPER_MARGIN}mm; }`;
+  // printed once the sheet is laid out; cleared when the dialog closes
+  window.addEventListener("afterprint", () => {
+    els.printSheet.replaceChildren();
+    els.printPage.textContent = "";
+  }, { once: true });
+  requestAnimationFrame(() => requestAnimationFrame(() => window.print()));
+}
+
+/* What a named node is and where, for the sheet of names: "switch
+   without SNMP behind access-sw-4 Gi0/5", a device with its port */
+function nodeWhere(nodeId) {
+  const words = nodeWords(nodeId);
+  if (!nodeId.startsWith("host:")) return words;
+  const host = findHost(nodeId);
+  return host && host.switch ? words + " · " + switchName(host.switch) + " " + (host.port || "") : words;
 }
 
 /* ---------- a node's name and note (v0.8.0) ----------
@@ -5306,7 +5622,7 @@ function nodeWords(nodeId) {
   const at = nodeId.indexOf(":");
   const kind = nodeId.slice(0, at);
   const rest = nodeId.slice(at + 1);
-  if (kind === "pseudo" || kind === "external" || kind === "trunk") {
+  if (kind === "pseudo" || kind === "external" || kind === "trunk" || kind === "offline") {
     const cut = rest.indexOf(":");
     const ip = rest.slice(0, cut);
     return fmt("nodeWords_" + kind, { switch: switchName(ip), port: rest.slice(cut + 1) });
@@ -5316,7 +5632,10 @@ function nodeWords(nodeId) {
     const host = findHost(nodeId) || findHost("unloc:" + rest);
     return fmt("nodeWords_host", { name: host ? hostLabel(host) : rest });
   }
-  if (kind === "bridge") return fmt("nodeWords_bridge", { name: rest });
+  if (kind === "bridge") {
+    const bridge = (topology.bridges || []).find((b) => b.id === nodeId);
+    return fmt("nodeWords_bridge", { name: (bridge && bridge.name) || rest });
+  }
   return nodeId;
 }
 

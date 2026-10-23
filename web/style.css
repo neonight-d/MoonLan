@@ -1044,3 +1044,61 @@ body.gated .toolbar > button { display: none; }
   transition: opacity 0.3s;
 }
 .toast.shown { opacity: 1; }
+
+/* ---------- the map on paper (v0.8.1) ----------
+   Only the sheet is printed: the page itself is a dark screen of
+   panels. The paper size is the @page rule printSchema writes. */
+#print-sheet { display: none; }
+@media print {
+  html, body {
+    height: auto;
+    display: block;
+    overflow: visible;
+    background: #ffffff;
+    color: #111111;
+  }
+  body > :not(#print-sheet) { display: none !important; }
+  #print-sheet { display: block; font-family: system-ui, "Segoe UI", sans-serif; }
+  .sheet-first {
+    display: flex;
+    flex-direction: column;
+    box-sizing: border-box;
+    break-after: page;
+    overflow: hidden;
+  }
+  .sheet-first:last-child { break-after: auto; }
+  .sheet-head {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 12mm;
+    padding-bottom: 2mm;
+    border-bottom: 0.3mm solid #999999;
+  }
+  .sheet-head h1 { margin: 0; font-size: 15pt; }
+  .sheet-meta { font-size: 8.5pt; color: #444444; text-align: right; }
+  .sheet-map { flex: 1; min-height: 0; padding: 2mm 0; }
+  .sheet-map svg { display: block; width: 100%; height: 100%; }
+  .sheet-legend {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 1.5mm 6mm;
+    padding-top: 2mm;
+    border-top: 0.3mm solid #999999;
+    font-size: 8pt;
+    color: #333333;
+  }
+  .sheet-legend-item { display: inline-flex; align-items: center; gap: 1.5mm; }
+  .sheet-notes h2 { margin: 0 0 3mm; font-size: 13pt; }
+  .sheet-notes table { width: 100%; border-collapse: collapse; font-size: 9pt; }
+  .sheet-notes th, .sheet-notes td {
+    padding: 1.5mm 2mm;
+    border-bottom: 0.2mm solid #bbbbbb;
+    text-align: left;
+    vertical-align: top;
+  }
+  .sheet-notes th { border-bottom: 0.4mm solid #666666; }
+  .sheet-notes tr { break-inside: avoid; }
+  .sheet-notes .sheet-note { white-space: pre-wrap; }
+}
