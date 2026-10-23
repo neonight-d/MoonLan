@@ -196,6 +196,115 @@ class WithoutANodeTest(MapTest):
         self.assertEqual(self.listed()["host:" + HOST]["state"], "present")
 
 
+# the switch without SNMP on the offline group's port: what the group
+# stands in for while every device behind it is off (v0.8.1)
+STAND_IN = "pseudo:10.0.0.2:Gi0/5"
+TRUNK = "trunk:10.0.0.1:Gi0/24"
+
+
+class OfflineGroupTest(MapTest):
+    """A room whose computers are off at night: its switch without SNMP
+    is not drawn then, its offline group is — on the same port — and
+    carries the room's name (v0.8.1)."""
+
+    def setUp(self):
+        super().setUp()
+        # named by day, while the switch without SNMP was on the map
+        server.state.pseudo_switches.append({"id": STAND_IN, "switch": "10.0.0.2", "port": "Gi0/5"})
+        self.assertEqual(self.put(STAND_IN, "Room 305", "Off at night").status, 200)
+        server.state.pseudo_switches.pop()
+
+    def scan(self):
+        asyncio.run(server._reconcile_notes())
+
+    def group(self):
+        topo = call(server.app, "GET", "/api/topology").json()
+        return topo["offline_groups"][0]
+
+    def test_the_group_carries_the_name(self):
+        group = self.group()
+        self.assertEqual(group["note"]["label"], "Room 305")
+        self.assertEqual(group["note_key"], STAND_IN)
+
+    def test_not_while_the_switch_without_snmp_is_drawn(self):
+        server.state.pseudo_switches.append({"id": STAND_IN, "switch": "10.0.0.2", "port": "Gi0/5"})
+        self.assertNotIn("note", self.group())
+        self.assertNotIn("note_key", self.group())
+
+    def test_not_without_a_node_while_the_group_is_there(self):
+        for _ in range(notes.MISSING_SCANS + 2):
+            self.scan()
+        self.assertEqual(self.listed()[STAND_IN]["state"], "present")
+        # the group goes too: then it is without a node, as before
+        server.state.offline_groups = []
+        for _ in range(notes.MISSING_SCANS):
+            self.scan()
+        self.assertEqual(self.listed()[STAND_IN]["state"], "missing")
+
+    def test_written_and_deleted_through_the_group(self):
+        self.assertEqual(self.put(OFFLINE, "Room 306", "Moved").status, 200)
+        listed = self.listed()
+        self.assertEqual(list(listed), [STAND_IN])
+        self.assertEqual((listed[STAND_IN]["label"], listed[STAND_IN]["note"]), ("Room 306", "Moved"))
+        self.assertEqual(call(server.app, "DELETE", "/api/notes/" + OFFLINE).status, 200)
+        self.assertEqual(self.listed(), {})
+        # and with the name gone the group stands for nothing again
+        self.assertNotIn("note_key", self.group())
+        self.assertEqual(self.put(OFFLINE, "Room 306").json()["error"], "offline_group")
+
+    def test_moved_off_the_group(self):
+        answer = call(server.app, "POST", f"/api/notes/{OFFLINE}/move",
+                      json_body={"to": PSEUDO})
+        self.assertEqual(answer.status, 200)
+        self.assertEqual(list(self.listed()), [PSEUDO])
+
+
+class TrunkTest(MapTest):
+    """Devices behind a trunk are a guess at a place: no name goes there
+    (v0.8.1), and one written before that is kept, without a node."""
+
+    def setUp(self):
+        super().setUp()
+        server.state.trunk_groups = [{"id": TRUNK, "switch": "10.0.0.1", "port": "Gi0/24"}]
+
+    def test_no_name_behind_a_trunk(self):
+        answer = self.put(TRUNK, "Test")
+        self.assertEqual((answer.status, answer.json()["error"]), (400, "trunk_group"))
+        self.put(PSEUDO, "Room 214")
+        moved = call(server.app, "POST", f"/api/notes/{PSEUDO}/move", json_body={"to": TRUNK})
+        self.assertEqual(moved.json()["error"], "trunk_group")
+        self.assertEqual(list(self.listed()), [PSEUDO])
+
+    def test_an_import_never_lands_there(self):
+        # an import goes by MAC, and a MAC is a device, a switch or a bridge
+        kinds = {key.split(":")[0] for key in server._mac_directory().values()}
+        self.assertLessEqual(kinds, set(notes.NOTED_KINDS))
+        self.assertTrue(notes.retired(TRUNK))
+        with self.assertRaises(notes.NoteError):
+            notes.note_key(TRUNK)
+
+    def test_an_old_name_is_without_a_node_at_once(self):
+        # written by v0.8.0, when a group behind a trunk could be named
+        server.db.set_note(TRUNK, "Test", "", "manual", "", 1.0)
+        note = self.listed()[TRUNK]
+        self.assertEqual((note["state"], note["retired"]), ("missing", True))
+        # not on the map, though the group is
+        topo = call(server.app, "GET", "/api/topology").json()
+        self.assertNotIn("note", topo["trunk_groups"][0])
+        # kept by every scan, deleted by a person
+        for _ in range(notes.MISSING_SCANS + 2):
+            asyncio.run(server._reconcile_notes())
+        self.assertIn(TRUNK, self.listed())
+        self.assertEqual(call(server.app, "DELETE", "/api/notes/" + TRUNK).status, 200)
+        self.assertEqual(self.listed(), {})
+
+    def test_an_old_name_moves_to_a_real_place(self):
+        server.db.set_note(TRUNK, "Test", "Kept", "manual", "", 1.0)
+        answer = call(server.app, "POST", f"/api/notes/{TRUNK}/move", json_body={"to": PSEUDO})
+        self.assertEqual(answer.status, 200)
+        self.assertEqual(self.listed()[PSEUDO]["note"], "Kept")
+
+
 CSV = (
     "mac;label;note\r\n"
     f"{HOST};Accounting;Desk 105\r\n"                       # a device
