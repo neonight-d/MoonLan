@@ -2330,24 +2330,46 @@ async def api_topology() -> JSONResponse:
 
 def _attach_notes(topo: dict, rows: dict[str, dict]) -> None:
     """Every node with a name or a note carries it as `note`. A device
-    off the map has the note of the same device on it."""
+    off the map has the note of the same device on it.
+
+    The nodes are copied, not written to: the lists are the ones the
+    state keeps, and a note set on one of them stayed there after the
+    note was deleted, until the next scan replaced the list.
+
+    An offline group stands in for the switch without SNMP of its port
+    (v0.8.1). When every device of a room is off for the night, the
+    room's switch without SNMP is not drawn and an offline group is;
+    the group carries the room's name, and `note_key` says where the
+    name is kept. Where that switch is drawn — some devices still
+    answer — the name is on it, and the group hangs off it anyway."""
     if not rows:
         return
-    for sw in topo["switches"]:
-        row = rows.get("sw:" + sw["ip"])
-        if row:
-            sw["note"] = notes.public(row)
+
+    def noted(node: dict, key: str) -> dict:
+        row = rows.get(key)
+        return {**node, "note": notes.public(row)} if row else node
+
+    topo["switches"] = [noted(sw, "sw:" + sw["ip"]) for sw in topo["switches"]]
     for key in ("hosts", "unlocated"):
-        for host in topo.get(key) or ():
-            row = rows.get("host:" + host["mac"])
-            if row:
-                host["note"] = notes.public(row)
+        topo[key] = [noted(h, "host:" + h["mac"]) for h in topo.get(key) or ()]
     for key in ("bridges", "pseudo_switches", "external_networks",
                 "trunk_groups"):
-        for node in topo.get(key) or ():
-            row = rows.get(node.get("id", ""))
-            if row:
-                node["note"] = notes.public(row)
+        topo[key] = [noted(n, n.get("id", "")) for n in topo.get(key) or ()]
+    drawn = {node["id"] for node in topo.get("pseudo_switches") or ()}
+    groups = []
+    for group in topo.get("offline_groups") or ():
+        key = _stand_in(group["id"])
+        row = rows.get(key)
+        if row and key not in drawn:
+            group = {**group, "note": notes.public(row), "note_key": key}
+        groups.append(group)
+    topo["offline_groups"] = groups
+
+
+def _stand_in(offline_id: str) -> str:
+    """The switch without SNMP an offline group stands in for: the same
+    switch and port"""
+    return "pseudo:" + offline_id[len("offline:"):]
 
 
 @app.get("/api/switch/{ip}/ports")
@@ -3199,10 +3221,27 @@ class NoteMove(BaseModel):
 
 def _noted_node_ids() -> set[str]:
     """The nodes a note can be written on now: everything on the map,
-    and the devices MoonLan knows that are not on it."""
+    and the devices MoonLan knows that are not on it. An offline group
+    keeps the switch without SNMP of its port present: a night with
+    every device of a room off is not a cable moved."""
+    topo = state.as_dict()
     ids = _layout_node_ids()
-    ids |= {"host:" + h["mac"] for h in state.as_dict().get("unlocated") or ()}
+    ids |= {"host:" + h["mac"] for h in topo.get("unlocated") or ()}
+    ids |= {_stand_in(g["id"]) for g in topo.get("offline_groups") or ()}
     return ids
+
+
+async def _note_key_for(node_id: str) -> str:
+    """notes.note_key — and for an offline group, the switch without
+    SNMP it stands in for, when that has a note and is not drawn. An
+    offline group on a port that never had one gets nothing: a name is
+    not put on a port where no switch without SNMP ever was."""
+    if node_id.startswith("offline:"):
+        key = _stand_in(node_id)
+        drawn = {p["id"] for p in state.as_dict().get("pseudo_switches") or ()}
+        if key not in drawn and await asyncio.to_thread(db.note, key):
+            return key
+    return notes.note_key(node_id)
 
 
 def _note_refused(exc: notes.NoteError) -> JSONResponse:
@@ -3318,7 +3357,7 @@ async def api_put_note(node_id: str, body: NoteBody):
     deletes the note. A note is written only on a node the map has:
     one without a node comes from a node that has gone, or an import."""
     try:
-        key = notes.note_key(node_id)
+        key = await _note_key_for(node_id)
         label = notes.clean_label(body.label)
         text = notes.clean_note(body.note)
     except notes.NoteError as exc:
@@ -3346,7 +3385,7 @@ async def api_put_note(node_id: str, body: NoteBody):
 @app.delete("/api/notes/{node_id:path}")
 async def api_delete_note(node_id: str):
     try:
-        key = notes.note_key(node_id)
+        key = await _note_key_for(node_id)
     except notes.NoteError as exc:
         return _note_refused(exc)
     if not await asyncio.to_thread(db.delete_note, key):
@@ -3361,8 +3400,8 @@ async def api_move_note(node_id: str, body: NoteMove):
     moved to another port. A target with a note of its own is replaced
     only when asked to."""
     try:
-        source = notes.note_key(node_id)
-        target = notes.note_key(body.to)
+        source = await _note_key_for(node_id)
+        target = await _note_key_for(body.to)
     except notes.NoteError as exc:
         return _note_refused(exc)
     if source == target:

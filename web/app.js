@@ -3232,6 +3232,7 @@ function namedNodes() {
   for (const bridge of topology.bridges || []) add(bridge, "bridge", bridge.name);
   for (const ext of topology.external_networks || []) add(ext, "external", switchName(ext.switch) + " " + ext.port);
   for (const group of topology.trunk_groups || []) add(group, "trunk", switchName(group.switch) + " " + group.port);
+  for (const group of topology.offline_groups || []) add(group, "offline", switchName(group.switch) + " " + group.port);
   return rows.sort((a, b) => a.name.localeCompare(b.name, locale()));
 }
 
@@ -3643,7 +3644,11 @@ function buildGraphData() {
   for (const group of topology.offline_groups || []) {
     nodes.push(applyLayout({
       id: group.id,
-      label: t("offlineGroup") + " · " + group.count,
+      // standing in for a named switch without SNMP: the room's name,
+      // and what it is tonight, small
+      label: named(group.id, group)
+        ? namedCaption(nameOf(group), [t("offlineGroup") + " · " + group.count], true)
+        : t("offlineGroup") + " · " + group.count,
       shape: "square",
       size: 13,
       color: {
@@ -4817,12 +4822,18 @@ let noteEditorFor = null;
 /* The key a card's note is kept under: a device off the map is the
    same device */
 function noteKeyOf(nodeId) {
-  return nodeId.startsWith("unloc:") ? "host:" + nodeId.slice("unloc:".length) : nodeId;
+  if (nodeId.startsWith("unloc:")) return "host:" + nodeId.slice("unloc:".length);
+  // an offline group standing in for a named switch without SNMP keeps
+  // the name where it is: on that switch (v0.8.1)
+  if (nodeId.startsWith("offline:")) return (noteItemOf(nodeId) || {}).note_key || nodeId;
+  return nodeId;
 }
 
 /* Why this node can get no name or note from here, or null */
 function noteReason(nodeId) {
-  if (nodeId.startsWith("offline:")) return t("reasonOfflineGroup");
+  if (nodeId.startsWith("offline:") && !(noteItemOf(nodeId) || {}).note_key) {
+    return t("reasonOfflineGroup");
+  }
   return needRole("user");
 }
 
@@ -4834,6 +4845,7 @@ function noteItemOf(nodeId) {
   const list = {
     bridge: topology.bridges, pseudo: topology.pseudo_switches,
     external: topology.external_networks, trunk: topology.trunk_groups,
+    offline: topology.offline_groups,
   }[kind];
   return (list || []).find((node) => node.id === nodeId) || null;
 }
@@ -5239,7 +5251,11 @@ function takeNote(nodeId, note) {
   for (const item of items) {
     if (!item) continue;
     if (note) item.note = note;
-    else delete item.note;
+    else {
+      delete item.note;
+      // an offline group whose room has no name now stands for nothing
+      delete item.note_key;
+    }
   }
   renderGraph();
   renderSidebar();

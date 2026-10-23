@@ -416,6 +416,9 @@ DEMO_NOTES = [
     ("pseudo:10.0.0.21:Gi0/14", "Room 118", ""),
     (f"host:{EDGE_ROUTER_CHASSIS}", "Edge router",
      "The provider's line ends here.\nAsk them before a reboot."),
+    # a room whose computers are all off: its switch without SNMP is not
+    # drawn, and the offline group of the port carries its name (v0.8.1)
+    ("pseudo:10.0.0.24:Gi0/6", "Room 305", "The computers here are off at night."),
 ]
 DEMO_GONE_NOTE = ("pseudo:10.0.0.24:Gi0/12", "Room 109",
                   "Moved to another port in the summer?")

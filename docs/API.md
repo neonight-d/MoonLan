@@ -407,6 +407,13 @@ In `/api/topology` every node with a name or a note has
 `note: {label, note, source, updated_at, updated_by}`; `source` is
 `manual` or `import`. A node without one has no `note` field.
 
+An offline group stands in for the switch without SNMP of its port
+(v0.8.1): when every device of a room is off, the switch is not drawn
+and the group is, so the group carries that switch's note, with
+`note_key: "pseudo:<switch>:<port>"` — where it is kept, and where a
+PUT through the group writes it. Not when the switch is drawn too:
+then the name is on it.
+
 ### GET /api/notes
 
 Every note, with `state`: `present`, `missing` — its node has not

@@ -605,6 +605,7 @@ const I18N = {
     kindLine_bridge: "bridge",
     kindLine_external: "external network",
     kindLine_trunk: "behind the trunk",
+    kindLine_offline: "offline group",
     unlocatedHint:
       "The device is known from ARP but was not found on any port of " +
       "the polled switches — it is most likely behind a router or an " +
@@ -1449,6 +1450,7 @@ const I18N = {
     kindLine_bridge: "мост",
     kindLine_external: "внешняя сеть",
     kindLine_trunk: "за магистралью",
+    kindLine_offline: "офлайн-группа",
     unlocatedHint:
       "Устройство известно по ARP, но не найдено на портах опрашиваемых " +
       "коммутаторов — вероятно, находится за маршрутизатором или " +

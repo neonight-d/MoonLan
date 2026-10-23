@@ -62,7 +62,9 @@ class CaptionTest(unittest.TestCase):
 
     def test_every_kind_of_named_node(self):
         build = function("buildGraphData")
-        self.assertEqual(build.count("namedCaption("), 6)
+        # switch, switch without SNMP, bridge, external network, group
+        # behind a trunk, offline group, device
+        self.assertEqual(build.count("namedCaption("), 7)
         self.assertIn('namedCaption(nameOf(ps), [t("pseudoKind")], true)', build)
         for lang in ("en", "ru"):
             self.assertIn("pseudoKind", strings(lang))
@@ -149,8 +151,10 @@ class DemoTest(unittest.TestCase):
             logging.disable(logging.NOTSET)
         pseudo_ids = {p["id"] for p in pseudo}
         named = [node_id for node_id, *_ in demo.DEMO_NOTES if node_id.startswith("pseudo:")]
-        self.assertEqual(len(named), 2)
-        self.assertLessEqual(set(named), pseudo_ids)
+        # two drawn, and one whose devices are all off: its offline group
+        # carries the name (v0.8.1)
+        self.assertEqual(len([n for n in named if n in pseudo_ids]), 2)
+        self.assertEqual([n for n in named if n not in pseudo_ids], ["pseudo:10.0.0.24:Gi0/6"])
         device = [node_id for node_id, _, note in demo.DEMO_NOTES
                   if node_id.startswith("host:") and note]
         self.assertEqual(len(device), 1)
