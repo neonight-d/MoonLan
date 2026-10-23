@@ -186,6 +186,15 @@
         <div id="gate-body"></div>
       </div>
     </div>
+    <!-- Exporting the map (v0.8.1): PDF, Draw.io, SVG -->
+    <div id="export-dialog" class="gate hidden" role="dialog" aria-modal="true"
+         aria-labelledby="export-title">
+      <div class="gate-card export-card">
+        <h2 id="export-title"></h2>
+        <button id="export-close" class="dialog-close" type="button">×</button>
+        <div id="export-body"></div>
+      </div>
+    </div>
   </main>
   <!-- The map on paper (v0.8.1): filled by printSchema, shown only in
        print; the size of the paper is the @page rule in the style -->

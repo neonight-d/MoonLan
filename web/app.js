@@ -24,6 +24,10 @@ const els = {
   journalClose: document.getElementById("journal-close"),
   notesPanel: document.getElementById("notes-panel"),
   printSheet: document.getElementById("print-sheet"),
+  exportDialog: document.getElementById("export-dialog"),
+  exportTitle: document.getElementById("export-title"),
+  exportBody: document.getElementById("export-body"),
+  exportClose: document.getElementById("export-close"),
   printPage: document.getElementById("print-page"),
   notesTitle: document.getElementById("notes-title"),
   notesBody: document.getElementById("notes-body"),
@@ -2254,6 +2258,8 @@ function moreItems() {
       disabled: needRole("user") || (scanning ? t("reasonScanning") : null),
       run: rescan,
     },
+    // reads only: for every role
+    { key: "exportMap", group: "network", label: t("menuExportMap"), run: openExportDialog },
     {
       key: "users", group: "network", label: t("usersBtn"),
       disabled: accountsReason(),
@@ -5400,6 +5406,166 @@ function nodeWhere(nodeId) {
   const host = findHost(nodeId);
   return host && host.switch ? words + " · " + switchName(host.switch) + " " + (host.port || "") : words;
 }
+
+/* ---------- the export window (v0.8.1) ----------
+
+   What to export and how, remembered in this browser. Exporting reads
+   and changes nothing: there is no journal entry, and every role may. */
+const EXPORT_KEY = "moonlan-export";
+const EXPORT_DEFAULTS = {
+  format: "pdf", contents: "infrastructure", ports: true, notes: true,
+  title: "", paper: "A3", orientation: "landscape",
+};
+
+const EXPORT_FORMATS = {
+  pdf: { name: "PDF" },
+  drawio: { name: "Draw.io", ext: "drawio", type: "application/vnd.jgraph.mxfile" },
+  svg: { name: "SVG", ext: "svg", type: "image/svg+xml" },
+};
+
+function exportChoices() {
+  let saved = {};
+  try {
+    saved = JSON.parse(localStorage.getItem(EXPORT_KEY)) || {};
+  } catch (e) { /* what was kept is unreadable: the defaults, then */ }
+  return { ...EXPORT_DEFAULTS, ...saved };
+}
+
+// today, for a file name: moonlan-2026-10-23.drawio
+function exportDate() {
+  const now = new Date();
+  return [now.getFullYear(), now.getMonth() + 1, now.getDate()]
+    .map((part) => String(part).padStart(2, "0")).join("-");
+}
+
+function downloadText(text, name, type) {
+  const url = URL.createObjectURL(new Blob([text], { type }));
+  const link = h("a", { href: url, download: name, class: "hidden" });
+  document.body.append(link);
+  link.click();
+  link.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 10000);
+}
+
+function openExportDialog() {
+  const choices = exportChoices();
+  const radios = (name, values, words) => h("fieldset", { class: "export-choice" },
+    h("legend", { text: t(words) }),
+    ...values.map((value) => h("label", {},
+      h("input", { type: "radio", name: "export-" + name, value, checked: choices[name] === value }),
+      " " + (name === "format" ? EXPORT_FORMATS[value].name : t(words + "_" + value)))));
+  const check = (name, words) => h("label", { class: "export-check" },
+    h("input", { type: "checkbox", name: "export-" + name, checked: choices[name] }), " " + t(words));
+  const select = (name, values, words, text) => h("label", {}, t(words),
+    h("select", { name: "export-" + name },
+      ...values.map((value) => h("option", { value, selected: choices[name] === value, text: text(value) }))));
+  const title = h("input", {
+    type: "text", name: "export-title", maxlength: 120,
+    value: choices.title || t("sheetTitleDefault"),
+  });
+  const pdfOnly = h("div", { class: "export-pdf" },
+    check("notes", "exportNotes"),
+    h("label", {}, t("exportTitleField"), title),
+    h("div", { class: "export-paper" },
+      select("paper", Object.keys(PAPER), "exportPaper", (value) => value),
+      select("orientation", ["landscape", "portrait"], "exportOrientation",
+             (value) => t("exportOrientation_" + value))),
+    h("p", { class: "hint-line", text: t("exportPdfHint") }));
+  const go = h("button", { type: "submit" });
+  const form = h("form", { class: "form export-form" },
+    radios("format", Object.keys(EXPORT_FORMATS), "exportFormat"),
+    radios("contents", ["infrastructure", "all"], "exportContents"),
+    check("ports", "exportPorts"),
+    pdfOnly,
+    // the physics may still be moving things: say it, and export anyway
+    layoutSettling() ? h("p", { class: "export-settling", text: t("exportSettling") }) : null,
+    h("div", { class: "buttons" }, go,
+      h("button", { type: "button", text: t("noteCancel"), onclick: closeExportDialog })));
+  const value = (name) => form.elements["export-" + name];
+  const shown = () => {
+    const format = value("format").value;
+    pdfOnly.classList.toggle("hidden", format !== "pdf");
+    go.textContent = t(format === "pdf" ? "exportPrint" : "exportDownload");
+  };
+  form.addEventListener("change", shown);
+  form.addEventListener("submit", (event) => {
+    event.preventDefault();
+    const typed = title.value.trim();
+    const picked = {
+      format: value("format").value, contents: value("contents").value,
+      ports: value("ports").checked, notes: value("notes").checked,
+      // the default title is the default in either language, so it is not kept
+      title: typed === t("sheetTitleDefault") ? "" : typed,
+      paper: value("paper").value, orientation: value("orientation").value,
+    };
+    localStorage.setItem(EXPORT_KEY, JSON.stringify(picked));
+    closeExportDialog();
+    runExport(picked);
+  });
+  shown();
+  els.exportTitle.textContent = t("exportMapTitle");
+  els.exportBody.replaceChildren(form);
+  els.exportDialog.classList.remove("hidden");
+  form.querySelector('input[name="export-format"]:checked').focus();
+}
+
+function closeExportDialog() {
+  if (els.exportDialog.classList.contains("hidden")) return;
+  els.exportDialog.classList.add("hidden");
+  els.exportBody.replaceChildren();
+  els.moreBtn.focus();
+}
+
+function runExport(picked) {
+  const title = picked.title || t("sheetTitleDefault");
+  if (picked.format === "pdf") {
+    printSchema({
+      contents: picked.contents, ports: picked.ports, notesTable: picked.notes,
+      title, paper: picked.paper, orientation: picked.orientation,
+    });
+    return;
+  }
+  const model = exportModel({ contents: picked.contents, ports: picked.ports });
+  const format = EXPORT_FORMATS[picked.format];
+  const text = picked.format === "drawio"
+    ? drawioXml(model, title)
+    : schemaSvg(model, {
+      measure: exportMeasure(),
+      legend: { title: t("legendTitle"), items: exportLegend(model) },
+    });
+  downloadText(text, `moonlan-${exportDate()}.${format.ext}`, format.type);
+}
+
+/* The window is a dialog: Esc closes it, Tab goes round inside it, and
+   no key in it reaches the map (P would pin the selection) */
+els.exportDialog.addEventListener("keydown", (event) => {
+  event.stopPropagation();
+  if (event.key === "Escape") {
+    event.preventDefault();
+    closeExportDialog();
+    return;
+  }
+  if (event.key !== "Tab") return;
+  const stops = [...els.exportDialog.querySelectorAll("input, select, button")]
+    .filter((el) => !el.disabled && el.offsetParent !== null &&
+      // of a group of radios, only the checked one takes the focus
+      !(el.type === "radio" && !el.checked));
+  if (!stops.length) return;
+  const first = stops[0];
+  const last = stops[stops.length - 1];
+  if (event.shiftKey && document.activeElement === first) {
+    event.preventDefault();
+    last.focus();
+  } else if (!event.shiftKey && document.activeElement === last) {
+    event.preventDefault();
+    first.focus();
+  }
+});
+// a click beside the window closes it
+els.exportDialog.addEventListener("click", (event) => {
+  if (event.target === els.exportDialog) closeExportDialog();
+});
+els.exportClose.addEventListener("click", closeExportDialog);
 
 /* ---------- a node's name and note (v0.8.0) ----------
 
