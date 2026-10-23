@@ -3231,7 +3231,6 @@ function namedNodes() {
   for (const ps of topology.pseudo_switches || []) add(ps, "pseudo", switchName(ps.switch) + " " + ps.port);
   for (const bridge of topology.bridges || []) add(bridge, "bridge", bridge.name);
   for (const ext of topology.external_networks || []) add(ext, "external", switchName(ext.switch) + " " + ext.port);
-  for (const group of topology.trunk_groups || []) add(group, "trunk", switchName(group.switch) + " " + group.port);
   for (const group of topology.offline_groups || []) add(group, "offline", switchName(group.switch) + " " + group.port);
   return rows.sort((a, b) => a.name.localeCompare(b.name, locale()));
 }
@@ -3325,6 +3324,12 @@ function plainNodeFont(id) {
   const selected = id === selectedNodeId;
   if (id.startsWith("sw:")) {
     return { color: colors.text, face: "system-ui" };
+  }
+  // its own size here, not in the node: a font set on the node itself
+  // missed the markup of a name (v0.8.1), and a selection changes the
+  // brightness, not the size
+  if (id.startsWith("bridge:")) {
+    return { color: selected ? colors.text : colors.dim, size: 12 };
   }
   if (id.startsWith("host:")) {
     return {
@@ -3567,7 +3572,7 @@ function buildGraphData() {
       shapeProperties: { borderDashes: [5, 3] },
       borderWidth: 2,
       margin: 8,
-      font: { color: colors.dim, size: 12 },
+      font: nodeFont(bridge.id),
     }));
     edges.push(fromPort({
       id: "bredge:" + bridge.id,
@@ -3616,9 +3621,8 @@ function buildGraphData() {
   for (const group of topology.trunk_groups || []) {
     nodes.push(applyLayout({
       id: group.id,
-      label: named(group.id, group)
-        ? namedCaption(nameOf(group), [t("trunkGroup") + " · " + group.count])
-        : t("trunkGroup") + " · " + group.count,
+      // no name: a group behind a trunk is a guess, not a place (v0.8.1)
+      label: t("trunkGroup") + " · " + group.count,
       shape: "ellipse",
       color: {
         background: "#232c3d",
@@ -3628,7 +3632,7 @@ function buildGraphData() {
       shapeProperties: { borderDashes: [4, 3] },
       borderWidth: 2,
       margin: 6,
-      font: { color: colors.dim, size: 11 },
+      font: nodeFont(group.id),
     }));
     edges.push(fromPort({
       id: "trunkedge:" + group.id,
@@ -4831,6 +4835,7 @@ function noteKeyOf(nodeId) {
 
 /* Why this node can get no name or note from here, or null */
 function noteReason(nodeId) {
+  if (nodeId.startsWith("trunk:")) return t("reasonTrunkGroup");
   if (nodeId.startsWith("offline:") && !(noteItemOf(nodeId) || {}).note_key) {
     return t("reasonOfflineGroup");
   }
@@ -5085,7 +5090,9 @@ function orphanRow(note) {
     note.label ? h("div", { class: "orphan-label", text: note.label }) : null,
     note.note ? h("div", { class: "orphan-note", text: note.note }) : null,
     h("div", { class: "orphan-where", text: nodeWords(note.node_id) }),
-    h("div", { class: "orphan-since", text: note.state === "missing"
+    h("div", { class: "orphan-since", text: note.retired
+      ? t("orphanRetired")
+      : note.state === "missing"
       ? fmt("orphanSince", { time: fmtTime(note.missing_since) })
       : fmt("orphanImported", { date: fmtDate(note.updated_at) }) }),
     remove);

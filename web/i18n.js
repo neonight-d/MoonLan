@@ -166,6 +166,9 @@ const I18N = {
     noteErrOther: "Not saved: {code}",
     noteErrNetwork: "Not saved: no answer from the server.",
     reasonOfflineGroup: "an offline group is whatever is missing from the tables right now",
+    reasonTrunkGroup: "a group behind a trunk has no place: a name would describe a guess",
+    noteErr_trunk_group: "A group behind a trunk takes no name: it has no place.",
+    orphanRetired: "groups behind a trunk are not named any more",
     unpinBtn: "Unpin this node",
     unpinConfirm: "Unpin \u201c{node}\u201d and give it back to the layout engine?",
     resetLayoutConfirm:
@@ -1013,6 +1016,9 @@ const I18N = {
     noteErrOther: "Не сохранено: {code}",
     noteErrNetwork: "Не сохранено: сервер не ответил.",
     reasonOfflineGroup: "офлайн-группа — это то, чего сейчас нет в таблицах",
+    reasonTrunkGroup: "у группы за магистралью нет места — подпись описывала бы догадку",
+    noteErr_trunk_group: "Группу за магистралью не подписывают: у неё нет места.",
+    orphanRetired: "группы за магистралью больше не подписываются",
     unpinBtn: "Открепить узел",
     unpinConfirm: "Открепить «{node}» и вернуть его под раскладку?",
     resetLayoutConfirm:

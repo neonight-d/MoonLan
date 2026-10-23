@@ -2352,8 +2352,8 @@ def _attach_notes(topo: dict, rows: dict[str, dict]) -> None:
     topo["switches"] = [noted(sw, "sw:" + sw["ip"]) for sw in topo["switches"]]
     for key in ("hosts", "unlocated"):
         topo[key] = [noted(h, "host:" + h["mac"]) for h in topo.get(key) or ()]
-    for key in ("bridges", "pseudo_switches", "external_networks",
-                "trunk_groups"):
+    # not groups behind a trunk: they take no names (v0.8.1)
+    for key in ("bridges", "pseudo_switches", "external_networks"):
         topo[key] = [noted(n, n.get("id", "")) for n in topo.get(key) or ()]
     drawn = {node["id"] for node in topo.get("pseudo_switches") or ()}
     groups = []
@@ -3225,7 +3225,7 @@ def _noted_node_ids() -> set[str]:
     keeps the switch without SNMP of its port present: a night with
     every device of a room off is not a cable moved."""
     topo = state.as_dict()
-    ids = _layout_node_ids()
+    ids = {i for i in _layout_node_ids() if not notes.retired(i)}
     ids |= {"host:" + h["mac"] for h in topo.get("unlocated") or ()}
     ids |= {_stand_in(g["id"]) for g in topo.get("offline_groups") or ()}
     return ids
@@ -3242,6 +3242,18 @@ async def _note_key_for(node_id: str) -> str:
         if key not in drawn and await asyncio.to_thread(db.note, key):
             return key
     return notes.note_key(node_id)
+
+
+async def _existing_note_key(node_id: str) -> str:
+    """The key of a note that is there to be deleted or moved away —
+    including one on a kind of node that takes no notes any more"""
+    try:
+        return await _note_key_for(node_id)
+    except notes.NoteError:
+        key = notes.stored_key(node_id)
+        if await asyncio.to_thread(db.note, key):
+            return key
+        raise
 
 
 def _note_refused(exc: notes.NoteError) -> JSONResponse:
@@ -3272,6 +3284,8 @@ async def api_notes() -> dict:
                 "node_id": node_id, **notes.public(row),
                 "state": notes.state(row),
                 "missing_since": row["missing_since"],
+                # on a group behind a trunk: kept, but no longer a name
+                "retired": notes.retired(node_id),
             }
             for node_id, row in sorted(rows.items())
         ],
@@ -3385,7 +3399,7 @@ async def api_put_note(node_id: str, body: NoteBody):
 @app.delete("/api/notes/{node_id:path}")
 async def api_delete_note(node_id: str):
     try:
-        key = await _note_key_for(node_id)
+        key = await _existing_note_key(node_id)
     except notes.NoteError as exc:
         return _note_refused(exc)
     if not await asyncio.to_thread(db.delete_note, key):
@@ -3400,7 +3414,7 @@ async def api_move_note(node_id: str, body: NoteMove):
     moved to another port. A target with a note of its own is replaced
     only when asked to."""
     try:
-        source = await _note_key_for(node_id)
+        source = await _existing_note_key(node_id)
         target = await _note_key_for(body.to)
     except notes.NoteError as exc:
         return _note_refused(exc)

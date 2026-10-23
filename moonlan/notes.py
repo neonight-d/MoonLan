@@ -35,8 +35,13 @@ NOTE_MAX = 2000
 # cable moved (with the default ten-minute scans, half an hour)
 MISSING_SCANS = 3
 
-# the kinds of node a note may be on, by the prefix of the id
-NOTED_KINDS = ("sw", "host", "bridge", "pseudo", "external", "trunk")
+# the kinds of node a note may be on, by the prefix of the id. Not a
+# group behind a trunk (since v0.8.1): it says "these addresses come
+# through this cable, nobody knows where they are", and a name on it
+# would describe a guess, not a place
+NOTED_KINDS = ("sw", "host", "bridge", "pseudo", "external")
+# kinds that had notes once; theirs are kept, but count as without a node
+RETIRED_KINDS = ("trunk",)
 
 
 class NoteError(ValueError):
@@ -55,6 +60,12 @@ def note_key(node_id: str) -> str:
         raise NoteError("not_a_node", f"not a node id: {node_id!r}")
     if kind == "unloc":
         return "host:" + rest
+    if kind == "trunk":
+        raise NoteError(
+            "trunk_group",
+            "a group behind a trunk has no place: a name on it would "
+            "describe a guess",
+        )
     if kind == "offline":
         raise NoteError(
             "offline_group",
@@ -104,10 +115,25 @@ def public(row: dict) -> dict:
     }
 
 
+def stored_key(node_id: str) -> str:
+    """The id a note already stored may be under — of a kind that no
+    longer takes notes too, so that it can still be deleted or moved"""
+    kind, _, rest = node_id.partition(":")
+    return "host:" + rest if kind == "unloc" else node_id
+
+
+def retired(node_id: str) -> bool:
+    """A note on a kind of node that no longer takes notes"""
+    return node_id.partition(":")[0] in RETIRED_KINDS
+
+
 def state(row: dict) -> str:
     """"present" — its node is on the map, or has been gone for less
-    than MISSING_SCANS scans; "missing" — gone longer; "not_found" — an
-    import whose device has never been on the map."""
+    than MISSING_SCANS scans; "missing" — gone longer, or on a kind of
+    node that takes no notes any more; "not_found" — an import whose
+    device has never been on the map."""
+    if retired(row.get("node_id", "")):
+        return "missing"
     if row.get("seen_at") is None:
         return "not_found"
     if (row.get("missing_scans") or 0) >= MISSING_SCANS:

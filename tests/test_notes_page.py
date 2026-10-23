@@ -62,9 +62,9 @@ class CaptionTest(unittest.TestCase):
 
     def test_every_kind_of_named_node(self):
         build = function("buildGraphData")
-        # switch, switch without SNMP, bridge, external network, group
-        # behind a trunk, offline group, device
-        self.assertEqual(build.count("namedCaption("), 7)
+        # switch, switch without SNMP, bridge, external network, offline
+        # group, device — not a group behind a trunk (v0.8.1)
+        self.assertEqual(build.count("namedCaption("), 6)
         self.assertIn('namedCaption(nameOf(ps), [t("pseudoKind")], true)', build)
         for lang in ("en", "ru"):
             self.assertIn("pseudoKind", strings(lang))
@@ -92,7 +92,7 @@ class SearchTest(unittest.TestCase):
         self.assertIn('id="named-section" class="hidden"', INDEX)
         self.assertLess(INDEX.index('id="named-list"'), INDEX.index('id="switch-list"'))
         named = function("namedNodes")
-        for kind in ("pseudo", "bridge", "external", "trunk"):
+        for kind in ("pseudo", "bridge", "external", "offline"):
             self.assertIn(f'"{kind}"', named)
             self.assertIn("kindLine_" + kind, strings("ru"))
         self.assertEqual(strings("ru")["namedHeader"], "Подписанные")

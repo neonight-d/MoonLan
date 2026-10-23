@@ -422,6 +422,9 @@ DEMO_NOTES = [
 ]
 DEMO_GONE_NOTE = ("pseudo:10.0.0.24:Gi0/12", "Room 109",
                   "Moved to another port in the summer?")
+# a name given before v0.8.1 to a group behind a trunk, which takes none
+# now: kept, and listed under "Notes without a node" with why
+DEMO_RETIRED_NOTE = ("trunk:10.0.0.10:bridge-port 3", "Test", "")
 
 
 def seed_notes(db) -> None:
@@ -432,6 +435,8 @@ def seed_notes(db) -> None:
     node_id, label, note = DEMO_GONE_NOTE
     db.set_note(node_id, label, note, "manual", "", now - 7 * 86400)
     db.mark_note_missing(node_id, now - 2 * 3600)
+    node_id, label, note = DEMO_RETIRED_NOTE
+    db.set_note(node_id, label, note, "manual", "", now - 3 * 86400)
 
 
 def demo_network() -> list[SwitchData]:
