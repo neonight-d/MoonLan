@@ -4956,6 +4956,135 @@ function exportModel({ contents, ports }) {
   return { nodes, edges };
 }
 
+/* Text into XML or HTML: the five characters that could end an attribute
+   or open a tag. A line break stays a line break inside an attribute
+   only as a character reference — XML turns a bare one into a space. */
+function xmlEscape(text) {
+  return String(text == null ? "" : text)
+    .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;").replace(/'/g, "&#39;")
+    .replace(/\r?\n/g, "&#10;").replace(/\t/g, "&#9;");
+}
+
+/* The map as a Draw.io file (diagrams.net, draw.io desktop): an
+   uncompressed mxfile. Pure — the model in, the text out.
+
+   A node is an <object> — label, moonlan_id, ip, mac, note, tooltip,
+   which draw.io shows under "Edit Data" and searches — holding an
+   mxCell styled by its kind. Its label is HTML (html=1): the name in
+   bold, the node's own lines small under it. Text written by people and
+   devices goes through two levels of escaping: as HTML into the label,
+   then the label as XML into the attribute — "<b>x</b> & \"y\"" is
+   read back as exactly that.
+
+   A line has no arrows; its style says what it means; its speed is its
+   value; its bend is one point the curve goes through; the port numbers
+   are labels of the line itself (relative, ±0.8), so they go with it
+   when somebody moves the nodes in draw.io. */
+function drawioXml(model, title) {
+  const NODE = {
+    switch: "rounded=1;arcSize=12;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#333333;strokeWidth=2;fontColor=#111111;fontSize=12;",
+    pseudo: "rounded=0;whiteSpace=wrap;html=1;dashed=1;fillColor=#eeeeee;strokeColor=#666666;fontColor=#222222;fontSize=11;",
+    bridge: "rounded=0;whiteSpace=wrap;html=1;dashed=1;fillColor=#eef4fb;strokeColor=#4a7fb0;fontColor=#222222;fontSize=11;",
+    external: "shape=hexagon;perimeter=hexagonPerimeter2;size=0.25;whiteSpace=wrap;html=1;fillColor=#fbf3e6;strokeColor=#b07a2a;fontColor=#222222;fontSize=11;",
+    trunk: "ellipse;whiteSpace=wrap;html=1;dashed=1;fillColor=#eef4fb;strokeColor=#4a7fb0;fontColor=#222222;fontSize=10;",
+    offline: "rounded=0;whiteSpace=wrap;html=1;dashed=1;fillColor=#dddddd;strokeColor=#999999;fontColor=#555555;fontSize=10;",
+    host: "ellipse;aspect=fixed;html=1;fillColor=#7fc98f;strokeColor=#4f8f5d;fontColor=#333333;fontSize=9;",
+    router: "rhombus;html=1;fillColor=#7fc98f;strokeColor=#333333;fontColor=#333333;fontSize=9;",
+  };
+  const BELOW = "verticalLabelPosition=bottom;verticalAlign=top;labelPosition=center;align=center;";
+  const edgeStyle = (semantic) => {
+    const has = (tag) => semantic.includes(tag);
+    let style = "endArrow=none;startArrow=none;html=1;curved=1;rounded=0;fontSize=10;fontColor=#333333;labelBackgroundColor=#ffffff;";
+    let color = "#555555";
+    let width = 2;
+    if (has("device")) { color = "#8fb3cf"; width = 1; }
+    if (has("pseudo") || has("offline")) color = "#888888";
+    if (has("bridge") || has("trunk-group")) color = "#4a7fb0";
+    if (has("external")) color = "#b07a2a";
+    if (has("lldp")) color = "#333333";
+    if (has("lacp")) width = 4;
+    else if (has("trunk")) width = 3;
+    if (has("stale")) color = "#c8c8c8";
+    if (has("blocking") || has("loop")) color = "#d23f3f";
+    if (has("loop")) width = Math.max(width, 3);
+    style += `strokeColor=${color};strokeWidth=${width};`;
+    if (has("guess") || has("ring")) style += "dashed=1;dashPattern=4 6;";
+    else if (has("blocking")) style += "dashed=1;dashPattern=6 4;";
+    else if (has("approximate")) style += "dashed=1;dashPattern=2 4;";
+    else if (has("stale") || has("pseudo") || has("offline") || has("bridge") || has("trunk-group")) {
+      style += "dashed=1;dashPattern=3 3;";
+    }
+    return style;
+  };
+  const html = (text) => xmlEscape(text).replace(/&#10;/g, "<br>");
+  const label = (node) => {
+    const lines = node.lines.map(html);
+    if (node.name) {
+      return `<b>${html(node.name)}</b>` +
+        (lines.length ? `<br><span style="font-size:9px">${lines.join("<br>")}</span>` : "");
+    }
+    return (lines[0] || "") + (lines.length > 1
+      ? `<br><span style="font-size:9px">${lines.slice(1).join("<br>")}</span>` : "");
+  };
+  const xs = model.nodes.flatMap((n) => [n.x - n.w / 2, n.x + n.w / 2]);
+  const ys = model.nodes.flatMap((n) => [n.y - n.h / 2, n.y + n.h / 2 + (n.captionInside ? 0 : 40)]);
+  const left = Math.min(0, ...xs) - 40;
+  const top = Math.min(0, ...ys) - 40;
+  const width = Math.max(800, Math.max(...xs, 0) - left + 40);
+  const height = Math.max(600, Math.max(...ys, 0) - top + 40);
+  const at = (v, origin) => Math.round((v - origin) * 10) / 10;
+  const ids = new Map(model.nodes.map((node, i) => [node.id, "n" + i]));
+  const cells = [];
+  for (const node of model.nodes) {
+    // a caption under a small shape is not wrapped to the shape's width
+    const style = (NODE[node.kind] || NODE.bridge).replace(node.captionInside ? "" : "whiteSpace=wrap;", "") +
+      (node.captionInside ? "" : BELOW) +
+      (node.flags.includes("root") ? "strokeColor=#3a9a50;strokeWidth=3;" : "") +
+      (node.flags.includes("loop") ? "strokeColor=#d23f3f;strokeWidth=3;" : "") +
+      (node.flags.includes("stale") ? "fillColor=#cccccc;strokeColor=#aaaaaa;" : "");
+    cells.push(
+      `<object id="${ids.get(node.id)}" label="${xmlEscape(label(node))}" ` +
+      `moonlan_id="${xmlEscape(node.id)}" ip="${xmlEscape(node.ip)}" ` +
+      `mac="${xmlEscape(node.mac)}" note="${xmlEscape(node.note)}" ` +
+      `tooltip="${xmlEscape(node.note)}">` +
+      `<mxCell style="${xmlEscape(style)}" vertex="1" parent="1">` +
+      `<mxGeometry x="${at(node.x - node.w / 2, left)}" y="${at(node.y - node.h / 2, top)}" ` +
+      `width="${Math.round(node.w)}" height="${Math.round(node.h)}" as="geometry"/>` +
+      `</mxCell></object>`);
+  }
+  model.edges.forEach((edge, i) => {
+    const id = "e" + i;
+    cells.push(
+      `<mxCell id="${id}" value="${xmlEscape(html(edge.label))}" ` +
+      `style="${xmlEscape(edgeStyle(edge.semantic))}" edge="1" parent="1" ` +
+      `source="${ids.get(edge.from)}" target="${ids.get(edge.to)}">` +
+      `<mxGeometry relative="1" as="geometry"><Array as="points">` +
+      `<mxPoint x="${at(edge.mid.x, left)}" y="${at(edge.mid.y, top)}"/>` +
+      `</Array></mxGeometry></mxCell>`);
+    for (const [end, text] of Object.entries(edge.ports)) {
+      const x = end === edge.from ? -0.8 : 0.8;
+      cells.push(
+        `<mxCell id="${id}${x < 0 ? "a" : "b"}" value="${xmlEscape(html(text))}" ` +
+        `style="edgeLabel;html=1;align=center;verticalAlign=middle;resizable=0;points=[];` +
+        `fontSize=10;fontColor=#1d3b24;labelBackgroundColor=#cdeed4;" ` +
+        `vertex="1" connectable="0" parent="${id}">` +
+        `<mxGeometry x="${x}" relative="1" as="geometry"><mxPoint as="offset"/></mxGeometry>` +
+        `</mxCell>`);
+    }
+  });
+  return '<?xml version="1.0" encoding="UTF-8"?>\n' +
+    `<mxfile host="MoonLan" agent="MoonLan" type="device">` +
+    `<diagram id="moonlan" name="${xmlEscape(title)}">` +
+    `<mxGraphModel dx="0" dy="0" grid="0" gridSize="10" guides="1" tooltips="1" ` +
+    `connect="1" arrows="1" fold="1" page="1" pageScale="1" ` +
+    `pageWidth="${Math.round(width)}" pageHeight="${Math.round(height)}" ` +
+    `math="0" shadow="0" background="#ffffff"><root>` +
+    `<mxCell id="0"/><mxCell id="1" parent="0"/>` +
+    cells.join("") +
+    `</root></mxGraphModel></diagram></mxfile>\n`;
+}
+
 /* ---------- a node's name and note (v0.8.0) ----------
 
    In the card under the title: the name, the note, who changed them
