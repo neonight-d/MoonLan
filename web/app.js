@@ -3411,6 +3411,7 @@ function buildGraphData() {
     edge.dashes = false;
     edge.label = (edge.label ? edge.label + " · " : "") + t("loopMark");
     edge.font = { color: colors.alarm, size: 11, strokeWidth: 0 };
+    if (edge.semantic && !edge.semantic.includes("loop")) edge.semantic.push("loop");
     return edge;
   };
 
@@ -3454,6 +3455,8 @@ function buildGraphData() {
     const swName = named("sw:" + sw.ip, sw);
     nodes.push(applyLayout({
       id: "sw:" + sw.ip,
+      // what it is, for a picture with other colours than these (export)
+      semantic: ["switch", ...(sw.stp_root ? ["root"] : []), ...(looping ? ["loop"] : [])],
       label: swName ? namedCaption(swName, swLines) : swLines.join("\n"),
       shape: "box",
       color: {
@@ -3485,6 +3488,15 @@ function buildGraphData() {
       width: isLacp ? 5 : isTrunk ? 4 : 3,
       font: { color: colors.dim, size: 11, strokeWidth: 0 },
       dashes: false,
+      // what the line means, not its colour: the export draws it on paper
+      semantic: [
+        confirmed ? "lldp" : "fdb",
+        ...(isLacp ? ["lacp"] : []), ...(isTrunk ? ["trunk"] : []),
+        ...(link.order_unknown ? ["guess"] : []),
+        ...(link.cycle_unresolved ? ["ring"] : []),
+        ...(link.stp_blocking ? ["blocking"] : []),
+        ...(link.parallel ? ["parallel"] : []),
+      ],
     };
     // The MAC tables could not say which of several switches behind
     // one port is on the cable, so they are all hung off it. A guess
@@ -3520,6 +3532,7 @@ function buildGraphData() {
   for (const ps of topology.pseudo_switches || []) {
     nodes.push(applyLayout({
       id: ps.id,
+      semantic: ["pseudo"],
       // named: the name, and what kind of node it is, small
       label: named(ps.id, ps)
         ? namedCaption(nameOf(ps), [t("pseudoKind")], true)
@@ -3537,6 +3550,7 @@ function buildGraphData() {
     }));
     edges.push(fromPort({
       id: "psedge:" + ps.id,
+      semantic: ["pseudo"],
       from: "sw:" + ps.switch,
       to: ps.id,
       dashes: [4, 4],
@@ -3560,6 +3574,7 @@ function buildGraphData() {
     const bridgeAddress = bridge.router_ip || bridge.ip || bridge.mgmt_ip;
     nodes.push(applyLayout({
       id: bridge.id,
+      semantic: ["bridge"],
       label: named(bridge.id, bridge)
         ? namedCaption(nameOf(bridge), [bridge.name, bridgeAddress])
         : bridge.name + (bridgeAddress ? "\n" + bridgeAddress : ""),
@@ -3576,6 +3591,7 @@ function buildGraphData() {
     }));
     edges.push(fromPort({
       id: "bredge:" + bridge.id,
+      semantic: ["bridge"],
       from: "sw:" + bridge.switch,
       to: bridge.id,
       dashes: [5, 3],
@@ -3589,6 +3605,7 @@ function buildGraphData() {
   for (const external of topology.external_networks || []) {
     nodes.push(applyLayout({
       id: external.id,
+      semantic: ["external"],
       label: named(external.id, external)
         ? namedCaption(nameOf(external), [t("externalNetwork") + " · " + external.count])
         : t("externalNetwork") + " · " + external.count,
@@ -3604,6 +3621,7 @@ function buildGraphData() {
     }));
     edges.push(fromPort({
       id: "extedge:" + external.id,
+      semantic: ["external"],
       // the provider's switch is on the cable and everything else is
       // behind IT: mb0 -> CE6851 -> external network
       from: external.via || "sw:" + external.switch,
@@ -3621,6 +3639,7 @@ function buildGraphData() {
   for (const group of topology.trunk_groups || []) {
     nodes.push(applyLayout({
       id: group.id,
+      semantic: ["trunk"],
       // no name: a group behind a trunk is a guess, not a place (v0.8.1)
       label: t("trunkGroup") + " · " + group.count,
       shape: "ellipse",
@@ -3636,6 +3655,7 @@ function buildGraphData() {
     }));
     edges.push(fromPort({
       id: "trunkedge:" + group.id,
+      semantic: ["trunk-group"],
       // off whatever stands on that cable, if anything does
       from: group.via || "sw:" + group.switch,
       to: group.id,
@@ -3648,6 +3668,7 @@ function buildGraphData() {
   for (const group of topology.offline_groups || []) {
     nodes.push(applyLayout({
       id: group.id,
+      semantic: ["offline"],
       // standing in for a named switch without SNMP: the room's name,
       // and what it is tonight, small
       label: named(group.id, group)
@@ -3666,6 +3687,7 @@ function buildGraphData() {
     }));
     edges.push(fromPort({
       id: "offedge:" + group.id,
+      semantic: ["offline"],
       // the live devices of this port hang off the bridge or the
       // unmanaged switch on its cable; the quiet ones belong there too
       from: group.via || "sw:" + group.switch,
@@ -3692,6 +3714,8 @@ function buildGraphData() {
       host.router_ip && host.router_ip !== caption ? "\n" + host.router_ip : "";
     nodes.push(applyLayout({
       id: "host:" + host.mac,
+      semantic: [isRouter ? "router" : "host", ...(host.stale ? ["stale"] : []),
+                 ...(host.approximate ? ["approximate"] : [])],
       label: named("host:" + host.mac, host)
         ? namedCaption(nameOf(host), [caption, second.trim()])
         : caption + second,
@@ -3708,6 +3732,8 @@ function buildGraphData() {
     }));
     edges.push(fromPort({
       id: "hostedge:" + host.mac,
+      semantic: ["device", ...(host.stale ? ["stale"] : []),
+                 ...(host.approximate ? ["approximate"] : [])],
       from: host.via || "sw:" + host.switch,
       to: "host:" + host.mac,
       color: { color: colors.link, opacity: host.stale ? 0.15 : 0.35 },
@@ -4812,6 +4838,122 @@ function hintBlock(shortText, longText) {
 /* hintBlock() for a key whose short line is `<key>Short` */
 function hintKey(key, params = {}) {
   return hintBlock(fmt(key + "Short", params), fmt(key, params));
+}
+
+/* ---------- the map, exported (v0.8.1) ----------
+
+   The export takes what is on the screen: the same nodes, lines and
+   layout. The layout lives in this browser only — the physics lays out
+   whatever nobody pinned on every viewer's screen — so the picture is
+   made here, not on the server. exportModel() is that picture as plain
+   data; the Draw.io, SVG and print builders below draw it on paper with
+   a light palette, by what each node and line means (`semantic`), not
+   by its colour on the dark map. */
+
+/* `n` with the word that goes with it: "1 device", "23 devices",
+   "23 устройства", "25 устройств" */
+function plural(key, n) {
+  const form = new Intl.PluralRules(locale()).select(n);
+  const text = t(key + "_" + form);
+  return (text === key + "_" + form ? t(key + "_other") : text).replace("{n}", n);
+}
+
+/* How many devices a switch or a switch without SNMP has behind it —
+   the line under it when the devices are not drawn */
+function deviceCount(nodeId) {
+  if (nodeId.startsWith("sw:")) {
+    const ip = nodeId.slice(3);
+    return topology.hosts.filter((h) => h.switch === ip && !h.merged_into).length;
+  }
+  if (nodeId.startsWith("pseudo:")) return topology.hosts.filter((h) => h.via === nodeId).length;
+  return null;
+}
+
+/* A node's shape and caption, measured: its own size, and its caption
+   inside it (a box, an ellipse) or under it (a dot, a square, a
+   diamond, a hexagon). Not getBoundingBox: vis places a caption only
+   when it draws the node, and it draws only what is on the screen —
+   the box of a node off the screen reaches back to wherever its caption
+   was last drawn. shape.resize and labelModule.getTextSize are
+   internal API of vis-network 9.1.9, which index.html pins. */
+function nodeGeometry(id) {
+  const node = network.body.nodes[id];
+  const ctx = network.canvas.frame.canvas.getContext("2d");
+  node.shape.resize(ctx, false, false);
+  const text = node.labelModule.getTextSize(ctx, false, false);
+  const inside = ["box", "ellipse", "circle", "database", "text"].includes(node.options.shape);
+  const w = node.shape.width;
+  const h = node.shape.height;
+  const box = inside
+    ? { left: node.x - w / 2, right: node.x + w / 2, top: node.y - h / 2, bottom: node.y + h / 2 }
+    : {
+      left: node.x - Math.max(w, text.width) / 2, right: node.x + Math.max(w, text.width) / 2,
+      top: node.y - h / 2, bottom: node.y + h / 2 + 2 + text.height,
+    };
+  return { w, h, inside, text, box };
+}
+
+/* The physics is still laying the map out: an export now is the
+   picture of this moment. Internal of vis-network 9.1.9 (pinned). */
+function layoutSettling() {
+  return !!(network && !layoutFrozen && network.physics && !network.physics.stabilized);
+}
+
+/* The map as data. `contents`: "infrastructure" — switches, switches
+   without SNMP, bridges, external networks, groups, with the number of
+   devices under a switch — or "all", as on the screen. `ports`: the
+   port numbers at the ends of the lines, as the map words them. */
+function exportModel({ contents, ports }) {
+  const all = contents === "all";
+  const positions = network.getPositions();
+  const nodes = [];
+  const kept = new Set();
+  for (const node of nodesDs.get()) {
+    if (!all && node.id.startsWith("host:")) continue;
+    const pos = positions[node.id];
+    if (!pos) continue;
+    const shape = nodeGeometry(node.id);
+    const item = noteItemOf(node.id) || {};
+    const name = nodeNames.get(node.id) || "";
+    let lines = plainCaption(node.label || "").replace(" " + t("pinnedMark"), "")
+      .split("\n").map((line) => line.trim()).filter(Boolean);
+    if (name) lines = lines.slice(1);
+    const devices = all ? null : deviceCount(node.id);
+    if (devices) lines.push(plural("exportDevices", devices));
+    const semantic = node.semantic || [node.id.slice(0, node.id.indexOf(":"))];
+    nodes.push({
+      id: node.id, kind: semantic[0], flags: semantic.slice(1),
+      // the shape's own size; the caption is inside it or under it
+      x: pos.x, y: pos.y, w: shape.w, h: shape.h, captionInside: shape.inside,
+      name, lines, note: (item.note && item.note.note) || "",
+      ip: item.ip || item.mgmt_ip || "", mac: item.mac || item.chassis_id || "",
+    });
+    kept.add(node.id);
+  }
+  const edges = [];
+  for (const edge of edgesDs.get()) {
+    if (!kept.has(edge.from) || !kept.has(edge.to)) continue;
+    const a = positions[edge.from];
+    const b = positions[edge.to];
+    const point = edgePointFn(edge, edge.from, positions);
+    const mid = point ? point(0.5) : { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
+    const entry = portEdges.get(edge.id);
+    const tags = {};
+    if (ports && entry) {
+      for (const [end, at] of Object.entries(entry.ends)) {
+        tags[end] = portTagText(at.port, at.members, at.prefix, portNumbersOnly);
+      }
+    }
+    edges.push({
+      id: edge.id, from: edge.from, to: edge.to,
+      // the bend, as the control point of a quadratic curve through mid
+      mid: { x: mid.x, y: mid.y },
+      control: { x: 2 * mid.x - (a.x + b.x) / 2, y: 2 * mid.y - (a.y + b.y) / 2 },
+      label: plainCaption(edge.label || ""),
+      ports: tags, semantic: edge.semantic || [],
+    });
+  }
+  return { nodes, edges };
 }
 
 /* ---------- a node's name and note (v0.8.0) ----------

@@ -609,6 +609,8 @@ const I18N = {
     kindLine_external: "external network",
     kindLine_trunk: "behind the trunk",
     kindLine_offline: "offline group",
+    exportDevices_one: "{n} device",
+    exportDevices_other: "{n} devices",
     unlocatedHint:
       "The device is known from ARP but was not found on any port of " +
       "the polled switches — it is most likely behind a router or an " +
@@ -1457,6 +1459,10 @@ const I18N = {
     kindLine_external: "внешняя сеть",
     kindLine_trunk: "за магистралью",
     kindLine_offline: "офлайн-группа",
+    exportDevices_one: "{n} устройство",
+    exportDevices_few: "{n} устройства",
+    exportDevices_many: "{n} устройств",
+    exportDevices_other: "{n} устройства",
     unlocatedHint:
       "Устройство известно по ARP, но не найдено на портах опрашиваемых " +
       "коммутаторов — вероятно, находится за маршрутизатором или " +
