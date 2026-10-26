@@ -27,6 +27,8 @@ const out = {};
 
 // a link the MAC tables could not order: none in the demo, so one here
 topology.links.find((l) => l.source === "fdb" && !l.lag).order_unknown = true;
+// a minute's load on every link, as the counters cycle leaves it
+for (const link of topology.links) link.load = { in_mbps: 12.5, out_mbps: 0.4 };
 
 // a name on every kind of node that can have one
 const kinds = {
@@ -80,6 +82,7 @@ network = {
 };
 
 out.infrastructure = exportModel({ contents: "infrastructure", ports: true });
+out.screenLinks = edges.filter((e) => e.id.startsWith("link:")).map((e) => e.label);
 out.all = exportModel({ contents: "all", ports: true }).nodes.map((n) => n.id);
 out.drawnHosts = nodes.filter((n) => n.id.startsWith("host:")).length;
 portNumbersOnly = true;
@@ -142,6 +145,17 @@ class ExportTest(unittest.TestCase):
         for tag in ("lldp", "fdb", "blocking", "lacp", "guess", "parallel"):
             self.assertIn(tag, meanings)
 
+    def test_no_load_on_paper(self):
+        # the map shows the minute's load …
+        self.assertTrue(all("↓" in label for label in self.out["screenLinks"]))
+        # … the paper does not: it is untrue an hour later
+        labels = [e["label"] for e in self.model["edges"]]
+        self.assertFalse([label for label in labels if "↓" in label or "↑" in label])
+        self.assertIn("LACP 2×1 Gbit/s", labels)
+        # what is not load stays: STP blocking
+        self.assertTrue([label for label in labels if label.endswith("BLOCKING")])
+        self.assertNotRegex(self.out["drawio"] + self.out["svg"], "[↓↑]")
+
     def test_port_numbers(self):
         named = [text for e in self.model["edges"] for text in e["ports"].values()]
         numbers = [text for ports in self.out["numbersOnly"] for text in ports.values()]
@@ -200,6 +214,19 @@ class WindowTest(unittest.TestCase):
         # About: the last item, a group of its own
         self.assertTrue(items.rstrip().endswith(
             '{ key: "about", group: "about", label: t("menuAbout"), run: openAbout },\n  ];\n}'))
+
+    def test_everything_on_paper_is_said_to_be_small(self):
+        dialog = function("renderExportDialog")
+        self.assertIn('t("exportAllPaperHint")', dialog)
+        self.assertIn('format !== "pdf" || form.elements["export-contents"].value !== "all"', dialog)
+        self.assertEqual(strings("ru")["exportAllPaperHint"],
+                         "Для экрана: на листе подписи устройств будут нечитаемо мелкими.")
+
+    def test_settling_is_what_the_eye_sees(self):
+        settling = function("layoutSettling")
+        self.assertNotIn("stabilized", settling)
+        self.assertIn("performance.now() - layoutMovedAt < LAYOUT_STILL_MS", settling)
+        self.assertIn("setInterval(watchLayoutMotion, 1000);", APP)
 
     def test_nothing_in_the_journal(self):
         for name in ("runExport", "printSchema", "openExportDialog"):
