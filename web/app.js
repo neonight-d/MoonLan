@@ -170,36 +170,27 @@ function setLang(newLang) {
   localStorage.setItem(LANG_KEY, lang);
   applyStatic();
   applyRole();
-  // the sign-in form is redrawn in the new language; a form half way
-  // through a code or a password is left alone
-  if (gateUp() && gateView === "signIn") {
-    // the name typed so far survives the switch
-    const typed = els.gateBody.querySelector('input[name="username"]');
-    renderSignIn(undefined, typed && typed.value);
-  }
   applyArrangeMode();
   updateScanStatus();
   renderSidebar();
   renderGraph();
-  // re-render whatever panel is open
-  if (!els.details.classList.contains("hidden") && shownDetails) {
-    if (shownDetails.type === "link") showLinkDetails(shownDetails.id);
-    else showDetails(shownDetails.id);
+  // every panel and dialog that is open, in the new language
+  for (const [panel, redraw] of panelRedraws) {
+    if (!panel.classList.contains("hidden")) redraw();
   }
-  if (!els.journal.classList.contains("hidden") && lastEvents) {
-    renderJournal(lastEvents);
-  }
-  if (!els.ports.classList.contains("hidden") && lastPorts) {
-    renderPorts(lastPorts);
-  }
-  if (!els.alarms.classList.contains("hidden") && lastAlarms) {
-    renderAlarms();
-  }
-  if (!els.stp.classList.contains("hidden") && lastStp) {
-    renderStp();
-  }
-  if (!els.actions.classList.contains("hidden")) renderAction();
-  if (!els.users.classList.contains("hidden")) refreshUsers();
+}
+
+/* What redraws each panel and dialog in a newly chosen language
+   (v0.8.2). The list in setLang named seven panels, and four more were
+   added since without it: their headings changed language and what
+   was under them did not. Each registers here, next to the code that
+   draws it; tests/test_panels.py holds the registrations to the
+   .panel and dialog elements of index.html, so the next one cannot be
+   forgotten either. */
+const panelRedraws = new Map();
+
+function redrawOnLanguage(panel, redraw) {
+  panelRedraws.set(panel, redraw);
 }
 
 /* ---------- who is looking ----------
@@ -5464,7 +5455,41 @@ function downloadText(text, name, type) {
 }
 
 function openExportDialog() {
-  const choices = exportChoices();
+  renderExportDialog(exportChoices());
+  els.exportDialog.querySelector('input[name="export-format"]:checked').focus();
+}
+
+// the title is a default in either language: kept as "no title of one's own"
+function defaultSheetTitle(text) {
+  return Object.values(I18N).some((words) => words.sheetTitleDefault === text);
+}
+
+/* The window in the language just chosen, with what was picked in it
+   and the focus where it was */
+function redrawExportDialog() {
+  const form = els.exportBody.querySelector("form");
+  if (!form) return;
+  const focused = document.activeElement && form.contains(document.activeElement)
+    ? document.activeElement.name : "";
+  renderExportDialog(exportPicked(form));
+  const again = focused && els.exportBody.querySelector(
+    `[name="${focused}"]${focused === "export-format" || focused === "export-contents" ? ":checked" : ""}`);
+  if (again) again.focus();
+}
+
+/* What the window's fields say now */
+function exportPicked(form) {
+  const value = (name) => form.elements["export-" + name];
+  const typed = value("title").value.trim();
+  return {
+    format: value("format").value, contents: value("contents").value,
+    ports: value("ports").checked, notes: value("notes").checked,
+    title: defaultSheetTitle(typed) ? "" : typed,
+    paper: value("paper").value, orientation: value("orientation").value,
+  };
+}
+
+function renderExportDialog(choices) {
   const radios = (name, values, words) => h("fieldset", { class: "export-choice" },
     h("legend", { text: t(words) }),
     ...values.map((value) => h("label", {},
@@ -5497,23 +5522,16 @@ function openExportDialog() {
     layoutSettling() ? h("p", { class: "export-settling", text: t("exportSettling") }) : null,
     h("div", { class: "buttons" }, go,
       h("button", { type: "button", text: t("noteCancel"), onclick: closeExportDialog })));
-  const value = (name) => form.elements["export-" + name];
   const shown = () => {
-    const format = value("format").value;
+    const format = form.elements["export-format"].value;
     pdfOnly.classList.toggle("hidden", format !== "pdf");
     go.textContent = t(format === "pdf" ? "exportPrint" : "exportDownload");
   };
   form.addEventListener("change", shown);
   form.addEventListener("submit", (event) => {
     event.preventDefault();
-    const typed = title.value.trim();
-    const picked = {
-      format: value("format").value, contents: value("contents").value,
-      ports: value("ports").checked, notes: value("notes").checked,
-      // the default title is the default in either language, so it is not kept
-      title: typed === t("sheetTitleDefault") ? "" : typed,
-      paper: value("paper").value, orientation: value("orientation").value,
-    };
+    // the default title is the default in either language, so it is not kept
+    const picked = exportPicked(form);
     localStorage.setItem(EXPORT_KEY, JSON.stringify(picked));
     closeExportDialog();
     runExport(picked);
@@ -5522,7 +5540,6 @@ function openExportDialog() {
   els.exportTitle.textContent = t("exportMapTitle");
   els.exportBody.replaceChildren(form);
   els.exportDialog.classList.remove("hidden");
-  form.querySelector('input[name="export-format"]:checked').focus();
 }
 
 function closeExportDialog() {
@@ -5593,9 +5610,12 @@ const REPO_URL = "https://github.com/neonight-d/MoonLan";
 const AUTHOR_URL = "https://github.com/neonight-d";
 let aboutData = null;
 let licenseText = null;
+// the licence text shown, kept by a redraw in another language
+let licenceOpen = false;
 
 async function openAbout() {
   hidePanelsFor(els.about);
+  licenceOpen = false;
   els.about.classList.remove("hidden");
   try {
     aboutData = await (await api("/api/about")).json();
@@ -5633,15 +5653,17 @@ function renderAbout() {
   const changelog = `${REPO_URL}/blob/v${data.version}/` +
     (lang === "ru" ? "CHANGELOG_RU.md" : "CHANGELOG.md");
 
-  const licence = h("div", { class: "about-license hidden" });
+  const licence = h("div", { class: "about-license" + (licenceOpen ? "" : " hidden") });
   // the file's own line breaks are for an 80-column terminal: its
   // paragraphs, each as one, fit the panel
   const reflowed = (text) => (text || "").replace(/([^\n])\n(?!\n)/g, "$1 ");
+  if (licenceOpen) licence.textContent = reflowed(licenseText);
   const showLicence = h("button", {
-    type: "button", class: "panel-btn", "aria-expanded": "false",
-    text: t("aboutShowLicense"),
+    type: "button", class: "panel-btn", "aria-expanded": licenceOpen ? "true" : "false",
+    text: t(licenceOpen ? "aboutHideLicense" : "aboutShowLicense"),
     onclick: async () => {
       const open = licence.classList.toggle("hidden") === false;
+      licenceOpen = open;
       showLicence.setAttribute("aria-expanded", open ? "true" : "false");
       showLicence.textContent = t(open ? "aboutHideLicense" : "aboutShowLicense");
       if (!open || licenseText !== null) {
@@ -6104,31 +6126,55 @@ async function sendNotesFile(data, dryRun) {
   return response.ok ? body : { failed: body.error || String(response.status) };
 }
 
+// the import on show — the file, what the server said of it, whether
+// it was written — and the export's count: what a redraw draws again
+let notesImport = null;
+let notesExport = null;
+
 async function previewNotesImport(file) {
   const data = await file.arrayBuffer();
   showNotesPanel("import", t("importTitle"));
-  els.notesBody.replaceChildren(h("p", { class: "hint", text: file.name }));
+  notesImport = { name: file.name, data, report: null, failed: "", written: false };
+  renderNotesImport();
   const report = await sendNotesFile(data, true);
-  if (report.failed) {
-    els.notesBody.replaceChildren(h("p", { class: "note-error", text: noteErrorText(report.failed) }));
+  if (report.failed) notesImport.failed = report.failed;
+  else notesImport.report = report;
+  renderNotesImport();
+}
+
+function renderNotesImport() {
+  const job = notesImport;
+  if (!job) return;
+  if (job.failed) {
+    els.notesBody.replaceChildren(h("p", { class: "note-error", text: noteErrorText(job.failed) }));
+    return;
+  }
+  if (!job.report) {
+    els.notesBody.replaceChildren(h("p", { class: "hint", text: job.name }));
+    return;
+  }
+  if (job.written) {
+    renderImportReport(job.name, job.report, []);
     return;
   }
   const go = h("button", { type: "button", class: "panel-btn", text: t("importGo") });
-  go.disabled = report.written === 0;
+  go.disabled = job.report.written === 0;
   go.addEventListener("click", async () => {
     go.disabled = true;
-    const done = await sendNotesFile(data, false);
+    const done = await sendNotesFile(job.data, false);
     if (done.failed) {
       showToast(noteErrorText(done.failed));
       go.disabled = false;
       return;
     }
-    renderImportReport(file.name, done, []);
+    job.report = done;
+    job.written = true;
+    renderNotesImport();
     await loadTopologyOnce();
   });
   const cancel = h("button", { type: "button", class: "panel-btn", text: t("noteCancel"),
                                onclick: () => els.notesPanel.classList.add("hidden") });
-  renderImportReport(file.name, report, [go, cancel]);
+  renderImportReport(job.name, job.report, [go, cancel]);
 }
 
 function renderImportReport(name, report, buttons) {
@@ -6158,13 +6204,19 @@ function renderImportReport(name, report, buttons) {
 
 async function openNotesExport() {
   showNotesPanel("export", t("exportTitle"));
-  let summary;
+  notesExport = null;
   try {
-    summary = await (await api("/api/notes/export?preview=1")).json();
+    notesExport = await (await api("/api/notes/export?preview=1")).json();
   } catch (e) {
     serviceLost("the notes");
     return;
   }
+  renderNotesExport();
+}
+
+function renderNotesExport() {
+  const summary = notesExport;
+  if (!summary) return;
   els.notesBody.replaceChildren(
     h("p", { class: "import-sum", text: fmt("exportWill", { n: summary.exported }) }),
     summary.left_out
@@ -6174,6 +6226,21 @@ async function openNotesExport() {
       h("a", { class: "panel-btn", href: "/api/notes/export", download: "moonlan-notes.csv",
                text: t("exportGo") })),
   );
+}
+
+/* The notes panel in the language just chosen: whichever of its three
+   it shows */
+function redrawNotesPanel() {
+  if (notesPanelShows === "orphans") {
+    els.notesTitle.textContent = t("orphansTitle");
+    renderOrphans();
+  } else if (notesPanelShows === "import") {
+    els.notesTitle.textContent = t("importTitle");
+    renderNotesImport();
+  } else if (notesPanelShows === "export") {
+    els.notesTitle.textContent = t("exportTitle");
+    renderNotesExport();
+  }
 }
 
 /* The words for a refusal of the server, or the code itself */
@@ -7749,6 +7816,29 @@ function togglePinOnSelection() {
     unpinNodes(ids);
   }
 }
+
+redrawOnLanguage(els.details, () => {
+  if (!shownDetails) return;
+  if (shownDetails.type === "link") showLinkDetails(shownDetails.id);
+  else showDetails(shownDetails.id);
+});
+redrawOnLanguage(els.journal, () => lastEvents && renderJournal(lastEvents));
+redrawOnLanguage(els.notesPanel, redrawNotesPanel);
+redrawOnLanguage(els.ports, () => lastPorts && renderPorts(lastPorts));
+redrawOnLanguage(els.alarms, () => lastAlarms && renderAlarms());
+redrawOnLanguage(els.stp, () => lastStp && renderStp());
+redrawOnLanguage(els.actions, renderAction);
+redrawOnLanguage(els.account, renderAccount);
+redrawOnLanguage(els.users, refreshUsers);
+redrawOnLanguage(els.about, renderAbout);
+redrawOnLanguage(els.exportDialog, redrawExportDialog);
+// the sign-in form is redrawn, with the name typed so far; a form half
+// way through a code or a password is left alone
+redrawOnLanguage(els.gate, () => {
+  if (gateView !== "signIn") return;
+  const typed = els.gateBody.querySelector('input[name="username"]');
+  renderSignIn(undefined, typed && typed.value);
+});
 
 applyStatic();
 applyArrangeMode();
