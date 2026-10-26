@@ -1,6 +1,6 @@
 # What MoonLan does
 
-Everything MoonLan does, as of v0.8.1 — the list the README used to carry. The README keeps the summary; each item here links to the page that explains it.
+Everything MoonLan does, as of v0.8.2 — the list the README used to carry. The README keeps the summary; each item here links to the page that explains it.
 
 ![Alarms panel](img/alarms.png)
 
@@ -386,10 +386,26 @@ Everything MoonLan does, as of v0.8.1 — the list the README used to carry. The
   of 9"). Named nodes that have no list of their own — switches without
   SNMP, bridges, external networks, offline groups — are in a "Named" list
   above the switches. English and Russian
-  interface languages. On a phone (720 px and narrower) the list stands
+  interface languages, all of it: what the server reports — the reason
+  a switch is said to run a spanning tree or not, a withdrawn link in
+  the journal — comes as a code and its numbers and is worded by the
+  page; what a switch, a ping or the system said stays as it was said.
+  A change of language redraws every open panel and dialog. On a phone
+  (720 px and narrower) the list stands
   over the map, and a "List and search" bar between the header and the
   map folds it away: the map takes the whole height at once, looking at
-  the same spot, and the choice is kept in the browser.
+  the same spot, and the choice is kept in the browser. The page itself
+  never scrolls on a phone — a long card, a menu or the list scrolls
+  inside itself — and the header's buttons take a finger's 44 by 44
+  px around them without looking any larger. Two fingers still zoom.
+- The lists from the keyboard: the map is a canvas, and the lists on
+  the left are the keyboard's way onto it. Each row is a button; Tab
+  from the search goes to the first row found, ↑ and ↓ to the next
+  visible row, Home and End to the first and the last, and Enter opens
+  the node as a click does — the map goes to it and its card opens —
+  with the focus left on the row for the next one. Tab goes on to the
+  next list. Every close button and the search have names a screen
+  reader can say.
 - About, the last item of Actions, for everybody: the version and the
   build — the commit the service was started from, read out of `.git`
   without running git — the MIT licence and its text, links to the

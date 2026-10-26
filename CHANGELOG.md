@@ -6,6 +6,57 @@ for before the next one started.
 
 Русская версия — [CHANGELOG_RU.md](CHANGELOG_RU.md).
 
+## v0.8.2 — 2026-10-26
+
+Russian without English in it, a page that stays put on a phone, the
+lists from the keyboard. No new features: corrections, from a
+colleague, from a phone, and from an automated test of the interface.
+
+**Russian with no English in it.** In the Russian interface the STP
+panel's tooltip on "not operating" was the server's English sentence
+("answers dot1dStp* with nothing at all…"). The verdict now comes as
+one of nine codes and its numbers — the root, the cost, the changes,
+the times, the neighbours — and the page words it in its language; the
+English sentence stays for the log and diag --stp, and an older or
+newer server's code the page does not know is shown as that sentence.
+The same rule went through the rest of the page: a link the inference
+withdraws is journalled as data and worded by the page (until now the
+journal said only "Link withdrawn", without which link or why; older
+entries keep the line they were written with), the hint of a port that
+looks like a way out no longer says "and 3 more" in English, nor a
+loop-detection profile "matched by probe". What an SNMP agent, a ping
+or the operating system said is theirs, and stays as it is. The close
+buttons, the search field and the language switch have names in the
+page's language. A change of language redraws every open panel — About,
+notes without a node, one's own account and the export window used to
+keep their contents in the other language — and the export window
+keeps what was picked in it.
+
+**A page that stays put on a phone.** The page was 100vh high, and on a
+phone that is taller than what is seen while the address bar shows: a
+finger on the header, a menu or a card moved the whole page and left
+an empty strip under the map. It is the height actually seen now
+(100dvh), and the page itself never scrolls — nor pulls to refresh in
+the middle of arranging the map. A long card, a panel, the menu and the
+list scroll inside themselves, and a menu is never taller than the room
+under its button. Two fingers still zoom. The header's buttons stay as
+they look and take a finger's 44 by 44 px around them, as far as the
+room between them allows.
+
+**The lists from the keyboard.** The map is a canvas, and a row of the
+list on the left took no focus: with the keyboard there was no way onto
+a switch at all. A row is a button now; Tab from the search goes to the
+first row found, the arrows, Home and End through the rows, Enter opens
+the node and its card with the focus left on the row.
+
+**The export.** The lines of an export no longer carry the load of the
+minute it was made — on paper it is untrue an hour later; the speed,
+LACP, the trunk and STP blocking stay. PDF with "Everything" says that
+on paper the devices' captions come out unreadably small. "The map is
+still being laid out" followed vis's own flag, which on a big map never
+came over a map that stood still to the eye; it follows what is seen
+now — nodes moving on the screen in the last seconds.
+
 ## v0.8.1 — 2026-10-23
 
 The map on paper and in Draw.io, an offline room keeps its name, About.
