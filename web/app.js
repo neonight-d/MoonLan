@@ -75,6 +75,7 @@ const els = {
   users: document.getElementById("users"),
   usersBody: document.getElementById("users-body"),
   usersClose: document.getElementById("users-close"),
+  langSwitch: document.getElementById("lang-switch"),
   langRu: document.getElementById("lang-ru"),
   langEn: document.getElementById("lang-en"),
 };
@@ -148,11 +149,17 @@ function applyStatic() {
     el.innerHTML = t(el.dataset.i18nHtml);
   }
   els.search.placeholder = t("searchPlaceholder");
+  // names for a screen reader (v0.8.2): the placeholder is not one, and
+  // "×" says nothing — every close button is marked data-close
+  els.search.setAttribute("aria-label", t("searchLabel"));
+  els.langSwitch.setAttribute("aria-label", t("langSwitch"));
+  for (const button of document.querySelectorAll("[data-close]")) {
+    button.setAttribute("aria-label", t("close"));
+    button.title = t("close");
+  }
   labelIcon(els.journalBtn, t("journalBtn"));
   labelIcon(els.moreBtn, t("moreBtn"));
   renderBadge();
-  els.detailsClose.title = t("close");
-  els.journalClose.title = t("close");
   // what the two counters actually mean — the whole point of v0.5.4
   const errHead = document.querySelector('#ports th[data-sort="err"]');
   const discHead = document.querySelector('#ports th[data-sort="disc"]');
@@ -463,7 +470,7 @@ function gateLangSwitch() {
     onclick: () => setLang(code),
   });
   return h("span", { class: "lang-switch gate-lang", role: "group",
-                     "aria-label": "Language" }, choose("ru"), choose("en"));
+                     "aria-label": t("langSwitch") }, choose("ru"), choose("en"));
 }
 
 function renderSignIn(message, typedName) {

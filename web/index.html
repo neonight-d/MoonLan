@@ -16,7 +16,7 @@
     </div>
     <div class="toolbar">
       <span id="scan-status" class="status"></span>
-      <span class="lang-switch" role="group" aria-label="Language">
+      <span id="lang-switch" class="lang-switch" role="group">
         <button id="lang-ru">RU</button><button id="lang-en">EN</button>
       </span>
       <!-- Icons, drawn here rather than taken from a font or a CDN: they
@@ -87,14 +87,14 @@
       <div id="details" class="panel hidden">
         <div class="panel-head">
           <h3 id="details-title"></h3>
-          <button id="details-close">×</button>
+          <button id="details-close" data-close>×</button>
         </div>
         <div class="panel-scroll"><div id="details-body"></div></div>
       </div>
       <div id="journal" class="panel hidden">
         <div class="panel-head">
           <h3 data-i18n="journalTitle"></h3>
-          <button id="journal-close">×</button>
+          <button id="journal-close" data-close>×</button>
         </div>
         <div class="panel-scroll"><ul id="journal-list"></ul></div>
       </div>
@@ -103,14 +103,14 @@
       <div id="notes-panel" class="panel hidden">
         <div class="panel-head">
           <h3 id="notes-title"></h3>
-          <button id="notes-close">×</button>
+          <button id="notes-close" data-close>×</button>
         </div>
         <div class="panel-scroll"><div id="notes-body"></div></div>
       </div>
       <div id="ports" class="panel hidden">
         <div class="panel-head">
           <h3 id="ports-title"></h3>
-          <button id="ports-close">×</button>
+          <button id="ports-close" data-close>×</button>
         </div>
         <div class="panel-scroll">
         <table class="ports-table">
@@ -133,14 +133,14 @@
       <div id="alarms" class="panel hidden">
         <div class="panel-head">
           <h3 data-i18n="alarmsTitle"></h3>
-          <button id="alarms-close">×</button>
+          <button id="alarms-close" data-close>×</button>
         </div>
         <div class="panel-scroll"><div id="alarms-body"></div></div>
       </div>
       <div id="stp" class="panel hidden">
         <div class="panel-head">
           <h3 data-i18n="stpTitle"></h3>
-          <button id="stp-close">×</button>
+          <button id="stp-close" data-close>×</button>
         </div>
         <div class="panel-scroll"><div id="stp-body"></div></div>
       </div>
@@ -150,7 +150,7 @@
       <div id="actions" class="panel hidden">
         <div class="panel-head">
           <h3 id="actions-title"></h3>
-          <button id="actions-close">×</button>
+          <button id="actions-close" data-close>×</button>
         </div>
         <div class="panel-scroll"><div id="actions-body"></div></div>
       </div>
@@ -158,7 +158,7 @@
       <div id="account" class="panel hidden">
         <div class="panel-head">
           <h3 data-i18n="accountTitle"></h3>
-          <button id="account-close">×</button>
+          <button id="account-close" data-close>×</button>
         </div>
         <div class="panel-scroll"><div id="account-body"></div></div>
       </div>
@@ -166,7 +166,7 @@
       <div id="users" class="panel hidden">
         <div class="panel-head">
           <h3 data-i18n="usersTitle"></h3>
-          <button id="users-close">×</button>
+          <button id="users-close" data-close>×</button>
         </div>
         <div class="panel-scroll"><div id="users-body"></div></div>
       </div>
@@ -174,7 +174,7 @@
       <div id="about" class="panel hidden">
         <div class="panel-head">
           <h3 data-i18n="aboutTitle"></h3>
-          <button id="about-close">×</button>
+          <button id="about-close" data-close>×</button>
         </div>
         <div class="panel-scroll"><div id="about-body"></div></div>
       </div>
@@ -199,7 +199,7 @@
          aria-labelledby="export-title">
       <div class="gate-card export-card">
         <h2 id="export-title"></h2>
-        <button id="export-close" class="dialog-close" type="button">×</button>
+        <button id="export-close" class="dialog-close" type="button" data-close>×</button>
         <div id="export-body"></div>
       </div>
     </div>
