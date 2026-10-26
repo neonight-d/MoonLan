@@ -140,6 +140,12 @@ class StpData:
     # verdict can group this switch under the root it actually is
     confirmed_root_mac: str = ""
     reason: str = ""             # why it is not operating, for diagnostics
+    # The same verdict for the page (v0.8.2): which of the branches of
+    # judge() / judge_network() decided, and the numbers in it. `reason`
+    # stays the English sentence for the log and diag --stp; the page
+    # words it from these, in its own language.
+    reason_code: str = ""
+    reason_params: dict = field(default_factory=dict)
 
     @property
     def protocol_name(self) -> str:
@@ -301,6 +307,7 @@ def judge(data: StpData) -> StpData:
     if not data.supported:
         data.operating = False
         data.reason = "the switch does not answer dot1dStp* at all"
+        data.reason_code, data.reason_params = "not_supported", {}
         return data
     foreign = (
         data.root_mac
@@ -314,6 +321,8 @@ def judge(data: StpData) -> StpData:
             f"accepted an external root ({data.designated_root}) at cost "
             f"{data.root_cost} — only a bridge processing BPDUs does that"
         )
+        data.reason_code = "foreign_root"
+        data.reason_params = {"root": data.designated_root, "cost": data.root_cost}
         return data
     if reports_nothing(data):
         data.operating = False
@@ -323,16 +332,19 @@ def judge(data: StpData) -> StpData:
             "tree may well be running — this model does not put it in "
             "BRIDGE-MIB. Check the switch's own CLI."
         )
+        data.reason_code, data.reason_params = "reports_nothing", {}
         return data
     enabled = [p for p in data.ports.values() if p.enabled]
     active = [p for p in data.ports.values() if p.state != STATE_DISABLED]
     if not enabled:
         data.operating = False
         data.reason = "no port has dot1dStpPortEnable = enabled"
+        data.reason_code, data.reason_params = "no_port_enabled", {}
         return data
     if not active:
         data.operating = False
         data.reason = "every port is in state disabled(1)"
+        data.reason_code, data.reason_params = "all_disabled", {}
         return data
     if data.root_mac in ("", ZERO_MAC):
         # A bridge in a tree knows its root — itself or somebody else.
@@ -352,6 +364,8 @@ def judge(data: StpData) -> StpData:
             "address or another's; this agent implements the port table "
             "and not the scalars around it"
         )
+        data.reason_code = "no_root"
+        data.reason_params = {"root": data.designated_root, "cost": data.root_cost}
         return data
     converged = data.top_changes > 0 or (
         data.sys_uptime > 0
@@ -364,6 +378,8 @@ def judge(data: StpData) -> StpData:
             f"{data.top_changes}, time since change "
             f"{data.time_since_change} ticks vs uptime {data.sys_uptime}"
         )
+        data.reason_code = "never_converged"
+        data.reason_params = _history(data)
         return data
     data.operating = True
     data.reason = (
@@ -371,7 +387,18 @@ def judge(data: StpData) -> StpData:
         f"last one {data.time_since_change} ticks ago against an uptime "
         f"of {data.sys_uptime}"
     )
+    data.reason_code = "converged"
+    data.reason_params = _history(data)
     return data
+
+
+def _history(data: StpData) -> dict:
+    """The numbers the history-based verdict rests on, in seconds"""
+    return {
+        "changes": data.top_changes,
+        "since": data.time_since_change / 100.0,
+        "uptime": data.sys_uptime / 100.0,
+    }
 
 
 def judge_network(per_switch: dict[str, StpData]) -> dict[str, StpData]:
@@ -414,6 +441,8 @@ def judge_network(per_switch: dict[str, StpData]) -> dict[str, StpData]:
             f"({', '.join(sorted(confirming))}) follow this switch's own "
             f"address, so its zeros are the root's, not a disabled tree's"
         )
+        data.reason_code = "root_confirmed"
+        data.reason_params = {"count": len(confirming), "neighbours": sorted(confirming)}
     return per_switch
 
 

@@ -800,7 +800,10 @@ def suspect_uplink_ports(
                 )
                 suspects[key] = {
                     "kind": "foreign_subnet",
-                    "ip": where,
+                    # the first address, and how many more: the page
+                    # says "and 3 more" in its own language
+                    "ip": foreign[0],
+                    "more": len(foreign) - 1,
                     "name": name,
                     "text": (
                         f"{name} is managed at {where}, in subnets "

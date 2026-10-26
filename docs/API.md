@@ -381,6 +381,25 @@ LLDP information, link changes, and loop-detection state.
 
 Per-switch STP information and the network-level verdict.
 
+Why a switch is said to run a tree or not comes three ways: `reason`,
+an English sentence for the log and `diag --stp`; and, for the page to
+word in its own language, `reason_code` — which branch of the verdict
+decided — and `reason_params`, the numbers in it:
+
+| `reason_code` | `reason_params` |
+|---|---|
+| `not_supported` | — |
+| `foreign_root` | `root`, `cost` |
+| `reports_nothing` | — |
+| `no_port_enabled` | — |
+| `all_disabled` | — |
+| `no_root` | `root`, `cost` |
+| `never_converged` | `changes`, `since`, `uptime` (seconds) |
+| `converged` | `changes`, `since`, `uptime` (seconds) |
+| `root_confirmed` | `count`, `neighbours` (addresses) |
+
+A code the page does not know is shown as `reason`.
+
 ### GET /api/alarms
 
 Query parameters: `active=1` for active alarms, `active=0` for
@@ -396,6 +415,12 @@ Recent journal events, newest first; `limit` up to 1000. Each carries
 `user`: who did it, `"@console"` for `python -m moonlan.users`, empty
 for what MoonLan did itself. An event about a device the IEEE register
 knows carries its `vendor`, looked up when asked.
+
+`details` is data where the page words the event itself: since v0.8.2 a
+`link_dropped` carries `{"a", "a_port", "b", "b_port", "source",
+"reason"}` and, by the reason, `behind` (LLDP puts `b` behind that
+switch) or `cycle` (the ring it was the weakest edge of). An entry
+written before v0.8.2 is the English line it was then.
 
 ## Inventory
 

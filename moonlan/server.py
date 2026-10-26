@@ -463,7 +463,7 @@ async def run_scan() -> None:
         for dropped in topo_info.get("dropped_links", []):
             await asyncio.to_thread(
                 db.add_event, time.time(), "link_dropped", "",
-                _dropped_link_text(dropped),
+                _dropped_link_details(dropped),
             )
         prev_pseudo_ports = {
             (p["switch"], p["port"]) for p in pseudo_switches
@@ -749,20 +749,17 @@ async def _reconcile_notes() -> None:
         )
 
 
-def _dropped_link_text(dropped: dict) -> str:
-    """One journal line about a link the inference took back."""
-    a = f"{dropped['a']} [{dropped['a_port']}]"
-    b = f"{dropped['b']} [{dropped['b_port']}]"
-    if dropped.get("reason") == "behind":
-        return (
-            f"{a} — {b} ({dropped.get('source', 'fdb')}): LLDP puts "
-            f"{dropped['b']} behind {dropped['behind']}, so it cannot "
-            f"also hang off {dropped['a']}"
-        )
-    return (
-        f"{a} — {b} ({dropped.get('source', 'fdb')}): "
-        f"{dropped.get('reason', 'removed by the topology inference')}"
-    )
+def _dropped_link_details(dropped: dict) -> str:
+    """The journal's record of a link the inference took back: the
+    link, why ("behind" — LLDP puts one end behind another switch;
+    "cycle" — the weakest edge of a ring nothing explains) and what
+    the reason names. Data, not a sentence (v0.8.2): the page words it
+    in its own language. The log says it in English when it happens."""
+    return json.dumps({
+        key: dropped[key]
+        for key in ("a", "a_port", "b", "b_port", "source", "reason", "behind", "cycle")
+        if dropped.get(key) not in (None, "")
+    })
 
 
 async def _purge_layout_once() -> None:
@@ -881,7 +878,11 @@ def _stp_report(
             "name": sw.sys_name or ip if sw else ip,
             "supported": data.supported,
             "operating": data.operating,
+            # the English sentence for an old page; a page of v0.8.2 or
+            # later words the verdict itself from the code and numbers
             "reason": data.reason,
+            "reason_code": data.reason_code,
+            "reason_params": data.reason_params,
             "is_root": data.is_root(own_macs),
             "protocol": data.protocol_name,
             "version": data.version_name,

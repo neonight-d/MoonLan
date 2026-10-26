@@ -4785,7 +4785,9 @@ function loopCardTitle(loop) {
     head + "\n" +
     fmt("loopProfileHint", {
       profile: loop.profile,
-      how: loop.matched_by,
+      // "sysObjectID" or "probe": a word of the page, not the server's
+      how: t("loopHow_" + loop.matched_by) === "loopHow_" + loop.matched_by
+        ? loop.matched_by : t("loopHow_" + loop.matched_by),
     })
   );
 }
@@ -6914,7 +6916,9 @@ function renderPorts(data) {
           fmt("uplinkHint", { switch: data.switch, port: p.name }) +
           "\n\n" +
           fmt("uplinkWhy_" + p.uplink_hint.kind, {
-            ip: p.uplink_hint.ip,
+            // "10.8.0.1 and 3 more", the count from the server
+            ip: p.uplink_hint.ip + (p.uplink_hint.more
+              ? " " + fmt("andMore", { n: p.uplink_hint.more }) : ""),
             name: p.uplink_hint.name,
           });
         nameCell.append(" ", chip);
@@ -7209,6 +7213,26 @@ function fmtSince(seconds) {
   return fmtDuration(seconds);
 }
 
+/* Why a switch is said to run a tree or not, in the page's language
+   (v0.8.2). The server sends which branch of its verdict decided and
+   the numbers in it; a code this page does not know — an older or a
+   newer server — falls back to the server's own sentence, not to an
+   empty tooltip. */
+function stpReasonText(sw) {
+  const key = "stpReason_" + sw.reason_code;
+  if (!sw.reason_code || t(key) === key) return sw.reason || "";
+  const p = sw.reason_params || {};
+  return fmt(key, {
+    root: p.root || t("stpReasonEmpty"),
+    cost: p.cost,
+    changes: p.changes,
+    since: p.since == null ? "—" : fmtUptime(p.since),
+    uptime: p.uptime == null ? "—" : fmtUptime(p.uptime),
+    count: p.count,
+    neighbours: (p.neighbours || []).map(switchName).join(", "),
+  });
+}
+
 function stpVerdictText(v) {
   if (!v || v.verdict === "not_operating") return t("stpVerdictNone");
   if (v.verdict === "single") {
@@ -7323,7 +7347,7 @@ function renderStp() {
       td.textContent = value;
       // the basis for the verdict, either way: an operator who cannot
       // see why a switch is called operating cannot check the claim
-      if (i === 1) td.title = sw.reason || "";
+      if (i === 1) td.title = stpReasonText(sw);
       if (i === 1 && !sw.operating) td.className = "stp-off";
       if (i === 1 && sw.is_root) td.className = "stp-root";
       if (i === 3 && sw.root_nonstandard) {
@@ -7413,7 +7437,7 @@ function renderJournal(events) {
       const host = document.createElement("span");
       host.className = "ev-host";
       host.textContent = accountEventText(ev) || noteEventText(ev) ||
-        ev.name || ev.ip || ev.mac || layoutEventText(ev);
+        linkDroppedText(ev) || ev.name || ev.ip || ev.mac || layoutEventText(ev);
       if (ev.vendor) {
         // a new device says who made it; any other event keeps it to
         // the tooltip
@@ -7496,6 +7520,33 @@ function layoutEventText(ev) {
   return fmt(more > 0 ? "evNodesMore" : "evNodes", {
     n: data.n, names: names.join(", "), more: more,
   });
+}
+
+/* A link the inference took back: which, and why. Recorded as data
+   since v0.8.2 and worded here; an older entry is the English line it
+   was written as, shown as it is. */
+function linkDroppedText(ev) {
+  if (ev.event !== "link_dropped") return "";
+  let data = null;
+  try {
+    data = JSON.parse(ev.details);
+  } catch (e) {
+    data = null;
+  }
+  if (!data || typeof data !== "object") return ev.details || "";
+  const source = t("evLinkSource_" + data.source);
+  const link = fmt("evLinkEnds", {
+    a: switchName(data.a), a_port: data.a_port, b: switchName(data.b), b_port: data.b_port,
+    source: source === "evLinkSource_" + data.source ? data.source || "" : source,
+  });
+  const key = "evLinkWhy_" + data.reason;
+  const why = t(key) === key
+    ? data.reason || ""
+    : fmt(key, {
+      a: switchName(data.a), b: switchName(data.b),
+      behind: switchName(data.behind || ""), cycle: data.cycle || "",
+    });
+  return why ? link + ": " + why : link;
 }
 
 /* A name or a note changed, deleted or moved: the node, then what
