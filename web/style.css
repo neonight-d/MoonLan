@@ -238,16 +238,24 @@ main { flex: 1; display: flex; min-height: 0; position: relative; }
 .count { color: var(--moon); }
 
 .device-list { list-style: none; margin: 0; padding: 0; }
-.device-list li {
+/* a row is a button (v0.8.2), dressed as the row it was */
+.device-list .li-btn {
+  width: 100%;
   padding: 7px 9px;
+  border: none;
   border-radius: 6px;
-  cursor: pointer;
+  background: none;
+  color: inherit;
+  font: inherit;
   font-size: 0.9rem;
+  text-align: left;
+  cursor: pointer;
   display: flex;
   align-items: baseline;
   gap: 8px;
 }
-.device-list li:hover { background: var(--bg-hover); }
+.device-list .li-btn:hover { background: var(--bg-hover); }
+.device-list .li-btn:focus-visible { outline: 2px solid var(--link); outline-offset: -2px; }
 .device-list .li-text { display: flex; flex-direction: column; min-width: 0; }
 .device-list .li-text > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .device-list .sub { color: var(--text-dim); font-family: ui-monospace, monospace; font-size: 0.8rem; }

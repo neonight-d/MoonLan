@@ -13,6 +13,7 @@ const els = {
   switchCount: document.getElementById("switch-count"),
   hostCount: document.getElementById("host-count"),
   search: document.getElementById("search"),
+  sidebar: document.getElementById("sidebar"),
   scanStatus: document.getElementById("scan-status"),
   details: document.getElementById("details"),
   detailsBody: document.getElementById("details-body"),
@@ -3202,15 +3203,25 @@ function switchHasAlarm(ip) {
   );
 }
 
-function li(main, sub, dotClass, onClick, searchText, cssClass, title) {
+/* A row of the lists: a button the width of the row (v0.8.2). The map
+   is a canvas, and these lists are the keyboard's only way onto it: a
+   button takes Tab, Enter and space by itself and says what it is to
+   a screen reader. Each list takes one Tab (listTabStop); the arrows go
+   through the rest of it. `key` is the node, to keep the focus on its
+   row when the list is drawn again. */
+function li(main, sub, dotClass, onClick, searchText, cssClass, title, key) {
   const item = document.createElement("li");
-  if (title) item.title = title;
+  const button = document.createElement("button");
+  button.type = "button";
+  button.className = "li-btn";
+  button.tabIndex = -1;
+  if (title) button.title = title;
   if (dotClass) {
     const dot = document.createElement("span");
     dot.className = "dot " + dotClass;
-    item.append(dot);
+    button.append(dot);
   }
-  const text = document.createElement("div");
+  const text = document.createElement("span");
   text.className = "li-text";
   const name = document.createElement("span");
   name.textContent = main;
@@ -3221,11 +3232,43 @@ function li(main, sub, dotClass, onClick, searchText, cssClass, title) {
     extra.textContent = sub;
     text.append(extra);
   }
-  item.append(text);
+  button.append(text);
+  button.addEventListener("click", onClick);
+  item.append(button);
   item.dataset.search = (searchText || main + " " + sub).toLowerCase();
-  item.addEventListener("click", onClick);
+  if (key) item.dataset.key = key;
   if (cssClass) item.classList.add(cssClass);
   return item;
+}
+
+/* The one row of a list that Tab stops at: `row`, or the first one the
+   search leaves */
+function listTabStop(list, row) {
+  for (const button of list.querySelectorAll(".li-btn")) button.tabIndex = -1;
+  const target = row || [...list.children].find((item) => !item.classList.contains("hidden-by-search"));
+  const button = target && target.querySelector(".li-btn");
+  if (button) button.tabIndex = 0;
+}
+
+/* ↑ and ↓ to the next row the search leaves, Home and End to the first
+   and the last: hundreds of rows are not a Tab each. The focus stays
+   in the list after Enter, so the next row is one key away. */
+function listKeys(event) {
+  const button = event.target.closest && event.target.closest(".device-list .li-btn");
+  if (!button) return;
+  const list = button.closest("ul");
+  const rows = [...list.children].filter((item) => !item.classList.contains("hidden-by-search"));
+  const at = rows.indexOf(button.parentElement);
+  let next = null;
+  if (event.key === "ArrowDown") next = rows[Math.min(at + 1, rows.length - 1)];
+  else if (event.key === "ArrowUp") next = rows[Math.max(at - 1, 0)];
+  else if (event.key === "Home") next = rows[0];
+  else if (event.key === "End") next = rows[rows.length - 1];
+  else return;
+  event.preventDefault();
+  if (!next) return;
+  listTabStop(list, next);
+  next.querySelector(".li-btn").focus();
 }
 
 /* A name and a note are searched like the rest of what is known */
@@ -3249,11 +3292,16 @@ function namedNodes() {
 }
 
 function renderSidebar() {
+  // a refresh draws the lists anew: the row with the focus keeps it
+  const active = document.activeElement;
+  const kept = active && active.classList && active.classList.contains("li-btn")
+    ? { list: active.closest("ul"), key: active.parentElement.dataset.key }
+    : null;
   const named = namedNodes();
   els.namedList.replaceChildren(
     ...named.map((row) =>
       li(row.name, row.line, null, () => focusNode(row.id),
-         [row.name, row.line, noteSearchText(row.item)].join(" ")))
+         [row.name, row.line, noteSearchText(row.item)].join(" "), "", "", row.id))
   );
   els.namedSection.classList.toggle("hidden", named.length === 0);
   els.switchList.replaceChildren(
@@ -3276,7 +3324,8 @@ function renderSidebar() {
         sw.over_budget_scans >= 2
           ? fmt("staleSwitchScans", { n: sw.over_budget_scans }) +
             " · " + t("dataFrom") + " " + fmtTime(sw.polled_at)
-          : ""
+          : "",
+        "sw:" + sw.ip
       )
     )
   );
@@ -3293,7 +3342,7 @@ function renderSidebar() {
         // VLAN is intentionally excluded from search; the maker is in:
         // "mercusys" finds every MERCUSYS device
         [hostLabel(h), h.ip, h.mac, h.vendor, noteSearchText(h)].filter(Boolean).join(" "),
-        h.stale ? "stale" : ""
+        h.stale ? "stale" : "", "", "host:" + h.mac
       )
     )
   );
@@ -3310,12 +3359,17 @@ function renderSidebar() {
         statusClass(h),
         () => showDetails("unloc:" + h.mac),
         [hostLabel(h), h.ip, h.mac, h.vendor, noteSearchText(h)].filter(Boolean).join(" "),
-        "stale"
+        "stale", "", "unloc:" + h.mac
       )
     )
   );
   els.unlocatedSection.classList.toggle("hidden", unlocated.length === 0);
   applySearchFilter();
+  const row = kept && [...kept.list.children].find((item) => item.dataset.key === kept.key);
+  if (row) {
+    listTabStop(kept.list, row);
+    row.querySelector(".li-btn").focus({ preventScroll: true });
+  }
 }
 
 /* Caption style of a node; the selected one is brighter than the rest.
@@ -7692,6 +7746,8 @@ function applySearchFilter() {
     count.textContent = q
       ? fmt("searchCount", { n: shown, total: items.length })
       : String(items.length);
+    // Tab from the search goes to the first row it found
+    listTabStop(list);
   }
 }
 
@@ -7703,6 +7759,7 @@ async function rescan() {
 }
 
 els.search.addEventListener("input", applySearchFilter);
+els.sidebar.addEventListener("keydown", listKeys);
 
 els.detailsClose.addEventListener("click", hideDetails);
 // ⓘ after a card's one-line hint opens the full text under it, and
