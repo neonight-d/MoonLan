@@ -1176,6 +1176,7 @@ body.gated .toolbar > button { display: none; }
 .export-paper { display: flex; gap: 10px; }
 .export-paper label { flex: 1; }
 .export-form .hint-line { margin: 10px 0 0; }
+.export-form .export-all-hint { margin: 4px 0 0 22px; }
 .export-settling { margin: 12px 0 0; color: var(--warn); font-size: 0.85rem; }
 
 /* ---------- About (v0.8.1) ---------- */

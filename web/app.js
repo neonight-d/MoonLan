@@ -2897,7 +2897,7 @@ function fmtRate(v) {
 /* Link caption: "LACP 2×1 Gbit/s" for an aggregate, "LAG trunk" for a
    trunk detected via synthetic bridge-ports, otherwise the speed;
    plus the current load ("↓34 ↑12 Mbit/s") when counters know it */
-function linkLabel(link) {
+function linkLabel(link, withLoad = true) {
   let label;
   if (link.lag && link.lag.count > 1) {
     // speed_mbps already counts only the active members
@@ -2915,7 +2915,8 @@ function linkLabel(link) {
   } else {
     label = fmtSpeed(link.speed_mbps);
   }
-  if (link.load) {
+  // the load is a minute's reading: on paper it is untrue an hour later
+  if (withLoad && link.load) {
     // out of the parent side = downstream (↓), into it = upstream (↑)
     const load =
       "↓" + fmtRate(link.load.out_mbps) + " ↑" + fmtRate(link.load.in_mbps) +
@@ -3575,6 +3576,9 @@ function buildGraphData() {
     edge.width = Math.max(edge.width || 1, 3);
     edge.dashes = false;
     edge.label = (edge.label ? edge.label + " · " : "") + t("loopMark");
+    if (edge.paperLabel !== undefined) {
+      edge.paperLabel = (edge.paperLabel ? edge.paperLabel + " · " : "") + t("loopMark");
+    }
     edge.font = { color: colors.alarm, size: 11, strokeWidth: 0 };
     if (edge.semantic && !edge.semantic.includes("loop")) edge.semantic.push("loop");
     return edge;
@@ -3649,6 +3653,8 @@ function buildGraphData() {
       from: "sw:" + link.a,
       to: "sw:" + link.b,
       label: linkLabel(link),
+      // the caption on paper: the speed, LACP, the trunk — no load (v0.8.2)
+      paperLabel: linkLabel(link, false),
       color: { color: colors.moon, opacity: confirmed ? 1 : 0.8 },
       width: isLacp ? 5 : isTrunk ? 4 : 3,
       font: { color: colors.dim, size: 11, strokeWidth: 0 },
@@ -3684,6 +3690,7 @@ function buildGraphData() {
       edge.color = { color: colors.alarm, opacity: 1 };
       edge.dashes = [6, 4];
       edge.label = (edge.label ? edge.label + " · " : "") + t("stpBlocking");
+      edge.paperLabel = (edge.paperLabel ? edge.paperLabel + " · " : "") + t("stpBlocking");
       edge.title = t("linkStpBlocking");
     }
     markLoop(edge, link.a, link.a_port);
@@ -5061,9 +5068,44 @@ function nodeGeometry(id) {
 }
 
 /* The physics is still laying the map out: an export now is the
-   picture of this moment. Internal of vis-network 9.1.9 (pinned). */
+   picture of this moment. Not by vis's `stabilized` (v0.8.2): the
+   physics never stops here, and on a big map a few nodes keep creeping
+   a pixel or two a second, above vis's minVelocity — the flag never
+   came, nor did a "stabilized" event, and the window said "still being
+   laid out" over a map that stood still to the eye. Measured on the
+   demo grown to 683 nodes: hundreds of pixels a second after a refresh,
+   at most 2.5 once it had settled. So what counts is what the eye
+   sees: a node faster than LAYOUT_STILL_PX a second on the screen
+   within the last LAYOUT_STILL_MS (watchLayoutMotion, every second). */
+const LAYOUT_STILL_PX = 3;
+const LAYOUT_STILL_MS = 2500;
+let layoutMovedAt = 0;
+let layoutSample = null;
+
+function watchLayoutMotion() {
+  if (!network) return;
+  const now = performance.now();
+  const positions = network.getPositions();
+  if (layoutSample) {
+    const seconds = (now - layoutSample.at) / 1000 || 1;
+    const scale = network.getScale();
+    for (const [id, p] of Object.entries(positions)) {
+      // a node that was not there a second ago is placed, not laid out
+      const before = layoutSample.positions[id];
+      if (!before) continue;
+      if (Math.hypot(p.x - before.x, p.y - before.y) * scale / seconds > LAYOUT_STILL_PX) {
+        layoutMovedAt = now;
+        break;
+      }
+    }
+  }
+  layoutSample = { at: now, positions };
+}
+
 function layoutSettling() {
-  return !!(network && !layoutFrozen && network.physics && !network.physics.stabilized);
+  if (!network || layoutFrozen) return false;
+  // not measured yet: the map has only just been drawn
+  return !layoutSample || performance.now() - layoutMovedAt < LAYOUT_STILL_MS;
 }
 
 /* The map as data. `contents`: "infrastructure" — switches, switches
@@ -5116,7 +5158,7 @@ function exportModel({ contents, ports }) {
       // the bend, as the control point of a quadratic curve through mid
       mid: { x: mid.x, y: mid.y },
       control: { x: 2 * mid.x - (a.x + b.x) / 2, y: 2 * mid.y - (a.y + b.y) / 2 },
-      label: plainCaption(edge.label || ""),
+      label: plainCaption((edge.paperLabel === undefined ? edge.label : edge.paperLabel) || ""),
       ports: tags, semantic: edge.semantic || [],
     });
   }
@@ -5656,6 +5698,8 @@ function renderExportDialog(choices) {
     type: "text", name: "export-title", maxlength: 120,
     value: choices.title || t("sheetTitleDefault"),
   });
+  // "everything" on paper: 682 device captions on A2 come out at 2 pt
+  const allOnPaper = h("p", { class: "hint-line export-all-hint", text: t("exportAllPaperHint") });
   const pdfOnly = h("div", { class: "export-pdf" },
     check("notes", "exportNotes"),
     h("label", {}, t("exportTitleField"), title),
@@ -5668,6 +5712,7 @@ function renderExportDialog(choices) {
   const form = h("form", { class: "form export-form" },
     radios("format", Object.keys(EXPORT_FORMATS), "exportFormat"),
     radios("contents", ["infrastructure", "all"], "exportContents"),
+    allOnPaper,
     check("ports", "exportPorts"),
     pdfOnly,
     // the physics may still be moving things: say it, and export anyway
@@ -5677,6 +5722,8 @@ function renderExportDialog(choices) {
   const shown = () => {
     const format = form.elements["export-format"].value;
     pdfOnly.classList.toggle("hidden", format !== "pdf");
+    allOnPaper.classList.toggle("hidden",
+      format !== "pdf" || form.elements["export-contents"].value !== "all");
     go.textContent = t(format === "pdf" ? "exportPrint" : "exportDownload");
   };
   form.addEventListener("change", shown);
@@ -8003,3 +8050,4 @@ loadMe();
 // get yanked into place a moment later.
 loadTopology();
 setInterval(loadTopology, REFRESH_MS);
+setInterval(watchLayoutMotion, 1000);
