@@ -3064,9 +3064,100 @@ function fitHeader() {
     header.scrollWidth > header.clientWidth + 1 ||
     brand.scrollWidth > brand.clientWidth + 1;
   header.classList.remove("compact", "compact-more");
-  if (window.innerWidth <= 860 || !crowded()) return;
-  header.classList.add("compact");
-  if (crowded()) header.classList.add("compact-more");
+  if (window.innerWidth > 860 && crowded()) {
+    header.classList.add("compact");
+    if (crowded()) header.classList.add("compact-more");
+  }
+  tapAreas();
+}
+
+/* Tap areas on a phone (v0.8.2). A button of the header is 36 by 34,
+   enough for WCAG's AA (24 by 24) and a little small for a finger: an
+   invisible ::before takes it to 44 by 44, with nothing on the screen
+   changed. As far as the room allows — the header wraps differently
+   at every width, and its rows are 6 px apart: each side reaches
+   halfway across the gap to whatever can be tapped beside it, and
+   what one side cannot take the other does (RU and EN touch, so
+   theirs reach outwards). Two areas that would still meet at a corner
+   stop at the middle of the gap between their buttons. */
+const TAP_SIZE = 44;
+
+function tapAreas() {
+  const targets = [...document.querySelectorAll("header button, #sidebar-toggle")]
+    .filter((el) => el.offsetParent !== null);
+  if (!window.matchMedia("(max-width: 720px)").matches) {
+    for (const el of targets) el.style.removeProperty("--tap");
+    return;
+  }
+  const others = [...targets, ...document.querySelectorAll("#search, header a, #notice a")]
+    .filter((el) => el.offsetParent !== null);
+  const box = new Map(others.map((el) => [el, el.getBoundingClientRect()]));
+  const zones = new Map();
+  for (const el of targets) {
+    const r = box.get(el);
+    const wantX = Math.max(0, TAP_SIZE - r.width);
+    const wantY = Math.max(0, TAP_SIZE - r.height);
+    const room = { top: wantY, right: wantX, bottom: wantY, left: wantX };
+    for (const [other, o] of box) {
+      if (other === el) continue;
+      if (o.top < r.bottom + wantY && r.top - wantY < o.bottom) {
+        if (o.left >= r.right) room.right = Math.min(room.right, (o.left - r.right) / 2);
+        if (o.right <= r.left) room.left = Math.min(room.left, (r.left - o.right) / 2);
+      }
+      if (o.left < r.right + wantX && r.left - wantX < o.right) {
+        if (o.top >= r.bottom) room.bottom = Math.min(room.bottom, (o.top - r.bottom) / 2);
+        if (o.bottom <= r.top) room.top = Math.min(room.top, (r.top - o.bottom) / 2);
+      }
+    }
+    // half each way, and what one side has no room for, the other
+    const split = (want, a, b) => {
+      let first = Math.min(a, want / 2);
+      let second = Math.min(b, want / 2);
+      first = Math.min(a, want - second);
+      second = Math.min(b, want - first);
+      return [first, second];
+    };
+    const [left, right] = split(wantX, room.left, room.right);
+    const [top, bottom] = split(wantY, room.top, room.bottom);
+    zones.set(el, { top: r.top - top, right: r.right + right, bottom: r.bottom + bottom, left: r.left - left });
+  }
+  const list = [...zones];
+  for (let i = 0; i < list.length; i++) {
+    for (let j = i + 1; j < list.length; j++) {
+      const [ea, a] = list[i];
+      const [eb, b] = list[j];
+      if (!(a.left < b.right && b.left < a.right && a.top < b.bottom && b.top < a.bottom)) continue;
+      const ra = box.get(ea);
+      const rb = box.get(eb);
+      const apartX = Math.max(rb.left - ra.right, ra.left - rb.right);
+      const apartY = Math.max(rb.top - ra.bottom, ra.top - rb.bottom);
+      if (apartX >= apartY) {
+        const [l, r] = rb.left >= ra.right ? [a, b] : [b, a];
+        const [rl, rr] = rb.left >= ra.right ? [ra, rb] : [rb, ra];
+        const middle = (rl.right + rr.left) / 2;
+        l.right = Math.min(l.right, middle);
+        r.left = Math.max(r.left, middle);
+      } else {
+        const [u, d] = rb.top >= ra.bottom ? [a, b] : [b, a];
+        const [ru, rd] = rb.top >= ra.bottom ? [ra, rb] : [rb, ra];
+        const middle = (ru.bottom + rd.top) / 2;
+        u.bottom = Math.min(u.bottom, middle);
+        d.top = Math.max(d.top, middle);
+      }
+    }
+  }
+  for (const [el, z] of zones) {
+    const r = box.get(el);
+    const css = getComputedStyle(el);
+    // ::before is placed from inside the border
+    const inset = [
+      z.top - r.top - parseFloat(css.borderTopWidth),
+      r.right - z.right - parseFloat(css.borderRightWidth),
+      r.bottom - z.bottom - parseFloat(css.borderBottomWidth),
+      z.left - r.left - parseFloat(css.borderLeftWidth),
+    ].map((v) => Math.round(v * 10) / 10 + "px");
+    el.style.setProperty("--tap", inset.join(" "));
+  }
 }
 
 /* The service can go away — restarted, redeployed, or the machine this

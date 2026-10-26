@@ -822,6 +822,15 @@ body.gated .toolbar > button { display: none; }
   .sidebar-toggle:hover { color: var(--text); background: var(--bg-hover); }
   .sidebar-toggle:focus-visible { outline: 2px solid var(--link); outline-offset: -2px; }
   main.sidebar-collapsed #sidebar { display: none; }
+  /* a larger tap area, unseen (v0.8.2): tapAreas() in app.js sets how
+     far each one reaches, so that no two of them meet */
+  header button, .sidebar-toggle { position: relative; }
+  header button::before, .sidebar-toggle::before {
+    content: "";
+    position: absolute;
+    inset: var(--tap, 0);
+    z-index: 1;
+  }
 }
 
 /* STP panel: the verdict first, then the raw per-switch numbers */
