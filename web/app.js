@@ -2304,11 +2304,18 @@ function openMoreMenu() {
   // under the button, its right edge on the button's
   const button = els.moreBtn.getBoundingClientRect();
   const width = els.moreMenu.offsetWidth;
-  els.moreMenu.style.top = button.bottom + 6 + "px";
+  menuUnder(els.moreMenu, button.bottom + 6);
   els.moreMenu.style.left =
     Math.max(4, Math.min(button.right - width, window.innerWidth - width - 8)) + "px";
   const first = els.moreMenu.querySelector('[role="menuitem"]');
   if (first) first.focus();
+}
+
+/* A menu under its button, no taller than the room left under it: on a
+   low phone screen it scrolls inside itself (v0.8.2) */
+function menuUnder(menu, top) {
+  menu.style.top = top + "px";
+  menu.style.maxHeight = Math.max(120, window.innerHeight - top - 8) + "px";
 }
 
 function closeMoreMenu(returnFocus) {
@@ -4431,7 +4438,7 @@ function openPortLabelsMenu() {
   // under the button, its left edge on the button's
   const button = els.portLabelsBtn.getBoundingClientRect();
   const width = els.portLabelsMenu.offsetWidth;
-  els.portLabelsMenu.style.top = button.bottom + 6 + "px";
+  menuUnder(els.portLabelsMenu, button.bottom + 6);
   els.portLabelsMenu.style.left =
     Math.max(4, Math.min(button.left, window.innerWidth - width - 8)) + "px";
   const current = els.portLabelsMenu.querySelector('[aria-checked="true"]');

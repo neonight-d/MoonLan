@@ -19,9 +19,24 @@
 
 * { box-sizing: border-box; }
 
+/* The page itself never scrolls (v0.8.2). On a phone 100vh is the
+   window without the address bar, taller than what is seen while the
+   bar is shown: the page came out higher than the screen, and a finger
+   on the header, a menu or a card moved all of it. dvh is the height
+   actually seen; 100vh stays for a browser that does not know it.
+   Whatever is longer than the screen scrolls inside itself, and its
+   end does not hand the scroll on (overscroll-behavior: contain).
+   "none" here also stops Chrome's pull-to-refresh, a reload in the
+   middle of arranging the map. Zooming with two fingers stays. */
+html, body {
+  overflow: hidden;
+  overscroll-behavior: none;
+}
+
 body {
   margin: 0;
   height: 100vh;
+  height: 100dvh;
   display: flex;
   flex-direction: column;
   background: var(--bg);
@@ -198,6 +213,7 @@ main { flex: 1; display: flex; min-height: 0; position: relative; }
   border-right: 1px solid var(--line);
   background: var(--bg-panel);
   overflow-y: auto;
+  overscroll-behavior: contain;
   padding: 14px;
 }
 
@@ -283,6 +299,7 @@ main { flex: 1; display: flex; min-height: 0; position: relative; }
   display: flex;
   flex-direction: column;
   overflow: hidden;
+  overscroll-behavior: contain;
   background: var(--bg-panel);
   border: 1px solid var(--line);
   border-radius: 8px;
@@ -311,7 +328,7 @@ main { flex: 1; display: flex; min-height: 0; position: relative; }
   font-size: 1.1rem;
   padding: 2px 6px;
 }
-.panel-scroll { overflow: auto; flex: 1 1 auto; }
+.panel-scroll { overflow: auto; overscroll-behavior: contain; flex: 1 1 auto; }
 /* a wide table inside a panel of prose: the table scrolls, the prose
    stays where it was written */
 .table-scroll { overflow-x: auto; }
@@ -632,11 +649,13 @@ body.gated .toolbar > button { display: none; }
   background: rgba(14, 20, 32, 0.78);
   backdrop-filter: blur(3px);
   overflow: auto;
+  overscroll-behavior: contain;
 }
 .gate-card {
   width: min(430px, 100%);
   max-height: 100%;
   overflow: auto;
+  overscroll-behavior: contain;
   background: var(--bg-panel);
   border: 1px solid var(--line);
   border-radius: 10px;
@@ -854,6 +873,11 @@ body.gated .toolbar > button { display: none; }
   position: fixed;
   z-index: 40;
   min-width: 170px;
+  /* taller than the room under its button: it scrolls, it does not
+     run off the screen (the page under it cannot be scrolled to it) */
+  max-height: calc(100dvh - 16px);
+  overflow-y: auto;
+  overscroll-behavior: contain;
   padding: 4px;
   background: var(--bg-panel);
   border: 1px solid var(--line);
