@@ -126,10 +126,14 @@ function t(key) {
 }
 
 /* t() with {placeholder} substitution */
-function fmt(key, params) {
+/* A translation with its {places} filled (v0.8.3: every one of them,
+   and as they are — a replacement given as a string to replace() reads
+   $& and $1 in it, and a device's name or a port's description may
+   have them) */
+function fmt(key, params = {}) {
   let s = t(key);
   for (const [name, value] of Object.entries(params)) {
-    s = s.replace("{" + name + "}", value);
+    s = s.replaceAll("{" + name + "}", () => (value == null ? "" : String(value)));
   }
   return s;
 }
