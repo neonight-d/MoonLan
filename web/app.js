@@ -1113,9 +1113,25 @@ function hideAccountPanels() {
   els.account.classList.add("hidden");
   els.users.classList.add("hidden");
   els.about.classList.add("hidden");
+  panelAsked = null;
+}
+
+/* The panel asked for last (v0.8.3). The ports, alarms, STP and the
+   journal open once their answer is in, and an answer late enough
+   opened its panel over whatever had been opened since — or after it
+   was closed, its 30 s timer included. Showing any other panel or
+   closing the ports drops the ticket; an answer whose ticket is gone
+   opens nothing. */
+let panelAsked = null;
+
+function askPanel() {
+  const ticket = {};
+  panelAsked = ticket;
+  return () => panelAsked === ticket;
 }
 
 function hidePanelsFor(panel) {
+  panelAsked = null;
   for (const other of [els.details, els.journal, els.alarms, els.stp,
     els.account, els.users, els.notesPanel, els.about]) {
     if (other !== panel) other.classList.add("hidden");
@@ -6995,6 +7011,10 @@ function hideDetails() {
 /* ---------- ports panel ---------- */
 
 async function openPorts(ip, highlightPort) {
+  // the timer goes before the request: two switches opened one after
+  // the other used to leave the first one's timer running
+  clearInterval(portsTimer);
+  portsTimer = null;
   portsIp = ip;
   portsHighlight = highlightPort || null;
   hideDetails();
@@ -7002,7 +7022,10 @@ async function openPorts(ip, highlightPort) {
   hideAccountPanels();
   els.alarms.classList.add("hidden");
   els.stp.classList.add("hidden");
+  const stillAsked = askPanel();
   await refreshPorts();
+  // closed, another switch opened or another panel shown meanwhile
+  if (!stillAsked() || portsIp !== ip) return;
   els.ports.classList.remove("hidden");
   clearInterval(portsTimer);
   portsTimer = setInterval(refreshPorts, REFRESH_MS);
@@ -7013,16 +7036,18 @@ function closePorts() {
   clearInterval(portsTimer);
   portsTimer = null;
   portsIp = null;
+  panelAsked = null;
 }
 
 async function refreshPorts() {
   // its 30 s timer waits for nobody: the request behind the sign-in
   // form is the one that goes on
-  if (!portsIp || gateWait) return;
+  const ip = portsIp;
+  if (!ip || gateWait) return;
   let data;
   try {
     const res = await api(
-      "/api/switch/" + encodeURIComponent(portsIp) + "/ports"
+      "/api/switch/" + encodeURIComponent(ip) + "/ports"
     );
     data = await res.json();
   } catch (e) {
@@ -7031,6 +7056,8 @@ async function refreshPorts() {
     return;
   }
   serviceBack();
+  // another switch's table is not drawn over this one's
+  if (portsIp !== ip) return;
   lastPorts = data;
   renderPorts(lastPorts);
 }
@@ -7429,7 +7456,9 @@ async function toggleAlarms() {
     els.alarms.classList.add("hidden");
     return;
   }
+  const stillAsked = askPanel();
   await refreshAlarms();
+  if (!stillAsked()) return;
   hideDetails();
   els.journal.classList.add("hidden");
   hideAccountPanels();
@@ -7728,8 +7757,10 @@ async function toggleStp() {
     els.stp.classList.add("hidden");
     return;
   }
+  const stillAsked = askPanel();
   lastStp = await (await api("/api/stp")).json();
   renderStp();
+  if (!stillAsked()) return;
   hideDetails();
   closePorts();
   hideAccountPanels();
@@ -7905,10 +7936,12 @@ async function toggleJournal() {
     els.journal.classList.add("hidden");
     return;
   }
+  const stillAsked = askPanel();
   const res = await api("/api/journal?limit=100");
   const data = await res.json();
   lastEvents = data.events;
   renderJournal(lastEvents);
+  if (!stillAsked()) return;
   hideDetails();
   closePorts();
   hideAccountPanels();
