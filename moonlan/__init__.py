@@ -1,3 +1,3 @@
 """MoonLan — builds a local network map from SNMP data."""
 
-__version__ = "0.8.2"
+__version__ = "0.8.3"
