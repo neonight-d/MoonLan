@@ -160,11 +160,9 @@ function applyStatic() {
   labelIcon(els.journalBtn, t("journalBtn"));
   labelIcon(els.moreBtn, t("moreBtn"));
   renderBadge();
-  // what the two counters actually mean — the whole point of v0.5.4
-  const errHead = document.querySelector('#ports th[data-sort="err"]');
-  const discHead = document.querySelector('#ports th[data-sort="disc"]');
-  if (errHead) errHead.title = t("errTooltip");
-  if (discHead) discHead.title = t("discTooltip");
+  // what the columns are: the full name where a phone shows a short
+  // one, and what the two counters actually mean (v0.5.4)
+  for (const th of document.querySelectorAll("#ports th[data-sort]")) th.title = columnTitle(th);
   els.langRu.classList.toggle("active", lang === "ru");
   els.langEn.classList.toggle("active", lang === "en");
   applyFreeze();
@@ -7093,6 +7091,15 @@ function setPortsSort(key) {
   if (lastPorts) renderPorts(lastPorts);
 }
 
+/* A column header's tooltip: its full name — a narrow screen shows
+   "In", "Err" (v0.8.3) — and for the two counters what they count */
+function columnTitle(th) {
+  const full = th.querySelector(".th-full");
+  const meaning = th.dataset.sort === "err" ? t("errTooltip")
+    : th.dataset.sort === "disc" ? t("discTooltip") : "";
+  return [full ? full.textContent : "", meaning].filter(Boolean).join("\n\n");
+}
+
 /* A column the agent never answered for is a column of dashes that
    means "unknown", not "zero". The header says which, and why. */
 function markSilentColumns(columns) {
@@ -7104,12 +7111,7 @@ function markSilentColumns(columns) {
     const partial = info && info.answered && info.partial;
     th.classList.toggle("no-answer", !!silent);
     th.classList.toggle("partial", !!partial);
-    const base =
-      th.dataset.sort === "err"
-        ? t("errTooltip")
-        : th.dataset.sort === "disc"
-        ? t("discTooltip")
-        : "";
+    const base = columnTitle(th);
     if (!silent && !partial) {
       th.title = base;
       continue;
@@ -7228,8 +7230,15 @@ function renderPorts(data) {
         // monitored devices behind this port
         name += " ★" + (p.monitored_hosts > 1 ? p.monitored_hosts : "");
       }
+      // the name, and what is known about the port after it; on a phone
+      // the marks go to a line of their own under the name (v0.8.3)
       const nameCell = document.createElement("td");
-      nameCell.textContent = name;
+      const nameText = document.createElement("span");
+      nameText.className = "port-name";
+      nameText.textContent = name;
+      const marks = document.createElement("span");
+      marks.className = "port-marks";
+      nameCell.append(nameText, marks);
       // lldpLocPortDesc: what the operator called this port on the
       // switch itself ("Library", "403 audit")
       if (p.uplink_hint) {
@@ -7245,21 +7254,21 @@ function renderPorts(data) {
               ? " " + fmt("andMore", { n: p.uplink_hint.more }) : ""),
             name: p.uplink_hint.name,
           });
-        nameCell.append(" ", chip);
+        marks.append(" ", chip);
       }
       if (p.external) {
         const chip = document.createElement("span");
         chip.className = "chip";
         chip.textContent = t("externalPort");
         chip.title = t("externalHint");
-        nameCell.append(" ", chip);
+        marks.append(" ", chip);
       }
       if (p.label) {
         const label = document.createElement("span");
         label.className = "port-label";
         label.textContent = p.label;
         label.title = t("portLabelName") + "\n" + p.label;
-        nameCell.append(" ", label);
+        marks.append(" ", label);
       }
       // addresses this port's damaged frames invented, with the real
       // one each of them is a distortion of
@@ -7271,7 +7280,7 @@ function renderPorts(data) {
           n: p.flaps,
           when: p.flaps_last ? fmtTime(p.flaps_last) : "—",
         });
-        nameCell.append(" ", chip);
+        marks.append(" ", chip);
       }
       const neighbours = p.lldp || [];
       if (neighbours.length) {
@@ -7303,7 +7312,7 @@ function renderPorts(data) {
             : p.lldp_crowded
             ? "\n\n" + t("lldpCrowdedHint")
             : "");
-        nameCell.append(" ", chip);
+        marks.append(" ", chip);
       }
       const suspect = p.suspect_macs || [];
       if (suspect.length) {
@@ -7316,8 +7325,11 @@ function renderPorts(data) {
           suspect
             .map((s) => s.mac + " ← " + s.sample + " (" + s.distance + ")")
             .join("\n");
-        nameCell.append(" ", chip);
+        marks.append(" ", chip);
       }
+      // cut short on a phone: the whole of it in the tooltip
+      if (marks.childNodes.length) marks.title = marks.textContent.trim();
+      else marks.remove();
       tr.append(nameCell);
       const dot = document.createElement("span");
       dot.className = "dot " + (p.oper_up ? "up" : "down");

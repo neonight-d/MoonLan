@@ -547,6 +547,8 @@ main { flex: 1; display: flex; min-height: 0; position: relative; }
 /* numbers keep their width; the port name gives way first */
 .ports-table th.num, .ports-table td.num { width: 8ch; }
 .ports-table td:first-child { max-width: 22rem; }
+/* a short header for a phone, the full one everywhere else */
+.ports-table .th-short { display: none; }
 .ports-table th[data-sort] { cursor: pointer; user-select: none; }
 .ports-table th[data-sort]:hover { color: var(--text); }
 .ports-table th.sorted-asc::after { content: " ▲"; font-size: 0.7rem; }
@@ -822,6 +824,22 @@ body.gated .toolbar > button { display: none; }
   .sidebar-toggle:hover { color: var(--text); background: var(--bg-hover); }
   .sidebar-toggle:focus-visible { outline: 2px solid var(--link); outline-offset: -2px; }
   main.sidebar-collapsed #sidebar { display: none; }
+  /* The ports of a switch on an upright phone (v0.8.3): the port's
+     column at most 40% of the width, its name wrapping, what is known
+     about it on a line of its own under the name, cut short with the
+     whole of it in the tooltip; the numbers scroll sideways under it. */
+  .ports-table th:first-child, .ports-table td:first-child { max-width: 40vw; }
+  .ports-table td:first-child { white-space: normal; }
+  .ports-table .port-name { overflow-wrap: anywhere; }
+  .ports-table .port-marks {
+    display: block;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: 0.72rem;
+  }
+  .ports-table .th-full { display: none; }
+  .ports-table .th-short { display: inline; }
   /* a larger tap area, unseen (v0.8.2): tapAreas() in app.js sets how
      far each one reaches, so that no two of them meet */
   header button, .sidebar-toggle { position: relative; }

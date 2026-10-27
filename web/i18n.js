@@ -627,6 +627,10 @@ const I18N = {
     colOut: "Out, Mbit/s",
     colErr: "Err/min",
     colDisc: "Disc/min",
+    colInShort: "In",
+    colOutShort: "Out",
+    colErrShort: "Err",
+    colDiscShort: "Disc",
     errTooltip:
       "Damaged frames: bad cable or patch cord, duplex mismatch, a dying "
       + "transceiver. Rare on healthy hardware — worth looking into.",
@@ -1582,6 +1586,10 @@ const I18N = {
     colOut: "Исх., Мбит/с",
     colErr: "Ошиб/мин",
     colDisc: "Отбр/мин",
+    colInShort: "Вх.",
+    colOutShort: "Исх.",
+    colErrShort: "Ош.",
+    colDiscShort: "Отб.",
     errTooltip:
       "Испорченные кадры: плохой кабель или патч-корд, рассогласование "
       + "дуплекса, умирающий трансивер. На исправном оборудовании редки — "
