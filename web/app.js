@@ -2675,81 +2675,57 @@ function renderAction() {
       " · " +
       (actionTitle.name || fmt("actionsNodes", { n: actionTitle.n }))
     : "";
-  const body = [];
-  const esc = (text) =>
-    String(text == null ? "" : text).replace(/[&<>"]/g, (c) => ({
-      "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;",
-    })[c]);
+  // names and addresses come from the network, the output from ping or
+  // traceroute: all of it escaped by html`…`
+  const show = (markup) => {
+    els.actionsBody.innerHTML = markup.text;
+  };
   if (actionRefusal) {
-    body.push(`<p class="action-status refused">${esc(refusalText(actionRefusal))}</p>`);
-    els.actionsBody.innerHTML = body.join("");
+    show(html`<p class="action-status refused">${refusalText(actionRefusal)}</p>`);
     return;
   }
   const job = actionJob;
   if (!job) {
-    body.push(`<p class="action-status running">${t("actionStarting")}</p>`);
-    els.actionsBody.innerHTML = body.join("");
+    show(html`<p class="action-status running">${t("actionStarting")}</p>`);
     return;
   }
-  body.push(
-    `<p class="action-status ${job.done ? "" : "running"}">${
-      job.done ? t("actionDone") : t("actionRunning")
-    }</p>`
-  );
+  const body = [html`<p class="action-status ${job.done ? "" : "running"}">${
+    job.done ? t("actionDone") : t("actionRunning")}</p>`];
   if (lastTools && lastTools.simulated) {
-    body.push(`<p class="hint">${t("actionSimulated")}</p>`);
+    body.push(html`<p class="hint">${t("actionSimulated")}</p>`);
   }
   if (job.action === "ping" && job.targets.length > 1) {
     const answered = job.targets.filter(
       (target) => target.result && target.result.received > 0
     ).length;
-    body.push(
-      `<p class="hint">${fmt("pingSummary", {
-        n: answered, total: job.targets.length,
-      })}</p>`
-    );
+    body.push(html`<p class="hint">${fmt("pingSummary", { n: answered, total: job.targets.length })}</p>`);
     const rows = job.targets.map((target) => {
       const [cls, verdict] = pingVerdict(target);
       const result = target.result || {};
-      return (
-        `<tr><td>${esc(target.name)}</td>` +
-        `<td class="mono">${esc(target.ip || "—")}</td>` +
-        `<td class="num">${result.loss == null ? "—" : result.loss + "%"}</td>` +
-        `<td class="num">${esc(fmtMs(result.avg))}</td>` +
-        `<td class="${cls}">${esc(verdict)}</td></tr>`
-      );
+      return html`<tr><td>${target.name}</td><td class="mono">${target.ip || "—"}</td><td class="num">${
+        result.loss == null ? "—" : result.loss + "%"}</td><td class="num">${fmtMs(result.avg)}</td><td class="${cls}">${verdict}</td></tr>`;
     });
-    body.push(
-      `<table><thead><tr><th>${t("colNode")}</th><th>IP</th>` +
-        `<th>${t("colLoss")}</th><th>${t("colRtt")}</th>` +
-        `<th>${t("colVerdict")}</th></tr></thead>` +
-        `<tbody>${rows.join("")}</tbody></table>`
-    );
+    body.push(html`<table><thead><tr><th>${t("colNode")}</th><th>IP</th><th>${t("colLoss")}</th><th>${
+      t("colRtt")}</th><th>${t("colVerdict")}</th></tr></thead><tbody>${rows}</tbody></table>`);
   } else {
     const target = job.targets[0];
-    body.push(`<dl><dt>${t("actionTarget")}</dt><dd>${esc(target.name)} · ${esc(target.ip || "—")}</dd>`);
+    const rows = [html`<dt>${t("actionTarget")}</dt><dd>${target.name} · ${target.ip || "—"}</dd>`];
     if (job.action === "ping") {
       const result = target.result;
       const [cls, verdict] = pingVerdict(target);
-      body.push(
-        `<dt>${t("actionThisRun")}</dt><dd><span class="${cls}">${esc(verdict)}</span>` +
-          (result
-            ? ` · ${fmt("pingLoss", {
-                loss: result.loss, received: result.received, sent: result.sent,
-              })} · ${t("pingRtt")} ${esc(fmtMs(result.min))} / ${esc(
-                fmtMs(result.avg)
-              )} / ${esc(fmtMs(result.max))}`
-            : "") +
-          `</dd>`
-      );
-      body.push(`<dt>${t("actionMonitor")}</dt><dd>${esc(monitorText(target.monitor))}</dd>`);
+      rows.push(html`<dt>${t("actionThisRun")}</dt><dd><span class="${cls}">${verdict}</span>${
+        result
+          ? " · " + fmt("pingLoss", { loss: result.loss, received: result.received, sent: result.sent }) +
+            " · " + t("pingRtt") + " " + fmtMs(result.min) + " / " + fmtMs(result.avg) + " / " + fmtMs(result.max)
+          : ""}</dd>`);
+      rows.push(html`<dt>${t("actionMonitor")}</dt><dd>${monitorText(target.monitor)}</dd>`);
     } else {
-      body.push(`<dt>${t("actionTool")}</dt><dd>${esc(job.tool)}</dd>`);
+      rows.push(html`<dt>${t("actionTool")}</dt><dd>${job.tool}</dd>`);
     }
-    body.push("</dl>");
-    if (target.output) body.push(`<pre>${esc(target.output)}</pre>`);
+    body.push(html`<dl>${rows}</dl>`);
+    if (target.output) body.push(html`<pre>${target.output}</pre>`);
   }
-  els.actionsBody.innerHTML = body.join("");
+  show(html`${body}`);
 }
 
 /* ---------- arrange mode ----------
@@ -4964,12 +4940,63 @@ function switchName(ip) {
   return sw ? sw.name : ip;
 }
 
-/* Text from outside the page — a maker's name from the IEEE register —
-   into one of the cards built as HTML. */
+/* Text from outside the page into HTML: the five characters that could
+   end an attribute or open a tag. */
 function escapeHtml(text) {
   return String(text).replace(/[&<>"']/g, (ch) => ({
     "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;",
   })[ch]);
+}
+
+/* Markup with everything from outside escaped (v0.8.3). The cards were
+   template strings with an escapeHtml() here and there, and the ones
+   left out put a switch's sysName, an LLDP neighbour's name or a DNS
+   name into the page as markup: a laptop announcing itself as
+   <img src=x onerror=…> ran a script in whoever opened its card. In
+   html`…` every ${…} is escaped — text, a number, an attribute value;
+   markup goes in only as another html`…` or as raw(…), so what can be
+   forgotten now is raw, and raw is visible. An array of either is
+   joined as it is. */
+class Markup {
+  constructor(text) {
+    this.text = text;
+  }
+
+  toString() {
+    return this.text;
+  }
+}
+
+function raw(text) {
+  return new Markup(text == null ? "" : String(text));
+}
+
+function htmlValue(value) {
+  if (value instanceof Markup) return value.text;
+  if (Array.isArray(value)) return value.map(htmlValue).join("");
+  if (value == null || value === false) return "";
+  return escapeHtml(value);
+}
+
+function html(strings, ...values) {
+  let out = strings[0];
+  values.forEach((value, i) => {
+    out += htmlValue(value) + strings[i + 1];
+  });
+  return new Markup(out);
+}
+
+/* Markup items with text between them: "Gi0/1, Gi0/2" of two dots */
+function htmlJoin(items, separator) {
+  return raw(items.map(htmlValue).join(escapeHtml(separator)));
+}
+
+/* fmt() for markup: the translation is ours and may hold markup, the
+   parameters are not — a switch's name, a port — and are escaped */
+function fmtHtml(key, params = {}) {
+  const escaped = {};
+  for (const [name, value] of Object.entries(params)) escaped[name] = htmlValue(value);
+  return raw(fmt(key, escaped));
 }
 
 /* Who made a device, from `vendor` and `vendor_status`: the name as the
@@ -4985,17 +5012,17 @@ function vendorText(item) {
 function vendorRow(item) {
   if (!item || !item.vendor_status || item.vendor_status === "invalid") return "";
   // words, not an address: wrapped between words, unlike the MAC above
-  let value = `<span class="vendor${item.vendor_status === "found" ? "" : " muted"}">${
-    escapeHtml(vendorText(item))}</span>`;
+  let value = html`<span class="vendor${item.vendor_status === "found" ? "" : " muted"}">${
+    vendorText(item)}</span>`;
   if (item.vendor_status === "no_registry") {
     // the cure is a command on the server: said to whoever can run it
-    value = `<span class="muted" title="${escapeHtml(fmt("vendorNoRegistryHint", {
-      command: "python -m moonlan.oui update" }))}">${escapeHtml(t("vendor_no_registry"))}</span>`;
+    value = html`<span class="muted" title="${fmt("vendorNoRegistryHint", {
+      command: "python -m moonlan.oui update" })}">${t("vendor_no_registry")}</span>`;
     if (me && (me.sign_in === false || me.role === "admin")) {
-      value += `<div class="hint-line"><code>python -m moonlan.oui update</code></div>`;
+      value = html`${value}<div class="hint-line"><code>python -m moonlan.oui update</code></div>`;
     }
   }
-  return `<dt>${t("vendorLabel")}</dt><dd>${value}</dd>`;
+  return html`<dt>${t("vendorLabel")}</dt><dd>${value}</dd>`;
 }
 
 /* An explanation on a card, in one line that names the fact itself —
@@ -5003,10 +5030,7 @@ function vendorRow(item) {
    about it, is the full text: a tooltip on the line, and behind ⓘ a
    paragraph that opens in place, because a phone has no hover. */
 function hintBlock(shortText, longText) {
-  return `<p class="hint" title="${escapeHtml(longText)}">${escapeHtml(shortText)} ` +
-    `<button type="button" class="hint-more" aria-expanded="false" ` +
-    `aria-label="${escapeHtml(t("hintMore"))}">ⓘ</button></p>` +
-    `<p class="hint hint-full hidden">${escapeHtml(longText)}</p>`;
+  return html`<p class="hint" title="${longText}">${shortText} <button type="button" class="hint-more" aria-expanded="false" aria-label="${t("hintMore")}">ⓘ</button></p><p class="hint hint-full hidden">${longText}</p>`;
 }
 
 /* hintBlock() for a key whose short line is `<key>Short` */
@@ -6505,9 +6529,10 @@ async function saveNote(nodeId, remove) {
 /* Fills the details card, hoisting its own <h3> into the panel head.
    Each branch below writes its title as part of the HTML — that is
    where it belongs, next to the thing it titles — and the head is
-   where it has to end up, so it stays put while the card scrolls. */
-function setDetails(html) {
-  els.detailsBody.innerHTML = html;
+   where it has to end up, so it stays put while the card scrolls.
+   Markup only (html`…`): a plain string is shown as the text it is. */
+function setDetails(card) {
+  els.detailsBody.innerHTML = card instanceof Markup ? card.text : escapeHtml(card);
   const heading = els.detailsBody.querySelector("h3");
   els.detailsTitle.replaceChildren(
     ...(heading ? [...heading.childNodes] : [])
@@ -6539,37 +6564,31 @@ function switchLinksHtml(ip) {
       : link.stp_blocking
       ? t("linkStpBlocking")
       : "";
-    rows.push(
-      `<li${title ? ` title="${title}"` : ""}>` +
-        `<span>${port}${mark} → ${switchName(otherIp)}</span>` +
-        `<span class="sub">${
-          source === "both"
-            ? t("srcBoth")
-            : source === "lldp"
-            ? t("srcLldp")
-            : t("srcFdb")
-        }${link.speed_mbps ? " · " + fmtSpeed(link.speed_mbps) : ""}${
-          link.stp_blocking ? " · " + t("stpBlocking") : ""
-        }</span></li>`
-    );
+    const how = source === "both" ? t("srcBoth") : source === "lldp" ? t("srcLldp") : t("srcFdb");
+    rows.push(html`<li${title ? html` title="${title}"` : ""}><span>${port}${mark} → ${switchName(otherIp)}</span><span class="sub">${how}${
+      link.speed_mbps ? " · " + fmtSpeed(link.speed_mbps) : ""}${
+      link.stp_blocking ? " · " + t("stpBlocking") : ""}</span></li>`);
   }
   if (!rows.length) return "";
-  return (
-    `<h4 class="card-sub">${fmt("switchLinks", { n: rows.length })}</h4>` +
-    `<ul class="offline-list">${rows.join("")}</ul>`
-  );
+  return html`<h4 class="card-sub">${fmt("switchLinks", { n: rows.length })}</h4><ul class="offline-list">${rows}</ul>`;
+}
+
+/* The devices of a group, each a row that leads to its node */
+function memberRows(members, first, second) {
+  return members.map((h) => html`<li data-mac="${h.mac}" title="${h.mac + " · " + vendorText(h)}"><span>${first(h)}</span>
+          <span class="sub">${second(h)}</span></li>`);
 }
 
 function showDetails(nodeId) {
   // what is being typed into an open editor of this card survives the
   // card being drawn again — a change of language or of role
   const draft = noteDraft(nodeId);
-  let html = "";
+  let card = raw("");
   if (nodeId.startsWith("sw:")) {
     const sw = topology.switches.find((s) => "sw:" + s.ip === nodeId);
     if (!sw) return;
     const loop = sw.loop || {};
-    html = `<h3>${sw.name}</h3>
+    card = html`<h3>${sw.name}</h3>
       ${sw.over_budget
         ? hintKey(
             sw.over_budget_scans >= 2 ? "staleSwitchHint" : "overBudgetHint",
@@ -6584,36 +6603,31 @@ function showDetails(nodeId) {
       <dt>${t("portsUpTotal")}</dt><dd>${sw.ports_up} / ${sw.ports_total}</dd>
       <dt>${t("lastReply")}</dt><dd>${fmtTime(sw.last_ping_ok)}</dd>
       ${sw.over_budget
-        ? `<dt>${t("dataFrom")}</dt><dd>${fmtTime(sw.polled_at)}${
+        ? html`<dt>${t("dataFrom")}</dt><dd>${fmtTime(sw.polled_at)}${
             sw.over_budget_scans >= 2
               ? " · " + fmt("staleSwitchScans", { n: sw.over_budget_scans })
               : ""
           }</dd>`
         : ""}
       <dt>${t("loopDetection")}</dt><dd${
-        loop.status === "loop" ? ' class="loop-alarm"' : ""
+        loop.status === "loop" ? raw(' class="loop-alarm"') : ""
       } title="${loopCardTitle(loop)}">${loopCardLine(loop)}</dd>
       <dt>${t("descr")}</dt><dd>${sw.descr || "—"}</dd></dl>
       ${switchLinksHtml(sw.ip)}
-      <button id="ports-btn" class="panel-btn">${t("portsBtn")}</button>`;
+      <button type="button" id="ports-btn" class="panel-btn">${t("portsBtn")}</button>`;
   } else if (nodeId.startsWith("offline:")) {
     const group = (topology.offline_groups || []).find((g) => g.id === nodeId);
     if (!group) return;
     const members = topology.hosts.filter((h) => h.via === nodeId);
-    const rows = members
-      .map(
-        (h) => `<li data-mac="${h.mac}" title="${escapeHtml(h.mac + " · " + vendorText(h))}"><span>${hostLabel(h)}</span>
-          <span class="sub">${fmtTime(h.last_seen)}</span></li>`
-      )
-      .join("");
-    html = `<h3>${fmt("offlineGroupTitle", { n: group.count })}</h3>
+    const rows = memberRows(members, hostLabel, (h) => fmtTime(h.last_seen));
+    card = html`<h3>${fmt("offlineGroupTitle", { n: group.count })}</h3>
       ${group.approximate
         ? hintKey("offlineGroupGuessHint")
-        : `<p class="hint">${t("offlineGroupHint")}</p>`}<dl>
+        : html`<p class="hint">${t("offlineGroupHint")}</p>`}<dl>
       <dt>${t("switchLabel")}</dt><dd>${group.switch}</dd>
       <dt>${t("portLabel")}</dt><dd>${group.port}</dd>
       ${group.via_name
-        ? `<dt>${t("behindBridge")}</dt><dd>${group.via_name}</dd>`
+        ? html`<dt>${t("behindBridge")}</dt><dd>${group.via_name}</dd>`
         : ""}
       <dt>${t("lastSeenLabel")}</dt><dd>${fmtTime(group.last_seen_max)}</dd>
       </dl><ul class="offline-list">${rows}</ul>`;
@@ -6621,25 +6635,20 @@ function showDetails(nodeId) {
     const group = (topology.trunk_groups || []).find((g) => g.id === nodeId);
     if (!group) return;
     const members = topology.hosts.filter((h) => h.via === nodeId);
-    const rows = members
-      .map(
-        (h) => `<li data-mac="${h.mac}" title="${escapeHtml(h.mac + " · " + vendorText(h))}"><span>${hostLabel(h)}</span>
-          <span class="sub">${h.ip ? h.mac : ""}</span></li>`
-      )
-      .join("");
-    html = `<h3>${fmt("trunkGroupTitle", { n: group.count })}</h3>
-      <p class="hint">${fmt("trunkGroupHint", {
+    const rows = memberRows(members, hostLabel, (h) => (h.ip ? h.mac : ""));
+    card = html`<h3>${fmt("trunkGroupTitle", { n: group.count })}</h3>
+      <p class="hint">${fmtHtml("trunkGroupHint", {
         switch: switchName(group.switch),
         port: group.port,
       })}</p><dl>
       <dt>${t("switchLabel")}</dt><dd>${group.switch}</dd>
       <dt>${t("portLabel")}</dt><dd>${group.port}</dd>
       ${group.via_name
-        ? `<dt>${t("behindBridge")}</dt><dd>${group.via_name}</dd>`
+        ? html`<dt>${t("behindBridge")}</dt><dd>${group.via_name}</dd>`
         : ""}
       <dt>${t("devicesBehindPort")}</dt><dd>${group.count}</dd>
       ${group.silent
-        ? `<dt>${t("trunkGroupSilent")}</dt><dd>${group.silent}</dd>`
+        ? html`<dt>${t("trunkGroupSilent")}</dt><dd>${group.silent}</dd>`
         : ""}
       </dl><ul class="offline-list">${rows}</ul>`;
   } else if (nodeId.startsWith("bridge:")) {
@@ -6663,7 +6672,7 @@ function showDetails(nodeId) {
       : bridge.shares_port
       ? "bridgeSharesPortHint"
       : "bridgeHint";
-    html = `<h3>${bridge.name}</h3>
+    card = html`<h3>${bridge.name}</h3>
       ${hintKey(bridgeHint)}
       ${bridge.lldp_crowded && !bridge.shares_port
         ? hintKey("lldpCrowdedHint") : ""}
@@ -6673,15 +6682,15 @@ function showDetails(nodeId) {
       <dt>${t("chassisId")}</dt><dd>${bridge.chassis_id}</dd>
       ${bridge.vendor_status === "found" || bridge.vendor_status === "unregistered"
         || bridge.vendor_status === "no_registry" ? vendorRow(bridge) : ""}
-      ${bridge.dns_name ? `<dt>${t("name")}</dt><dd>${bridge.dns_name}</dd>` : ""}
+      ${bridge.dns_name ? html`<dt>${t("name")}</dt><dd>${bridge.dns_name}</dd>` : ""}
       <dt>${t("mgmtIp")}</dt><dd>${link}</dd>
       ${bridge.ip && !(bridge.mgmt_ips || []).includes(bridge.ip)
-        ? `<dt>${t("ipAddr")}</dt><dd>${bridge.ip}</dd>` : ""}
+        ? html`<dt>${t("ipAddr")}</dt><dd>${bridge.ip}</dd>` : ""}
       ${bridge.ip
-        ? `<dt>${t("lastReply")}</dt><dd>${fmtTime(bridge.last_ping_ok)}</dd>`
+        ? html`<dt>${t("lastReply")}</dt><dd>${fmtTime(bridge.last_ping_ok)}</dd>`
         : ""}
       ${(bridge.also_ips || []).length
-        ? `<dt>${t("sameDevice")}</dt><dd>${bridge.also_ips.join(", ")}</dd>`
+        ? html`<dt>${t("sameDevice")}</dt><dd>${bridge.also_ips.join(", ")}</dd>`
         : ""}
       <dt>${t("switchLabel")}</dt><dd>${bridge.switch}</dd>
       <dt>${t("portLabel")}</dt><dd>${bridge.port}</dd>
@@ -6692,7 +6701,7 @@ function showDetails(nodeId) {
       }</dd>
       ${bridge.shares_port || bridge.external
         ? ""
-        : `<dt>${t("devicesBehindPort")}</dt><dd>${bridge.host_count ?? 0}</dd>`}
+        : html`<dt>${t("devicesBehindPort")}</dt><dd>${bridge.host_count ?? 0}</dd>`}
       <dt>${t("firstSeen")}</dt><dd>${fmtTime(bridge.first_seen)}</dd>
       <dt>${t("lastSeenLabel")}</dt><dd>${fmtTime(bridge.last_seen)}</dd>
       </dl>`;
@@ -6708,25 +6717,20 @@ function showDetails(nodeId) {
     );
     // addresses first: past the handover the address is all there is,
     // and the name column would just repeat it
-    const rows = members
-      .map(
-        (h) => `<li data-mac="${h.mac}" title="${escapeHtml(h.mac + " · " + vendorText(h))}"><span>${h.ip || hostLabel(h)}</span>
-          <span class="sub">${h.ip ? h.mac : ""}</span></li>`
-      )
-      .join("");
-    html = `<h3>${t("externalNetwork")}</h3>
+    const rows = memberRows(members, (h) => h.ip || hostLabel(h), (h) => (h.ip ? h.mac : ""));
+    card = html`<h3>${t("externalNetwork")}</h3>
       ${hintKey("externalHint")}<dl>
       <dt>${t("switchLabel")}</dt><dd>${external.switch}</dd>
       <dt>${t("portLabel")}</dt><dd>${external.port}</dd>
       ${external.via_name
-        ? `<dt>${t("behindBridge")}</dt><dd>${external.via_name}</dd>`
+        ? html`<dt>${t("behindBridge")}</dt><dd>${external.via_name}</dd>`
         : ""}
       <dt>${t("devicesBehindPort")}</dt><dd>${external.count}</dd>
       </dl><ul class="offline-list">${rows}</ul>`;
   } else if (nodeId.startsWith("pseudo:")) {
     const ps = (topology.pseudo_switches || []).find((p) => p.id === nodeId);
     if (!ps) return;
-    html = `<h3>${t("pseudoTitle")}</h3>
+    card = html`<h3>${t("pseudoTitle")}</h3>
       <p class="hint">${fmt("pseudoHint", { n: ps.host_count })}</p><dl>
       <dt>${t("switchLabel")}</dt><dd>${ps.switch}</dd>
       <dt>${t("portLabel")}</dt><dd>${ps.port}</dd>
@@ -6745,14 +6749,17 @@ function showDetails(nodeId) {
       : offMap
       ? host.ip
         ? hintKey("unlocatedHint")
-        : `<p class="hint">${t("offMapHint")}</p>`
+        : html`<p class="hint">${t("offMapHint")}</p>`
       : host.stale
-      ? `<p class="hint">${t("staleHint")}</p>`
+      ? html`<p class="hint">${t("staleHint")}</p>`
       : "";
     // a stale record whose address ARP still confirms is not a dead
     // host: the device most likely changed its MAC
     const aliveByIp = host.stale && !offMap && host.ping_up && host.ip_confirmed;
-    html = `<h3>${hostLabel(host)}</h3>
+    const savedHint = host.from_saved
+      ? fmt("hostFromSavedHint", { switch: switchName(host.switch), time: fmtTime(host.reading_at) })
+      : "";
+    card = html`<h3>${hostLabel(host)}</h3>
       ${labelFromLldp(host) ? hintKey("nameFromLldpHint") : ""}
       ${host.approximate
         ? hintBlock(t("approximateHintShort"), t("approximateHint") + " " +
@@ -6773,43 +6780,38 @@ function showDetails(nodeId) {
         host.ip_confirmed ? fmtTime(host.ip_confirmed) : t("ipNotConfirmed")
       }</dd>
       <dt>${t("macAddr")}</dt><dd>${host.mac}${
-        host.random_mac ? ` <span class="chip" title="${t("randomMacHint")}">${t("randomMac")}</span>` : ""
+        host.random_mac ? html` <span class="chip" title="${t("randomMacHint")}">${t("randomMac")}</span>` : ""
       }</dd>
       ${vendorRow(host)}
       ${(host.seen_on || []).length
-        ? `<dt>${t("uplinkOnlySeenOn")}</dt><dd>${host.seen_on
-            .map((s) => `${switchName(s.switch)} ${s.port}`)
+        ? html`<dt>${t("uplinkOnlySeenOn")}</dt><dd>${host.seen_on
+            .map((seen) => `${switchName(seen.switch)} ${seen.port}`)
             .join(", ")}</dd>`
         : ""}
       <dt>${t("switchLabel")}</dt><dd>${host.switch || "—"}</dd>
       <dt>${t("portLabel")}</dt><dd>${host.port || "—"}${
-        host.approximate ? ` <span class="chip">${t("approximate")}</span>` : ""
+        host.approximate ? html` <span class="chip">${t("approximate")}</span>` : ""
       }${
-        host.remembered ? ` <span class="chip">${t("remembered")}</span>` : ""
+        host.remembered ? html` <span class="chip">${t("remembered")}</span>` : ""
       }${
-        host.from_saved
-          ? ` <span class="chip" title="${fmt("hostFromSavedHint", {
-              switch: switchName(host.switch),
-              time: fmtTime(host.reading_at),
-            })}">${t("fromSaved")}</span>`
-          : ""
+        host.from_saved ? html` <span class="chip" title="${savedHint}">${t("fromSaved")}</span>` : ""
       }</dd>
       <dt>${t("vlan")}</dt><dd>${vlanLabel(host.vlan)}</dd>
       ${host.router_ip
-        ? `<dt>${t("routerAddr")}</dt><dd>${addressLink(host.router_ip)}</dd>`
+        ? html`<dt>${t("routerAddr")}</dt><dd>${addressLink(host.router_ip)}</dd>`
         : ""}
-      ${host.lldp ? `<dt>${t("lldpLabel")}</dt><dd>${lldpHostLine(host.lldp)}</dd>` : ""}
+      ${host.lldp ? html`<dt>${t("lldpLabel")}</dt><dd>${lldpHostLine(host.lldp)}</dd>` : ""}
       ${(host.lldp && (host.lldp.mgmt_ips || []).length > 1)
-        ? `<dt>${t("mgmtIp")}</dt><dd>${addressList(host.lldp.mgmt_ips)}</dd>`
+        ? html`<dt>${t("mgmtIp")}</dt><dd>${addressList(host.lldp.mgmt_ips)}</dd>`
         : ""}
       <dt>${t("lastReply")}</dt><dd>${fmtTime(host.last_ping_ok)}</dd>
       <dt>${t("lastSeenLabel")}</dt><dd>${fmtTime(host.last_seen)}</dd>
       ${host.from_saved
-        ? `<dt>${t("readingFrom")}</dt><dd>${fmtTime(host.reading_at)}</dd>`
+        ? html`<dt>${t("readingFrom")}</dt><dd>${fmtTime(host.reading_at)}</dd>`
         : ""}
-      ${offMap ? `<dt>${t("lastArpLabel")}</dt><dd>${fmtTime(host.last_arp)}</dd>` : ""}
+      ${offMap ? html`<dt>${t("lastArpLabel")}</dt><dd>${fmtTime(host.last_arp)}</dd>` : ""}
       <dt>${t("firstSeen")}</dt><dd>${fmtDate(host.first_seen)}</dd></dl>
-      <button id="monitor-btn" class="panel-btn${host.monitored ? " active" : ""}${
+      <button type="button" id="monitor-btn" class="panel-btn${host.monitored ? " active" : ""}${
         needRole("user") ? " off" : ""}">
         ${host.monitored ? "★" : "☆"} ${t("monitorBtn")}</button>`;
   }
@@ -6817,14 +6819,14 @@ function showDetails(nodeId) {
   // The map must answer "did MoonLan arrange this or did I" without
   // anyone having to guess.
   if (savedLayout[nodeId] && savedLayout[nodeId].pinned) {
-    html +=
-      hintKey("pinnedHint") +
-      `<button id="unpin-btn" class="panel-btn${needRole("user") ? " off" : ""}">${t("unpinBtn")}</button>`;
+    card = html`${card}${hintKey("pinnedHint")}<button type="button" id="unpin-btn" class="panel-btn${
+      needRole("user") ? " off" : ""}">${t("unpinBtn")}</button>`;
   }
-  // the node's name and note, right under the title
-  html = html.replace("</h3>", '</h3><div id="note-slot"></div>');
+  // the node's name and note, right under the title: after the first
+  // </h3>, which is ours — one in a name is escaped
+  card = raw(card.text.replace("</h3>", '</h3><div id="note-slot"></div>'));
   shownDetails = { type: "node", id: nodeId };
-  setDetails(html);
+  setDetails(card);
   els.details.classList.remove("hidden");
   els.journal.classList.add("hidden");
   hideAccountPanels();
@@ -6879,9 +6881,9 @@ function fmtAddresses(addresses, limit) {
 function addressLink(address) {
   const text = String(address);
   const host = text.includes(":") ? "[" + text + "]" : text;
-  const linkable = /^[0-9.]+$/.test(text) || text.includes(":");
-  if (!linkable) return `<span>${text}</span>`;
-  return `<a href="http://${host}" target="_blank" rel="noopener">${text}</a>`;
+  const linkable = /^[0-9.]+$/.test(text) || /^[0-9a-fA-F:.]+$/.test(text);
+  if (!linkable) return html`<span>${text}</span>`;
+  return html`<a href="${"http://" + host}" target="_blank" rel="noopener">${text}</a>`;
 }
 
 /* Management addresses as a column: the first few as links, the rest
@@ -6891,21 +6893,11 @@ function addressList(addresses, limit) {
   const list = addresses || [];
   if (!list.length) return "—";
   const keep = limit || 3;
-  const shown = list
-    .slice(0, keep)
-    .map((a) => `<li>${addressLink(a)}</li>`)
-    .join("");
-  if (list.length <= keep) return `<ul class="addr-list">${shown}</ul>`;
-  const rest = list
-    .slice(keep)
-    .map((a) => `<li>${addressLink(a)}</li>`)
-    .join("");
-  return (
-    `<ul class="addr-list">${shown}</ul>` +
-    `<button type="button" class="addr-more">` +
-    fmt("andMore", { n: list.length - keep }) +
-    `</button><ul class="addr-list addr-rest hidden">${rest}</ul>`
-  );
+  const shown = list.slice(0, keep).map((a) => html`<li>${addressLink(a)}</li>`);
+  if (list.length <= keep) return html`<ul class="addr-list">${shown}</ul>`;
+  const rest = list.slice(keep).map((a) => html`<li>${addressLink(a)}</li>`);
+  return html`<ul class="addr-list">${shown}</ul><button type="button" class="addr-more">${
+    fmt("andMore", { n: list.length - keep })}</button><ul class="addr-list addr-rest hidden">${rest}</ul>`;
 }
 
 /* What LLDP says about a device that is already a host on the map:
@@ -7292,47 +7284,37 @@ function showLinkDetails(edgeId) {
   const link = topology.links.find((l) => linkId(l) === edgeId);
   if (!link) return;
   const swName = switchName;
-  let html = `<h3>${swName(link.a)} — ${swName(link.b)}</h3><dl>
-    <dt>${fmt("portOnSide", { name: swName(link.a) })}</dt><dd>${linkPortLabel(link, link.a_port)}</dd>
-    <dt>${fmt("portOnSide", { name: swName(link.b) })}</dt><dd>${linkPortLabel(link, link.b_port)}</dd>`;
+  const rows = [html`<dt>${fmt("portOnSide", { name: swName(link.a) })}</dt><dd>${linkPortLabel(link, link.a_port)}</dd>
+    <dt>${fmt("portOnSide", { name: swName(link.b) })}</dt><dd>${linkPortLabel(link, link.b_port)}</dd>`];
   // trunk speed is unknown — do not show a meaningless dash row
   if (!(link.lag && link.lag.trunk) || link.speed_mbps) {
-    html += `<dt>${t("speed")}</dt><dd>${fmtSpeed(link.speed_mbps) || "—"}</dd>`;
+    rows.push(html`<dt>${t("speed")}</dt><dd>${fmtSpeed(link.speed_mbps) || "—"}</dd>`);
   }
   if (link.lag && link.lag.count > 1) {
-    html += `<dt>${t("lagAggregate")}</dt><dd>${linkLabel(link)}</dd>`;
+    rows.push(html`<dt>${t("lagAggregate")}</dt><dd>${linkLabel(link)}</dd>`);
     // each member with its oper state: green = up, grey = down
-    const memberList = (members, states) =>
-      members
-        .map((m, i) => {
-          const up = !states || states[i] == null || states[i];
-          return `<span class="dot ${up ? "up" : "down"} inline-dot"></span>${m}`;
-        })
-        .join(", ") + " (" + t("lacp") + ")";
+    const memberList = (members, states) => html`${htmlJoin(members.map((m, i) => {
+      const up = !states || states[i] == null || states[i];
+      return html`<span class="dot ${up ? "up" : "down"} inline-dot"></span>${m}`;
+    }), ", ")} (${t("lacp")})`;
     if ((link.lag.a_members || []).length)
-      html += `<dt>${fmt("portsOf", { name: swName(link.a) })}</dt><dd>${memberList(link.lag.a_members, link.lag.a_states)}</dd>`;
+      rows.push(html`<dt>${fmt("portsOf", { name: swName(link.a) })}</dt><dd>${memberList(link.lag.a_members, link.lag.a_states)}</dd>`);
     if ((link.lag.b_members || []).length)
-      html += `<dt>${fmt("portsOf", { name: swName(link.b) })}</dt><dd>${memberList(link.lag.b_members, link.lag.b_states)}</dd>`;
+      rows.push(html`<dt>${fmt("portsOf", { name: swName(link.b) })}</dt><dd>${memberList(link.lag.b_members, link.lag.b_states)}</dd>`);
   }
   const source = link.source || "fdb";
   const sourceLabel =
     source === "both" ? t("srcBoth") : source === "lldp" ? t("srcLldp") : t("srcFdb");
   const sourceHint = source === "fdb" ? t("srcHintFdb") : t("srcHintLldp");
-  html += `<dt>${t("linkSource")}</dt><dd title="${sourceHint}">${sourceLabel}</dd>`;
-  html += "</dl>";
-  if (link.stp_blocking) {
-    html += hintKey("stpBlockingHint");
-  }
+  rows.push(html`<dt>${t("linkSource")}</dt><dd title="${sourceHint}">${sourceLabel}</dd>`);
+  const hints = [];
+  if (link.stp_blocking) hints.push(hintKey("stpBlockingHint"));
   // What is uncertain about this line, said in the card and not only
   // in a tooltip somebody has to know to hover
-  if (link.order_unknown) {
-    html += hintKey("linkOrderUnknown");
-  }
-  if (link.cycle_unresolved) {
-    html += hintKey("linkCycleUnresolved");
-  }
+  if (link.order_unknown) hints.push(hintKey("linkOrderUnknown"));
+  if (link.cycle_unresolved) hints.push(hintKey("linkCycleUnresolved"));
   shownDetails = { type: "link", id: edgeId };
-  setDetails(html);
+  setDetails(html`<h3>${swName(link.a)} — ${swName(link.b)}</h3><dl>${rows}</dl>${hints}`);
   els.details.classList.remove("hidden");
   els.journal.classList.add("hidden");
   hideAccountPanels();

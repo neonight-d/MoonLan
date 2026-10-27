@@ -87,10 +87,10 @@ class ShortCardsTest(unittest.TestCase):
 
     def test_the_markup(self):
         block = function("hintBlock")
-        # the tooltip is plain text, escaped
-        self.assertIn('title="${escapeHtml(longText)}"', block)
+        # the tooltip is plain text, escaped by html`…` (v0.8.3)
+        self.assertIn('return html`<p class="hint" title="${longText}">', block)
         self.assertIn('class="hint-more" aria-expanded="false"', block)
-        self.assertIn('aria-label="${escapeHtml(t("hintMore"))}"', block)
+        self.assertIn('aria-label="${t("hintMore")}"', block)
         self.assertIn('class="hint hint-full hidden"', block)
         self.assertIn('type="button"', block)  # Enter and Space for free
         for texts in (EN, RU):
