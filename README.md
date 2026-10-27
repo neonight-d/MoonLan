@@ -53,6 +53,15 @@ no Rust — upgrade pip, or use the distribution's `python3-cryptography`:
 [docs/OPERATIONS.md](docs/OPERATIONS.md#installing). Without it
 MoonLan runs, with keys off.
 
+### Docker
+
+~~~bash
+docker run --rm -p 8080:8080 -e MOONLAN_DEMO=1 neonight/moonlan
+~~~
+
+The demo in one command; with your switches, docker compose and the two
+volumes: **[docs/DOCKER.md](docs/DOCKER.md)**.
+
 ### Configure
 
 ~~~bash
@@ -224,6 +233,7 @@ MoonLan/
 - **Users and sign-in** — [docs/SIGN-IN.md](docs/SIGN-IN.md)
 - **HTTPS, the public address, a proxy** — [docs/HTTPS.md](docs/HTTPS.md)
 - **Operations & troubleshooting** — [docs/OPERATIONS.md](docs/OPERATIONS.md)
+- **Docker** — [docs/DOCKER.md](docs/DOCKER.md)
 - **Diagnostics** — [docs/DIAGNOSTICS.md](docs/DIAGNOSTICS.md)
 - **LLDP, STP and loop detection** — [docs/NETWORK.md](docs/NETWORK.md)
 - **Health checks** — [docs/HEALTHCHECK.md](docs/HEALTHCHECK.md)

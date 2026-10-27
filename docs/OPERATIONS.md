@@ -34,6 +34,8 @@ Open `http://server_address:8080` in a browser.
 
 ## Running as a service (systemd)
 
+Or in a container, with docker compose: [DOCKER.md](DOCKER.md).
+
 An example unit lives in [docs/deploy/moonlan.service](deploy/moonlan.service).
 Adjust `User=`, `WorkingDirectory=` and the venv path, then:
 

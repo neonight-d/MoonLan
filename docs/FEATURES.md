@@ -108,6 +108,15 @@ Everything MoonLan does, as of v0.8.2 — the list the README used to carry. The
   from its address alone. Over HTTPS the session cookie is `Secure`, and
   with an https public address a password is not taken over plain HTTP.
   See [HTTPS](HTTPS.md).
+- What the network says is shown as text. A switch's sysName and
+  sysDescr, an interface name, an LLDP neighbour's or a DNS name, a
+  maker: none of it can become markup in a card — the page builds its
+  cards with escaping by default, and markup goes in only where the
+  code says so. Behind that, a Content-Security-Policy on every answer
+  runs scripts from MoonLan only (an `onerror=` slipped in would not
+  run), with `X-Content-Type-Options: nosniff` and
+  `Referrer-Policy: same-origin`; vis-network is served by MoonLan
+  itself, so the map also opens where there is no internet.
 - Who made a device, by its MAC address and the IEEE register — MA-L,
   MA-M, MA-S and IAB, the longest prefix first, so a device from a block
   IEEE carved up is not named "IEEE Registration Authority". In the
@@ -414,6 +423,12 @@ Everything MoonLan does, as of v0.8.2 — the list the README used to carry. The
   and the IEEE register; for an administrator also the server (Python,
   the system, uptime, sign-in, HTTPS). "Copy the details for a bug
   report" puts it all on the clipboard as plain text.
+- An image for Docker, amd64 and arm64, on Docker Hub
+  (`neonight/moonlan`) and GitHub's registry
+  (`ghcr.io/neonight-d/moonlan`): the demo in one command, docker
+  compose with `/config` and `/data`, the console through
+  `docker exec`, a health check, and a non-root user. See
+  [DOCKER.md](DOCKER.md).
 - Demo mode with a virtual network — explore the UI without real switches.
 - SNMP diagnostic tool: `python -m moonlan.diag <ip>`.
 

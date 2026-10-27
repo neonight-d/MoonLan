@@ -23,6 +23,8 @@ MoonLan currently uses SNMP v2c. Community strings are credentials.
 
 ### Web service
 
+Everything that comes from the network — SNMP `sysName` and `sysDescr`, interface names, LLDP and DNS names, makers — is treated as untrusted and shown as text: the page escapes it by default, and its Content-Security-Policy runs scripts from MoonLan only (v0.8.3).
+
 Do not expose the MoonLan web server directly to an untrusted network. Put it behind an appropriate firewall or reverse proxy and restrict access to the management network. This stays true with sign-in on.
 
 ### Sign-in

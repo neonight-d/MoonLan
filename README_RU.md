@@ -55,6 +55,15 @@ pip install -r requirements.txt
 [docs/OPERATIONS.md](docs/OPERATIONS.md#installing). Без него MoonLan
 работает, только вход по ключу выключен.
 
+### Docker
+
+~~~bash
+docker run --rm -p 8080:8080 -e MOONLAN_DEMO=1 neonight/moonlan
+~~~
+
+Демо одной командой; со своими коммутаторами, docker compose и два тома —
+**[docs/DOCKER.md](docs/DOCKER.md)** (на английском).
+
 ### Настройка
 
 ~~~bash
@@ -232,6 +241,7 @@ MoonLan/
 - **Пользователи и вход** — [docs/SIGN-IN.md](docs/SIGN-IN.md) (на английском)
 - **HTTPS, публичный адрес, прокси** — [docs/HTTPS.md](docs/HTTPS.md) (на английском)
 - **Эксплуатация и неполадки** — [docs/OPERATIONS.md](docs/OPERATIONS.md) (на английском)
+- **Docker** — [docs/DOCKER.md](docs/DOCKER.md) (на английском)
 - **Диагностика** — [docs/DIAGNOSTICS.md](docs/DIAGNOSTICS.md) (на английском)
 - **LLDP, STP и петли** — [docs/NETWORK.md](docs/NETWORK.md) (на английском)
 - **Проверка работоспособности** — [docs/HEALTHCHECK.md](docs/HEALTHCHECK.md) (на английском)

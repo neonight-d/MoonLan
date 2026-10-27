@@ -6,6 +6,52 @@ for before the next one started.
 
 Русская версия — [CHANGELOG_RU.md](CHANGELOG_RU.md).
 
+## v0.8.3 — 2026-10-27
+
+Names from the network as text, ports on an upright phone, an image on
+Docker Hub. From an audit of the page's code, checked line by line, and
+from the operator's notes.
+
+**Names from the network as text.** The cards were template strings put
+into the page as HTML, with an escape here and there. Where one was
+left out — a switch's sysName and sysDescr, an LLDP neighbour's name, a
+DNS name, an interface name, the devices of a group, a link's title —
+the name went in as markup: a laptop with lldpd announcing itself as
+`<img src=x onerror=…>` ran a script in the session of whoever opened
+its card, an administrator's included. The cards are built with
+escaping by default now; markup goes in only where the code says so.
+Behind that, every answer carries a Content-Security-Policy that runs
+scripts from MoonLan only, `nosniff` and `Referrer-Policy:
+same-origin`, and vis-network is served by MoonLan itself — the map
+opens on a management network without the internet too. What vis-network
+does not publish and the map uses — six things — is looked for once the
+map is made; if a later vis lacks one, that feature is off and the map
+still works.
+
+**Ports on an upright phone.** The port's column took the width of a
+375 px screen and the numbers were gone under it. On a phone it is at
+most 40% now, the name wraps, the marks — the LLDP neighbour, "external
+uplink" — go to a line of their own under it, and the headers are short
+("In", «Вх.») with the full name in the tooltip.
+
+**Small things the audit found.** A late answer opened a panel that had
+been closed meanwhile, and opening two switches' ports quickly left two
+30-second timers running: an answer now opens nothing that was closed
+or replaced. A double click on "Save" sent two requests and wrote the
+journal twice: every button that writes runs once at a time. A name
+with `$&` in it no longer garbles the sentence it is in. Fields are 16 px
+on a phone, so iOS does not zoom into them; every button of the page
+has a type; the empty header of the ports table is named for a screen
+reader. A debounce of the search was not added: it takes 1–3 ms a
+keystroke on a thousand devices.
+
+**Docker.** An image for amd64 and arm64 on Docker Hub
+(`neonight/moonlan`) and GitHub's registry (`ghcr.io/neonight-d/moonlan`),
+published on a release tag: the demo in one command, docker compose with
+`/config` and `/data`, the console through `docker exec`, a health
+check, a non-root user, the build in About. Every push builds the image
+and runs it as an operator would. See docs/DOCKER.md.
+
 ## v0.8.2 — 2026-10-26
 
 Russian without English in it, a page that stays put on a phone, the
