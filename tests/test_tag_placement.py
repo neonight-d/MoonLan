@@ -161,9 +161,13 @@ class CurvesTest(unittest.TestCase):
 
     def test_vis_internals_in_one_place(self):
         support = function("curveSupport")
+        # used there, and looked for once the network is made (v0.8.3)
+        check = function("checkVisInternals")
         for internal in ("type.via", "type.positionBezierNode()"):
             self.assertIn(internal, support)
-            self.assertEqual(APP.count(internal), support.count(internal), internal)
+            self.assertEqual(APP.count(internal), support.count(internal) + check.count(internal),
+                             internal)
+        self.assertIn("if (visInternals.curves !== true) return null;", support)
 
 
 class TagsTest(unittest.TestCase):

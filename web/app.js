@@ -1827,7 +1827,7 @@ function loosenForDrag(ids) {
   // changes, the drag would silently go back to doing nothing — so
   // check, and set it on the node directly if it did not arrive.
   for (const id of held) {
-    const body = network.body.nodes[id];
+    const body = visInternals.fixed === true && network.body.nodes[id];
     if (body && (body.options.fixed.x || body.options.fixed.y)) {
       console.warn("MoonLan: pinned node not loosened by the data update; setting it directly", id);
       body.options.fixed.x = false;
@@ -3993,6 +3993,7 @@ function movedVia(before, after, via) {
    positionBezierNode are internal API of vis-network 9.1.9, which
    index.html pins, like getPoint below. */
 function curveSupport(edgeId) {
+  if (visInternals.curves !== true) return null;
   const edge = network.body.edges[edgeId];
   const type = edge && edge.edgeType;
   if (!type || !type.via || !edge.from || !edge.to) return null;
@@ -4183,7 +4184,7 @@ function edgePointFn(entry, start, positions) {
   const a = positions[start];
   const b = positions[other];
   if (!a || !b) return null;
-  const edge = network.body.edges[entry.id];
+  const edge = visInternals.curvePoints === true && network.body.edges[entry.id];
   const smooth = edge && edge.options && edge.options.smooth;
   if (smooth && smooth.enabled && edge.edgeType && edge.edgeType.getPoint) {
     const reversed = start !== entry.from;
@@ -4579,13 +4580,64 @@ function closePortLabelsMenu(returnFocus) {
   if (returnFocus) els.portLabelsBtn.focus();
 }
 
+/* ---------- vis-network's internals ----------
+
+   What MoonLan needs from vis that vis does not publish, in one place
+   (v0.8.3), each looked for once the network is made:
+
+   - curves: edgeType.via and positionBezierNode — the bends of a
+     dragged node's lines follow it while the layout is frozen;
+   - curvePoints: edgeType.getPoint — port tags along a curved line;
+   - hold: body.eventListeners and canvas.hammer — a long press is a
+     press, not a selection that adds;
+   - labels: labelModule.size — the backdrop under the selected caption;
+   - geometry: shape.resize, labelModule.getTextSize, canvas.frame — the
+     size of a node and its caption for an export;
+   - fixed: options.fixed of a node — the check that a pinned node was
+     loosened for a drag.
+
+   vis-network 9.1.9 is served by MoonLan itself and does not change
+   under the page; a later version might. What is missing is said once
+   in the console and its feature is off — a straight line for the
+   tags, the bounding box for an export, no backdrop — and the map
+   still draws, moves and selects. */
+const visInternals = {
+  curves: false, curvePoints: false, hold: false, labels: false, geometry: false, fixed: false,
+};
+
+function checkVisInternals(net) {
+  const body = net.body || {};
+  const nodes = Object.values(body.nodes || {});
+  const edges = Object.values(body.edges || {});
+  const node = nodes.find((n) => n && n.options) || {};
+  const types = edges.map((e) => e && e.edgeType).filter(Boolean);
+  const canvas = net.canvas || {};
+  const found = {
+    curves: !!body.edges && types.every((type) => !type.via || typeof type.positionBezierNode === "function"),
+    curvePoints: !!body.edges && types.every((type) => typeof type.getPoint === "function"),
+    hold: !!(body.eventListeners && typeof body.eventListeners.onTap === "function" &&
+      canvas.hammer && typeof canvas.hammer.on === "function"),
+    labels: !!body.nodes && (!nodes.length || !!(node.labelModule && "size" in node.labelModule)),
+    geometry: !!(canvas.frame && canvas.frame.canvas && typeof canvas.frame.canvas.getContext === "function") &&
+      (!nodes.length || !!(node.shape && typeof node.shape.resize === "function" &&
+        node.labelModule && typeof node.labelModule.getTextSize === "function")),
+    fixed: !!body.nodes && (!nodes.length || !!(node.options && node.options.fixed)),
+  };
+  for (const [name, ok] of Object.entries(found)) {
+    if (!ok && visInternals[name] !== "warned") {
+      console.warn(`MoonLan: vis-network has no ${name} internals here; that feature is off`);
+    }
+    visInternals[name] = ok ? true : "warned";
+  }
+}
+
 /* ---------- label backdrop for the selected node ---------- */
 
 /* Where the node's caption is drawn, in canvas coordinates. vis knows
    it exactly (the label was measured on the previous frame); the
    fallback measures the text under the node's bounding box. */
 function labelBox(ctx, nodeId) {
-  const node = network.body && network.body.nodes[nodeId];
+  const node = visInternals.labels === true && network.body.nodes[nodeId];
   const measured = node && node.labelModule && node.labelModule.size;
   if (measured && measured.width) {
     return {
@@ -4799,7 +4851,8 @@ function renderGraph() {
         hideDetails();
       }
     });
-    holdIsAPress();
+    checkVisInternals(network);
+    if (visInternals.hold === true) holdIsAPress();
     network.on("beforeDrawing", (ctx) => {
       if (hoveredNodeId && hoveredNodeId !== selectedNodeId) {
         drawLabelBackdrop(ctx, hoveredNodeId, false);
@@ -5075,6 +5128,12 @@ function deviceCount(nodeId) {
    was last drawn. shape.resize and labelModule.getTextSize are
    internal API of vis-network 9.1.9, which index.html pins. */
 function nodeGeometry(id) {
+  if (visInternals.geometry !== true) {
+    // without vis's own measures: the box vis reports, caption and all
+    const b = network.getBoundingBox(id);
+    const box = { left: b.left, right: b.right, top: b.top, bottom: b.bottom };
+    return { w: b.right - b.left, h: b.bottom - b.top, inside: true, text: { width: 0, height: 0 }, box };
+  }
   const node = network.body.nodes[id];
   const ctx = network.canvas.frame.canvas.getContext("2d");
   node.shape.resize(ctx, false, false);
