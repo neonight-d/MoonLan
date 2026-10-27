@@ -1904,6 +1904,20 @@ def _link_load(link: dict) -> dict | None:
     return None
 
 
+def _config_missing() -> dict | None:
+    """Where config.yaml should be and the example to copy, when it is
+    not there; None when it is"""
+    report = config.report
+    if report is None or report.exists:
+        return None
+    path = Path(report.path)
+    return {
+        "path": str(path),
+        "dir": str(path.parent if str(path.parent) != "." else Path.cwd()),
+        "example": str(Path(__file__).resolve().parent.parent / "config.example.yaml"),
+    }
+
+
 def _log_config() -> None:
     """One line on how much of the configuration is actually yours —
     a config.yaml left over from an older version silently overrides
@@ -1921,6 +1935,15 @@ def _log_config() -> None:
         "Config file: %s%s", report.path,
         "" if report.exists else "  (not found — every setting is a default)",
     )
+    if not report.exists:
+        # in a container this is the first thing anyone sees (v0.8.3):
+        # say where the file goes and what to start it from
+        missing = _config_missing()
+        log.warning(
+            "No config.yaml: MoonLan runs on its defaults and polls no "
+            "switch. Put one at %s — %s is the template to copy.",
+            missing["path"], missing["example"],
+        )
     log.info(
         "Database:    %s%s", Path(db.path).resolve() if db.path != ":memory:"
         else "in memory (demo mode)",
@@ -2342,6 +2365,10 @@ async def api_topology() -> JSONResponse:
             bridge["last_ping_ok"] = row.get("last_ping_ok", 0)
         bridges.append(bridge)
     topo["bridges"] = bridges
+    # no config.yaml: the empty map says where it goes (v0.8.3)
+    missing = _config_missing()
+    if missing:
+        topo["config_missing"] = missing
     topo["switches"] = [
         {
             **sw,

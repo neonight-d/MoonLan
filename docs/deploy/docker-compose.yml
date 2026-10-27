@@ -1,0 +1,20 @@
+# MoonLan with Docker Compose — docs/DOCKER.md.
+#
+#   mkdir -p config data && cp config.example.yaml config/config.yaml
+#   docker compose up -d
+#
+# The container's user is uid 1000: config/ must be readable by it and
+# data/ writable (sudo chown -R 1000:1000 data if it is not yours).
+services:
+  moonlan:
+    image: neonight/moonlan:0.8      # or ghcr.io/neonight-d/moonlan:0.8
+    container_name: moonlan
+    restart: unless-stopped
+    init: true
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./config:/config            # config.yaml, tls/
+      - ./data:/data                # the database, oui/, the console token
+    environment:
+      TZ: Europe/Moscow

@@ -1,0 +1,21 @@
+# What the image is built from: the code, the web page, requirements.txt,
+# LICENSE (About shows it) and the example config. Nothing of a working
+# installation — its database, its config.yaml with passwords in it —
+# and nothing the service does not run.
+.git
+.github
+.claude
+.venv
+**/__pycache__
+**/*.pyc
+*.db
+*.db-*
+*.db.console
+**/*.db
+**/*.db-*
+**/*.db.console
+oui/
+config.yaml
+tests/
+docs/results
+docs/tz

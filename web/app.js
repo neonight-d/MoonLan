@@ -50,6 +50,7 @@ const els = {
   stpBody: document.getElementById("stp-body"),
   stpClose: document.getElementById("stp-close"),
   emptyState: document.getElementById("empty-state"),
+  emptyConfig: document.getElementById("empty-config"),
   freezeBtn: document.getElementById("freeze-btn"),
   arrangeBtn: document.getElementById("arrange-btn"),
   portLabelsBtn: document.getElementById("port-labels-btn"),
@@ -3307,6 +3308,10 @@ async function loadTopologyOnce() {
   // has moved for ten minutes.
   if (topology.scanning) watchScan();
   els.emptyState.classList.toggle("hidden", topology.switches.length > 0);
+  // no config.yaml at all: where it goes, in a container /config (v0.8.3)
+  const missing = topology.config_missing;
+  els.emptyConfig.classList.toggle("hidden", !missing);
+  if (missing) els.emptyConfig.textContent = fmt("emptyNoConfig", missing);
 }
 
 function renderBadge() {

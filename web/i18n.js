@@ -270,6 +270,7 @@ const I18N = {
     journalTitle: "Event journal",
     noEvents: "No events yet",
     emptyLine1: "The map is empty.",
+    emptyNoConfig: "There is no configuration file: put config.yaml in {dir} — {example} is the template to copy.",
     emptyLine2:
       "Add switches to <code>config.yaml</code> and choose " +
       "“Rescan network” in the Actions menu (⋯), or start the service with " +
@@ -1235,6 +1236,7 @@ const I18N = {
     journalTitle: "Журнал событий",
     noEvents: "Событий пока нет",
     emptyLine1: "Схема пока пуста.",
+    emptyNoConfig: "Файла настроек нет: положите config.yaml в {dir} — образец для копирования: {example}.",
     emptyLine2:
       "Укажите коммутаторы в <code>config.yaml</code> и выберите " +
       "«Опросить сеть» в меню «Действия» (⋯), либо запустите сервис с " +

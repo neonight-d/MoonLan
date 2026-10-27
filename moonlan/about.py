@@ -12,6 +12,7 @@ not at all, and tests/test_about.py holds the table to requirements.txt.
 from __future__ import annotations
 
 import importlib.metadata
+import os
 import platform
 import re
 import time
@@ -42,10 +43,19 @@ _SHA = re.compile(r"[0-9a-f]{40}(?:[0-9a-f]{24})?")
 
 
 def build_hash(root: Path = ROOT) -> str | None:
-    """The short hash of the commit checked out in `root`, or None when
-    it is no git clone or the clone cannot be read. `.git` is a folder,
+    """The short hash of the commit checked out in `root`; without a
+    git clone, MOONLAN_BUILD — what a Docker image was built from
+    (v0.8.3), for an image has no .git — or None. `.git` is a folder,
     or a file naming one ("gitdir: …") in a worktree or a submodule; a
     branch is a file under refs/ or a line of packed-refs."""
+    found = _git_hash(root)
+    if found:
+        return found
+    built = os.environ.get("MOONLAN_BUILD", "").strip()
+    return built[:12] if re.fullmatch(r"[0-9a-f]{7,40}", built) else None
+
+
+def _git_hash(root: Path) -> str | None:
     try:
         git = root / ".git"
         if git.is_file():
