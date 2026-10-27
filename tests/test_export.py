@@ -80,6 +80,8 @@ network = {
   },
   canvas: { frame: { canvas: { getContext: () => ({}) } } },
 };
+// what the page does once the network is made (v0.8.3)
+checkVisInternals(network);
 
 out.infrastructure = exportModel({ contents: "infrastructure", ports: true });
 out.screenLinks = edges.filter((e) => e.id.startsWith("link:")).map((e) => e.label);
