@@ -19,7 +19,7 @@
     <div class="toolbar">
       <span id="scan-status" class="status"></span>
       <span id="lang-switch" class="lang-switch" role="group">
-        <button id="lang-ru">RU</button><button id="lang-en">EN</button>
+        <button type="button" id="lang-ru">RU</button><button type="button" id="lang-en">EN</button>
       </span>
       <!-- Icons, drawn here rather than taken from a font or a CDN: they
            must not depend on the outside network, and they take the
@@ -33,13 +33,13 @@
       <button id="port-labels-btn" type="button" class="icon-btn" aria-haspopup="menu"
               aria-expanded="false" aria-controls="port-labels-menu"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><rect x="3" y="6.5" width="18" height="11" rx="3"/><path d="M10.5 10.5L12.5 9v6M10.5 15h4"/></svg></button>
       <button id="alarms-btn" type="button" class="icon-btn"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M18 16v-5a6 6 0 0 0-12 0v5l-2 2h16z"/><path d="M10.2 20.5a2 2 0 0 0 3.6 0"/></svg><span id="alarms-badge" class="badge hidden"></span></button>
-      <button id="stp-btn" data-i18n="stpBtn"></button>
+      <button type="button" id="stp-btn" data-i18n="stpBtn"></button>
       <button id="journal-btn" type="button" class="icon-btn"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M9 6h11M9 12h11M9 18h11"/><path class="dot" d="M4.5 6h.01M4.5 12h.01M4.5 18h.01"/></svg></button>
       <!-- Actions: rescan, users, reset. A menu built from data like the
            node menu (moreItems in app.js); one more item is one more line -->
       <button id="more-btn" type="button" class="icon-btn" aria-haspopup="menu"
               aria-expanded="false" aria-controls="more-menu"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path class="dot" d="M5 12h.01M12 12h.01M19 12h.01"/></svg></button>
-      <button id="user-chip" class="user-chip hidden"></button>
+      <button type="button" id="user-chip" class="user-chip hidden"></button>
     </div>
   </header>
   <!-- What the header has to keep saying: that the map is open to
@@ -89,14 +89,14 @@
       <div id="details" class="panel hidden">
         <div class="panel-head">
           <h3 id="details-title"></h3>
-          <button id="details-close" data-close>×</button>
+          <button type="button" id="details-close" data-close>×</button>
         </div>
         <div class="panel-scroll"><div id="details-body"></div></div>
       </div>
       <div id="journal" class="panel hidden">
         <div class="panel-head">
           <h3 data-i18n="journalTitle"></h3>
-          <button id="journal-close" data-close>×</button>
+          <button type="button" id="journal-close" data-close>×</button>
         </div>
         <div class="panel-scroll"><ul id="journal-list"></ul></div>
       </div>
@@ -105,21 +105,21 @@
       <div id="notes-panel" class="panel hidden">
         <div class="panel-head">
           <h3 id="notes-title"></h3>
-          <button id="notes-close" data-close>×</button>
+          <button type="button" id="notes-close" data-close>×</button>
         </div>
         <div class="panel-scroll"><div id="notes-body"></div></div>
       </div>
       <div id="ports" class="panel hidden">
         <div class="panel-head">
           <h3 id="ports-title"></h3>
-          <button id="ports-close" data-close>×</button>
+          <button type="button" id="ports-close" data-close>×</button>
         </div>
         <div class="panel-scroll">
         <table class="ports-table">
           <thead>
             <tr>
               <th data-i18n="colPort" data-sort="name"></th>
-              <th></th>
+              <th><span class="sr-only" data-i18n="colState"></span></th>
               <th data-i18n="colSpeed" data-sort="speed"></th>
               <th class="num" data-sort="in"><span class="th-full" data-i18n="colIn"></span><span class="th-short" data-i18n="colInShort"></span></th>
               <th class="num" data-sort="out"><span class="th-full" data-i18n="colOut"></span><span class="th-short" data-i18n="colOutShort"></span></th>
@@ -135,14 +135,14 @@
       <div id="alarms" class="panel hidden">
         <div class="panel-head">
           <h3 data-i18n="alarmsTitle"></h3>
-          <button id="alarms-close" data-close>×</button>
+          <button type="button" id="alarms-close" data-close>×</button>
         </div>
         <div class="panel-scroll"><div id="alarms-body"></div></div>
       </div>
       <div id="stp" class="panel hidden">
         <div class="panel-head">
           <h3 data-i18n="stpTitle"></h3>
-          <button id="stp-close" data-close>×</button>
+          <button type="button" id="stp-close" data-close>×</button>
         </div>
         <div class="panel-scroll"><div id="stp-body"></div></div>
       </div>
@@ -152,7 +152,7 @@
       <div id="actions" class="panel hidden">
         <div class="panel-head">
           <h3 id="actions-title"></h3>
-          <button id="actions-close" data-close>×</button>
+          <button type="button" id="actions-close" data-close>×</button>
         </div>
         <div class="panel-scroll"><div id="actions-body"></div></div>
       </div>
@@ -160,7 +160,7 @@
       <div id="account" class="panel hidden">
         <div class="panel-head">
           <h3 data-i18n="accountTitle"></h3>
-          <button id="account-close" data-close>×</button>
+          <button type="button" id="account-close" data-close>×</button>
         </div>
         <div class="panel-scroll"><div id="account-body"></div></div>
       </div>
@@ -168,7 +168,7 @@
       <div id="users" class="panel hidden">
         <div class="panel-head">
           <h3 data-i18n="usersTitle"></h3>
-          <button id="users-close" data-close>×</button>
+          <button type="button" id="users-close" data-close>×</button>
         </div>
         <div class="panel-scroll"><div id="users-body"></div></div>
       </div>
@@ -176,7 +176,7 @@
       <div id="about" class="panel hidden">
         <div class="panel-head">
           <h3 data-i18n="aboutTitle"></h3>
-          <button id="about-close" data-close>×</button>
+          <button type="button" id="about-close" data-close>×</button>
         </div>
         <div class="panel-scroll"><div id="about-body"></div></div>
       </div>
