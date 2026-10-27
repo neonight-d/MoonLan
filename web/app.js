@@ -1248,25 +1248,27 @@ function keyList(keys, remove) {
 }
 
 async function removeOwnKey(key) {
-  const label = key.label || "#" + key.number;
-  if (!window.confirm(fmt("confirmRemoveOwnKey", { label: label }))) return;
-  let response;
-  try {
-    response = await api("/api/auth/passkeys/" + key.id, { method: "DELETE" });
-  } catch (e) {
-    serviceLost("removing a key");
-    return;
-  }
-  const answer = await response.json().catch(() => ({}));
-  if (!response.ok) {
-    // the last second factor of an administrator, most likely
-    showToast(errorText(answer));
-    return;
-  }
-  await loadMe();
-  renderAccount();
-  const line = els.accountBody.querySelector(".done");
-  if (line) line.textContent = fmt("keyRemoved", { n: answer.sessions_closed });
+  return busy("passkey:" + key.id, async () => {
+    const label = key.label || "#" + key.number;
+    if (!window.confirm(fmt("confirmRemoveOwnKey", { label: label }))) return;
+    let response;
+    try {
+      response = await api("/api/auth/passkeys/" + key.id, { method: "DELETE" });
+    } catch (e) {
+      serviceLost("removing a key");
+      return;
+    }
+    const answer = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      // the last second factor of an administrator, most likely
+      showToast(errorText(answer));
+      return;
+    }
+    await loadMe();
+    renderAccount();
+    const line = els.accountBody.querySelector(".done");
+    if (line) line.textContent = fmt("keyRemoved", { n: answer.sessions_closed });
+  }, []);
 }
 
 /* ---------- accounts, for an administrator ---------- */
@@ -1300,30 +1302,32 @@ async function refreshUsers(error) {
    question asked first is `confirmKey` for `name`, or `question` as it
    is. */
 async function userAction(path, options, confirmKey, name, question) {
-  if (confirmKey && !window.confirm(fmt(confirmKey, { name: name }))) return;
-  if (question && !window.confirm(question)) return;
-  // a temporary password is shown until the next change, not forever
-  usersNotice = null;
-  let response;
-  try {
-    response = await api(path, options);
-  } catch (e) {
-    serviceLost("changing an account");
-    return;
-  }
-  const answer = await response.json().catch(() => ({}));
-  if (!response.ok) {
-    await refreshUsers(errorText(answer));
-    return;
-  }
-  if (answer.password) {
-    usersNotice = fmt(path.endsWith("/password") ? "userNewPassword" : "userCreated", {
-      name: answer.name, password: answer.password,
-    });
-  } else {
-    showToast(t("usersDone"));
-  }
-  await refreshUsers();
+  return busy("users:" + path + ":" + ((options && options.method) || ""), async () => {
+    if (confirmKey && !window.confirm(fmt(confirmKey, { name: name }))) return;
+    if (question && !window.confirm(question)) return;
+    // a temporary password is shown until the next change, not forever
+    usersNotice = null;
+    let response;
+    try {
+      response = await api(path, options);
+    } catch (e) {
+      serviceLost("changing an account");
+      return;
+    }
+    const answer = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      await refreshUsers(errorText(answer));
+      return;
+    }
+    if (answer.password) {
+      usersNotice = fmt(path.endsWith("/password") ? "userNewPassword" : "userCreated", {
+        name: answer.name, password: answer.password,
+      });
+    } else {
+      showToast(t("usersDone"));
+    }
+    await refreshUsers();
+  }, []);
 }
 
 function userState(user) {
@@ -1657,6 +1661,30 @@ function adoptLayout(entries, skip) {
   }
 }
 
+/* One request at a time from whatever writes (v0.8.3). A double click on
+   "Save" sent two PUTs and the journal said it twice; Enter in the name
+   field did the same. While `fn` runs a second call with the same `key`
+   does nothing and `buttons` are disabled; after it — done or failed —
+   everything is as it was. A key and not only a button: a menu item is
+   gone once clicked, and Enter is not a button at all. */
+const busyKeys = new Set();
+
+async function busy(key, fn, buttons = []) {
+  if (busyKeys.has(key)) return undefined;
+  busyKeys.add(key);
+  const held = buttons.filter(Boolean);
+  const before = held.map((button) => button.disabled);
+  for (const button of held) button.disabled = true;
+  try {
+    return await fn();
+  } finally {
+    busyKeys.delete(key);
+    held.forEach((button, i) => {
+      button.disabled = before[i];
+    });
+  }
+}
+
 /* Pins one or more nodes where they are, and remembers it.
 
    Pinning says "the physics engine does not get to move this", and
@@ -1712,21 +1740,23 @@ function neighboursAround(anchors, positions) {
    pinned, when the groups around it have been put right and the node
    itself is where it should be. */
 async function rememberNeighbours(anchor) {
-  const neighbours = neighboursAround([anchor]);
-  const count = Object.keys(neighbours[anchor] || {}).length;
-  try {
-    await api("/api/layout", {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ nodes: {}, neighbours: neighbours }),
-    });
-  } catch (e) {
-    serviceLost("remembering the neighbours");
-    return;
-  }
-  serviceBack();
-  keepOffsets(neighbours);
-  showToast(fmt("neighboursRemembered", { n: count }));
+  return busy("neighbours:" + anchor, async () => {
+    const neighbours = neighboursAround([anchor]);
+    const count = Object.keys(neighbours[anchor] || {}).length;
+    try {
+      await api("/api/layout", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ nodes: {}, neighbours: neighbours }),
+      });
+    } catch (e) {
+      serviceLost("remembering the neighbours");
+      return;
+    }
+    serviceBack();
+    keepOffsets(neighbours);
+    showToast(fmt("neighboursRemembered", { n: count }));
+  }, []);
 }
 
 /* This page's copy of the offsets, after the server took them: each
@@ -1764,40 +1794,42 @@ async function unpinNodes(ids) {
 /* One action of the hand — a drop, `P`, a menu item — whatever the
    number of nodes: one request, and one line in the journal. */
 async function storeByHand(positions, pinned, what, neighbours) {
-  const ids = Object.keys(positions);
-  if (!ids.length) return;
-  const nodes = {};
-  for (const id of ids) {
-    nodes[id] = { x: positions[id].x, y: positions[id].y, pinned: pinned };
-    if (pinned) {
-      savedLayout[id] = nodes[id];
-    } else {
-      delete savedLayout[id];
-      // with nothing pinned to measure from, the offsets around it
-      // mean nothing; the server forgets them too
-      for (const [other, pos] of Object.entries(savedLayout)) {
-        if (pos.anchor === id) delete savedLayout[other];
+  return busy("layout:" + pinned + ":" + Object.keys(positions).sort().join(","), async () => {
+    const ids = Object.keys(positions);
+    if (!ids.length) return;
+    const nodes = {};
+    for (const id of ids) {
+      nodes[id] = { x: positions[id].x, y: positions[id].y, pinned: pinned };
+      if (pinned) {
+        savedLayout[id] = nodes[id];
+      } else {
+        delete savedLayout[id];
+        // with nothing pinned to measure from, the offsets around it
+        // mean nothing; the server forgets them too
+        for (const [other, pos] of Object.entries(savedLayout)) {
+          if (pos.anchor === id) delete savedLayout[other];
+        }
       }
     }
-  }
-  writing(ids);
-  try {
-    await api("/api/layout", {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ nodes: nodes, neighbours: neighbours || {} }),
-    });
-  } catch (e) {
+    writing(ids);
+    try {
+      await api("/api/layout", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ nodes: nodes, neighbours: neighbours || {} }),
+      });
+    } catch (e) {
+      written(ids);
+      serviceLost(what);
+      return;
+    }
     written(ids);
-    serviceLost(what);
-    return;
-  }
-  written(ids);
-  serviceBack();
-  if (neighbours) keepOffsets(neighbours);
-  if (!layoutSavedAt) layoutSavedAt = Date.now() / 1000;
-  renderGraph();
-  updateScanStatus();
+    serviceBack();
+    if (neighbours) keepOffsets(neighbours);
+    if (!layoutSavedAt) layoutSavedAt = Date.now() / 1000;
+    renderGraph();
+    updateScanStatus();
+  }, [document.getElementById("unpin-btn")]);
 }
 
 function unpinNode(id) {
@@ -1851,34 +1883,36 @@ function loosenForDrag(ids) {
 }
 
 async function resetLayout() {
-  if (!window.confirm(t("resetLayoutConfirm"))) return;
-  let answer;
-  try {
-    answer = await (await api("/api/layout", { method: "DELETE" })).json();
-  } catch (e) {
-    serviceLost("clearing the layout");
-    return;
-  }
-  serviceBack();
-  // our own reset, not somebody else's: the next refresh must not
-  // start the map over a second time
-  knownClearedAt = Math.max(knownClearedAt, answer.cleared_at || 0);
-  savedLayout = {};
-  layoutSavedAt = 0;
-  // Forgetting the positions on the server is only half of it. vis
-  // keeps x and y on the node it has already built, and nothing in
-  // the update path can take them away again — `setOptions` assigns a
-  // coordinate only when one is given, so leaving it out means "keep
-  // what you have". The nodes went on standing exactly where they
-  // were, `stabilize()` restarted the physics from those same points,
-  // and the reset looked like it had done nothing at all until the
-  // page was reloaded.
-  //
-  // So the node set is rebuilt rather than updated: that is what
-  // makes vis drop the old bodies and lay the map out afresh.
-  rebuildGraph();
-  updateScanStatus();
-  if (network) network.stabilize();
+  return busy("layout-reset", async () => {
+    if (!window.confirm(t("resetLayoutConfirm"))) return;
+    let answer;
+    try {
+      answer = await (await api("/api/layout", { method: "DELETE" })).json();
+    } catch (e) {
+      serviceLost("clearing the layout");
+      return;
+    }
+    serviceBack();
+    // our own reset, not somebody else's: the next refresh must not
+    // start the map over a second time
+    knownClearedAt = Math.max(knownClearedAt, answer.cleared_at || 0);
+    savedLayout = {};
+    layoutSavedAt = 0;
+    // Forgetting the positions on the server is only half of it. vis
+    // keeps x and y on the node it has already built, and nothing in
+    // the update path can take them away again — `setOptions` assigns a
+    // coordinate only when one is given, so leaving it out means "keep
+    // what you have". The nodes went on standing exactly where they
+    // were, `stabilize()` restarted the physics from those same points,
+    // and the reset looked like it had done nothing at all until the
+    // page was reloaded.
+    //
+    // So the node set is rebuilt rather than updated: that is what
+    // makes vis drop the old bodies and lay the map out afresh.
+    rebuildGraph();
+    updateScanStatus();
+    if (network) network.stabilize();
+  }, []);
 }
 
 /* Who a node hangs off, taken from the edges that were just built.
@@ -6330,7 +6364,7 @@ function renderOrphans() {
 function orphanRow(note) {
   const remove = h("button", { type: "button", class: "panel-btn danger", text: t("noteDelete") });
   gateButton(remove, needRole("user"));
-  remove.addEventListener("click", async () => {
+  remove.addEventListener("click", () => busy("note:" + note.node_id, async () => {
     if (!allowed(remove) || !window.confirm(t("noteDeleteConfirm"))) return;
     const response = await api("/api/notes/" + nodePath(note.node_id), { method: "DELETE" });
     if (!response.ok) {
@@ -6339,7 +6373,7 @@ function orphanRow(note) {
     }
     await loadTopologyOnce();
     renderOrphans();
-  });
+  }, [remove]));
   return h("li", {},
     note.label ? h("div", { class: "orphan-label", text: note.label }) : null,
     note.note ? h("div", { class: "orphan-note", text: note.note }) : null,
@@ -6374,23 +6408,25 @@ function moveHereMenu(nodeId) {
 }
 
 async function moveNoteHere(source, nodeId) {
-  const target = noteKeyOf(nodeId);
-  const own = (noteItemOf(nodeId) || {}).note;
-  if (own && !window.confirm(t("noteReplaceConfirm"))) return;
-  const response = await api("/api/notes/" + nodePath(source) + "/move",
-    jsonPost("", { to: target, replace: !!own }));
-  const data = await response.json().catch(() => ({}));
-  const error = document.querySelector("#note-slot .note-error");
-  if (!response.ok) {
-    if (error) {
-      error.textContent = noteErrorText(data.error);
-      error.classList.remove("hidden");
+  return busy("note:" + noteKeyOf(nodeId), async () => {
+    const target = noteKeyOf(nodeId);
+    const own = (noteItemOf(nodeId) || {}).note;
+    if (own && !window.confirm(t("noteReplaceConfirm"))) return;
+    const response = await api("/api/notes/" + nodePath(source) + "/move",
+      jsonPost("", { to: target, replace: !!own }));
+    const data = await response.json().catch(() => ({}));
+    const error = document.querySelector("#note-slot .note-error");
+    if (!response.ok) {
+      if (error) {
+        error.textContent = noteErrorText(data.error);
+        error.classList.remove("hidden");
+      }
+      return;
     }
-    return;
-  }
-  noteEditorFor = null;
-  await loadTopologyOnce();
-  showDetails(nodeId);
+    noteEditorFor = null;
+    await loadTopologyOnce();
+    showDetails(nodeId);
+  }, [...document.querySelectorAll("#note-slot button")]);
 }
 
 /* ---------- names and notes from a file, and into one ----------
@@ -6455,19 +6491,17 @@ function renderNotesImport() {
   }
   const go = h("button", { type: "button", class: "panel-btn", text: t("importGo") });
   go.disabled = job.report.written === 0;
-  go.addEventListener("click", async () => {
-    go.disabled = true;
+  go.addEventListener("click", () => busy("notes-import", async () => {
     const done = await sendNotesFile(job.data, false);
     if (done.failed) {
       showToast(noteErrorText(done.failed));
-      go.disabled = false;
       return;
     }
     job.report = done;
     job.written = true;
     renderNotesImport();
     await loadTopologyOnce();
-  });
+  }, [go]));
   const cancel = h("button", { type: "button", class: "panel-btn", text: t("noteCancel"),
                                onclick: () => els.notesPanel.classList.add("hidden") });
   renderImportReport(job.name, job.report, [go, cancel]);
@@ -6568,35 +6602,37 @@ function takeNote(nodeId, note) {
 }
 
 async function saveNote(nodeId, remove) {
-  const key = noteKeyOf(nodeId);
-  const label = document.getElementById("note-label");
-  const text = document.getElementById("note-text");
-  const error = document.querySelector("#note-slot .note-error");
-  if (remove && !window.confirm(t("noteDeleteConfirm"))) return;
-  let response;
-  let data = {};
-  try {
-    response = await api("/api/notes/" + nodePath(key), remove
-      ? { method: "DELETE" }
-      : {
-        method: "PUT", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ label: label ? label.value : "", note: text ? text.value : "" }),
-      });
-    data = await response.json().catch(() => ({}));
-  } catch (e) {
-    response = null;
-  }
-  if (!response || !response.ok) {
-    // what was typed stays where it is; the reason goes under it
-    if (error) {
-      error.textContent = response ? noteErrorText(data.error) : t("noteErrNetwork");
-      error.classList.remove("hidden");
+  return busy("note:" + noteKeyOf(nodeId), async () => {
+    const key = noteKeyOf(nodeId);
+    const label = document.getElementById("note-label");
+    const text = document.getElementById("note-text");
+    const error = document.querySelector("#note-slot .note-error");
+    if (remove && !window.confirm(t("noteDeleteConfirm"))) return;
+    let response;
+    let data = {};
+    try {
+      response = await api("/api/notes/" + nodePath(key), remove
+        ? { method: "DELETE" }
+        : {
+          method: "PUT", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ label: label ? label.value : "", note: text ? text.value : "" }),
+        });
+      data = await response.json().catch(() => ({}));
+    } catch (e) {
+      response = null;
     }
-    return;
-  }
-  noteEditorFor = null;
-  takeNote(nodeId, remove ? null : data.note);
-  showDetails(nodeId);
+    if (!response || !response.ok) {
+      // what was typed stays where it is; the reason goes under it
+      if (error) {
+        error.textContent = response ? noteErrorText(data.error) : t("noteErrNetwork");
+        error.classList.remove("hidden");
+      }
+      return;
+    }
+    noteEditorFor = null;
+    takeNote(nodeId, remove ? null : data.note);
+    showDetails(nodeId);
+  }, [...document.querySelectorAll("#note-slot button")]);
 }
 
 /* Fills the details card, hoisting its own <h3> into the panel head.
@@ -6990,17 +7026,19 @@ function lldpHostLine(lldp) {
 
 /* Flip the host_down alarm flag of a host and re-render */
 async function toggleMonitor(nodeId) {
-  const host = findHost(nodeId);
-  if (!host) return;
-  const res = await api("/api/host/" + encodeURIComponent(host.mac), {
-    method: "PATCH",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ monitored: !host.monitored }),
-  });
-  if (!res.ok) return;
-  host.monitored = (await res.json()).monitored;
-  renderSidebar();
-  showDetails(nodeId);
+  return busy("monitor:" + nodeId, async () => {
+    const host = findHost(nodeId);
+    if (!host) return;
+    const res = await api("/api/host/" + encodeURIComponent(host.mac), {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ monitored: !host.monitored }),
+    });
+    if (!res.ok) return;
+    host.monitored = (await res.json()).monitored;
+    renderSidebar();
+    showDetails(nodeId);
+  }, [document.getElementById("monitor-btn")]);
 }
 
 function hideDetails() {
@@ -7469,10 +7507,12 @@ async function toggleAlarms() {
 
 /* Manually clear one active alarm (with confirmation), then refresh */
 async function clearAlarm(id) {
-  if (!confirm(t("clearConfirm"))) return;
-  const res = await api("/api/alarms/" + id + "/clear", { method: "POST" });
-  if (!res.ok) return;
-  await refreshAlarms();
+  return busy("alarm:" + id, async () => {
+    if (!confirm(t("clearConfirm"))) return;
+    const res = await api("/api/alarms/" + id + "/clear", { method: "POST" });
+    if (!res.ok) return;
+    await refreshAlarms();
+  }, []);
 }
 
 function renderAlarms() {
