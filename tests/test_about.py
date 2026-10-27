@@ -139,7 +139,9 @@ class LicenceTableTest(unittest.TestCase):
     def test_the_browser_component_is_the_one_the_page_loads(self):
         index = (ROOT / "web" / "index.html").read_text(encoding="utf-8")
         for name, version, _ in about.BROWSER_COMPONENTS:
-            self.assertIn(f"/{name}/{version}/", index)
+            # served by MoonLan itself since v0.8.3
+            self.assertIn(f'src="vendor/{name}-{version}/', index)
+            self.assertTrue((ROOT / "web" / "vendor" / f"{name}-{version}").is_dir())
 
     def test_the_copyright_line_is_the_licence_file_s(self):
         self.assertEqual(about.copyright_line("MIT License\n\nCopyright (c) 2026 neonight-d\n"),

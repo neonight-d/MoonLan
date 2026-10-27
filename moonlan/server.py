@@ -2268,6 +2268,8 @@ app = FastAPI(title="MoonLan", version=__version__, lifespan=lifespan)
 # Every request passes the rights table in access.py before a handler
 # sees it (a no-op while sign-in is off)
 app.add_middleware(signin.Guard, signin=sign_in, router=app.router)
+# CSP, nosniff, Referrer-Policy on every answer, the guard's refusals too
+app.add_middleware(https.SecurityHeaders)
 if config.listen_hsts_max_age:
     # outermost, so the refusals the guard answers carry it too
     app.add_middleware(https.Hsts, max_age=config.listen_hsts_max_age)

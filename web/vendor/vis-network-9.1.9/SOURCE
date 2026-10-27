@@ -1,0 +1,9 @@
+vis-network 9.1.9, standalone/umd/vis-network.min.js, as published:
+  https://cdnjs.cloudflare.com/ajax/libs/vis-network/9.1.9/standalone/umd/vis-network.min.js
+  https://cdn.jsdelivr.net/npm/vis-network@9.1.9/standalone/umd/vis-network.min.js
+Both give the same file, the one cdnjs's SRI names:
+  sha512-iTgTmIgxyA2YehKNVbzLJx4j9SnuC5ihtRrtxVkXH/9nF3vXBN5YeNQp+6wufBWKD3u+roHVNOvWBMufQnBbug==
+Dual-licensed: Apache-2.0 (LICENSE-APACHE-2.0) or MIT (LICENSE-MIT).
+Served by MoonLan itself (v0.8.3): a management VLAN without the internet
+gets the map too, and the page's Content-Security-Policy allows scripts
+from MoonLan only. Not to be edited; a new version is a new folder.

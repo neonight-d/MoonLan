@@ -316,6 +316,50 @@ def transport_mode(tls_cert: str, trusted: list[str],
     return "http"
 
 
+# What the page may load and from where (v0.8.3): its own files only.
+# Styles may be inline — app.js sets a few style attributes and vis
+# builds its own — but scripts may not, so a name from the network that
+# slipped into the page as markup still runs nothing: an onerror= is an
+# inline script. The second line of defence after the cards' escaping,
+# not instead of it.
+CONTENT_SECURITY_POLICY = (
+    "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; "
+    "img-src 'self' data: blob:; connect-src 'self'; object-src 'none'; "
+    "base-uri 'none'; frame-ancestors 'none'; form-action 'self'"
+)
+# FastAPI's API explorer for administrators is an inline script and
+# files from a CDN; the policy would leave it blank, so it goes without
+EXPLORER_PATHS = ("/docs", "/redoc")
+
+
+class SecurityHeaders:
+    """Content-Security-Policy, X-Content-Type-Options: nosniff and
+    Referrer-Policy: same-origin on every answer, the page's and the
+    API's, refusals included. A header a route set itself is kept."""
+
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+        add = [(b"x-content-type-options", b"nosniff"),
+               (b"referrer-policy", b"same-origin")]
+        if not scope.get("path", "").startswith(EXPLORER_PATHS):
+            add.append((b"content-security-policy", CONTENT_SECURITY_POLICY.encode("ascii")))
+
+        async def with_headers(message):
+            if message["type"] == "http.response.start":
+                headers = list(message.get("headers", []))
+                present = {name.lower() for name, _ in headers}
+                headers += [(name, value) for name, value in add if name not in present]
+                message = {**message, "headers": headers}
+            await send(message)
+
+        await self.app(scope, receive, with_headers)
+
+
 class Hsts:
     """listen.hsts_max_age: Strict-Transport-Security on every answer
     that went over HTTPS. Off unless asked for: once a browser has seen
