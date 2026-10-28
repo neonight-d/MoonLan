@@ -1572,6 +1572,14 @@ function userState(user) {
       parts.push(h("span", { class: "bad", text: t("userTotpAdminMissing") }));
     } else parts.push(t("userTotpOff"));
   }
+  // confirmed personal notifications (v0.8.4)
+  for (const channel of user.notifications || []) {
+    parts.push(h("span", {
+      class: "user-notify", title: fmt("userNotifies", { channel: channelName(channel) }),
+      "aria-label": fmt("userNotifies", { channel: channelName(channel) }),
+      text: channel === "email" ? "✉" : "✈",
+    }));
+  }
   parts.push(user.last_login
     ? fmt("userLastLogin", { time: fmtTime(user.last_login) })
     : t("userNever"));
@@ -1686,6 +1694,11 @@ function userMenuItems(user, myName, users) {
     { key: "unlock", group: "account", label: t("actUnlock"),
       disabled: user.locked_until > now ? null : t("reasonNotLocked"),
       run: post("/unlock") },
+    // somebody who left, whose account is not deleted yet (v0.8.4)
+    { key: "notifications", group: "state", label: t("actRemoveNotifications"),
+      disabled: (user.notifications || []).length ? null : t("reasonNoNotifications"),
+      run: () => userAction(path + "/notifications", { method: "DELETE" },
+        "confirmRemoveNotifications", user.name) },
     user.disabled
       ? { key: "enable", group: "state", label: t("actEnable"),
           run: patch({ disabled: false }) }
@@ -6359,7 +6372,7 @@ function openSettingsSections() {
   } catch (e) {
     // a private window, or storage turned off: the first section open
   }
-  return new Set(["map"]);
+  return new Set(["mine"]);
 }
 
 function rememberSettingsSections(open) {
@@ -6389,6 +6402,7 @@ async function loadSettings() {
   }
   if (!response.ok) return;
   settingsData = await response.json();
+  await loadMyNotifications();
   renderSettings();
 }
 
@@ -6738,16 +6752,31 @@ function saveSettingsSection(section, button) {
   }, [button]);
 }
 
-function settingsSection(name, open) {
-  const editable = settingsData.can_edit;
-  const members = settingsData.settings.filter((s) => s.section === name);
+/* A section that folds: its name is the button, and whether it is open
+   is remembered in the browser */
+function foldSection(name, open, parts, dirty) {
   const isOpen = open.has(name);
   const bodyId = "set-section-" + name;
-  const dirty = members.some((s) => s.key in settingsDraft);
   const head = h("button", {
     type: "button", class: "set-head", "aria-expanded": String(isOpen), "aria-controls": bodyId,
   }, t("setSection_" + name),
   h("span", { class: "set-dirty" + (dirty ? "" : " hidden"), "data-dirty": name, text: " · " + t("setUnsaved") }));
+  const body = h("div", { class: "set-body" + (isOpen ? "" : " hidden"), id: bodyId }, ...parts);
+  head.addEventListener("click", () => {
+    const opened = body.classList.toggle("hidden") === false;
+    head.setAttribute("aria-expanded", String(opened));
+    const now = openSettingsSections();
+    if (opened) now.add(name);
+    else now.delete(name);
+    rememberSettingsSections(now);
+  });
+  return h("section", { class: "set-section" }, head, body);
+}
+
+function settingsSection(name, open) {
+  const editable = settingsData.can_edit;
+  const members = settingsData.settings.filter((s) => s.section === name);
+  const dirty = members.some((s) => s.key in settingsDraft);
   const parts = [];
   if (!editable) parts.push(h("p", { class: "set-readonly", text: t("setAdminOnly") }));
   for (const s of members) {
@@ -6771,26 +6800,314 @@ function settingsSection(name, open) {
       parts.push(h("p", { class: "set-scan" }, t("setScanNow") + " ", scan));
     }
   }
-  const body = h("div", { class: "set-body" + (isOpen ? "" : " hidden"), id: bodyId }, ...parts);
-  head.addEventListener("click", () => {
-    const opened = body.classList.toggle("hidden") === false;
-    head.setAttribute("aria-expanded", String(opened));
-    const now = openSettingsSections();
-    if (opened) now.add(name);
-    else now.delete(name);
-    rememberSettingsSections(now);
-  });
-  return h("section", { class: "set-section" }, head, body);
+  return foldSection(name, open, parts, dirty);
 }
 
 function renderSettings() {
   if (!settingsData) return;
   const open = openSettingsSections();
   els.settingsBody.replaceChildren(
+    // one's own notifications first, for every role
+    foldSection("mine", open, myNotificationsParts(), false),
     ...settingsData.sections.map((name) => settingsSection(name, open)));
+  watchMyLink();
 }
 
 els.settingsClose.addEventListener("click", closeSettings);
+
+/* ---------- My notifications (v0.8.4) ----------
+
+   One's own email and Telegram, for every role. An email is confirmed
+   with a code sent to it, a Telegram chat with a link to the bot (and
+   its QR code, for a map open on a computer and Telegram on a phone).
+   While a link waits, its state is asked every three seconds — only
+   while the panel is open — and the page says "connected" by itself. */
+
+const MY_CHANNELS = ["email", "telegram"];
+let myNotes = null;        // GET /api/me/notifications
+let myErrors = {};         // channel -> a line under it
+let myLink = null;         // {link, expires_at}: the link this page made
+let myEmailForm = false;   // "Change": the address form over a confirmed one
+let myLinkTimer = null;
+
+async function loadMyNotifications() {
+  myNotes = null;
+  if (!me || !me.sign_in || !me.name) return;
+  try {
+    const response = await api("/api/me/notifications");
+    if (response.ok) myNotes = await response.json();
+  } catch (e) {
+    serviceLost("your notifications");
+  }
+}
+
+/* A refusal of /api/me/* in words: the code and, where there is one,
+   when to try again or how many tries are left */
+function myErrorText(answer) {
+  const code = (answer && answer.error) || "other";
+  if (answer && answer.retry_at) {
+    return fmt("myErr_" + code, { time: new Date(answer.retry_at * 1000).toLocaleTimeString(locale()) });
+  }
+  if (code === "wrong_code") return fmt("myErr_wrong_code", { n: answer.left });
+  if (code === "channel_off") return t("channelWhy_" + answer.why);
+  const key = "myErr_" + code;
+  return t(key) !== key ? t(key) : errorText(answer);
+}
+
+/* One request about one's own notifications; the answer — the new
+   state — is drawn, a refusal is said under its channel */
+function myRequest(key, channel, path, options, button, after) {
+  return busy("my:" + key, async () => {
+    let response;
+    try {
+      response = await api(path, options);
+    } catch (e) {
+      serviceLost("your notifications");
+      return;
+    }
+    const answer = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      myErrors[channel] = myErrorText(answer);
+      renderSettings();
+      return;
+    }
+    delete myErrors[channel];
+    if (after) await after(answer);
+    else if (answer.subscriptions) myNotes = answer;
+    renderSettings();
+  }, button ? [button] : []);
+}
+
+// the page's language goes with a request: the email and the bot's
+// answer are written in it
+function myBody(extra) {
+  return jsonPost("", { lang: lang, ...extra });
+}
+
+function myReceive(channel, sub) {
+  const box = h("input", { type: "checkbox", id: "my-receive-" + channel, checked: sub.enabled });
+  box.addEventListener("change", () => myRequest("receive:" + channel, channel,
+    "/api/me/notifications/" + channel, {
+      method: "PATCH", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ enabled: box.checked }),
+    }));
+  return h("div", { class: "set-input" }, box, h("label", { for: box.id, text: t("myReceive") }));
+}
+
+function myTestButton(channel, ready) {
+  const test = h("button", { type: "button", class: "panel-btn", text: t("setTest"), disabled: !ready });
+  test.addEventListener("click", () => myRequest("test:" + channel, channel,
+    "/api/me/notifications/" + channel + "/test", myBody(), test, async () => {
+      showToast(t("myTestSent"));
+    }));
+  return test;
+}
+
+function myRemoveButton(channel, label) {
+  const remove = h("button", { type: "button", class: "panel-btn danger", text: t(label) });
+  remove.addEventListener("click", () => {
+    if (!window.confirm(t(channel === "email" ? "confirmMyEmailRemove" : "confirmMyTelegramRemove"))) return;
+    myRequest("remove:" + channel, channel, "/api/me/notifications/" + channel,
+      { method: "DELETE" }, remove);
+  });
+  return remove;
+}
+
+// a channel the server does not send through: greyed, and why
+function myChannelHead(channel, sub) {
+  const state = myNotes.channels[channel];
+  return [
+    h("h4", { class: "card-sub", text: channelName(channel) }),
+    state.ready ? null : h("p", { class: "set-readonly",
+      text: t("channelNotSet") + ": " + t("channelWhy_" + state.why) + (sub ? " " + t("mySavedNotWorking") : "") }),
+  ];
+}
+
+function myEmail() {
+  const channel = "email";
+  const ready = myNotes.channels.email.ready;
+  const sub = myNotes.subscriptions.email;
+  const pending = myNotes.pending.email;
+  const parts = myChannelHead(channel, sub);
+  if (sub) {
+    parts.push(h("p", { class: "my-state" },
+      h("span", { class: "set-address", text: sub.address }), " · ",
+      fmt("myConfirmedOn", { date: fmtDate(sub.confirmed_at) })));
+    parts.push(myReceive(channel, sub));
+    const change = h("button", { type: "button", class: "panel-btn", text: t("myChange"), disabled: !ready });
+    change.addEventListener("click", () => {
+      myEmailForm = true;
+      renderSettings();
+    });
+    parts.push(h("div", {}, myTestButton(channel, ready), change, myRemoveButton(channel, "myRemove")));
+  }
+  if (pending && !pending.expired) {
+    // the code went out: it comes back here
+    const code = h("input", {
+      type: "text", id: "my-code", inputmode: "numeric", autocomplete: "one-time-code",
+      maxlength: "6", placeholder: "123456",
+    });
+    const confirm = h("button", { type: "button", text: t("myConfirm") });
+    const send = () => myRequest("confirm", channel, "/api/me/notifications/email/confirm",
+      jsonPost("", { code: code.value }), confirm, async (answer) => {
+        myNotes = answer;
+        myEmailForm = false;
+        showToast(t("myEmailConfirmed"));
+      });
+    confirm.addEventListener("click", send);
+    code.addEventListener("keydown", (event) => {
+      if (event.key === "Enter") {
+        event.preventDefault();
+        send();
+      }
+    });
+    const again = h("button", { type: "button", class: "panel-btn", text: t("mySendAgain") });
+    again.addEventListener("click", () => myRequest("code", channel, "/api/me/notifications/email",
+      myBody({ address: pending.address }), again, loadMyNotifications));
+    parts.push(
+      h("p", { class: "set-meta", text: fmt("myCodeSent", {
+        address: pending.address, time: new Date(pending.expires_at * 1000).toLocaleTimeString(locale()),
+      }) }),
+      h("div", { class: "set-input set-add" }, code, confirm),
+      h("div", {}, again));
+  } else if (!sub || myEmailForm) {
+    const address = h("input", {
+      type: "email", id: "my-email", autocomplete: "email",
+      placeholder: t("setEmailPlaceholder"), disabled: !ready,
+    });
+    const send = h("button", { type: "button", text: t("mySendCode"), disabled: !ready });
+    const go = () => myRequest("code", channel, "/api/me/notifications/email",
+      myBody({ address: address.value }), send, loadMyNotifications);
+    send.addEventListener("click", go);
+    address.addEventListener("keydown", (event) => {
+      if (event.key === "Enter") {
+        event.preventDefault();
+        go();
+      }
+    });
+    if (pending && pending.expired) parts.push(h("p", { class: "set-meta", text: t("myErr_code_expired") }));
+    parts.push(h("label", { for: "my-email", class: "set-meta", text: t(sub ? "myNewAddress" : "myAddress") }),
+      h("div", { class: "set-input set-add" }, address, send));
+  }
+  if (myErrors[channel]) parts.push(h("p", { class: "error", role: "alert", text: myErrors[channel] }));
+  return parts;
+}
+
+function myTelegram() {
+  const channel = "telegram";
+  const ready = myNotes.channels.telegram.ready;
+  const sub = myNotes.subscriptions.telegram;
+  const link = myNotes.pending.telegram || { state: "none" };
+  const parts = myChannelHead(channel, sub);
+  const connect = (label) => {
+    const button = h("button", { type: "button", text: t(label), disabled: !ready });
+    button.addEventListener("click", () => myRequest("link", channel, "/api/me/notifications/telegram",
+      myBody(), button, async (answer) => {
+        myLink = answer;
+        await loadMyNotifications();
+      }));
+    return button;
+  };
+  if (sub && (link.state === "connected" || link.state === "none")) {
+    parts.push(h("p", { class: "my-state", text: fmt("myConnectedOn", { date: fmtDate(sub.confirmed_at) }) }));
+    parts.push(myReceive(channel, sub));
+    parts.push(h("div", {}, myTestButton(channel, ready), myRemoveButton(channel, "myDisconnect")));
+  } else if (link.state === "waiting" || link.state === "group") {
+    if (myLink && myLink.expires_at === link.expires_at) {
+      const qr = qrCanvas(myLink.link, 180);
+      if (qr) qr.setAttribute("aria-label", t("myQrLabel"));
+      parts.push(
+        h("p", { text: t("myLinkHint") }),
+        h("p", {}, h("a", { href: myLink.link, target: "_blank", rel: "noopener noreferrer", class: "my-link", text: myLink.link })),
+        qr ? h("div", { class: "my-qr" }, qr) : null,
+        h("p", { class: "set-meta", role: "status", text: fmt("myLinkUntil", {
+          time: new Date(link.expires_at * 1000).toLocaleTimeString(locale()),
+        }) }));
+    } else {
+      // made by this account in another page, or before a reload
+      parts.push(h("p", { class: "set-meta", text: t("myLinkElsewhere") }), connect("myNewLink"));
+    }
+    if (link.state === "group") parts.push(h("p", { class: "error", role: "alert", text: t("myLinkGroup") }));
+  } else if (link.state === "expired") {
+    parts.push(h("p", { class: "set-meta", text: t("myLinkExpired") }), connect("myNewLink"));
+  } else if (link.state === "conflict") {
+    parts.push(h("p", { class: "error", role: "alert", text: t("myBotBusy") }), connect("myTryAgain"));
+  } else {
+    parts.push(connect("myConnectTelegram"));
+  }
+  if (myErrors[channel]) parts.push(h("p", { class: "error", role: "alert", text: myErrors[channel] }));
+  return parts;
+}
+
+/* Which alarms come to one's own addresses: the shared table's until
+   a box is changed, then one's own, with the way back */
+function myAlarms() {
+  const subscribed = MY_CHANNELS.filter((c) => myNotes.subscriptions[c]);
+  if (!subscribed.length) return [];
+  const choose = (channel, list) => myRequest("alarms:" + channel, channel,
+    "/api/me/notifications/" + channel, {
+      method: "PATCH", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ alarm_types: list }),
+    });
+  const heads = subscribed.map((channel) => {
+    const own = myNotes.subscriptions[channel].alarm_types !== null;
+    const back = own ? h("button", { type: "button", class: "link-btn", text: t("myBackToTable") }) : null;
+    if (back) back.addEventListener("click", () => choose(channel, null));
+    return h("th", {}, channelName(channel),
+      h("div", { class: "why", text: t(own ? "myOwnChoice" : "myAsTable") }), back);
+  });
+  const rows = myNotes.alarm_types.map((type) => h("tr", {},
+    h("td", { text: t("al_" + type) }),
+    ...subscribed.map((channel) => {
+      const sub = myNotes.subscriptions[channel];
+      const box = h("input", {
+        type: "checkbox", checked: sub.effective.includes(type),
+        "aria-label": t("al_" + type) + " — " + channelName(channel),
+      });
+      box.addEventListener("change", () => choose(channel, box.checked
+        ? [...sub.effective, type] : sub.effective.filter((x) => x !== type)));
+      return h("td", {}, box);
+    })));
+  return [
+    h("h4", { class: "card-sub", text: t("myWhichAlarms") }),
+    h("div", { class: "table-scroll" }, h("table", { class: "set-table" },
+      h("thead", {}, h("tr", {}, h("th", { text: t("setAlarmType") }), ...heads)),
+      h("tbody", {}, ...rows))),
+  ];
+}
+
+function myNotificationsParts() {
+  if (!me || !me.sign_in) return [h("p", { class: "set-readonly", text: t("myNoSignIn") })];
+  if (!myNotes) return [h("p", { class: "set-meta", text: t("myUnavailable") })];
+  return [...myEmail(), ...myTelegram(), ...myAlarms()].filter(Boolean);
+}
+
+/* A waiting link's state, every three seconds while the panel is
+   open; drawn again only when it changes */
+function watchMyLink() {
+  clearTimeout(myLinkTimer);
+  myLinkTimer = null;
+  const state = myNotes && myNotes.pending.telegram && myNotes.pending.telegram.state;
+  if (els.settings.classList.contains("hidden") || (state !== "waiting" && state !== "group")) return;
+  myLinkTimer = setTimeout(async () => {
+    myLinkTimer = null;
+    if (els.settings.classList.contains("hidden")) return;
+    let now = null;
+    try {
+      const response = await api("/api/me/notifications/telegram");
+      if (response.ok) now = await response.json();
+    } catch (e) {
+      serviceLost("the Telegram link");
+    }
+    if (now && myNotes && now.state !== myNotes.pending.telegram.state) {
+      await loadMyNotifications();
+      if (now.state === "connected") showToast(t("myTelegramConnected"));
+      renderSettings();
+    } else {
+      watchMyLink();
+    }
+  }, 3000);
+}
 
 /* ---------- a node's name and note (v0.8.0) ----------
 
@@ -8592,6 +8909,8 @@ const ACCOUNT_EVENTS = new Set([
   "user_totp_enabled", "user_unlocked", "user_sessions_closed",
   "user_deleted", "user_passkey_added", "user_passkey_removed",
   "user_passkeys_reset", "passkey_clone_suspected",
+  // one's own notifications (v0.8.4)
+  "subscription_added", "subscription_removed", "user_notifications_removed",
 ]);
 
 function accountEventText(ev) {
@@ -8618,6 +8937,8 @@ function accountEventText(ev) {
     parts.push(t("evMethod_" + data.method));
   }
   if (data.minutes) parts.push(fmt("evLockedFor", { n: data.minutes }));
+  if (data.channel) parts.push(channelName(data.channel));
+  if (data.channels) parts.push(data.channels.map(channelName).join(", ") || "—");
   return parts.join(" · ");
 }
 

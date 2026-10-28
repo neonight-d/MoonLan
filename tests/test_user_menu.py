@@ -29,8 +29,9 @@ class UserMenuTest(unittest.TestCase):
         keys = re.findall(r'\{ key: "(\w+)", group: "(\w+)"', items)
         self.assertEqual(
             [k for k, _ in keys],
-            ["password", "totp", "keys", "sessions", "unlock", "enable",
-             "disable", "delete"],
+            # notifications: somebody's personal ones off (v0.8.4)
+            ["password", "totp", "keys", "sessions", "unlock",
+             "notifications", "enable", "disable", "delete"],
         )
         # a line before Enable/Disable, and Delete last on its own
         groups = dict(keys)
@@ -42,7 +43,7 @@ class UserMenuTest(unittest.TestCase):
         items = function("userMenuItems")
         for reason in ("reasonNoTotp", "reasonNoKeys", "reasonNoSessions",
                        "reasonNotLocked", "reasonYourAccount",
-                       "reasonLastAdmin"):
+                       "reasonLastAdmin", "reasonNoNotifications"):
             self.assertIn(f't("{reason}")', items)
         # one's own account and the last administrator: neither disabled
         # nor deleted from here

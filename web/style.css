@@ -1302,6 +1302,18 @@ body.gated .toolbar > button { display: none; }
 .set-footer .panel-btn { margin-top: 4px; }
 .set-scan { margin: 8px 0 0; }
 .set-scan .panel-btn { margin-top: 0; }
+/* my notifications */
+#settings .card-sub { margin: 10px 0 6px; }
+#settings .panel-btn.danger { color: #e39a9a; }
+.my-state { margin: 0 0 4px; }
+.my-link { color: var(--link-text); overflow-wrap: anywhere; }
+/* dark on white, with its quiet zone: what a phone's camera reads */
+.my-qr canvas { display: block; max-width: 100%; height: auto; border-radius: 4px; }
+.link-btn {
+  border: none; background: none; padding: 0; margin-top: 2px;
+  font: inherit; font-size: 0.72rem; color: var(--link-text); text-decoration: underline; cursor: pointer;
+}
+.user-notify { color: var(--text); }
 /* a phone's fields are 16 px (v0.8.3); this rule comes after the
    general one and is more specific, so it says so again */
 @media (max-width: 720px) {
