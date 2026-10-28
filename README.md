@@ -21,8 +21,8 @@
 | 🔭 Discovery | SNMP v2c, FDB/MAC tables, LLDP, LACP, VLAN/PVID, ARP/DNS, the maker of each device by the IEEE register |
 | 🗺️ Topology | Direct-link inference, trunk awareness, STP-aware rings, unmanaged bridges |
 | 📈 Monitoring | Ping, traffic rates, errors, discards, flapping, loop detection |
-| 🚨 Alarms | Stateful alarms with Email, Telegram, Syslog notifications |
-| 🧭 Operations | Shared layout, pinned nodes, names and notes on nodes (CSV import by MAC), port numbers on the lines, the map exported to PDF, Draw.io and SVG, search, journal, port/STP/alarms panels |
+| 🚨 Alarms | Stateful alarms with Email, Telegram, Syslog notifications — to shared recipients and to each person's own confirmed email and Telegram |
+| 🧭 Operations | Settings in the page (thresholds, intervals, alarm routing) without a restart, shared layout, pinned nodes, names and notes on nodes (CSV import by MAC), port numbers on the lines, the map exported to PDF, Draw.io and SVG, search, journal, port/STP/alarms panels |
 | 🔐 Access | Sign-in with three roles, TOTP or a key (passkey) for administrators, HTTPS of its own or behind a proxy, accounts from the server's shell |
 | 🧪 Diagnostics | FDB, hosts, ports, STP, loop detection, topology, arbitrary MIB walks |
 | 🛡️ Safety | Per-host poll budgets, stale-data labels, command argument validation |
@@ -70,6 +70,9 @@ cp config.example.yaml config.yaml
 ~~~
 
 Every key, with its default: **[docs/CONFIGURATION.md](docs/CONFIGURATION.md)**.
+What the map shows and how alarms rise is set in the page since
+v0.8.4 — the Actions menu → Settings; a `config.yaml` that still has
+those keys is moved into the database at the first start.
 
 ### Run
 
@@ -286,7 +289,10 @@ See **[CONTRIBUTING.md](CONTRIBUTING.md)**.
 | v0.7.9 | Not released: went into v0.7.10 |
 | v0.7.10 ✓ | Port numbers on the lines (numbers only, if wished), short cards, the list folds away on a phone |
 | v0.8.0 ✓ | Names and notes on the map, import by MAC, switches found by maker |
-| v0.8.1 | Export to PDF and Draw.io |
+| v0.8.1 ✓ | The map on paper and in Draw.io, an offline room keeps its name, About |
+| v0.8.2 ✓ | Russian without English in it, a page that stays put on a phone, the lists from the keyboard |
+| v0.8.3 ✓ | Names from the network as text, ports on an upright phone, an image on Docker Hub |
+| v0.8.4 ✓ | Settings in the page, alarms to one's own mail and Telegram |
 | v0.9 | Windows computer inventory (WMI/WinRM) |
 
 Every version so far: [CHANGELOG.md](CHANGELOG.md).

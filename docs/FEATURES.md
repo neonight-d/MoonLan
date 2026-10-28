@@ -1,6 +1,6 @@
 # What MoonLan does
 
-Everything MoonLan does, as of v0.8.3 — the list the README used to carry. The README keeps the summary; each item here links to the page that explains it.
+Everything MoonLan does, as of v0.8.4 — the list the README used to carry. The README keeps the summary; each item here links to the page that explains it.
 
 ![Alarms panel](img/alarms.png)
 
@@ -57,7 +57,7 @@ Everything MoonLan does, as of v0.8.3 — the list the README used to carry. The
   in the host card and the device list.
 - Unmanaged switch detection: when many hosts are visible behind one port,
   they are grouped under a "Switch without SNMP" node
-  (`unmanaged_threshold` in the configuration).
+  (`unmanaged_threshold` in Settings).
 - Host IP addresses from routers' ARP tables (`routers` section),
   host names via reverse DNS. An IP belongs to exactly one MAC, so a
   device replaced or re-addressed by DHCP does not linger as a second
@@ -376,7 +376,30 @@ Everything MoonLan does, as of v0.8.3 — the list the README used to carry. The
   and the link card lists each member with its state.
 - Notifications: email (SMTP), Telegram (Bot API) and Syslog (UDP) with
   per-alarm-type routing (`alarm_notify`) and an anti-spam cooldown.
-  `python -m moonlan.notify --test` checks every enabled channel.
+  `python -m moonlan.notify --test` checks every enabled channel. One
+  message per address: nobody sees who else gets it, and one refused
+  address does not stop the rest.
+- Settings in the page (v0.8.4): the Actions menu → Settings. The map
+  and the inventory (grouping thresholds, how long devices stay,
+  retention), the polling intervals, every alarm threshold, damping,
+  the alarm → channel table and the shared recipients — each with its
+  ⓘ, its unit, its default, when a change applies and who changed it
+  last, saved a section at a time, checked by the server, applied
+  without a restart (a sleeping scan is woken by a new interval) and
+  written in the journal ("Offline group threshold: 2 → 3"). Every role
+  sees them; an administrator changes them; the others see them
+  read-only with the reason. Kept in the database: the values a
+  `config.yaml` from before v0.8.4 has are moved there at the first
+  start, and the log and `diag --config` list the keys to remove. See
+  [CONFIGURATION.md](CONFIGURATION.md#in-settings-since-v084).
+- One's own notifications (v0.8.4): every account adds its own email —
+  confirmed with a six-digit code — and its own Telegram — connected
+  with a link to the bot, or its QR code from a phone, and Start; the
+  page says "connected" by itself. Nothing but the confirmation goes to
+  an address until it is confirmed. Which alarms: as the shared table,
+  following it, or one's own choice. An administrator sees ✉ / ✈ in
+  Users and can turn somebody's off. See
+  [OPERATIONS.md](OPERATIONS.md#personal-notifications).
 - Alarm hygiene: flap damping (an oscillating subject is muted after
   3 raises in 2 hours with a single FLAPPING notice and a FLAP mark in
   the panel), manual clear buttons, and a stale-alarm janitor that
@@ -427,8 +450,8 @@ Everything MoonLan does, as of v0.8.3 — the list the README used to carry. The
   (`neonight/moonlan`) and GitHub's registry
   (`ghcr.io/neonight-d/moonlan`): the demo in one command, docker
   compose with `/config` and `/data`, the console through
-  `docker exec`, a health check, and a non-root user. See
-  [DOCKER.md](DOCKER.md).
+  `docker exec`, a health check, and a non-root user; Settings and
+  subscriptions are in `/data`. See [DOCKER.md](DOCKER.md).
 - Demo mode with a virtual network — explore the UI without real switches.
 - SNMP diagnostic tool: `python -m moonlan.diag <ip>`.
 

@@ -243,6 +243,62 @@ Set the configuration explicitly when needed:
 export MOONLAN_CONFIG=/absolute/path/to/config.yaml
 ~~~
 
+## Settings: from config.yaml to the page (v0.8.4)
+
+What the map shows and how alarms rise — grouping thresholds, how long
+devices stay, the polling intervals, the alarm thresholds, the alarm →
+channel table, the shared recipients — is changed in the page now:
+the Actions menu → Settings, by an administrator, without a restart.
+The values are kept in the database. The list, with ranges:
+[CONFIGURATION.md](CONFIGURATION.md#in-settings-since-v084).
+
+After the upgrade, the first start moves every such value your
+`config.yaml` has into the database — the journal says "Settings from
+config.yaml" with each value — and from then on that part of the file
+is not read. The log says which keys to remove, at every start until
+they are gone:
+
+~~~text
+WARNING moonlan: In Settings now, so config.yaml's values are not used — remove them from config.yaml: offline_group_threshold, scan_interval_minutes, alarm_notify
+~~~
+
+`python -m moonlan.diag --config` lists the same keys, and every
+setting with its value, where it comes from and who changed it last.
+Remove them and restart: the values stay as they were. A value out of
+range in the file is not moved — the log names it, and the default
+applies until it is set in the page.
+
+## Personal notifications
+
+Every account — viewer, user or administrator — can add its own email
+and Telegram for alarms in Settings → My notifications. Until it is
+confirmed, an address gets nothing but its confirmation.
+
+- **Email** is confirmed with a six-digit code sent through the SMTP
+  server of `config.yaml` (fifteen minutes, five tries; one code a
+  minute, five an hour). The email channel has to be set up:
+  `notifications.email.enabled`, `smtp_host`, `mail_from`.
+- **Telegram** is connected with a link to MoonLan's bot (or its QR
+  code): the person presses Start, and the private chat it came from
+  is the address. A group cannot be connected this way.
+- **Which alarms**: what the shared table sends to that channel —
+  following it when it changes — or one's own choice.
+- Repeats and flapping are damped once, for everybody. An account that
+  is disabled gets nothing; deleting it deletes its subscriptions;
+  Users → ⋯ → "Turn notifications off" removes somebody's without
+  deleting the account.
+
+### A bot for MoonLan alone
+
+To connect a chat, MoonLan reads the bot's updates (`getUpdates`)
+while a link waits. Telegram gives a bot's updates to one reader: if
+another program polls the same bot, or the bot has a webhook, Telegram
+answers 409 Conflict, the log says so with Telegram's own words, and
+the page tells the person that a link cannot work — use email. Give
+MoonLan a bot of its own: @BotFather → /newbot, then its token in
+`notifications.telegram.bot_token`. Sending to chats is not affected
+either way; only connecting by a link is.
+
 ## Health checks
 
 Simple liveness, without sign-in:

@@ -6,6 +6,58 @@ for before the next one started.
 
 Русская версия — [CHANGELOG_RU.md](CHANGELOG_RU.md).
 
+## v0.8.4 — 2026-10-28
+
+Settings in the page, alarms to one's own mail and Telegram. From the
+operator's notes held over from v0.8.3.
+
+**Settings.** What the map shows and how alarms rise is no longer a
+config.yaml key: the Actions menu → Settings. The map and the
+inventory (the grouping thresholds, how long a device stays, how long
+it is kept), the polling intervals, every alarm threshold, the damping
+of repeats and flapping, the alarm → channel table and the shared
+recipients — each with what it does behind its ⓘ, its unit, its
+default, when a change applies and who changed it last. A section is
+saved in one request, checked by the server first (a value out of range
+stays under its field with what was typed), and applied without a
+restart: a scan asleep for ten minutes is woken by a new interval, and
+after a change a scan applies the page offers to scan now. The journal
+says "Offline group threshold: 2 → 3"; the log says the same in one
+line. Every role sees the settings; an administrator changes them, the
+others see them read-only and why. Secrets stay in config.yaml, with
+everything else about infrastructure: a channel shows only as set up on
+the server or not.
+
+**Upgrading.** The first start moves every such value your config.yaml
+has into the database ("Settings from config.yaml" in the journal) and
+reads that part of the file no more; the log and `diag --config` name
+the keys to remove. A value out of range is not moved, and said.
+`scan_interval_minutes: 0` now means only on request, as the
+documentation always said — it meant once an hour. The retention and
+layout cleanups also run once a day, not only at a start.
+
+**One's own notifications.** Every account adds its own email —
+confirmed with a six-digit code, in the language of its page — and its
+own Telegram — connected with a link to the bot, or the QR code of it
+from a phone, and Start; the page says "connected" by itself. An
+address gets nothing but its confirmation until it is confirmed. Which
+alarms: as the shared table, following it, or one's own choice. An
+address that is both shared and personal gets one message; a disabled
+account gets nothing; an administrator sees ✉ / ✈ in Users and can turn
+somebody's notifications off. A bot that another program polls cannot
+connect chats by a link, and the page says so: MoonLan wants a bot of
+its own (docs/OPERATIONS.md).
+
+**Delivery.** One message per address now: nobody sees who else gets an
+alarm, a refused address does not stop the others, and a Telegram chat
+that failed no longer ends the round for the chats after it. A failure
+is logged with its channel and account, never the address.
+
+**QR codes without a library.** The TOTP secret had lost its QR code in
+v0.8.3: it came from a library on cdnjs, which the page's
+Content-Security-Policy no longer runs. The page draws QR codes itself
+now, for TOTP and for the Telegram link.
+
 ## v0.8.3 — 2026-10-27
 
 Names from the network as text, ports on an upright phone, an image on

@@ -47,7 +47,7 @@ host` is not needed.
 | In the container | What is there |
 |---|---|
 | `/config` | `config.yaml` (`MOONLAN_CONFIG=/config/config.yaml`), and `tls/` for HTTPS |
-| `/data` | the working directory: the database (`db_path: moonlan.db`, relative, lands here), `oui/` — the IEEE register, the console token |
+| `/data` | the working directory: the database (`db_path: moonlan.db`, relative, lands here) — Settings and personal notifications included — `oui/` — the IEEE register, the console token |
 
 The container runs as `moonlan`, uid and gid 1000: `config/` must be
 readable by it and `data/` writable — hence the `chown` above.
