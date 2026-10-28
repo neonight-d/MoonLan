@@ -3,7 +3,15 @@
 A person adds their own address, and nothing is sent to it but the
 confirmation until it is confirmed: otherwise MoonLan would be a way to
 send alarms into somebody else's mailbox. An email is confirmed with a
-six-digit code sent to it.
+six-digit code sent to it; a Telegram chat with a link to the bot — the
+person presses Start, Telegram sends the bot "/start <key>", and the
+private chat it came from is the address.
+
+While a link waits, one getUpdates loop runs (long polling, with an
+offset of its own). With none waiting it stops; what arrives meanwhile
+is neither kept nor read — MoonLan is not a chat bot. A bot another
+program polls, or one with a webhook, answers 409: then a chat cannot
+be linked, and the page says so plainly.
 
 Which alarms: the subscription's own list, or — NULL — whatever the
 shared table sends to that channel, following it when an administrator
@@ -12,12 +20,15 @@ changes it. An explicit list does not follow.
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import hmac
 import json
 import logging
+import re
 import secrets
 import time
+import urllib.error
 
 from .config import Config
 from .db import Database
@@ -32,10 +43,18 @@ CODE_SECONDS = 15 * 60       # an email code is good for
 CODE_ATTEMPTS = 5            # wrong codes, and it burns
 CODE_GAP = 60                # one code a minute per account…
 CODES_PER_HOUR = 5           # …and five an hour
+LINK_SECONDS = 10 * 60       # a Telegram link is good for
 
 
-# What MoonLan says outside the page: the email with a code. In the
-# language of the page that asked.
+POLL_SECONDS = 25            # getUpdates' long polling
+# A message sent before its link was made is not read, but Telegram's
+# clock and this machine's may differ by a little
+CLOCK_SLACK = 60
+# 24 characters of the base64url alphabet; Telegram takes up to 64
+KEY = re.compile(r"^[A-Za-z0-9_-]{24}$")
+
+# What MoonLan says outside the page: the email with a code, the bot's
+# answers. In the language of the page that asked.
 MESSAGES = {
     "en": {
         "code_subject": "MoonLan: confirmation code",
@@ -46,6 +65,11 @@ MESSAGES = {
             "notifications.\n\n"
             "If you did not ask for it, just delete this message.\n"
         ),
+        "linked": "MoonLan: notifications for {name} are connected.",
+        "expired": "MoonLan: this link is out of date — get a new one in "
+                   "Settings → My notifications.",
+        "group": "MoonLan: notifications are connected in a private chat "
+                 "with the bot only, not in a group.",
     },
     "ru": {
         "code_subject": "MoonLan: код подтверждения",
@@ -56,6 +80,11 @@ MESSAGES = {
             "уведомления».\n\n"
             "Если вы этого не запрашивали — просто удалите письмо.\n"
         ),
+        "linked": "MoonLan: уведомления для {name} подключены.",
+        "expired": "MoonLan: ссылка устарела — получите новую в "
+                   "«Настройки» → «Мои уведомления».",
+        "group": "MoonLan: уведомления подключаются только в личном чате "
+                 "с ботом, не в группе.",
     },
 }
 
@@ -73,6 +102,11 @@ def code_hash(code: str, salt: str | None = None) -> str:
 def code_matches(code: str, stored: str) -> bool:
     salt, _, _ = stored.partition("$")
     return hmac.compare_digest(code_hash(code, salt), stored)
+
+
+def key_hash(key: str) -> str:
+    """A link's key is 144 random bits: its hash finds its row"""
+    return hashlib.sha256(key.encode()).hexdigest()
 
 
 class Refused(Exception):
@@ -98,6 +132,11 @@ class Subscriptions:
         self._demo = demo
         # account id -> when its codes were sent (the last hour's)
         self._codes_sent: dict[int, list[float]] = {}
+        self._bot: str | None = None   # the bot's username, from getMe
+        self._task: asyncio.Task | None = None
+        self.offset = 0                # getUpdates' own
+        # the text of a 409 Conflict, while the bot is somebody else's
+        self.conflict: str | None = None
 
     # ---------- what the page is told ----------
 
@@ -117,6 +156,26 @@ class Subscriptions:
             return list(json.loads(row["alarm_types"]))
         except ValueError:
             return self.routed(channel)
+
+    def link_state(self, user_id: int, now: float | None = None) -> dict:
+        """waiting | group (opened in a group; still waiting) | expired |
+        conflict (the bot is somebody else's) | connected | none"""
+        now = time.time() if now is None else now
+        row = self._accounts.code_of(user_id, "telegram")
+        if row is not None:
+            if row["expires_at"] <= now:
+                state = "expired"
+            elif self.conflict and not self.polling():
+                state = "conflict"
+            elif row["refused"] == "group":
+                state = "group"
+            else:
+                state = "waiting"
+            return {"state": state, "expires_at": row["expires_at"],
+                    "conflict": self.conflict if state == "conflict" else None}
+        if "telegram" in self._accounts.subscriptions_of(user_id):
+            return {"state": "connected"}
+        return {"state": "none"}
 
     def _need_ready(self, channel: str) -> None:
         state = self._ready()[channel]
@@ -194,7 +253,126 @@ class Subscriptions:
                  user_id, name)
         return self.state(user_id, now)
 
-    # ---------- what the person changes ----------
+    # ---------- Telegram: a link ----------
+
+    def bot_name(self) -> str:
+        if self._bot is None:
+            answer = self._notifier.telegram_call("getMe")
+            self._bot = answer["result"]["username"]
+        return self._bot
+
+    def start_link(self, user_id: int, name: str, lang: str,
+                   now: float | None = None) -> dict:
+        """A one-time link to the bot; the one before it is gone"""
+        now = time.time() if now is None else now
+        self._need_ready("telegram")
+        if self._demo:
+            raise Refused("demo", 409)
+        try:
+            bot = self.bot_name()
+        except Exception as exc:  # noqa: BLE001 — said, and refused
+            log.warning("Telegram: getMe failed: %s", exc)
+            raise Refused("telegram_unavailable", 502) from None
+        key = secrets.token_urlsafe(18)
+        self._accounts.put_code(user_id, "telegram", "", key_hash(key),
+                                now + LINK_SECONDS, lang, now)
+        log.info("Notifications: a Telegram link made for user #%d (%s)",
+                 user_id, name)
+        return {"link": f"https://t.me/{bot}?start={key}",
+                "expires_at": now + LINK_SECONDS, "bot": bot}
+
+    def polling(self) -> bool:
+        return self._task is not None and not self._task.done()
+
+    def ensure_polling(self) -> None:
+        """One getUpdates loop, while a link waits"""
+        if not self.polling():
+            self._task = asyncio.create_task(self.poll())
+
+    async def poll(self) -> None:
+        log.info("Telegram: reading the bot's updates while a link waits")
+        while True:
+            links = await asyncio.to_thread(self._accounts.waiting_links,
+                                            time.time())
+            if not links:
+                log.info("Telegram: no link waits — not reading the bot's "
+                         "updates any more")
+                return
+            since = min(link["created_at"] for link in links)
+            try:
+                answer = await asyncio.to_thread(
+                    self._notifier.telegram_call, "getUpdates",
+                    {"offset": self.offset, "timeout": POLL_SECONDS,
+                     "allowed_updates": ["message"]},
+                    POLL_SECONDS + 10,
+                )
+            except urllib.error.HTTPError as exc:
+                if exc.code == 409:
+                    self.conflict = _description(exc) or "409 Conflict"
+                    log.warning(
+                        "Telegram: getUpdates answered 409 Conflict (%s) — "
+                        "another program reads this bot's updates, or it has "
+                        "a webhook. A chat cannot be connected by a link "
+                        "until the bot is MoonLan's alone.", self.conflict,
+                    )
+                    return
+                log.warning("Telegram: getUpdates failed: %s", exc)
+                await asyncio.sleep(5)
+                continue
+            except Exception as exc:  # noqa: BLE001 — try again shortly
+                log.warning("Telegram: getUpdates failed: %s", exc)
+                await asyncio.sleep(5)
+                continue
+            self.conflict = None
+            for update in answer.get("result", []):
+                self.offset = max(self.offset, int(update["update_id"]) + 1)
+                try:
+                    await asyncio.to_thread(self.handle_update, update, since)
+                except Exception:  # noqa: BLE001 — one update, not the loop
+                    log.exception("Telegram: an update could not be handled")
+
+    def handle_update(self, update: dict, since: float) -> str | None:
+        """"/start <key>" from a chat: what came of it (for the tests),
+        None for anything that is not one of ours"""
+        message = update.get("message") or {}
+        if message.get("date", 0) < since - CLOCK_SLACK:
+            return None  # from before any link waited: not read
+        parts = (message.get("text") or "").split()
+        if len(parts) != 2 or parts[0] != "/start" or not KEY.match(parts[1]):
+            return None
+        row = self._accounts.code_by_secret("telegram", key_hash(parts[1]))
+        if row is None:
+            return None  # not a key of ours: nothing is said
+        chat = message.get("chat") or {}
+        said = words(row["lang"])
+        now = time.time()
+        if row["expires_at"] <= now:
+            self._reply(chat.get("id"), said["expired"])
+            return "expired"
+        if chat.get("type") != "private":
+            # one person's alarms do not go to a group chat
+            self._accounts.refuse_code(row["user_id"], "telegram", "group")
+            self._reply(chat.get("id"), said["group"])
+            log.info("Notifications: a Telegram link for user #%d was opened "
+                     "in a group — refused", row["user_id"])
+            return "group"
+        self._accounts.confirm_subscription(row["user_id"], "telegram",
+                                            str(chat["id"]), now)
+        self._event("subscription_added", row["name"], row["name"], now,
+                    channel="telegram")
+        self._reply(chat["id"], said["linked"].format(name=row["name"]))
+        log.info("Notifications: Telegram connected for user #%d (%s)",
+                 row["user_id"], row["name"])
+        return "linked"
+
+    def _reply(self, chat_id, text: str) -> None:
+        if chat_id is None:
+            return
+        try:
+            self._notifier.telegram_call("sendMessage",
+                                         {"chat_id": chat_id, "text": text})
+        except Exception as exc:  # noqa: BLE001 — the answer is a courtesy
+            log.warning("Telegram: could not answer in a chat: %s", exc)
 
     # ---------- who gets an alarm ----------
 
@@ -208,3 +386,11 @@ class Subscriptions:
             for row in self._accounts.active_subscriptions(channel)
             if alarm_type in self._chosen(row, channel)
         ]
+
+
+def _description(exc: urllib.error.HTTPError) -> str:
+    """The Bot API's own words for a refusal"""
+    try:
+        return json.loads(exc.read().decode("utf-8")).get("description", "")
+    except Exception:  # noqa: BLE001 — the status then
+        return ""

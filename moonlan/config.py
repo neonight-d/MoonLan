@@ -150,6 +150,9 @@ class TelegramConfig:
     enabled: bool = False
     bot_token: str = ""
     chat_ids: list[str] = field(default_factory=list)
+    # Where the Bot API is: Telegram's own, or a local Bot API server
+    # (v0.8.4) — "" is https://api.telegram.org
+    api_url: str = ""
 
 
 @dataclass
@@ -894,6 +897,9 @@ def load_config(path: Path | None = None) -> Config:
             chat_ids=r.get(
                 "notifications.telegram.chat_ids", n.telegram.chat_ids,
                 _as_str_list,
+            ),
+            api_url=r.get(
+                "notifications.telegram.api_url", n.telegram.api_url, str
             ),
         ),
         syslog=SyslogConfig(

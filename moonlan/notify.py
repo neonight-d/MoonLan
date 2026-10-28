@@ -41,7 +41,8 @@ log = logging.getLogger(__name__)
 SEND_TIMEOUT = 10  # seconds per channel operation
 SYSLOG_FACILITY = 16  # local0
 SYSLOG_SEVERITY = {"critical": 2, "warning": 4, "info": 6}
-# The Bot API
+# The Bot API, unless notifications.telegram.api_url names another — a
+# local Bot API server, or a stand-in for a test
 TELEGRAM_API = "https://api.telegram.org"
 
 
@@ -263,8 +264,9 @@ class Notifier:
         """One Bot API call; the answer's JSON. The URL carries the
         token, so it is never part of an error that is raised."""
         cfg = self._cfg.telegram
+        base = (cfg.api_url or TELEGRAM_API).rstrip("/")
         request = urllib.request.Request(
-            f"{TELEGRAM_API}/bot{cfg.bot_token}/{method}",
+            f"{base}/bot{cfg.bot_token}/{method}",
             data=json.dumps(payload or {}).encode(),
             headers={"Content-Type": "application/json"},
         )

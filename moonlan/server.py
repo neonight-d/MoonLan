@@ -2398,6 +2398,9 @@ async def lifespan(app: FastAPI):
     )
     _log_certificate()
     await check_certificate_end()
+    # a Telegram link made just before a restart still works
+    if await asyncio.to_thread(accounts.waiting_links, time.time()):
+        personal.ensure_polling()
     redirect = await start_redirect_listener()
     tasks = [
         asyncio.create_task(periodic_scan()),

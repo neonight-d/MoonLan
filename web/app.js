@@ -642,35 +642,258 @@ function renderNewPassword() {
   });
 }
 
+/* ---------- QR codes (v0.8.4) ----------
+
+   Drawn here, with no library and no service: QRious came from cdnjs,
+   and since v0.8.3 the page's Content-Security-Policy runs scripts from
+   MoonLan only, so the TOTP secret had lost its QR code. One encoder
+   for it and for the Telegram link: bytes (UTF-8), error correction
+   level M, the smallest version 1–40 that holds them, the mask with
+   the lowest penalty. ISO/IEC 18004, as it is usually written down. */
+
+// per version: error correction codewords per block, and blocks (level M)
+const QR_EC_PER_BLOCK = [0, 10, 16, 26, 18, 24, 16, 18, 22, 22, 26, 30, 22, 22, 24, 24, 28, 28, 26, 26,
+  26, 26, 28, 28, 28, 28, 28, 28, 28, 28, 28, 28, 28, 28, 28, 28, 28, 28, 28, 28, 28];
+const QR_BLOCKS = [0, 1, 1, 1, 2, 2, 4, 4, 4, 5, 5, 5, 8, 9, 9, 10, 10, 11, 13, 14,
+  16, 17, 17, 18, 20, 21, 23, 25, 26, 28, 29, 31, 33, 35, 37, 38, 40, 43, 45, 47, 49];
+
+// modules left for data once the patterns are drawn
+function qrDataModules(ver) {
+  let n = (16 * ver + 128) * ver + 64;
+  if (ver >= 2) {
+    const align = Math.floor(ver / 7) + 2;
+    n -= (25 * align - 10) * align - 55;
+    if (ver >= 7) n -= 36;
+  }
+  return n;
+}
+
+// GF(256) over x^8 + x^4 + x^3 + x^2 + 1
+function qrMul(x, y) {
+  let z = 0;
+  for (let i = 7; i >= 0; i--) {
+    z = (z << 1) ^ ((z >>> 7) * 0x11d);
+    z ^= ((y >>> i) & 1) * x;
+  }
+  return z;
+}
+
+// the error correction codewords of one block
+function qrEcc(data, degree) {
+  const divisor = new Array(degree).fill(0);
+  divisor[degree - 1] = 1;
+  let root = 1;
+  for (let i = 0; i < degree; i++) {
+    for (let j = 0; j < degree; j++) {
+      divisor[j] = qrMul(divisor[j], root) ^ (j + 1 < degree ? divisor[j + 1] : 0);
+    }
+    root = qrMul(root, 2);
+  }
+  const rest = new Array(degree).fill(0);
+  for (const byte of data) {
+    const factor = byte ^ rest.shift();
+    rest.push(0);
+    divisor.forEach((c, i) => { rest[i] ^= qrMul(c, factor); });
+  }
+  return rest;
+}
+
+/* The modules of a QR code for `text`, rows of booleans (true — dark);
+   null when it is longer than any version holds */
+function qrMatrix(text) {
+  const bytes = [...new TextEncoder().encode(text)];
+  let ver = 1;
+  for (;; ver++) {
+    if (ver > 40) return null;
+    const room = (Math.floor(qrDataModules(ver) / 8) - QR_EC_PER_BLOCK[ver] * QR_BLOCKS[ver]) * 8;
+    if (4 + (ver < 10 ? 8 : 16) + bytes.length * 8 <= room) break;
+  }
+  const total = Math.floor(qrDataModules(ver) / 8);
+  const ecLen = QR_EC_PER_BLOCK[ver];
+  const blocks = QR_BLOCKS[ver];
+  const dataLen = total - ecLen * blocks;
+  // the bit stream: byte mode, the count, the bytes, the end, the padding
+  const bits = [];
+  const put = (value, n) => { for (let i = n - 1; i >= 0; i--) bits.push((value >>> i) & 1); };
+  put(4, 4);
+  put(bytes.length, ver < 10 ? 8 : 16);
+  bytes.forEach((b) => put(b, 8));
+  put(0, Math.min(4, dataLen * 8 - bits.length));
+  put(0, (8 - (bits.length % 8)) % 8);
+  const data = [];
+  for (let i = 0; i < bits.length; i += 8) data.push(parseInt(bits.slice(i, i + 8).join(""), 2));
+  for (let pad = 0xec; data.length < dataLen; pad ^= 0xec ^ 0x11) data.push(pad);
+  // the blocks, then their codewords interleaved
+  const short = blocks - (total % blocks);
+  const shortLen = Math.floor(total / blocks) - ecLen;
+  const parts = [];
+  for (let b = 0, at = 0; b < blocks; b++) {
+    const len = shortLen + (b < short ? 0 : 1);
+    const block = data.slice(at, at + len);
+    at += len;
+    parts.push({ data: block, ecc: qrEcc(block, ecLen) });
+  }
+  const codewords = [];
+  for (let i = 0; i <= shortLen; i++) parts.forEach((p) => { if (i < p.data.length) codewords.push(p.data[i]); });
+  for (let i = 0; i < ecLen; i++) parts.forEach((p) => codewords.push(p.ecc[i]));
+
+  const size = ver * 4 + 17;
+  const dark = Array.from({ length: size }, () => new Array(size).fill(false));
+  const fixed = Array.from({ length: size }, () => new Array(size).fill(false));
+  const set = (x, y, on) => { dark[y][x] = on; fixed[y][x] = true; };
+  // timing, finders with their separators, alignment patterns
+  for (let i = 0; i < size; i++) {
+    set(6, i, i % 2 === 0);
+    set(i, 6, i % 2 === 0);
+  }
+  for (const [cx, cy] of [[3, 3], [size - 4, 3], [3, size - 4]]) {
+    for (let dy = -4; dy <= 4; dy++) {
+      for (let dx = -4; dx <= 4; dx++) {
+        const x = cx + dx;
+        const y = cy + dy;
+        const d = Math.max(Math.abs(dx), Math.abs(dy));
+        if (x >= 0 && x < size && y >= 0 && y < size) set(x, y, d !== 2 && d !== 4);
+      }
+    }
+  }
+  const align = [];
+  if (ver > 1) {
+    const n = Math.floor(ver / 7) + 2;
+    const step = ver === 32 ? 26 : Math.ceil((ver * 4 + 4) / (n * 2 - 2)) * 2;
+    align.push(6);
+    for (let pos = size - 7; align.length < n; pos -= step) align.splice(1, 0, pos);
+  }
+  for (const ax of align) {
+    for (const ay of align) {
+      if ((ax === 6 && (ay === 6 || ay === size - 7)) || (ax === size - 7 && ay === 6)) continue;
+      for (let dy = -2; dy <= 2; dy++) {
+        for (let dx = -2; dx <= 2; dx++) set(ax + dx, ay + dy, Math.max(Math.abs(dx), Math.abs(dy)) !== 1);
+      }
+    }
+  }
+  // the format (drawn for real once the mask is chosen) and the version
+  const format = (mask) => {
+    const value = mask; // level M is 00
+    let rem = value;
+    for (let i = 0; i < 10; i++) rem = (rem << 1) ^ ((rem >>> 9) * 0x537);
+    const f = ((value << 10) | rem) ^ 0x5412;
+    const bit = (i) => ((f >>> i) & 1) === 1;
+    for (let i = 0; i <= 5; i++) set(8, i, bit(i));
+    set(8, 7, bit(6));
+    set(8, 8, bit(7));
+    set(7, 8, bit(8));
+    for (let i = 9; i < 15; i++) set(14 - i, 8, bit(i));
+    for (let i = 0; i < 8; i++) set(size - 1 - i, 8, bit(i));
+    for (let i = 8; i < 15; i++) set(8, size - 15 + i, bit(i));
+    set(8, size - 8, true);
+  };
+  format(0);
+  if (ver >= 7) {
+    let rem = ver;
+    for (let i = 0; i < 12; i++) rem = (rem << 1) ^ ((rem >>> 11) * 0x1f25);
+    const v = (ver << 12) | rem;
+    for (let i = 0; i < 18; i++) {
+      const on = ((v >>> i) & 1) === 1;
+      set(size - 11 + (i % 3), Math.floor(i / 3), on);
+      set(Math.floor(i / 3), size - 11 + (i % 3), on);
+    }
+  }
+  // the codewords, two columns at a time, up and down, from the right
+  let n = 0;
+  for (let right = size - 1; right >= 1; right -= 2) {
+    if (right === 6) right = 5;
+    for (let k = 0; k < size; k++) {
+      for (let j = 0; j < 2; j++) {
+        const x = right - j;
+        const upward = ((right + 1) & 2) === 0;
+        const y = upward ? size - 1 - k : k;
+        if (fixed[y][x]) continue;
+        if (n < codewords.length * 8) dark[y][x] = ((codewords[n >>> 3] >>> (7 - (n & 7))) & 1) === 1;
+        n++;
+      }
+    }
+  }
+  const masks = [
+    (x, y) => (x + y) % 2 === 0,
+    (x, y) => y % 2 === 0,
+    (x) => x % 3 === 0,
+    (x, y) => (x + y) % 3 === 0,
+    (x, y) => (Math.floor(x / 3) + Math.floor(y / 2)) % 2 === 0,
+    (x, y) => ((x * y) % 2) + ((x * y) % 3) === 0,
+    (x, y) => (((x * y) % 2) + ((x * y) % 3)) % 2 === 0,
+    (x, y) => (((x + y) % 2) + ((x * y) % 3)) % 2 === 0,
+  ];
+  const flip = (m) => {
+    for (let y = 0; y < size; y++) {
+      for (let x = 0; x < size; x++) if (!fixed[y][x] && masks[m](x, y)) dark[y][x] = !dark[y][x];
+    }
+  };
+  let best = 0;
+  let lowest = Infinity;
+  for (let m = 0; m < 8; m++) {
+    flip(m);
+    format(m);
+    const score = qrPenalty(dark);
+    if (score < lowest) {
+      lowest = score;
+      best = m;
+    }
+    flip(m);
+  }
+  flip(best);
+  format(best);
+  return dark;
+}
+
+// how hard a masked symbol is to read: runs, blocks, finder look-alikes, balance
+function qrPenalty(dark) {
+  const size = dark.length;
+  let score = 0;
+  const lines = [];
+  for (let i = 0; i < size; i++) {
+    lines.push(dark[i].map((d) => (d ? "1" : "0")).join(""));
+    lines.push(dark.map((row) => (row[i] ? "1" : "0")).join(""));
+  }
+  for (const line of lines) {
+    for (const run of line.match(/0{5,}|1{5,}/g) || []) score += run.length - 2;
+    const padded = "0000" + line + "0000";
+    score += 40 * ((padded.match(/(?=00001011101)/g) || []).length + (padded.match(/(?=10111010000)/g) || []).length);
+  }
+  let count = 0;
+  for (let y = 0; y < size; y++) {
+    for (let x = 0; x < size; x++) {
+      if (dark[y][x]) count++;
+      if (x < size - 1 && y < size - 1 && dark[y][x] === dark[y][x + 1] &&
+        dark[y][x] === dark[y + 1][x] && dark[y][x] === dark[y + 1][x + 1]) score += 3;
+    }
+  }
+  return score + Math.floor(Math.abs(count * 20 - size * size * 10) / (size * size)) * 10;
+}
+
+/* A canvas with the QR code of `text`, dark on white with its quiet
+   zone, about `pixels` across; null when it does not fit in one */
+function qrCanvas(text, pixels) {
+  const matrix = qrMatrix(text);
+  if (!matrix) return null;
+  const cells = matrix.length + 8;
+  const scale = Math.max(2, Math.floor(pixels / cells));
+  const canvas = h("canvas", { width: cells * scale, height: cells * scale, class: "qr", role: "img" });
+  const ctx = canvas.getContext("2d");
+  ctx.fillStyle = "#fff";
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  ctx.fillStyle = "#000";
+  matrix.forEach((row, y) => row.forEach((on, x) => {
+    if (on) ctx.fillRect((x + 4) * scale, (y + 4) * scale, scale, scale);
+  }));
+  return canvas;
+}
+
 /* ---------- binding a second factor ----------
 
    The secret is shown, nothing is bound: it waits on the server until a
    code made from it comes back with the password, so a mistake while
    scanning locks nobody out. Over plain HTTP the page says the secret
    is crossing the network in the clear, and how to avoid that. */
-
-const QR_LIBRARY = "https://cdnjs.cloudflare.com/ajax/libs/qrious/4.0.2/qrious.min.js";
-let qrLoading = null;
-
-/* Loaded when a QR code is needed and not before: a wall monitor has
-   no use for it. Resolves false if cdnjs cannot be reached — the
-   secret is on the screen as text anyway. */
-function loadQrLibrary() {
-  if (window.QRious) return Promise.resolve(true);
-  if (!qrLoading) {
-    qrLoading = new Promise((resolve) => {
-      const script = document.createElement("script");
-      script.src = QR_LIBRARY;
-      script.onload = () => resolve(!!window.QRious);
-      script.onerror = () => {
-        qrLoading = null;
-        resolve(false);
-      };
-      document.head.append(script);
-    });
-  }
-  return qrLoading;
-}
 
 function copyButton(text) {
   return h("button", {
@@ -759,16 +982,9 @@ function renderSecret(area, secret, required) {
     h("div", { class: "buttons" }, bind)
   );
   code.input.focus();
-  loadQrLibrary().then((ok) => {
-    if (!ok) {
-      qr.replaceChildren(h("p", { class: "hint-line", text: t("qrUnavailable") }));
-      return;
-    }
-    const canvas = h("canvas");
-    // eslint-disable-next-line no-undef
-    new QRious({ element: canvas, value: secret.uri, size: 200, level: "M" });
-    qr.replaceChildren(canvas);
-  });
+  const canvas = qrCanvas(secret.uri, 200);
+  qr.replaceChildren(canvas || h("p", { class: "hint-line", text: t("qrUnavailable") }));
+  if (canvas) canvas.setAttribute("aria-label", t("totpQrLabel"));
   const form = area.closest("form");
   form.onsubmit = async (event) => {
     event.preventDefault();

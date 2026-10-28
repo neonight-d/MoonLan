@@ -189,7 +189,8 @@ fails on a key the loader knows and this page does not.
 | `notifications.email.password` | `""` | Its password — a secret. |
 | `notifications.email.mail_from` | `""` | Sender address. |
 | `notifications.telegram.enabled` | `false` | Send to Telegram. |
-| `notifications.telegram.bot_token` | `""` | Bot API token from @BotFather — a secret. |
+| `notifications.telegram.bot_token` | `""` | Bot API token from @BotFather — a secret. A bot of MoonLan's own: personal subscriptions are connected through its updates (see [OPERATIONS.md](OPERATIONS.md#a-bot-for-moonlan-alone)). |
+| `notifications.telegram.api_url` | `""` | Where the Bot API is: empty — `https://api.telegram.org`; or a local Bot API server. |
 | `notifications.syslog.enabled` | `false` | Send to syslog over UDP. |
 | `notifications.syslog.host` | `127.0.0.1` | Syslog server. |
 | `notifications.syslog.port` | `514` | Its port. |
