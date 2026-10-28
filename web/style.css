@@ -313,6 +313,11 @@ main { flex: 1; display: flex; min-height: 0; position: relative; }
   border-radius: 8px;
   padding: 14px;
   box-shadow: 0 6px 24px rgba(0, 0, 0, 0.5);
+  /* over "the map is empty", which comes after the panels and covers
+     the whole map: on an empty map — a new installation, the very
+     place Settings are opened first — it took the clicks meant for
+     the lower half of a panel (v0.8.4) */
+  z-index: 10;
 }
 .panel-head {
   display: flex;
