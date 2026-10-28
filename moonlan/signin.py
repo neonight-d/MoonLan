@@ -1050,6 +1050,7 @@ class SignIn:
 
     def users(self) -> list[dict]:
         sessions = self.accounts.session_counts()
+        notified = self.accounts.subscription_counts()
         now = time.time()
         return [
             {
@@ -1066,6 +1067,8 @@ class SignIn:
                 "sessions": sessions.get(row["id"], 0),
                 "passkeys": [key_summary(key)
                              for key in self.accounts.passkeys(row["id"])],
+                # confirmed personal notifications (v0.8.4): the channels
+                "notifications": sorted(notified.get(row["id"], ())),
             }
             for row in self.accounts.users()
         ]

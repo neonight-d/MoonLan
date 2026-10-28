@@ -70,6 +70,14 @@ tests.
 | POST | `/api/auth/passkeys/begin` | signed_in |
 | POST | `/api/auth/passkeys/finish` | signed_in |
 | DELETE | `/api/auth/passkeys/{key_id}` | signed_in |
+| GET | `/api/me/notifications` | signed_in |
+| POST | `/api/me/notifications/email` | signed_in |
+| POST | `/api/me/notifications/email/confirm` | signed_in |
+| POST | `/api/me/notifications/telegram` | signed_in |
+| GET | `/api/me/notifications/telegram` | signed_in |
+| PATCH | `/api/me/notifications/{channel}` | signed_in |
+| POST | `/api/me/notifications/{channel}/test` | signed_in |
+| DELETE | `/api/me/notifications/{channel}` | signed_in |
 | GET | `/api/topology` | viewer |
 | GET | `/api/switch/{ip}/ports` | viewer |
 | GET | `/api/stp` | viewer |
@@ -114,6 +122,7 @@ tests.
 | POST | `/api/users/{name}/unlock` | accounts |
 | POST | `/api/users/{name}/logout` | accounts |
 | DELETE | `/api/users/{name}` | accounts |
+| DELETE | `/api/users/{name}/notifications` | accounts |
 | GET | `/openapi.json` | admin |
 | GET | `/docs` | admin |
 | GET | `/docs/oauth2-redirect` | admin |
@@ -386,8 +395,9 @@ was wrong), `cannot_passwordless`, `key_exists`, `https_required`.
 
 Every account: `name`, `role`, `disabled`, `totp`, `recovery_left`,
 `must_change`, `locked_until`, `last_login`, `created_at`, `sessions`,
-`passkeys` (as in `/api/auth/me`'s `keys`). No hashes, no secrets, no
-key material.
+`passkeys` (as in `/api/auth/me`'s `keys`), `notifications` — the
+channels of its confirmed personal notifications (v0.8.4), e.g.
+`["email"]`. No hashes, no secrets, no key material, no addresses.
 
 ### POST /api/users
 
@@ -413,13 +423,117 @@ second factor at the next sign-in. Both close the account's sessions.
 
 ### DELETE /api/users/{name}
 
-Deletes the account.
+Deletes the account, its personal notifications with it.
+
+### DELETE /api/users/{name}/notifications
+
+Removes somebody's personal notifications — every channel, and a code
+or a link waiting to be confirmed: a person who left, whose account is
+not deleted yet. `{"status": "removed", "removed": n}`; the journal says
+`user_notifications_removed`. Only the person can set them up again.
 
 The last enabled administrator cannot be demoted, disabled or deleted:
 **409** `last_admin`. Other refusals: **404** `unknown`,
 `unknown_key`, **409** `exists`, `last_factor`, **400** `bad_name`,
 `bad_role`. A new password, a new role,
 disabling, deleting and resetting TOTP close the account's sessions.
+
+## One's own notifications (v0.8.4)
+
+A person's own email and Telegram for alarms. Always the account of the
+session — never one named in the request; any role; refused while
+sign-in is off (**403** `sign_in_off`) and to `diag`'s console token,
+which is nobody's. An address gets nothing but its confirmation until
+it is confirmed. `{channel}` is `email` or `telegram`.
+
+### GET /api/me/notifications
+
+~~~json
+{
+  "channels": {"email": {"ready": true}, "telegram": {"ready": false, "why": "no_token"}},
+  "alarm_types": ["host_down", "switch_down", "..."],
+  "table": {"email": ["host_down", "..."], "telegram": ["host_down", "..."]},
+  "subscriptions": {
+    "email": {"address": "anna@example.org", "confirmed_at": 1792750000.0,
+              "enabled": true, "alarm_types": null,
+              "effective": ["host_down", "switch_down", "..."]},
+    "telegram": null
+  },
+  "pending": {
+    "email": null,
+    "telegram": {"state": "waiting", "expires_at": 1792750600.0, "conflict": null}
+  }
+}
+~~~
+
+`table` is what the shared table sends to each channel now: what
+`alarm_types: null` means. `effective` is the subscription's set either
+way. A Telegram subscription has no `address` here: a chat id says
+nothing to a person. `pending.email` — a code sent and not confirmed:
+`address`, `expires_at`, `left` (tries), `expired`. `pending.telegram`
+is the link's state (below).
+
+### POST /api/me/notifications/email
+
+`{"address": "anna@example.org", "lang": "ru"}`: a six-digit code to
+that address, in that language, through the server's SMTP; it is valid
+for fifteen minutes and kept as a hash only. One code a minute and
+five an hour per account: **429** `too_soon` or `too_many_codes` with
+`retry_at`. **409** `channel_off` (`why`), **400** `bad_address`,
+**502** `send_failed`. A confirmed address keeps working until a new
+one is confirmed.
+
+### POST /api/me/notifications/email/confirm
+
+`{"code": "123456"}` → the state, as from `GET`. **400** `wrong_code`
+(`left`); the fifth wrong code burns it: **409** `code_burned`; **410**
+`code_expired`; **409** `no_code`.
+
+### POST /api/me/notifications/telegram
+
+`{"lang": "ru"}` → `{"link": "https://t.me/<bot>?start=<key>",
+"expires_at": …, "bot": "…"}`: a key of 24 characters, one-time, good
+for ten minutes, one per account at a time; the bot's name comes from
+`getMe`. While a link waits the server reads the bot's updates
+(`getUpdates`, long polling, an offset of its own): `/start <key>` from
+a **private** chat connects that chat, and the bot answers there in
+the page's language. A key from a group is refused, and the bot says
+why. With no link waiting nothing is read. **409** `channel_off`,
+`demo`; **502** `telegram_unavailable`.
+
+### GET /api/me/notifications/telegram
+
+The link's state, for the page to ask while it waits (every three
+seconds at most, only while the panel is open): `{"state": "waiting" |
+"group" | "expired" | "conflict" | "connected" | "none", "expires_at":
+…}`. `conflict` — `getUpdates` answered **409 Conflict**: another
+program reads the bot's updates, or it has a webhook, and a chat
+cannot be connected by a link; `conflict` carries Telegram's words,
+which the log has too.
+
+### PATCH /api/me/notifications/{channel}
+
+`{"enabled": false}` and/or `{"alarm_types": ["host_down", …]}` —
+or `{"alarm_types": null}`: as the shared table, following it when an
+administrator changes it. An explicit list does not follow. → the
+state. **404** `no_subscription`, **400** `bad_alarm_types`.
+
+### POST /api/me/notifications/{channel}/test
+
+`{"lang": "ru"}`: a test message to one's own confirmed address. Once
+a minute: **429** `too_soon` with `retry_at`.
+
+### DELETE /api/me/notifications/{channel}
+
+Removes the subscription and whatever waits to be confirmed on it.
+
+Delivery: an alarm goes, on each channel set up on the server, to the
+shared recipients (Settings) when the table sends it there, and to the
+confirmed, enabled subscriptions of enabled accounts whose set has its
+type — one message per address, an address in both getting one.
+Repeats and flapping are damped once, for everybody. A failure to one
+address does not stop the rest, and is logged with the channel and the
+account id, never the address.
 
 ## Operational status
 

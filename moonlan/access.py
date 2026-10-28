@@ -58,6 +58,16 @@ RULES: dict[str, str] = {
     "POST /api/auth/passkeys/begin": SIGNED_IN,
     "POST /api/auth/passkeys/finish": SIGNED_IN,
     "DELETE /api/auth/passkeys/{key_id}": SIGNED_IN,
+    # one's own notifications (v0.8.4): the account of the session and
+    # no other, any role — and never the console, which is nobody's
+    "GET /api/me/notifications": SIGNED_IN,
+    "POST /api/me/notifications/email": SIGNED_IN,
+    "POST /api/me/notifications/email/confirm": SIGNED_IN,
+    "POST /api/me/notifications/telegram": SIGNED_IN,
+    "GET /api/me/notifications/telegram": SIGNED_IN,
+    "PATCH /api/me/notifications/{channel}": SIGNED_IN,
+    "POST /api/me/notifications/{channel}/test": SIGNED_IN,
+    "DELETE /api/me/notifications/{channel}": SIGNED_IN,
 
     # looking: the map, cards, ports, STP, the journal, alarms
     "GET /api/topology": VIEWER,
@@ -119,6 +129,7 @@ RULES: dict[str, str] = {
     "POST /api/users/{name}/unlock": ACCOUNTS,
     "POST /api/users/{name}/logout": ACCOUNTS,
     "DELETE /api/users/{name}": ACCOUNTS,
+    "DELETE /api/users/{name}/notifications": ACCOUNTS,
 
     # FastAPI's own description of the API: a map of every door, so
     # not for everybody

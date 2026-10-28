@@ -44,8 +44,7 @@ CODE_ATTEMPTS = 5            # wrong codes, and it burns
 CODE_GAP = 60                # one code a minute per account…
 CODES_PER_HOUR = 5           # …and five an hour
 LINK_SECONDS = 10 * 60       # a Telegram link is good for
-
-
+TEST_GAP = 60                # one test message a minute
 POLL_SECONDS = 25            # getUpdates' long polling
 # A message sent before its link was made is not read, but Telegram's
 # clock and this machine's may differ by a little
@@ -54,7 +53,7 @@ CLOCK_SLACK = 60
 KEY = re.compile(r"^[A-Za-z0-9_-]{24}$")
 
 # What MoonLan says outside the page: the email with a code, the bot's
-# answers. In the language of the page that asked.
+# answers, a test. In the language of the page that asked.
 MESSAGES = {
     "en": {
         "code_subject": "MoonLan: confirmation code",
@@ -70,6 +69,8 @@ MESSAGES = {
                    "Settings → My notifications.",
         "group": "MoonLan: notifications are connected in a private chat "
                  "with the bot only, not in a group.",
+        "test": "test: MoonLan's notifications for {name} reach this "
+                "address",
     },
     "ru": {
         "code_subject": "MoonLan: код подтверждения",
@@ -85,6 +86,8 @@ MESSAGES = {
                    "«Настройки» → «Мои уведомления».",
         "group": "MoonLan: уведомления подключаются только в личном чате "
                  "с ботом, не в группе.",
+        "test": "тест: уведомления MoonLan для {name} доходят по этому "
+                "адресу",
     },
 }
 
@@ -132,6 +135,8 @@ class Subscriptions:
         self._demo = demo
         # account id -> when its codes were sent (the last hour's)
         self._codes_sent: dict[int, list[float]] = {}
+        # (account id, channel) -> the last test
+        self._tested: dict[tuple[int, str], float] = {}
         self._bot: str | None = None   # the bot's username, from getMe
         self._task: asyncio.Task | None = None
         self.offset = 0                # getUpdates' own
@@ -156,6 +161,39 @@ class Subscriptions:
             return list(json.loads(row["alarm_types"]))
         except ValueError:
             return self.routed(channel)
+
+    def state(self, user_id: int, now: float | None = None) -> dict:
+        now = time.time() if now is None else now
+        subs = self._accounts.subscriptions_of(user_id)
+        mine = {}
+        for channel in CHANNELS:
+            row = subs.get(channel)
+            mine[channel] = None if row is None else {
+                # a chat id says nothing to a person: Telegram is shown
+                # as connected, with the date
+                "address": row["address"] if channel == "email" else None,
+                "confirmed_at": row["confirmed_at"],
+                "enabled": bool(row["enabled"]),
+                "alarm_types": (None if row["alarm_types"] is None
+                                else self._chosen(row, channel)),
+                "effective": self._chosen(row, channel),
+            }
+        email_code = self._accounts.code_of(user_id, "email")
+        return {
+            "channels": self._ready(),
+            "alarm_types": list(self._config.alarm_notify),
+            "table": {c: self.routed(c) for c in CHANNELS},
+            "subscriptions": mine,
+            "pending": {
+                "email": None if email_code is None else {
+                    "address": email_code["address"],
+                    "expires_at": email_code["expires_at"],
+                    "left": CODE_ATTEMPTS - email_code["attempts"],
+                    "expired": email_code["expires_at"] <= now,
+                },
+                "telegram": self.link_state(user_id, now),
+            },
+        }
 
     def link_state(self, user_id: int, now: float | None = None) -> dict:
         """waiting | group (opened in a group; still waiting) | expired |
@@ -373,6 +411,86 @@ class Subscriptions:
                                          {"chat_id": chat_id, "text": text})
         except Exception as exc:  # noqa: BLE001 — the answer is a courtesy
             log.warning("Telegram: could not answer in a chat: %s", exc)
+
+    # ---------- what the person changes ----------
+
+    def change(self, user_id: int, channel: str, body: dict) -> dict:
+        """{enabled} and/or {alarm_types}: a list, or null — as the
+        shared table"""
+        if channel not in CHANNELS:
+            raise Refused("unknown_channel", 404)
+        if channel not in self._accounts.subscriptions_of(user_id):
+            raise Refused("no_subscription", 404)
+        fields = {}
+        if "enabled" in body:
+            if not isinstance(body["enabled"], bool):
+                raise Refused("bad_request", 400)
+            fields["enabled"] = body["enabled"]
+        if "alarm_types" in body:
+            chosen = body["alarm_types"]
+            if chosen is None:
+                fields["alarm_types"] = None
+            else:
+                known = list(self._config.alarm_notify)
+                if not isinstance(chosen, list) or any(
+                        t not in known for t in chosen):
+                    raise Refused("bad_alarm_types", 400)
+                fields["alarm_types"] = json.dumps(
+                    [t for t in known if t in chosen])
+        if fields:
+            self._accounts.change_subscription(user_id, channel, **fields)
+        return self.state(user_id)
+
+    def remove(self, user_id: int, name: str, channel: str,
+               now: float | None = None) -> dict:
+        now = time.time() if now is None else now
+        if channel not in CHANNELS:
+            raise Refused("unknown_channel", 404)
+        had = channel in self._accounts.subscriptions_of(user_id)
+        self._accounts.delete_subscription(user_id, channel)
+        if had:
+            self._event("subscription_removed", name, name, now,
+                        channel=channel)
+            log.info("Notifications: %s removed by user #%d (%s)", channel,
+                     user_id, name)
+        return self.state(user_id, now)
+
+    def remove_all(self, user_id: int, name: str, by: str,
+                   now: float | None = None) -> int:
+        """An administrator's: everything of somebody's, codes too"""
+        now = time.time() if now is None else now
+        channels = sorted(self._accounts.subscriptions_of(user_id))
+        removed = self._accounts.delete_subscription(user_id)
+        self._event("user_notifications_removed", name, by, now,
+                    channels=channels)
+        log.info("Notifications: every subscription of user #%d (%s) "
+                 "removed by %s", user_id, name, by)
+        return removed
+
+    def test(self, user_id: int, name: str, channel: str, lang: str = "en",
+             now: float | None = None) -> dict:
+        """A test to one's own confirmed address"""
+        now = time.time() if now is None else now
+        if channel not in CHANNELS:
+            raise Refused("unknown_channel", 404)
+        row = self._accounts.subscriptions_of(user_id).get(channel)
+        if row is None:
+            raise Refused("no_subscription", 404)
+        self._need_ready(channel)
+        last = self._tested.get((user_id, channel), 0)
+        if now - last < TEST_GAP:
+            raise Refused("too_soon", 429, retry_at=last + TEST_GAP)
+        self._tested[(user_id, channel)] = now
+        text = "[MoonLan] " + words(lang)["test"].format(name=name)
+        if self._demo:
+            log.info("NOTIFY (demo): %s (%s, user #%d)", text, channel,
+                     user_id)
+            return {"status": "sent", "demo": True}
+        failed = self._notifier.deliver(
+            channel, [Recipient(row["address"], user_id)], text)
+        if failed:
+            raise Refused("send_failed", 502)
+        return {"status": "sent"}
 
     # ---------- who gets an alarm ----------
 

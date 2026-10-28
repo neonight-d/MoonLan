@@ -2578,6 +2578,119 @@ async def api_settings_test(channel: str) -> JSONResponse:
     return JSONResponse({"sent": len(recipients) - failed, "failed": failed})
 
 
+# ---------- one's own notifications (v0.8.4) ----------
+
+class AddressBody(BaseModel):
+    address: str = ""
+    lang: str = "en"
+
+
+class CodeBody(BaseModel):
+    code: str = ""
+
+
+class LangBody(BaseModel):
+    lang: str = "en"
+
+
+def _lang(value: str) -> str:
+    return value if value in ("en", "ru") else "en"
+
+
+async def _personal(call, *args) -> JSONResponse:
+    """A call for the account of this session — never one named in the
+    request — with its refusal as the page's code"""
+    try:
+        return JSONResponse(await asyncio.to_thread(call, *args))
+    except subscriptions.Refused as refused:
+        return _refuse(refused.error, refused.status, **refused.extra)
+
+
+def _who() -> tuple[int, str]:
+    who = signin.principal()
+    return who.user_id, who.name
+
+
+@app.get("/api/me/notifications")
+async def api_my_notifications() -> JSONResponse:
+    user_id, _ = _who()
+    return await _personal(personal.state, user_id)
+
+
+@app.post("/api/me/notifications/email")
+async def api_my_email(body: AddressBody) -> JSONResponse:
+    """A code to the address, which is not anybody's until it comes back"""
+    user_id, name = _who()
+    return await _personal(personal.send_code, user_id, name, body.address,
+                           _lang(body.lang))
+
+
+@app.post("/api/me/notifications/email/confirm")
+async def api_my_email_confirm(body: CodeBody) -> JSONResponse:
+    user_id, name = _who()
+    return await _personal(personal.confirm_code, user_id, name, body.code)
+
+
+@app.post("/api/me/notifications/telegram")
+async def api_my_telegram(body: LangBody) -> JSONResponse:
+    """A link to the bot, good for ten minutes; the bot's updates are
+    read while it waits"""
+    user_id, name = _who()
+    answer = await _personal(personal.start_link, user_id, name,
+                             _lang(body.lang))
+    if answer.status_code == 200:
+        personal.ensure_polling()
+    return answer
+
+
+@app.get("/api/me/notifications/telegram")
+async def api_my_telegram_state() -> JSONResponse:
+    user_id, _ = _who()
+    return await _personal(personal.link_state, user_id)
+
+
+@app.patch("/api/me/notifications/{channel}")
+async def api_my_notifications_change(channel: str,
+                                      request: Request) -> JSONResponse:
+    """{enabled} and/or {alarm_types}: a list, or null — as the shared
+    table"""
+    try:
+        body = await request.json()
+    except ValueError:
+        return _refuse("bad_request", 400)
+    if not isinstance(body, dict):
+        return _refuse("bad_request", 400)
+    user_id, _ = _who()
+    return await _personal(personal.change, user_id, channel, body)
+
+
+@app.post("/api/me/notifications/{channel}/test")
+async def api_my_notifications_test(channel: str,
+                                    body: LangBody) -> JSONResponse:
+    user_id, name = _who()
+    return await _personal(personal.test, user_id, name, channel,
+                           _lang(body.lang))
+
+
+@app.delete("/api/me/notifications/{channel}")
+async def api_my_notifications_remove(channel: str) -> JSONResponse:
+    user_id, name = _who()
+    return await _personal(personal.remove, user_id, name, channel)
+
+
+@app.delete("/api/users/{name}/notifications")
+async def api_user_notifications_remove(name: str) -> JSONResponse:
+    """Somebody's subscriptions, by an administrator: a person who left,
+    whose account is not deleted yet"""
+    row = await asyncio.to_thread(sign_in.accounts.user, name)
+    if row is None:
+        return _refuse("unknown", 404, name=name)
+    removed = await asyncio.to_thread(
+        personal.remove_all, row["id"], row["name"], signin.actor()
+    )
+    return JSONResponse({"status": "removed", "removed": removed})
+
+
 @app.get("/api/topology")
 async def api_topology() -> JSONResponse:
     topo = state.as_dict()
