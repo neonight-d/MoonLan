@@ -77,6 +77,9 @@ RULES: dict[str, str] = {
     # About (v0.8.1): what runs; the server block inside for admins only
     "GET /api/about": VIEWER,
     "GET /api/about/license": VIEWER,
+    # Settings (v0.8.4): every role reads them — read-only, with the
+    # reason, not hidden; the shared recipients' addresses for admins only
+    "GET /api/settings": VIEWER,
 
     # doing: the server runs something, or the shared picture changes.
     # Even a ping is the server acting on somebody's request, so a
@@ -100,6 +103,10 @@ RULES: dict[str, str] = {
     "DELETE /api/layout": ADMIN,
     # names and notes from a file, for the whole map at once
     "POST /api/notes/import": ADMIN,
+    # what everybody's map shows and whom alarms wake
+    "PUT /api/settings": ADMIN,
+    "DELETE /api/settings/{key}": ADMIN,
+    "POST /api/settings/test/{channel}": ADMIN,
 
     # accounts: administrators, and only once sign-in is on
     "GET /api/users": ACCOUNTS,

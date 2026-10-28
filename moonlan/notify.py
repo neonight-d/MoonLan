@@ -3,7 +3,14 @@
 No new dependencies: SMTP via smtplib, Telegram Bot API via
 urllib.request, Syslog via a plain UDP socket. Channel errors are
 logged and never propagate into the monitoring loops. Secrets from the
-config are never written to the log.
+config are never written to the log, and neither is a person's address
+(v0.8.4): the log is read by more people than the ones whose mailbox
+it is.
+
+Who gets an alarm (v0.8.4): on each channel set up on the server, the
+shared recipients (Settings → shared recipients) when the shared table
+sends that alarm type there — one message each, so nobody sees who else
+gets it and one refused address does not stop the rest.
 
 Channel check from the command line:
 
@@ -22,6 +29,7 @@ import smtplib
 import socket
 import time
 import urllib.request
+from dataclasses import dataclass
 from email.message import EmailMessage
 
 from .config import Config, NotificationsConfig
@@ -31,6 +39,8 @@ log = logging.getLogger(__name__)
 SEND_TIMEOUT = 10  # seconds per channel operation
 SYSLOG_FACILITY = 16  # local0
 SYSLOG_SEVERITY = {"critical": 2, "warning": 4, "info": 6}
+# The Bot API
+TELEGRAM_API = "https://api.telegram.org"
 
 
 def format_text(
@@ -68,6 +78,20 @@ def channel_state(cfg: NotificationsConfig) -> dict[str, dict]:
     }
 
 
+@dataclass(frozen=True)
+class Recipient:
+    """An address on a channel, and whose: a personal subscription's
+    account id, or None for a shared recipient. Syslog has one
+    recipient with no address: the server in config.yaml."""
+
+    address: str
+    user_id: int | None = None
+
+    def who(self) -> str:
+        """For the log: never the address"""
+        return f"user #{self.user_id}" if self.user_id is not None else "a shared recipient"
+
+
 class Notifier:
     """Routes alarm events to the channels listed in alarm_notify.
 
@@ -84,17 +108,37 @@ class Notifier:
         # right after a raise is not swallowed by the cooldown.
         self._last_sent: dict[tuple[str, str, bool], float] = {}
 
-    def _enabled_channels(self, alarm_type: str) -> list[str]:
-        enabled = {
-            "email": self._cfg.email.enabled,
-            "telegram": self._cfg.telegram.enabled,
-            "syslog": self._cfg.syslog.enabled,
-        }
-        return [
-            name
-            for name in self._routing.get(alarm_type, [])
-            if enabled.get(name)
-        ]
+    def ready(self, channel: str) -> bool:
+        return channel_state(self._cfg)[channel]["ready"]
+
+    def shared(self, channel: str) -> list[Recipient]:
+        """The shared recipients of a channel (Settings)"""
+        if channel == "email":
+            return [Recipient(a) for a in self._cfg.email.mail_to]
+        if channel == "telegram":
+            return [Recipient(str(c)) for c in self._cfg.telegram.chat_ids]
+        return [Recipient("")]
+
+    def plan(self, alarm_type: str) -> dict[str, list[Recipient]]:
+        """Who gets this alarm type, per channel set up on the server:
+        the shared recipients when the table sends it there. One message
+        per address."""
+        routed = self._routing.get(alarm_type, [])
+        out: dict[str, list[Recipient]] = {}
+        for channel in ("email", "telegram", "syslog"):
+            if not self.ready(channel):
+                continue
+            recipients = self.shared(channel) if channel in routed else []
+            seen: set[str] = set()
+            unique = []
+            for r in recipients:
+                key = r.address.lower() if channel == "email" else r.address
+                if key not in seen:
+                    seen.add(key)
+                    unique.append(r)
+            if unique:
+                out[channel] = unique
+        return out
 
     async def notify(
         self,
@@ -116,60 +160,118 @@ class Notifier:
             if self._routing.get(alarm_type):
                 log.info("NOTIFY (demo): %s", text)
             return
-        channels = self._enabled_channels(alarm_type)
-        if not channels:
+        plan = self.plan(alarm_type)
+        if not plan:
             return
         key = (alarm_type, subject, head or cleared)
         now = time.time()
         if now - self._last_sent.get(key, 0) < self._cfg.cooldown_seconds:
             return
         self._last_sent[key] = now
-        results = await asyncio.gather(
-            *(asyncio.to_thread(self.send, ch, text, severity) for ch in channels),
-            return_exceptions=True,
-        )
-        for channel, result in zip(channels, results):
-            if isinstance(result, BaseException):
-                # exception text only: URLError/SMTPException do not
-                # carry the token or password
-                log.error("Notification via %s failed: %s", channel, result)
+        await asyncio.gather(*(
+            asyncio.to_thread(self.deliver, channel, recipients, text, severity)
+            for channel, recipients in plan.items()
+        ))
+
+    def deliver(self, channel: str, recipients: list[Recipient], text: str,
+                severity: str = "info", subject: str | None = None) -> int:
+        """One message to each recipient; a failure is logged with the
+        channel and whose it was, never the address, and does not stop
+        the rest. Returns how many failed."""
+        failures = self.send_each(channel, recipients, text, severity, subject)
+        for recipient, error in failures:
+            # exception text only: URLError/SMTPException do not carry
+            # the token or password
+            log.error("Notification via %s to %s failed: %s", channel,
+                      recipient.who(), error)
+        return len(failures)
 
     # ---------- channels (synchronous, run in to_thread) ----------
 
     def send(self, channel: str, text: str, severity: str = "info") -> None:
-        if channel == "email":
-            self._send_email(text)
-        elif channel == "telegram":
-            self._send_telegram(text)
-        elif channel == "syslog":
-            self._send_syslog(text, severity)
-        else:
+        """A message to the shared recipients of a channel; the first
+        failure is raised (notify --test)"""
+        if channel not in ("email", "telegram", "syslog"):
             raise ValueError(f"unknown notification channel: {channel}")
+        failures = self.send_each(channel, self.shared(channel), text, severity)
+        if failures:
+            raise failures[0][1]
 
-    def _send_email(self, text: str) -> None:
+    def send_each(self, channel: str, recipients: list[Recipient], text: str,
+                  severity: str = "info", subject: str | None = None,
+                  ) -> list[tuple[Recipient, Exception]]:
+        """[(recipient, exception)] of the ones that failed"""
+        if channel == "email":
+            return self._send_email(recipients, text, subject)
+        if channel == "telegram":
+            return self._send_telegram(recipients, text)
+        if channel == "syslog":
+            try:
+                self._send_syslog(text, severity)
+            except Exception as exc:  # noqa: BLE001 — reported, not raised
+                return [(recipients[0] if recipients else Recipient(""), exc)]
+            return []
+        raise ValueError(f"unknown notification channel: {channel}")
+
+    def _send_email(self, recipients: list[Recipient], text: str,
+                    subject: str | None = None,
+                    ) -> list[tuple[Recipient, Exception]]:
+        """One message per address over one connection: nobody sees
+        who else gets it, and a refused address refuses only itself"""
         cfg = self._cfg.email
-        msg = EmailMessage()
-        msg["Subject"] = text
-        msg["From"] = cfg.mail_from
-        msg["To"] = ", ".join(cfg.mail_to)
-        msg.set_content(text)
-        with smtplib.SMTP(cfg.smtp_host, cfg.smtp_port, timeout=SEND_TIMEOUT) as smtp:
-            if cfg.starttls:
-                smtp.starttls()
-            if cfg.username:
-                smtp.login(cfg.username, cfg.password)
-            smtp.send_message(msg)
+        if not recipients:
+            return []
+        failures = []
+        sent: set[int] = set()
+        try:
+            with smtplib.SMTP(cfg.smtp_host, cfg.smtp_port,
+                              timeout=SEND_TIMEOUT) as smtp:
+                if cfg.starttls:
+                    smtp.starttls()
+                if cfg.username:
+                    smtp.login(cfg.username, cfg.password)
+                for recipient in recipients:
+                    msg = EmailMessage()
+                    msg["Subject"] = subject or text
+                    msg["From"] = cfg.mail_from
+                    msg["To"] = recipient.address
+                    msg.set_content(text)
+                    try:
+                        smtp.send_message(msg)
+                        sent.add(id(recipient))
+                    except smtplib.SMTPServerDisconnected:
+                        raise
+                    except (smtplib.SMTPException, OSError) as exc:
+                        failures.append((recipient, exc))
+        except (smtplib.SMTPException, OSError) as exc:
+            # the server, not an address: whoever was not reached yet
+            done = sent | {id(r) for r, _ in failures}
+            failures += [(r, exc) for r in recipients if id(r) not in done]
+        return failures
 
-    def _send_telegram(self, text: str) -> None:
+    def telegram_call(self, method: str, payload: dict | None = None,
+                      timeout: float = SEND_TIMEOUT) -> dict:
+        """One Bot API call; the answer's JSON. The URL carries the
+        token, so it is never part of an error that is raised."""
         cfg = self._cfg.telegram
-        url = f"https://api.telegram.org/bot{cfg.bot_token}/sendMessage"
-        for chat_id in cfg.chat_ids:
-            payload = json.dumps({"chat_id": chat_id, "text": text}).encode()
-            request = urllib.request.Request(
-                url, data=payload, headers={"Content-Type": "application/json"}
-            )
-            with urllib.request.urlopen(request, timeout=SEND_TIMEOUT) as resp:
-                resp.read()
+        request = urllib.request.Request(
+            f"{TELEGRAM_API}/bot{cfg.bot_token}/{method}",
+            data=json.dumps(payload or {}).encode(),
+            headers={"Content-Type": "application/json"},
+        )
+        with urllib.request.urlopen(request, timeout=timeout) as resp:
+            return json.loads(resp.read().decode("utf-8") or "{}")
+
+    def _send_telegram(self, recipients: list[Recipient], text: str,
+                       ) -> list[tuple[Recipient, Exception]]:
+        failures = []
+        for recipient in recipients:
+            try:
+                self.telegram_call("sendMessage",
+                                   {"chat_id": recipient.address, "text": text})
+            except Exception as exc:  # noqa: BLE001 — one chat, not all
+                failures.append((recipient, exc))
+        return failures
 
     def _send_syslog(self, text: str, severity: str) -> None:
         cfg = self._cfg.syslog
@@ -181,19 +283,19 @@ class Notifier:
 def _test() -> int:
     """--test: one message to every enabled channel, result per channel."""
     from .config import load_config
+    from .settings import overlay, read_rows
 
     config = load_config()
+    # the shared recipients are Settings now (v0.8.4): in the database
+    if not config.demo:
+        overlay(config, read_rows(config.db_path))
     notifier = Notifier(config)
     text = format_text("test", "notify --test", "info", "channel check", False)
-    channels = [
-        ("email", config.notifications.email.enabled),
-        ("telegram", config.notifications.telegram.enabled),
-        ("syslog", config.notifications.syslog.enabled),
-    ]
+    states = channel_state(config.notifications)
     failures = 0
     tested = 0
-    for name, enabled in channels:
-        if not enabled:
+    for name in ("email", "telegram", "syslog"):
+        if not states[name]["ready"]:
             print(f"{name}: disabled")
             continue
         tested += 1

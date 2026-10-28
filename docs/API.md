@@ -86,6 +86,7 @@ tests.
 | GET | `/api/status` | viewer |
 | GET | `/api/about` | viewer |
 | GET | `/api/about/license` | viewer |
+| GET | `/api/settings` | viewer |
 | POST | `/api/actions` | user |
 | GET | `/api/actions/{job_id}` | user |
 | POST | `/api/alarms/{alarm_id}/clear` | user |
@@ -100,6 +101,9 @@ tests.
 | PUT | `/api/layout` | admin |
 | DELETE | `/api/layout` | admin |
 | POST | `/api/notes/import` | admin |
+| PUT | `/api/settings` | admin |
+| DELETE | `/api/settings/{key}` | admin |
+| POST | `/api/settings/test/{channel}` | admin |
 | GET | `/api/users` | accounts |
 | POST | `/api/users` | accounts |
 | PATCH | `/api/users/{name}` | accounts |
@@ -173,6 +177,94 @@ is `own` (MoonLan serves it), `proxy` (a trusted proxy in front) or
 The `LICENSE` file as `text/plain`: MIT asks for the text to go with
 every copy. `404 {"error": "no_license"}` when the service runs without
 it.
+
+## Settings (v0.8.4)
+
+What the map shows and how alarms rise, changed from the page; kept in
+the database. The keys are the `config.yaml` paths they had until
+v0.8.3 — [CONFIGURATION.md](CONFIGURATION.md#in-settings-since-v084)
+lists them with their ranges.
+
+### GET /api/settings
+
+Every setting, for every role: its description, value, default, where
+the value comes from (`database` or `default`) and who changed it last
+(`config.yaml` for a value moved from the file at a start). `applies`
+says when a change takes effect: `now`, `next_scan`, `next_cycle` (the
+next ping or counters cycle) or `next_cleanup`. `label` and `hint` are
+the page's i18n keys.
+
+~~~json
+{
+  "settings": [
+    {"key": "offline_group_threshold", "kind": "int", "section": "map",
+     "applies": "next_scan", "unit": "devices", "min": 0, "max": 1000,
+     "default": 2, "value": 3, "source": "database",
+     "updated_at": 1792750000.0, "updated_by": "anna",
+     "label": "set_offline_group_threshold",
+     "hint": "setHint_offline_group_threshold"},
+    {"key": "notifications.email.mail_to", "kind": "list", "item": "email",
+     "section": "recipients", "applies": "now", "value": null, "count": 2,
+     "hidden": true, "...": "..."}
+  ],
+  "sections": ["map", "polling", "thresholds", "channels", "recipients"],
+  "alarm_types": ["host_down", "switch_down", "..."],
+  "channels": {
+    "email": {"ready": true},
+    "telegram": {"ready": false, "why": "no_token"},
+    "syslog": {"ready": false, "why": "off"}
+  },
+  "can_edit": false,
+  "sign_in": true
+}
+~~~
+
+`alarm_notify` is a table, alarm type → channels. The shared
+recipients' addresses are in the answer to an administrator (and to
+everybody while sign-in is off); to anybody else `value` is `null`,
+with `count` and `hidden: true`. A channel is `ready` when
+`config.yaml` enables it and gives it what it needs; `why` is `off`,
+`no_server` (no `smtp_host`) or `no_token` — nothing else about it is
+sent: the SMTP password and the bot token never leave `config.yaml`.
+
+### PUT /api/settings
+
+A partial `{key: value}`: everything is checked first, then everything
+is written and applied — or nothing is. `alarm_notify` may name only
+the types it changes. One journal entry `settings_changed` per save,
+with each change as `{key, from, to}` (a recipients' list by its
+length only, `count: true`), and one line in the service's log.
+
+~~~json
+{"offline_group_threshold": 3, "alarm_notify": {"port_util": ["syslog"]}}
+~~~
+
+`200` — `changed` and the whole answer of `GET /api/settings`. `400` —
+an error per key, as a code with its parameters, worded by the page:
+
+~~~json
+{"errors": {
+  "scan_interval_minutes": {"code": "range", "min": 0, "max": 1440},
+  "no_such_key": {"code": "unknown"},
+  "monitored_by_default": {"code": "type", "kind": "bool"},
+  "notifications.email.mail_to": {"code": "email", "value": "anna@"},
+  "alarm_notify": {"code": "channel", "value": "sms", "where": "alarm_notify.new_mac"}
+}}
+~~~
+
+Other codes: `chat_id`, `too_many` (`max`), `alarm_type`.
+
+### DELETE /api/settings/{key}
+
+Back to the default; the answer as for `PUT`. `404
+{"error": "unknown_setting"}`.
+
+### POST /api/settings/test/{channel}
+
+A test message to the shared recipients of `email`, `telegram` or
+`syslog`: `{"sent": 2, "failed": 0}` (`"demo": true` in demo mode, where
+nothing leaves the machine). `409 {"error": "channel_off", "why": …}`,
+`409 {"error": "no_recipients"}`, `404 {"error": "unknown_channel"}`.
 
 ## Signing in
 

@@ -333,6 +333,36 @@ def validate(cfg: Config, changes: dict):
 
 # ---------- what the page and diag are told ----------
 
+def describe(cfg: Config, rows: dict[str, dict], personal: bool) -> list[dict]:
+    """Every setting with its value, default, source and last change.
+    `personal` False hides the shared recipients' addresses (a count
+    stays)."""
+    out = []
+    for s in SETTINGS:
+        row = rows.get(s.key)
+        entry = {
+            "key": s.key, "kind": s.kind, "section": s.section,
+            "applies": s.applies, "unit": s.unit,
+            "label": s.label_key, "hint": s.hint_key,
+            "default": s.default(), "value": current(cfg, s.key),
+            "source": "database" if row else "default",
+            "updated_at": row["updated_at"] if row else None,
+            "updated_by": row["updated_by"] if row else None,
+        }
+        if s.minimum is not None:
+            entry["min"] = _plain(s.minimum)
+            entry["max"] = _plain(s.maximum)
+        if s.item:
+            entry["item"] = s.item
+        if s.key in PERSONAL and not personal:
+            entry["count"] = len(entry["value"])
+            entry["value"] = None
+            entry["default"] = None
+            entry["hidden"] = True
+        out.append(entry)
+    return out
+
+
 def setting_of(path: str) -> str:
     """The setting a journal change belongs to: "alarm_notify.host_down"
     is the table's"""

@@ -20,7 +20,7 @@ from pydantic import BaseModel
 
 from . import (
     __version__, about, corruption, counters, demo, https, loopdetect, menu,
-    notes, oui, passkeys, pinger, probes, settings, signin, stp,
+    notes, notify, oui, passkeys, pinger, probes, settings, signin, stp,
 )
 from .alarms import AlarmEngine
 from .config import Config, load_config, parse_uplink_ports
@@ -2463,6 +2463,109 @@ async def api_about_license() -> Response:
     if text is None:
         return _refuse("no_license", 404)
     return Response(text, media_type="text/plain; charset=utf-8")
+
+
+# ---------- Settings (v0.8.4) ----------
+
+def _may_change_settings(on: bool) -> bool:
+    """An administrator — or everybody while sign-in is off, when
+    everybody is one. The console reads only."""
+    who = signin.principal()
+    return not on or (who is not None and who.role == "admin"
+                      and not who.console)
+
+
+async def _settings_answer() -> dict:
+    on = await asyncio.to_thread(sign_in.sign_in_on)
+    editor = _may_change_settings(on)
+    rows = await asyncio.to_thread(db.settings)
+    return {
+        "settings": settings.describe(config, rows, personal=editor),
+        "sections": list(settings.SECTIONS),
+        "alarm_types": list(config.alarm_notify),
+        "channels": notify.channel_state(config.notifications),
+        "can_edit": editor,
+        "sign_in": on,
+    }
+
+
+def _settings_applied(changes: list[dict], how: str) -> None:
+    """After a save or a reset: what holds a value of its own is told,
+    and the log says what changed, by whom, in one line."""
+    keys = {settings.setting_of(c["key"]) for c in changes}
+    for key in keys & set(settings.INTERVALS):
+        interval_changed[key].set()
+    if "thresholds.flap_window_minutes" in keys:
+        flap_tracker.window_seconds = config.thresholds.flap_window_minutes * 60
+    log.info("Settings %s by %s: %s", how, signin.actor() or "(sign-in off)",
+             settings.log_line(changes))
+
+
+@app.get("/api/settings")
+async def api_settings() -> dict:
+    """Every setting: its description, value, default, where it comes
+    from and who changed it last; whether each channel is set up on the
+    server (and nothing about how — no secret ever leaves config.yaml)."""
+    return await _settings_answer()
+
+
+@app.put("/api/settings")
+async def api_settings_save(request: Request) -> JSONResponse:
+    """{key: value, …}: all checked, then all written, or nothing.
+    An unknown key is an error."""
+    try:
+        body = await request.json()
+    except ValueError:
+        return _refuse("bad_request", 400)
+    changes, errors = await asyncio.to_thread(
+        settings.save, config, db, body, signin.actor()
+    )
+    if errors:
+        return JSONResponse({"errors": errors}, status_code=400)
+    if changes:
+        _settings_applied(changes, "changed")
+    return JSONResponse({"changed": changes, **await _settings_answer()})
+
+
+@app.delete("/api/settings/{key}")
+async def api_settings_reset(key: str) -> JSONResponse:
+    if key not in settings.BY_KEY:
+        return _refuse("unknown_setting", 404)
+    changes = await asyncio.to_thread(
+        settings.reset, config, db, key, signin.actor()
+    )
+    if changes:
+        _settings_applied(changes, "reset")
+    return JSONResponse({"changed": changes, **await _settings_answer()})
+
+
+@app.post("/api/settings/test/{channel}")
+async def api_settings_test(channel: str) -> JSONResponse:
+    """A test message to the shared recipients of one channel"""
+    state = notify.channel_state(config.notifications).get(channel)
+    if state is None:
+        return _refuse("unknown_channel", 404)
+    if not state["ready"]:
+        return _refuse("channel_off", 409, why=state["why"])
+    recipients = notifier.shared(channel)
+    if not recipients:
+        return _refuse("no_recipients", 409)
+    text = notify.format_text(
+        "test", "Settings", "info",
+        f"a test message to the shared recipients, sent by "
+        f"{signin.actor() or 'the page'}", False,
+    )
+    if config.demo:
+        log.info("NOTIFY (demo): %s (%s, %d recipient(s))", text, channel,
+                 len(recipients))
+        return JSONResponse({"sent": len(recipients), "failed": 0,
+                             "demo": True})
+    failed = await asyncio.to_thread(notifier.deliver, channel, recipients,
+                                     text)
+    log.info("Test message via %s to the shared recipients, by %s: %d sent, "
+             "%d failed", channel, signin.actor() or "(sign-in off)",
+             len(recipients) - failed, failed)
+    return JSONResponse({"sent": len(recipients) - failed, "failed": failed})
 
 
 @app.get("/api/topology")
