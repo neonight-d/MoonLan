@@ -195,9 +195,14 @@ class QrTest(unittest.TestCase):
         # level M byte capacity: v1 14, v9 180, v10 213
         self.assertEqual(versions[4:10], [1, 2, 9, 10, 10, 11])
 
+
+
+class SourceTest(unittest.TestCase):
     def test_no_library_and_no_service(self):
-        self.assertNotIn("QRious", APP)
-        self.assertNotIn("cdnjs", APP)
+        # the comment tells where QRious came from; nothing loads it
+        self.assertNotIn("new QRious", APP)
+        self.assertNotIn("loadQrLibrary", APP)
+        self.assertNotIn("https://cdnjs", APP)
         self.assertIn("qrCanvas(secret.uri, 200)", APP)
         self.assertIn("qrCanvas(myLink.link, 180)", APP)
 
