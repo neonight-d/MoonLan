@@ -1246,3 +1246,64 @@ body.gated .toolbar > button { display: none; }
 .about-rows dd { margin: 0; overflow-wrap: anywhere; }
 .about-rows code { font-family: ui-monospace, monospace; user-select: all; }
 #about-body .muted { color: var(--text-dim); }
+
+/* ---------- Settings (v0.8.4) ---------- */
+#settings { width: min(460px, calc(100vw - 28px)); }
+#settings-body { font-size: 0.85rem; line-height: 1.4; }
+.set-section { border-top: 1px solid var(--line); }
+.set-section:first-child { border-top: none; }
+/* a section's name is the button that opens and closes it */
+.set-head {
+  display: block; width: 100%; text-align: left;
+  border: none; border-radius: 0; background: none;
+  padding: 10px 0; font: inherit; font-weight: 600; color: var(--moon);
+}
+.set-head::before { content: "▸ "; color: var(--text-dim); }
+.set-head[aria-expanded="true"]::before { content: "▾ "; }
+.set-dirty { font-weight: normal; color: var(--warn); font-size: 0.8rem; }
+.set-body { padding: 0 0 12px; }
+.set-readonly {
+  margin: 0 0 10px; padding: 6px 10px;
+  border: 1px solid var(--line); border-radius: 6px; color: var(--text-dim);
+}
+.setting { margin: 0 0 14px; }
+.set-label label, .setting-bool label { color: var(--text); }
+.setting-bool .set-input { gap: 6px; }
+.set-input { display: flex; align-items: center; gap: 8px; margin-top: 4px; flex-wrap: wrap; }
+.set-input input[type="text"], .set-input input[type="email"] {
+  width: 9em; padding: 5px 8px;
+  border: 1px solid var(--line); border-radius: 6px;
+  background: var(--bg); color: var(--text); font: inherit;
+}
+.set-add input[type="text"], .set-add input[type="email"] { flex: 1 1 12em; width: auto; }
+.set-input input:disabled { opacity: 0.6; }
+.set-unit { color: var(--text-dim); }
+.set-reset { font-size: 0.78rem; padding: 2px 8px; }
+.set-hint { margin: 4px 0 0; padding-left: 8px; border-left: 2px solid var(--line); }
+.set-meta { margin-top: 3px; color: var(--text-dim); font-size: 0.78rem; }
+#settings .hint-more {
+  border: none; background: none; padding: 0 2px; margin: 0;
+  font: inherit; line-height: 1; color: var(--text-dim); cursor: pointer;
+}
+#settings .hint-more:hover,
+#settings .hint-more[aria-expanded="true"] { color: var(--link); }
+#settings .error { margin: 4px 0 0; color: #d96b6b; font-size: 0.82rem; }
+.set-table { border-collapse: collapse; margin-top: 6px; font-size: 0.8rem; }
+.set-table th, .set-table td { padding: 3px 8px 3px 0; border-bottom: 1px solid var(--line); text-align: center; }
+.set-table th:first-child, .set-table td:first-child { text-align: left; }
+.set-table th { color: var(--text-dim); font-weight: normal; vertical-align: bottom; }
+.set-table .off { opacity: 0.45; }
+.set-table th .why { font-size: 0.7rem; max-width: 7em; margin: 0 auto; }
+.set-list { list-style: none; margin: 6px 0; padding: 0; }
+.set-list li { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 3px 0; border-bottom: 1px solid var(--line); }
+.set-address { overflow-wrap: anywhere; font-family: ui-monospace, monospace; }
+.set-remove { font-size: 0.78rem; padding: 2px 8px; }
+.set-footer { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
+.set-footer .panel-btn { margin-top: 4px; }
+.set-scan { margin: 8px 0 0; }
+.set-scan .panel-btn { margin-top: 0; }
+/* a phone's fields are 16 px (v0.8.3); this rule comes after the
+   general one and is more specific, so it says so again */
+@media (max-width: 720px) {
+  .set-input input[type="text"], .set-input input[type="email"] { font-size: 16px; }
+}

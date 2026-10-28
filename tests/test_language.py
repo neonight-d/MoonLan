@@ -137,7 +137,8 @@ class ElsewhereTest(unittest.TestCase):
 
     def test_names_for_a_screen_reader(self):
         closes = re.findall(r"<button[^>]*>×</button>", INDEX)
-        self.assertEqual(len(closes), 11)
+        # eleven in v0.8.2, and Settings since v0.8.4
+        self.assertEqual(len(closes), 12)
         self.assertEqual([b for b in closes if "data-close" not in b], [])
         static = function("applyStatic")
         self.assertIn('document.querySelectorAll("[data-close]")', static)

@@ -534,14 +534,17 @@ def load(cfg: Config, db, now: float | None = None) -> LoadReport:
         db.save_settings(
             {k: json.dumps(v) for k, v in to_store.items()}, now, "config.yaml"
         )
-        db.add_event(
-            now, "settings_moved", "",
-            json.dumps({"changes": [
-                {"key": k, "to": (len(v) if k in PERSONAL else v),
-                 **({"count": True} if k in PERSONAL else {})}
-                for k, v in to_store.items()
-            ]}),
-        )
+        # as a change from the default, which is what it was until now;
+        # a value the same as the default by its value alone
+        moved = []
+        for key, value in to_store.items():
+            said = changes_between(key, BY_KEY[key].default(), value)
+            if not said and key != "alarm_notify":
+                said = [{"key": key, "to": len(value), "count": True}
+                        if key in PERSONAL else {"key": key, "to": value}]
+            moved += said
+        db.add_event(now, "settings_moved", "",
+                     json.dumps({"changes": moved}))
     return report
 
 

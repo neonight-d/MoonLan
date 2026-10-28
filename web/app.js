@@ -29,6 +29,9 @@ const els = {
   about: document.getElementById("about"),
   aboutBody: document.getElementById("about-body"),
   aboutClose: document.getElementById("about-close"),
+  settings: document.getElementById("settings"),
+  settingsBody: document.getElementById("settings-body"),
+  settingsClose: document.getElementById("settings-close"),
   exportTitle: document.getElementById("export-title"),
   exportBody: document.getElementById("export-body"),
   exportClose: document.getElementById("export-close"),
@@ -1113,11 +1116,12 @@ function applyRole() {
 
 /* ---------- your own account ---------- */
 
-// …and About: the panels the header's menus open
+// …About and Settings: the panels the header's menus open
 function hideAccountPanels() {
   els.account.classList.add("hidden");
   els.users.classList.add("hidden");
   els.about.classList.add("hidden");
+  els.settings.classList.add("hidden");
   panelAsked = null;
 }
 
@@ -1138,7 +1142,7 @@ function askPanel() {
 function hidePanelsFor(panel) {
   panelAsked = null;
   for (const other of [els.details, els.journal, els.alarms, els.stp,
-    els.account, els.users, els.notesPanel, els.about]) {
+    els.account, els.users, els.notesPanel, els.about, els.settings]) {
     if (other !== panel) other.classList.add("hidden");
   }
   if (panel !== els.details) shownDetails = null;
@@ -2339,7 +2343,9 @@ function moreItems() {
       disabled: needRole("admin"),
       run: resetLayout,
     },
-    // last, on its own, for everybody — sign-in off included
+    // last, on their own, for everybody — sign-in off included; what a
+    // role may not change is greyed inside, with the reason
+    { key: "settings", group: "about", label: t("menuSettings"), run: openSettings },
     { key: "about", group: "about", label: t("menuAbout"), run: openAbout },
   ];
 }
@@ -6108,6 +6114,468 @@ function aboutReport(data) {
 
 els.aboutClose.addEventListener("click", () => els.about.classList.add("hidden"));
 
+/* ---------- Settings (v0.8.4) ----------
+
+   What the map shows and how alarms rise, out of config.yaml and into
+   the page. Every role opens it; what one may not change is there all
+   the same, greyed, with who may (v0.7.2: explain, do not hide). A
+   section saves its own changes in one request. What was typed and not
+   saved survives a language change and another panel opened over it;
+   closing the panel asks first. */
+
+const SETTINGS_OPEN_KEY = "moonlan.settingsOpen";
+const SETTING_CHANNELS = ["email", "telegram", "syslog"];
+let settingsData = null;
+// key -> what was typed and not saved: the text of a number field, a
+// boolean, a list, the whole table
+let settingsDraft = {};
+// key -> the server's refusal ({code, …}), shown under its field
+let settingsErrors = {};
+// section -> a line under its button: saved, or why not
+let settingsNotice = {};
+// the section just saved with something a scan applies: "scan now?"
+let settingsScanAsk = null;
+
+function openSettingsSections() {
+  try {
+    const saved = JSON.parse(localStorage.getItem(SETTINGS_OPEN_KEY) || "null");
+    if (Array.isArray(saved)) return new Set(saved);
+  } catch (e) {
+    // a private window, or storage turned off: the first section open
+  }
+  return new Set(["map"]);
+}
+
+function rememberSettingsSections(open) {
+  try {
+    localStorage.setItem(SETTINGS_OPEN_KEY, JSON.stringify([...open]));
+  } catch (e) {
+    // not remembered; it still works
+  }
+}
+
+async function openSettings() {
+  hidePanelsFor(els.settings);
+  // what was typed is kept; what was said about the last save is not
+  settingsNotice = {};
+  settingsScanAsk = null;
+  els.settings.classList.remove("hidden");
+  await loadSettings();
+}
+
+async function loadSettings() {
+  let response;
+  try {
+    response = await api("/api/settings");
+  } catch (e) {
+    serviceLost("the settings");
+    return;
+  }
+  if (!response.ok) return;
+  settingsData = await response.json();
+  renderSettings();
+}
+
+function closeSettings() {
+  if (Object.keys(settingsDraft).length && !window.confirm(t("confirmDiscardSettings"))) return;
+  settingsDraft = {};
+  settingsErrors = {};
+  settingsNotice = {};
+  settingsScanAsk = null;
+  els.settings.classList.add("hidden");
+}
+
+function settingNamed(key) {
+  return settingsData.settings.find((s) => s.key === key);
+}
+
+function sameValue(a, b) {
+  return JSON.stringify(a) === JSON.stringify(b);
+}
+
+function draftOf(s) {
+  return s.key in settingsDraft ? settingsDraft[s.key] : s.value;
+}
+
+/* A number field's text as the number it is; undefined when it is not
+   one. A list, a table and a boolean are what they are. */
+function typedValue(s, typed) {
+  if (s.kind !== "int" && s.kind !== "float") return typed;
+  const text = String(typed).trim().replace(",", ".");
+  if (text === "") return undefined;
+  const number = Number(text);
+  return Number.isFinite(number) ? number : undefined;
+}
+
+/* A change to one setting: kept until saved — or dropped, when it is
+   back to the saved value */
+function setDraft(s, typed) {
+  const value = typedValue(s, typed);
+  if (value !== undefined && sameValue(value, s.value)) delete settingsDraft[s.key];
+  else settingsDraft[s.key] = typed;
+  delete settingsErrors[s.key];
+  markSettingsSection(s.section);
+}
+
+/* What a section's head and Save button say about unsaved changes —
+   in place, without drawing the section again under the cursor */
+function markSettingsSection(section) {
+  const dirty = settingsData.settings.some((s) => s.section === section && s.key in settingsDraft);
+  const mark = els.settingsBody.querySelector(`[data-dirty="${section}"]`);
+  if (mark) mark.classList.toggle("hidden", !dirty);
+  const save = els.settingsBody.querySelector(`[data-save="${section}"]`);
+  if (save) save.disabled = !dirty;
+}
+
+function unitText(s) {
+  return s.unit ? t("unit_" + s.unit) : "";
+}
+
+function channelName(channel) {
+  return t("ch_" + channel);
+}
+
+// a value as the page writes it: 0.01, "on", "Telegram, syslog"
+function settingWord(value, kind) {
+  if (typeof value === "boolean") return t(value ? "valOn" : "valOff");
+  if (Array.isArray(value)) return value.length ? value.map((v) => (SETTING_CHANNELS.includes(v) ? channelName(v) : v)).join(", ") : "—";
+  if (typeof value === "number") return value.toLocaleString(locale(), { maximumFractionDigits: 6 });
+  return String(value);
+}
+
+function settingErrorText(error, s) {
+  if (!error) return "";
+  switch (error.code) {
+    case "range":
+      return fmt("setErrRange", { min: settingWord(error.min), max: settingWord(error.max) });
+    case "type":
+      return t("setErrType_" + (error.kind || (s && s.kind) || "int"));
+    case "email":
+      return fmt("setErrEmail", { value: error.value });
+    case "chat_id":
+      return fmt("setErrChatId", { value: error.value });
+    case "too_many":
+      return fmt("setErrTooMany", { max: error.max });
+    case "channel":
+      return fmt("setErrChannel", { value: error.value });
+    case "alarm_type":
+      return fmt("setErrAlarmType", { value: error.value });
+    case "unknown":
+      return t("setErrUnknown");
+    default:
+      return fmt("err_other", { error: error.code });
+  }
+}
+
+// "changed by anna, 28.10.2026 13:05", or moved from config.yaml
+function settingChangedLine(s) {
+  if (!s.updated_by && !s.updated_at) return null;
+  const time = fmtTime(s.updated_at);
+  const text = s.updated_by === "config.yaml"
+    ? fmt("setMovedAt", { time: time })
+    : s.updated_by
+    ? fmt("setChangedBy", { user: s.updated_by, time: time })
+    : fmt("setChangedAt", { time: time });
+  return h("div", { class: "set-meta", text: text });
+}
+
+/* The label with its ⓘ, and the hint the ⓘ opens */
+function settingLabel(s, id) {
+  const hint = h("p", { class: "hint-line set-hint hidden", id: id + "-hint", text: t(s.hint) });
+  const more = h("button", {
+    type: "button", class: "hint-more", "aria-expanded": "false", "aria-controls": id + "-hint",
+    "aria-label": t("hintMore"), title: t(s.hint), text: "ⓘ",
+    onclick: () => {
+      const open = hint.classList.toggle("hidden") === false;
+      more.setAttribute("aria-expanded", String(open));
+    },
+  });
+  const name = h("label", { for: id, text: t(s.label) });
+  return { label: h("span", { class: "set-label" }, name, " ", more), name: name, more: more, hint: hint };
+}
+
+/* Back to the default: one request, the answer is the new state */
+function resetSetting(s, button) {
+  return busy("settings-reset:" + s.key, async () => {
+    let response;
+    try {
+      response = await api("/api/settings/" + encodeURIComponent(s.key), { method: "DELETE" });
+    } catch (e) {
+      serviceLost("resetting a setting");
+      return;
+    }
+    const answer = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      settingsNotice[s.section] = errorText(answer);
+    } else {
+      settingsData = answer;
+      delete settingsDraft[s.key];
+      delete settingsErrors[s.key];
+      if (s.applies === "next_scan") settingsScanAsk = s.section;
+    }
+    renderSettings();
+  }, [button]);
+}
+
+/* One number or switch: the label and its ⓘ, the field with its unit,
+   the default, when a change applies, who changed it last */
+function settingField(s, editable) {
+  const id = "set-" + s.key.replace(/[^a-z0-9]+/gi, "-");
+  const { label, name, more, hint } = settingLabel(s, id);
+  const value = draftOf(s);
+  let input;
+  if (s.kind === "bool") {
+    input = h("input", { type: "checkbox", id: id, checked: Boolean(value), disabled: !editable });
+    input.addEventListener("change", () => setDraft(s, input.checked));
+  } else {
+    input = h("input", {
+      type: "text", id: id, value: typeof value === "number" ? String(value) : value,
+      inputmode: s.kind === "int" ? "numeric" : "decimal", autocomplete: "off",
+      disabled: !editable, "aria-describedby": id + "-meta",
+    });
+    input.addEventListener("input", () => setDraft(s, input.value));
+  }
+  const reset = editable && !sameValue(s.value, s.default)
+    ? h("button", { type: "button", class: "set-reset", text: t("setReset") })
+    : null;
+  if (reset) reset.addEventListener("click", () => resetSetting(s, reset));
+  const error = settingsErrors[s.key];
+  // a switch reads with its name beside the box
+  const row = s.kind === "bool"
+    ? h("div", { class: "set-input" }, input, name, more, reset)
+    : h("div", { class: "set-input" }, input, s.unit ? h("span", { class: "set-unit", text: unitText(s) }) : null, reset);
+  return h("div", { class: "setting" + (s.kind === "bool" ? " setting-bool" : "") },
+    s.kind === "bool" ? null : label,
+    row,
+    hint,
+    h("div", { class: "set-meta", id: id + "-meta" },
+      fmt("setDefault", { value: settingWord(s.default) + (s.unit ? " " + unitText(s) : "") }),
+      " · ", t("applies_" + s.applies)),
+    settingChangedLine(s),
+    error ? h("p", { class: "error", role: "alert", text: settingErrorText(error, s) }) : null);
+}
+
+/* Alarms × channels: the shared table. A channel config.yaml does not
+   set up is greyed with the reason — what is ticked there is kept for
+   the day it is. */
+function settingsTable(s, editable) {
+  const channels = settingsData.channels;
+  const value = draftOf(s);
+  const head = h("tr", {}, h("th", { text: t("setAlarmType") }),
+    ...SETTING_CHANNELS.map((channel) => {
+      const state = channels[channel];
+      return h("th", { class: state.ready ? "" : "off", title: state.ready ? null : t("channelWhy_" + state.why) },
+        channelName(channel),
+        state.ready ? null : h("div", { class: "why", text: t("channelNotSet") }));
+    }));
+  const rows = settingsData.alarm_types.map((type) => h("tr", {},
+    h("td", { text: t("al_" + type) }),
+    ...SETTING_CHANNELS.map((channel) => {
+      const box = h("input", {
+        type: "checkbox", checked: (value[type] || []).includes(channel), disabled: !editable,
+        "aria-label": t("al_" + type) + " — " + channelName(channel),
+      });
+      box.addEventListener("change", () => {
+        const next = JSON.parse(JSON.stringify(draftOf(s)));
+        next[type] = SETTING_CHANNELS.filter((c) => (c === channel ? box.checked : (next[type] || []).includes(c)));
+        setDraft(s, next);
+      });
+      return h("td", { class: channels[channel].ready ? "" : "off" }, box);
+    })));
+  const error = settingsErrors[s.key];
+  const { label, hint } = settingLabel(s, "set-alarm-notify");
+  return h("div", { class: "setting" },
+    label, hint,
+    h("div", { class: "table-scroll" },
+      h("table", { class: "set-table" }, h("thead", {}, head), h("tbody", {}, ...rows))),
+    settingChangedLine(s),
+    error ? h("p", { class: "error", role: "alert", text: settingErrorText(error, s) }) : null);
+}
+
+/* A test message to the shared recipients of a channel, as saved */
+function testChannel(channel, button) {
+  return busy("settings-test:" + channel, async () => {
+    let response;
+    try {
+      response = await api("/api/settings/test/" + channel, jsonPost("/api/settings/test/" + channel));
+    } catch (e) {
+      serviceLost("the test message");
+      return;
+    }
+    const answer = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      showToast(answer.error === "channel_off" ? t("channelWhy_" + answer.why) : errorText(answer));
+      return;
+    }
+    showToast(fmt(answer.failed ? "setTestFailed" : "setTestSent", { sent: answer.sent, failed: answer.failed }));
+  }, [button]);
+}
+
+/* The shared recipients of one channel: the addresses, add and remove,
+   and a test message. A viewer is told how many, not who. */
+function recipientsField(s, editable) {
+  const channel = s.item === "email" ? "email" : "telegram";
+  const id = "set-" + channel + "-recipients";
+  const { label, hint } = settingLabel(s, id);
+  const state = settingsData.channels[channel];
+  if (s.hidden) {
+    return h("div", { class: "setting" }, label, hint,
+      h("p", { class: "set-meta", text: fmt("setRecipientsHidden", { n: s.count }) }));
+  }
+  const list = draftOf(s);
+  const items = list.map((address) => h("li", {},
+    h("span", { class: "set-address", text: address }),
+    editable ? h("button", {
+      type: "button", class: "set-remove", "aria-label": fmt("setRemoveAddress", { address: address }),
+      text: t("setRemove"),
+      onclick: () => {
+        setDraft(s, draftOf(s).filter((a) => a !== address));
+        renderSettings();
+      },
+    }) : null));
+  const input = h("input", {
+    type: s.item === "email" ? "email" : "text", id: id, autocomplete: "off",
+    placeholder: t(s.item === "email" ? "setEmailPlaceholder" : "setChatPlaceholder"),
+    disabled: !editable,
+  });
+  const add = () => {
+    const address = input.value.trim();
+    if (!address) return;
+    const now = draftOf(s);
+    if (!now.includes(address)) setDraft(s, [...now, address]);
+    renderSettings();
+    const again = document.getElementById(id);
+    if (again) again.focus();
+  };
+  input.addEventListener("keydown", (event) => {
+    if (event.key === "Enter") {
+      event.preventDefault();
+      add();
+    }
+  });
+  const addButton = h("button", { type: "button", text: t("setAdd"), disabled: !editable, onclick: add });
+  // the test goes to the saved list; a changed one is saved first
+  const why = !state.ready ? t("channelWhy_" + state.why)
+    : !s.value.length ? t("setNoRecipients")
+    : s.key in settingsDraft ? t("setSaveFirst")
+    : null;
+  const test = h("button", { type: "button", class: "panel-btn", text: t("setTest"), disabled: !editable || Boolean(why), title: why });
+  test.addEventListener("click", () => testChannel(channel, test));
+  const error = settingsErrors[s.key];
+  return h("div", { class: "setting" },
+    label, hint,
+    items.length ? h("ul", { class: "set-list" }, ...items) : h("p", { class: "set-meta", text: t("setNobody") }),
+    h("div", { class: "set-input set-add" }, input, addButton),
+    h("div", {}, test, why && editable ? h("span", { class: "set-meta", text: " " + why }) : null),
+    settingChangedLine(s),
+    error ? h("p", { class: "error", role: "alert", text: settingErrorText(error, s) }) : null);
+}
+
+/* A section's changes in one PUT: all of them or none (the server's
+   rule); a refusal stays under its field with what was typed */
+function saveSettingsSection(section, button) {
+  return busy("settings:" + section, async () => {
+    const changes = {};
+    const local = {};
+    for (const s of settingsData.settings) {
+      if (s.section !== section || !(s.key in settingsDraft)) continue;
+      const value = typedValue(s, settingsDraft[s.key]);
+      if (value === undefined) local[s.key] = { code: "type", kind: s.kind };
+      else changes[s.key] = value;
+    }
+    if (Object.keys(local).length) {
+      Object.assign(settingsErrors, local);
+      renderSettings();
+      return;
+    }
+    if (!Object.keys(changes).length) return;
+    let response;
+    try {
+      response = await api("/api/settings", {
+        method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(changes),
+      });
+    } catch (e) {
+      serviceLost("saving the settings");
+      return;
+    }
+    const answer = await response.json().catch(() => ({}));
+    if (response.status === 400 && answer.errors) {
+      Object.assign(settingsErrors, answer.errors);
+      delete settingsNotice[section];
+      renderSettings();
+      return;
+    }
+    if (!response.ok) {
+      settingsNotice[section] = errorText(answer);
+      renderSettings();
+      return;
+    }
+    const scanApplies = settingsData.settings.some((s) => s.key in changes && (s.applies === "next_scan" || s.section === "polling"));
+    settingsData = answer;
+    for (const key of Object.keys(changes)) {
+      delete settingsDraft[key];
+      delete settingsErrors[key];
+    }
+    settingsNotice[section] = t("setSaved");
+    settingsScanAsk = scanApplies ? section : null;
+    renderSettings();
+  }, [button]);
+}
+
+function settingsSection(name, open) {
+  const editable = settingsData.can_edit;
+  const members = settingsData.settings.filter((s) => s.section === name);
+  const isOpen = open.has(name);
+  const bodyId = "set-section-" + name;
+  const dirty = members.some((s) => s.key in settingsDraft);
+  const head = h("button", {
+    type: "button", class: "set-head", "aria-expanded": String(isOpen), "aria-controls": bodyId,
+  }, t("setSection_" + name),
+  h("span", { class: "set-dirty" + (dirty ? "" : " hidden"), "data-dirty": name, text: " · " + t("setUnsaved") }));
+  const parts = [];
+  if (!editable) parts.push(h("p", { class: "set-readonly", text: t("setAdminOnly") }));
+  for (const s of members) {
+    if (s.kind === "table") parts.push(settingsTable(s, editable));
+    else if (s.kind === "list") parts.push(recipientsField(s, editable));
+    else parts.push(settingField(s, editable));
+  }
+  if (editable) {
+    const save = h("button", { type: "button", class: "panel-btn", "data-save": name, text: t("setSave"), disabled: !dirty });
+    save.addEventListener("click", () => saveSettingsSection(name, save));
+    const footer = [save];
+    if (settingsNotice[name]) footer.push(h("span", { class: "set-meta", role: "status", text: settingsNotice[name] }));
+    parts.push(h("div", { class: "set-footer" }, ...footer));
+    if (settingsScanAsk === name) {
+      const scan = h("button", { type: "button", class: "panel-btn", text: t("setScanNowBtn"), disabled: Boolean(needRole("user")) });
+      scan.addEventListener("click", () => {
+        settingsScanAsk = null;
+        rescan();
+        renderSettings();
+      });
+      parts.push(h("p", { class: "set-scan" }, t("setScanNow") + " ", scan));
+    }
+  }
+  const body = h("div", { class: "set-body" + (isOpen ? "" : " hidden"), id: bodyId }, ...parts);
+  head.addEventListener("click", () => {
+    const opened = body.classList.toggle("hidden") === false;
+    head.setAttribute("aria-expanded", String(opened));
+    const now = openSettingsSections();
+    if (opened) now.add(name);
+    else now.delete(name);
+    rememberSettingsSections(now);
+  });
+  return h("section", { class: "set-section" }, head, body);
+}
+
+function renderSettings() {
+  if (!settingsData) return;
+  const open = openSettingsSections();
+  els.settingsBody.replaceChildren(
+    ...settingsData.sections.map((name) => settingsSection(name, open)));
+}
+
+els.settingsClose.addEventListener("click", closeSettings);
+
 /* ---------- a node's name and note (v0.8.0) ----------
 
    In the card under the title: the name, the note, who changed them
@@ -7843,7 +8311,8 @@ function renderJournal(events) {
       const host = document.createElement("span");
       host.className = "ev-host";
       host.textContent = accountEventText(ev) || noteEventText(ev) ||
-        linkDroppedText(ev) || ev.name || ev.ip || ev.mac || layoutEventText(ev);
+        settingsEventText(ev) || linkDroppedText(ev) || ev.name || ev.ip || ev.mac ||
+        layoutEventText(ev);
       if (ev.vendor) {
         // a new device says who made it; any other event keeps it to
         // the tooltip
@@ -7869,6 +8338,34 @@ function renderJournal(events) {
     empty.textContent = t("noEvents");
     els.journalList.append(empty);
   }
+}
+
+/* A save in Settings (v0.8.4), and what a start moved from
+   config.yaml: "Offline group threshold: 2 → 3; Alarms to channels —
+   High port load: Telegram, syslog → syslog". A list of people's
+   addresses is in the journal by its length only. */
+function settingsEventText(ev) {
+  if (ev.event !== "settings_changed" && ev.event !== "settings_moved") return "";
+  let data;
+  try {
+    data = JSON.parse(ev.details);
+  } catch (e) {
+    return ev.details || "";
+  }
+  return (data.changes || []).map((change) => {
+    const label = t("set_" + change.key.replace(/\./g, "_"));
+    if (change.count) {
+      return t("setSection_recipients") + " — " + label + ": " + ("from" in change
+        ? fmt("evAddressCount", { from: change.from, to: change.to })
+        : fmt("evAddressTotal", { n: change.to }));
+    }
+    const name = change.key.startsWith("alarm_notify.")
+      ? t("set_alarm_notify") + " — " + t("al_" + change.key.slice("alarm_notify.".length))
+      : label;
+    if (!("from" in change)) return name + ": " + settingWord(change.to);
+    return name + ": " + settingWord(change.from) + " → " + settingWord(change.to) +
+      (change.reset ? " " + t("evSettingReset") : "");
+  }).join("; ");
 }
 
 /* Sign-ins and account changes: the account, then what the details
@@ -8168,6 +8665,7 @@ redrawOnLanguage(els.actions, renderAction);
 redrawOnLanguage(els.account, renderAccount);
 redrawOnLanguage(els.users, refreshUsers);
 redrawOnLanguage(els.about, renderAbout);
+redrawOnLanguage(els.settings, renderSettings);
 redrawOnLanguage(els.exportDialog, redrawExportDialog);
 // the sign-in form is redrawn, with the name typed so far; a form half
 // way through a code or a password is left alone
