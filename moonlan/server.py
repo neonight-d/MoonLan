@@ -21,6 +21,7 @@ from pydantic import BaseModel
 from . import (
     __version__, about, corruption, counters, demo, https, loopdetect, menu,
     notes, notify, oui, passkeys, pinger, probes, settings, signin, stp,
+    subscriptions,
 )
 from .alarms import AlarmEngine
 from .config import Config, load_config, parse_uplink_ports
@@ -135,6 +136,12 @@ ZERO_FLAPS = counters.PortFlaps(count=0, last=0.0)
 # ports panel can say "unknown" where it used to say 0.0
 counter_columns: dict[str, dict[str, counters.ColumnStatus]] = {}
 notifier = Notifier(config, demo=config.demo)
+# One's own email and Telegram (v0.8.4): kept beside the accounts,
+# journalled with everything else; the notifier asks it who chose what
+personal = subscriptions.Subscriptions(
+    accounts, db, config, notifier, demo=config.demo
+)
+notifier.personal = personal.recipients
 alarm_engine = AlarmEngine(
     db, notifier, config.thresholds, config.notifications
 )

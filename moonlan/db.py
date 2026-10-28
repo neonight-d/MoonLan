@@ -210,6 +210,34 @@ CREATE TABLE IF NOT EXISTS settings (
     updated_at REAL,
     updated_by TEXT
 );
+-- A person's own notifications (v0.8.4), beside the accounts: one row
+-- per account and channel, and only once the address is confirmed —
+-- an address nobody confirmed is not in here and gets nothing.
+CREATE TABLE IF NOT EXISTS subscriptions (
+    user_id      INTEGER NOT NULL,
+    channel      TEXT NOT NULL,            -- email | telegram
+    address      TEXT NOT NULL,            -- the email, or the Telegram chat id
+    confirmed_at REAL NOT NULL,
+    enabled      INTEGER DEFAULT 1,
+    -- JSON list of alarm types; NULL — as the shared table says for
+    -- this channel, and following it when an administrator changes it
+    alarm_types  TEXT DEFAULT NULL,
+    PRIMARY KEY (user_id, channel)
+);
+-- …and what waits to be confirmed: an email's code or a Telegram
+-- link's key, as a hash only. One per account and channel.
+CREATE TABLE IF NOT EXISTS subscription_codes (
+    user_id    INTEGER NOT NULL,
+    channel    TEXT NOT NULL,
+    address    TEXT DEFAULT '',            -- the email being confirmed
+    secret     TEXT NOT NULL,              -- salt$sha256 of a code; sha256 of a key
+    expires_at REAL NOT NULL,
+    attempts   INTEGER DEFAULT 0,          -- wrong codes so far
+    lang       TEXT DEFAULT 'en',          -- of the page that asked: the bot answers in it
+    created_at REAL NOT NULL,
+    refused    TEXT DEFAULT '',            -- "group": the link was opened in a group
+    PRIMARY KEY (user_id, channel)
+);
 """
 
 
@@ -1227,6 +1255,149 @@ class Database:
                                      (key,))
         return cur.rowcount > 0
 
+    # ---------- personal notifications (v0.8.4) ----------
+
+    def subscriptions_of(self, user_id: int) -> dict[str, dict]:
+        """channel -> the confirmed subscription of one account"""
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT * FROM subscriptions WHERE user_id = ?", (user_id,)
+            ).fetchall()
+        return {row["channel"]: dict(row) for row in rows}
+
+    def active_subscriptions(self, channel: str) -> list[dict]:
+        """Confirmed, switched on, of an account that is not disabled"""
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT s.*, u.name FROM subscriptions s "
+                "JOIN users u ON u.id = s.user_id "
+                "WHERE s.channel = ? AND s.enabled = 1 AND u.disabled = 0 "
+                "ORDER BY s.user_id", (channel,),
+            ).fetchall()
+        return [dict(row) for row in rows]
+
+    def subscription_counts(self) -> dict[int, set[str]]:
+        """account id -> the channels it has confirmed"""
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT user_id, channel FROM subscriptions"
+            ).fetchall()
+        out: dict[int, set[str]] = {}
+        for row in rows:
+            out.setdefault(row["user_id"], set()).add(row["channel"])
+        return out
+
+    def confirm_subscription(self, user_id: int, channel: str, address: str,
+                             ts: float) -> None:
+        """A confirmed address: the subscription made, or its address
+        replaced (its choice of alarms kept), and the code gone"""
+        with self._lock, self._conn:
+            self._conn.execute(
+                "INSERT INTO subscriptions (user_id, channel, address, "
+                "confirmed_at, enabled) VALUES (?, ?, ?, ?, 1) "
+                "ON CONFLICT(user_id, channel) DO UPDATE SET "
+                "address = excluded.address, "
+                "confirmed_at = excluded.confirmed_at, enabled = 1",
+                (user_id, channel, address, ts),
+            )
+            self._conn.execute(
+                "DELETE FROM subscription_codes WHERE user_id = ? "
+                "AND channel = ?", (user_id, channel),
+            )
+
+    def change_subscription(self, user_id: int, channel: str,
+                            **fields) -> bool:
+        """enabled (bool) and/or alarm_types (JSON text or None)"""
+        names = [n for n in ("enabled", "alarm_types") if n in fields]
+        if not names:
+            return False
+        with self._lock, self._conn:
+            cur = self._conn.execute(
+                "UPDATE subscriptions SET "
+                + ", ".join(f"{n} = ?" for n in names)
+                + " WHERE user_id = ? AND channel = ?",
+                [int(fields[n]) if n == "enabled" else fields[n]
+                 for n in names] + [user_id, channel],
+            )
+        return cur.rowcount > 0
+
+    def delete_subscription(self, user_id: int, channel: str | None = None) -> int:
+        """One channel's subscription and code, or all of an account's"""
+        where = "user_id = ?" + (" AND channel = ?" if channel else "")
+        args = (user_id, channel) if channel else (user_id,)
+        with self._lock, self._conn:
+            removed = self._conn.execute(
+                f"DELETE FROM subscriptions WHERE {where}", args
+            ).rowcount
+            removed += self._conn.execute(
+                f"DELETE FROM subscription_codes WHERE {where}", args
+            ).rowcount
+        return removed
+
+    def put_code(self, user_id: int, channel: str, address: str, secret: str,
+                 expires_at: float, lang: str, ts: float) -> None:
+        """A new code or link key: the one before it is gone"""
+        with self._lock, self._conn:
+            self._conn.execute(
+                "INSERT OR REPLACE INTO subscription_codes (user_id, channel, "
+                "address, secret, expires_at, attempts, lang, created_at, "
+                "refused) VALUES (?, ?, ?, ?, ?, 0, ?, ?, '')",
+                (user_id, channel, address, secret, expires_at, lang, ts),
+            )
+
+    def code_of(self, user_id: int, channel: str) -> dict | None:
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT * FROM subscription_codes WHERE user_id = ? "
+                "AND channel = ?", (user_id, channel),
+            ).fetchone()
+        return dict(row) if row else None
+
+    def code_by_secret(self, channel: str, secret: str) -> dict | None:
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT c.*, u.name FROM subscription_codes c "
+                "JOIN users u ON u.id = c.user_id "
+                "WHERE c.channel = ? AND c.secret = ?", (channel, secret),
+            ).fetchone()
+        return dict(row) if row else None
+
+    def code_failed(self, user_id: int, channel: str) -> int:
+        """One more wrong code; how many there have been"""
+        with self._lock, self._conn:
+            self._conn.execute(
+                "UPDATE subscription_codes SET attempts = attempts + 1 "
+                "WHERE user_id = ? AND channel = ?", (user_id, channel),
+            )
+            row = self._conn.execute(
+                "SELECT attempts FROM subscription_codes WHERE user_id = ? "
+                "AND channel = ?", (user_id, channel),
+            ).fetchone()
+        return row["attempts"] if row else 0
+
+    def drop_code(self, user_id: int, channel: str) -> None:
+        with self._lock, self._conn:
+            self._conn.execute(
+                "DELETE FROM subscription_codes WHERE user_id = ? "
+                "AND channel = ?", (user_id, channel),
+            )
+
+    def refuse_code(self, user_id: int, channel: str, why: str) -> None:
+        with self._lock, self._conn:
+            self._conn.execute(
+                "UPDATE subscription_codes SET refused = ? WHERE user_id = ? "
+                "AND channel = ?", (why, user_id, channel),
+            )
+
+    def waiting_links(self, now: float) -> list[dict]:
+        """Telegram links not used and not expired yet"""
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT * FROM subscription_codes WHERE channel = 'telegram' "
+                "AND expires_at > ?", (now,),
+            ).fetchall()
+        return [dict(row) for row in rows]
+
     # ---------- journal ----------
 
     def add_event(
@@ -1494,9 +1665,10 @@ class Database:
             row = self._account(name)
             self._keep_an_admin(row)
             closed = self._close_sessions(row["id"])
-            self._conn.execute(
-                "DELETE FROM passkeys WHERE user_id = ?", (row["id"],)
-            )
+            for table in ("passkeys", "subscriptions", "subscription_codes"):
+                self._conn.execute(
+                    f"DELETE FROM {table} WHERE user_id = ?", (row["id"],)
+                )
             self._conn.execute("DELETE FROM users WHERE id = ?", (row["id"],))
             return closed
 

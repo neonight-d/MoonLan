@@ -9,8 +9,10 @@ it is.
 
 Who gets an alarm (v0.8.4): on each channel set up on the server, the
 shared recipients (Settings → shared recipients) when the shared table
-sends that alarm type there — one message each, so nobody sees who else
-gets it and one refused address does not stop the rest.
+sends that alarm type there, and every confirmed, enabled personal
+subscription whose set of alarm types has it (moonlan/subscriptions.py).
+An address in both gets one message. Repeats and flapping are damped
+once, for everybody: a subscription does not get round them.
 
 Channel check from the command line:
 
@@ -103,6 +105,10 @@ class Notifier:
         self._cfg = config.notifications
         self._routing = config.alarm_notify
         self._demo = demo
+        # Personal subscriptions (v0.8.4): (channel, alarm type) ->
+        # [Recipient] — confirmed and enabled ones, of enabled accounts.
+        # server.py sets it; None — nobody's.
+        self.personal = None
         # (type, subject, cleared) -> unix time of the last delivery.
         # Raises and clears are throttled separately so a clear arriving
         # right after a raise is not swallowed by the cooldown.
@@ -121,14 +127,16 @@ class Notifier:
 
     def plan(self, alarm_type: str) -> dict[str, list[Recipient]]:
         """Who gets this alarm type, per channel set up on the server:
-        the shared recipients when the table sends it there. One message
-        per address."""
+        the shared recipients when the table sends it there, and the
+        personal subscriptions that chose it. One message per address."""
         routed = self._routing.get(alarm_type, [])
         out: dict[str, list[Recipient]] = {}
         for channel in ("email", "telegram", "syslog"):
             if not self.ready(channel):
                 continue
             recipients = self.shared(channel) if channel in routed else []
+            if channel != "syslog" and self.personal is not None:
+                recipients += self.personal(channel, alarm_type)
             seen: set[str] = set()
             unique = []
             for r in recipients:
@@ -160,7 +168,8 @@ class Notifier:
             if self._routing.get(alarm_type):
                 log.info("NOTIFY (demo): %s", text)
             return
-        plan = self.plan(alarm_type)
+        # the personal subscriptions are read from the database
+        plan = await asyncio.to_thread(self.plan, alarm_type)
         if not plan:
             return
         key = (alarm_type, subject, head or cleared)
