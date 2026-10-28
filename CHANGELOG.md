@@ -58,6 +58,10 @@ v0.8.3: it came from a library on cdnjs, which the page's
 Content-Security-Policy no longer runs. The page draws QR codes itself
 now, for TOTP and for the Telegram link.
 
+**A panel over an empty map.** "The map is empty" lay over every panel
+and took the clicks meant for the lower half of one — on the very map a
+new installation opens Settings on. The panels are above it now.
+
 ## v0.8.3 — 2026-10-27
 
 Names from the network as text, ports on an upright phone, an image on
