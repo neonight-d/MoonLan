@@ -24,7 +24,7 @@ import time
 import urllib.request
 from email.message import EmailMessage
 
-from .config import Config
+from .config import Config, NotificationsConfig
 
 log = logging.getLogger(__name__)
 
@@ -45,6 +45,27 @@ def format_text(
         head = "CLEARED" if cleared else severity.upper()
     text = f"[MoonLan] {head} {alarm_type}: {subject}"
     return f"{text} — {message}" if message else text
+
+
+def channel_state(cfg: NotificationsConfig) -> dict[str, dict]:
+    """Is each channel set up on the server, and if not, why not:
+    {"ready": True} or {"ready": False, "why": "off" | "no_server" |
+    "no_token"}. Nothing about how it is set up — the page is told
+    this and no more."""
+
+    def state(enabled: bool, configured: bool, missing: str) -> dict:
+        if not enabled:
+            return {"ready": False, "why": "off"}
+        if not configured:
+            return {"ready": False, "why": missing}
+        return {"ready": True}
+
+    return {
+        "email": state(cfg.email.enabled, bool(cfg.email.smtp_host), "no_server"),
+        "telegram": state(cfg.telegram.enabled, bool(cfg.telegram.bot_token),
+                          "no_token"),
+        "syslog": state(cfg.syslog.enabled, True, ""),
+    }
 
 
 class Notifier:
