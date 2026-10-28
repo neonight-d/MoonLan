@@ -12,7 +12,7 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from moonlan import access
+from moonlan import access, settings
 from moonlan.config import load_config
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -76,11 +76,24 @@ class ConfigurationKeysTest(unittest.TestCase):
         keys = [key for key, _, _ in cfg.report.values]
         self.assertGreater(len(keys), 50)
         text = (DOCS / "CONFIGURATION.md").read_text(encoding="utf-8")
-        missing = [key for key in keys if f"`{key}`" not in text]
+        # the keys that are Settings now (v0.8.4) in a section of their
+        # own, and nowhere in the tables of what config.yaml holds
+        head = "## In Settings since v0.8.4\n"
+        start = text.index(head)
+        moved = text[start:text.index("\n## ", start + len(head))]
+        rest = text[:start] + text[start + len(moved):]
+        missing = [
+            key for key in keys
+            if f"`{key}`" not in (moved if key in settings.MOVED_PATHS else rest)
+        ]
         self.assertEqual(
             missing, [],
             "config keys docs/CONFIGURATION.md does not describe",
         )
+        in_tables = [key for key in settings.MOVED_PATHS
+                     if f"| `{key}` |" in rest]
+        self.assertEqual(in_tables, [],
+                         "Settings still listed among config.yaml's keys")
 
 
 class LinksTest(unittest.TestCase):

@@ -13,6 +13,19 @@ A value is put onto the live `config` by changing the field in place.
 The alarm engine holds `config.thresholds` and `config.notifications`,
 the notifier `config.alarm_notify`: a new object in their place would
 not be seen by either.
+
+Moving from config.yaml (the rule runs at every start, for every key):
+
+    in the database   in config.yaml   what happens
+    yes               no               the database's value
+    yes               yes              the database's value; config.yaml's
+                                       is said to be unused
+    no                yes              moved into the database (journal:
+                                       "moved from config.yaml"), then the same
+    no                no               the default
+
+A value config.yaml has that is out of range is not moved: the log
+names the key and the default applies. The service starts either way.
 """
 
 from __future__ import annotations
@@ -20,8 +33,9 @@ from __future__ import annotations
 import copy
 import json
 import re
+import sqlite3
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from .config import DEFAULT_ALARM_NOTIFY, Config
 
@@ -365,6 +379,141 @@ def log_line(changes: list[dict]) -> str:
 
 
 # ---------- the database ----------
+
+def read_rows(path: str) -> dict[str, dict]:
+    """The settings table of a database file, opened read-only — for
+    diag and the console, which do not write the service's database.
+    {} when there is no file or no table yet."""
+    try:
+        conn = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
+    except sqlite3.Error:
+        return {}
+    try:
+        conn.row_factory = sqlite3.Row
+        return {
+            row["key"]: dict(row) for row in conn.execute(
+                "SELECT key, value, updated_at, updated_by FROM settings"
+            )
+        }
+    except sqlite3.Error:
+        return {}
+    finally:
+        conn.close()
+
+
+def stored(rows: dict[str, dict]) -> dict:
+    """{key: decoded value} of the settings table"""
+    out = {}
+    for key, row in rows.items():
+        try:
+            out[key] = json.loads(row["value"])
+        except (TypeError, ValueError):
+            continue
+    return out
+
+
+@dataclass
+class LoadReport:
+    """What the start did with config.yaml, for the log and diag"""
+
+    # moved into the database at this start
+    moved: list[str] = field(default_factory=list)
+    # in config.yaml, in Settings now: no longer read
+    unused: list[str] = field(default_factory=list)
+    # config.yaml values that could not be moved: (key, value, error)
+    invalid: list[tuple[str, object, dict]] = field(default_factory=list)
+    # database values a later version no longer accepts (default used)
+    stale: list[tuple[str, object, dict]] = field(default_factory=list)
+
+
+def overlay(cfg: Config, rows: dict[str, dict]) -> list[tuple[str, object, dict]]:
+    """The database's values onto cfg, read-only (diag). Returns the
+    stored values that are no longer valid; their default applies."""
+    stale = []
+    values = stored(rows)
+    for s in SETTINGS:
+        if s.key not in values:
+            apply(cfg, s.key, s.default())
+            continue
+        value, error = check(s, values[s.key])
+        if error:
+            stale.append((s.key, values[s.key], error))
+            apply(cfg, s.key, s.default())
+        else:
+            apply(cfg, s.key, value)
+    return stale
+
+
+def _in_yaml(cfg: Config) -> set[str]:
+    """Settings config.yaml has a value for"""
+    report = cfg.report
+    if report is None:
+        return set()
+    read = {key for key, _, source in report.values if source == "config.yaml"}
+    return {s.key for s in SETTINGS if read & set(yaml_paths(s.key))}
+
+
+def load(cfg: Config, db, now: float | None = None) -> LoadReport:
+    """At every start: the database's values onto cfg, config.yaml's
+    moved where the database has none (see the module's docstring)."""
+    now = time.time() if now is None else now
+    report = LoadReport()
+    in_yaml = _in_yaml(cfg)
+    rows = db.settings()
+    values = stored(rows)
+    to_store: dict = {}
+    for s in SETTINGS:
+        if s.key in values:
+            value, error = check(s, values[s.key])
+            if error:
+                report.stale.append((s.key, values[s.key], error))
+                value = s.default()
+            apply(cfg, s.key, value)
+            if s.key in in_yaml:
+                report.unused.append(s.key)
+            continue
+        if s.key not in in_yaml:
+            apply(cfg, s.key, s.default())
+            continue
+        # as the loader read it from the file
+        found = next(v for path, v, source in cfg.report.values
+                     if path == s.key and source == "config.yaml") \
+            if s.kind != "table" else None
+        if s.kind == "table":
+            # one bad alarm type keeps its default, the rest move
+            given = {
+                path.split(".", 1)[1]: v
+                for path, v, source in cfg.report.values
+                if source == "config.yaml" and path.startswith("alarm_notify.")
+            }
+            value, errors = check_table(given)
+            for where, error in errors.items():
+                report.invalid.append((where, given[where.split(".", 1)[1]],
+                                       error))
+        else:
+            value, error = check(s, found)
+            if error:
+                report.invalid.append((s.key, found, error))
+                apply(cfg, s.key, s.default())
+                continue
+        apply(cfg, s.key, value)
+        to_store[s.key] = value
+        report.moved.append(s.key)
+        report.unused.append(s.key)
+    if to_store:
+        db.save_settings(
+            {k: json.dumps(v) for k, v in to_store.items()}, now, "config.yaml"
+        )
+        db.add_event(
+            now, "settings_moved", "",
+            json.dumps({"changes": [
+                {"key": k, "to": (len(v) if k in PERSONAL else v),
+                 **({"count": True} if k in PERSONAL else {})}
+                for k, v in to_store.items()
+            ]}),
+        )
+    return report
+
 
 def save(cfg: Config, db, changes: dict, user: str,
          now: float | None = None):

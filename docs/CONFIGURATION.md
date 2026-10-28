@@ -81,27 +81,26 @@ Session lifetimes after signing in (v0.7.4). Sign-in itself is not a
 setting: it switches on when the first administrator is created on the
 server — see [SIGN-IN.md](SIGN-IN.md).
 
-### thresholds
-
-Port errors, discards and utilisation, the cycles an alarm needs to
-rise and clear, mass outages on one port, frame corruption, STP changes
-and flapping. Keep changes targeted: raising every threshold can hide a
-real fault.
-
 ### notifications
 
-Notification destinations and anti-spam timing. Supported channels are
-Email, Telegram and Syslog. Check them after configuring:
+How to reach the mail server, the Telegram bot and syslog. Who gets
+what — the shared recipients, which alarm types go to which channel —
+and the anti-spam timing are Settings now (below). Check the channels
+after configuring:
 
 ~~~bash
 python -m moonlan.notify --test
 ~~~
 
-### alarm_notify
+### Settings (since v0.8.4)
 
-Which alarm types go to which notification channels. An empty list
-silences the notifications of that type without disabling the alarm
-itself.
+What the map shows and how alarms rise — grouping thresholds, how long
+devices stay, the polling intervals, the alarm thresholds, the alarm →
+channel table and the shared recipients — is changed in the page: the
+Actions menu → Settings, by an administrator. The values are kept in
+the database. They are listed in [In Settings since
+v0.8.4](#in-settings-since-v084), with the rule for a `config.yaml`
+that still has them.
 
 ## Reference
 
@@ -133,34 +132,18 @@ fails on a key the loader knows and this page does not.
 | `snmp.dead_oid_strikes` | `3` | Walks in a row with no rows and a timeout, after which that OID is left alone on that host (0 — never). |
 | `snmp.dead_oid_cooldown_scans` | `30` | For how many scans; then it is tried again. |
 
-### Inventory and polling
+### Inventory
 
 | Key | Default | Meaning |
 |---|---|---|
 | `switches` | `[]` | Managed switches: addresses, or mappings with `ip:` and per-switch settings (see above). |
 | `routers` | `[]` | Devices with an ARP table — the source of host IPs. |
-| `scan_interval_minutes` | `10` | SNMP polling period (0 — only on request). |
-| `ping_interval_seconds` | `60` | Ping monitoring period. |
-| `counters_interval_seconds` | `60` | Port counters polling period. |
 | `db_path` | `moonlan.db` | SQLite file: hosts, journal, alarms, layout, accounts. |
 
 ### Map and inventory rules
 
 | Key | Default | Meaning |
 |---|---|---|
-| `unmanaged_threshold` | `3` | More hosts than this behind one port are drawn under a "switch without SNMP" node (0 — never). |
-| `monitored_by_default` | `false` | `true` raises host_down for every host, not only those marked "Monitor". |
-| `host_grace_hours` | `24` | How long a host stays on the map after its MAC left the switch tables. |
-| `host_retention_days` | `30` | Then it is deleted from the database. |
-| `offline_group_threshold` | `2` | Offline devices on one port hang off one "Offline · N" node (0 — never). |
-| `trunk_group_threshold` | `3` | Devices seen only through a trunk are drawn as one "Beyond the trunk · N" node (0 — never). |
-| `ip_confirm_hours` | `6` | A stale host whose IP ARP has not confirmed for this long gives the address up. |
-| `stale_rate_hide_minutes` | `30` | A measured rate is shown dimmed with its age up to this, then the cell empties. |
-| `layout_keep_days` | `90` | A saved position is forgotten only when it is both older than this and has no node on the map. |
-| `stale_switch_scans` | `5` | Scans in a row a switch may miss its budget before its card says so and switch_stale is raised. |
-| `new_host_confirm_scans` | `2` | Polls a new MAC must appear in before it becomes a device (an IP from ARP is enough). |
-| `filter_suspect_macs` | `true` | Keep damaged copies of a real address off the map (`false` — draw them). |
-| `place_trunk_only_hosts` | `true` | A MAC seen only on trunks is drawn on the trunk with the best claim, marked approximate. |
 | `known_bridges` | `[]` | Bridges supposed to be behind an access port (chassis id or management IP): named, never alarmed on. |
 | `uplink_ports` | `[]` | Ports that leave the network, as `"<switch ip>:<port name>"`: what is behind them is one "External network" node. |
 
@@ -194,30 +177,10 @@ fails on a key the loader knows and this page does not.
 |---|---|---|
 | `oui.path` | `""` | The folder with the IEEE register of MAC blocks, which names a device's maker; empty — `oui/` next to `db_path`. `python -m moonlan.oui update` fills it; on a machine without the internet, copy the four CSV files there by hand ([OPERATIONS.md](OPERATIONS.md#the-maker-of-a-device-ieee-register)). Read at startup. |
 
-### thresholds
-
-| Key | Default | Meaning |
-|---|---|---|
-| `thresholds.errors_per_minute` | `5` | port_errors: damaged frames only… |
-| `thresholds.error_ratio_percent` | `0.01` | …and at least this share of all frames. |
-| `thresholds.discards_per_minute` | `500` | port_discards (info, syslog only). |
-| `thresholds.port_utilization_percent` | `90` | port_util: % of the link speed (of the total, for a LAG). |
-| `thresholds.port_alarm_cycles` | `3` | Cycles over or under a threshold before a port alarm rises or clears. |
-| `thresholds.mass_down_hosts` | `3` | port_hosts_down: devices of one port gone silent in one ping cycle. |
-| `thresholds.corruption_hamming_bits` | `8` | How far a MAC may sit from a real one on the same port and still be its damaged copy. |
-| `thresholds.corruption_macs_threshold` | `5` | Copies on one port within the flap window → port_frame_corruption. |
-| `thresholds.stp_changes_per_cycle` | `3` | stp_topology_change: topology changes per scan on an operating switch. |
-| `thresholds.flaps_per_window` | `4` | port_flapping: link state transitions… |
-| `thresholds.flap_window_minutes` | `10` | …inside this window. |
-
 ### notifications
 
 | Key | Default | Meaning |
 |---|---|---|
-| `notifications.cooldown_seconds` | `300` | Anti-spam per (alarm type, subject). |
-| `notifications.flap_count` | `3` | This many raises of one subject… |
-| `notifications.flap_window_seconds` | `7200` | …within this window mute its notifications… |
-| `notifications.flap_quiet_seconds` | `3600` | …until it stays quiet for this long. |
 | `notifications.email.enabled` | `false` | Send email. |
 | `notifications.email.smtp_host` | `""` | SMTP server. |
 | `notifications.email.smtp_port` | `587` | Its port. |
@@ -225,17 +188,95 @@ fails on a key the loader knows and this page does not.
 | `notifications.email.username` | `""` | SMTP account. |
 | `notifications.email.password` | `""` | Its password — a secret. |
 | `notifications.email.mail_from` | `""` | Sender address. |
-| `notifications.email.mail_to` | `[]` | Recipients. |
 | `notifications.telegram.enabled` | `false` | Send to Telegram. |
 | `notifications.telegram.bot_token` | `""` | Bot API token from @BotFather — a secret. |
-| `notifications.telegram.chat_ids` | `[]` | Chats to send to. |
 | `notifications.syslog.enabled` | `false` | Send to syslog over UDP. |
 | `notifications.syslog.host` | `127.0.0.1` | Syslog server. |
 | `notifications.syslog.port` | `514` | Its port. |
 
-### alarm_notify
+## In Settings since v0.8.4
 
-The channels (`email`, `telegram`, `syslog`) each alarm type goes to.
+These keys were `config.yaml` keys until v0.8.3. They are changed in the
+page now — the Actions menu → Settings — kept in the database (`db_path`,
+in a container `/data`), and applied without a restart: each says when
+a change takes effect. Every role sees them; only an administrator
+changes them, and the shared recipients' addresses are shown to
+administrators only.
+
+At every start, for every key:
+
+| In the database | In config.yaml | What happens |
+|---|---|---|
+| yes | no | the database's value |
+| yes | yes | the database's value; the log says the key is not read and should be removed |
+| no | yes | the file's value is moved into the database (the journal says "moved from config.yaml"), then as above |
+| no | no | the default |
+
+A value in the file that is out of range is not moved: the log names
+the key and the default applies; the service starts anyway.
+`python -m moonlan.diag --config` lists every setting with its value,
+where it comes from and who changed it last, and the keys `config.yaml`
+still has that are no longer read. The ranges are checked in the page
+and by `PUT /api/settings` ([API.md](API.md#settings-v084)).
+
+### Map and inventory
+
+| Key | Default | Range | Takes effect | Meaning |
+|---|---|---|---|---|
+| `unmanaged_threshold` | `3` | 0…1000 | next scan | More hosts than this behind one port are drawn under a "switch without SNMP" node (0 — never). |
+| `offline_group_threshold` | `2` | 0…1000 | next scan | Offline devices on one port hang off one "Offline · N" node (0 — never). |
+| `trunk_group_threshold` | `3` | 0…1000 | next scan | Devices seen only through a trunk are drawn as one "Beyond the trunk · N" node (0 — never). |
+| `host_grace_hours` | `24` | 0…8760 | next scan | How long a host stays on the map after its MAC left the switch tables. |
+| `host_retention_days` | `30` | 0…3650 | next cleanup (at the start, then daily) | Then it is deleted from the database. |
+| `layout_keep_days` | `90` | 1…3650 | next cleanup (at the start, then daily) | A saved position is forgotten only when it is both older than this and has no node on the map. |
+| `ip_confirm_hours` | `6` | 0…720 | next scan | A stale host whose IP ARP has not confirmed for this long gives the address up. |
+| `new_host_confirm_scans` | `2` | 1…20 | next scan | Polls a new MAC must appear in before it becomes a device (an IP from ARP is enough). |
+| `stale_rate_hide_minutes` | `30` | 1…1440 | at once | A measured rate is shown dimmed with its age up to this, then the cell empties. |
+| `stale_switch_scans` | `5` | 1…100 | next scan | Scans in a row a switch may miss its budget before its card says so and switch_stale is raised. |
+| `monitored_by_default` | `false` | true / false | at once | `true` raises host_down for every host, not only those marked "Monitor". |
+| `filter_suspect_macs` | `true` | true / false | next scan | Keep damaged copies of a real address off the map (`false` — draw them). |
+| `place_trunk_only_hosts` | `true` | true / false | next scan | A MAC seen only on trunks is drawn on the trunk with the best claim, marked approximate. |
+
+### Polling
+
+| Key | Default | Range | Takes effect | Meaning |
+|---|---|---|---|---|
+| `scan_interval_minutes` | `10` | 0…1440 | at once | SNMP polling period (0 — only on request). |
+| `ping_interval_seconds` | `60` | 5…3600 | at once | Ping monitoring period. |
+| `counters_interval_seconds` | `60` | 5…3600 | at once | Port counters polling period. |
+
+### Alarm thresholds
+
+| Key | Default | Range | Takes effect | Meaning |
+|---|---|---|---|---|
+| `thresholds.errors_per_minute` | `5` | 0…1000000 | next ping or counters cycle | port_errors: damaged frames only… |
+| `thresholds.error_ratio_percent` | `0.01` | 0…100 | next ping or counters cycle | …and at least this share of all frames. |
+| `thresholds.discards_per_minute` | `500` | 0…10000000 | next ping or counters cycle | port_discards (info, syslog only). |
+| `thresholds.port_utilization_percent` | `90` | 1…100 | next ping or counters cycle | port_util: % of the link speed (of the total, for a LAG). |
+| `thresholds.port_alarm_cycles` | `3` | 1…100 | next ping or counters cycle | Cycles over or under a threshold before a port alarm rises or clears. |
+| `thresholds.mass_down_hosts` | `3` | 0…1000 | next ping or counters cycle | port_hosts_down: devices of one port gone silent in one ping cycle. |
+| `thresholds.corruption_hamming_bits` | `8` | 1…24 | next scan | How far a MAC may sit from a real one on the same port and still be its damaged copy. |
+| `thresholds.corruption_macs_threshold` | `5` | 1…1000 | next scan | Copies on one port within the flap window → port_frame_corruption. |
+| `thresholds.stp_changes_per_cycle` | `3` | 0…10000 | next scan | stp_topology_change: topology changes per scan on an operating switch. |
+| `thresholds.flaps_per_window` | `4` | 0…1000 | next ping or counters cycle | port_flapping: link state transitions… |
+| `thresholds.flap_window_minutes` | `10` | 1…1440 | next ping or counters cycle | …inside this window. |
+
+### Alarms and channels
+
+Repeats and flapping are damped once for every recipient, shared or personal.
+
+| Key | Default | Range | Takes effect | Meaning |
+|---|---|---|---|---|
+| `notifications.cooldown_seconds` | `300` | 0…86400 | at once | Anti-spam per (alarm type, subject). |
+| `notifications.flap_count` | `3` | 0…100 | at once | This many raises of one subject… |
+| `notifications.flap_window_seconds` | `7200` | 60…604800 | at once | …within this window mute its notifications… |
+| `notifications.flap_quiet_seconds` | `3600` | 60…604800 | at once | …until it stays quiet for this long. |
+
+`alarm_notify` — the channels (`email`, `telegram`, `syslog`) each alarm
+type goes to; takes effect at once. A channel not set up in `config.yaml`
+sends nothing whatever the table says. An empty list silences that
+type's notifications without disabling the alarm itself. Personal
+subscriptions follow this table until their owner chooses otherwise.
 
 | Key | Default |
 |---|---|
@@ -256,8 +297,15 @@ The channels (`email`, `telegram`, `syslog`) each alarm type goes to.
 | `alarm_notify.port_flapping` | telegram, syslog |
 | `alarm_notify.loop_detected` | email, telegram, syslog |
 | `alarm_notify.loop_detection_disabled` | syslog |
-| `alarm_notify.tls_cert_expiring` | syslog, telegram |
+| `alarm_notify.tls_cert_expiring` | telegram, syslog |
 | `alarm_notify.passkey_clone_suspected` | email, telegram, syslog |
+
+### Shared recipients
+
+| Key | Default | Range | Takes effect | Meaning |
+|---|---|---|---|---|
+| `notifications.email.mail_to` | `[]` | up to 50 addresses | at once | Email addresses that get every alarm type the table sends to email. Shown to administrators only. |
+| `notifications.telegram.chat_ids` | `[]` | up to 50 chats | at once | Telegram chats — a number (negative for a group) or `@channel` — that get every alarm type the table sends to Telegram. Shown to administrators only. |
 
 ## Notes on particular settings
 

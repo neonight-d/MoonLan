@@ -57,7 +57,9 @@ import urllib.request
 from collections import Counter
 from pathlib import Path
 
-from . import counters, https, loopdetect, oui, passkeys, pinger, probes, stp
+from . import (
+    counters, https, loopdetect, oui, passkeys, pinger, probes, settings, stp,
+)
 from .anonymize import Anonymizer, AnonymizingWriter
 from .config import (
     SECRET_KEYS,
@@ -949,7 +951,7 @@ def _mask(key: str, value) -> str:
     return str(value)
 
 
-def run_config_audit(cfg) -> None:
+def run_config_audit(cfg, settings_rows: dict | None = None) -> None:
     """Section 11: the effective configuration and where it came from.
 
     A config.yaml written for an older version keeps overriding
@@ -965,13 +967,16 @@ def run_config_audit(cfg) -> None:
         f"config.yaml: {report.path}"
         + ("" if report.exists else "  (not found — every setting is a default)")
     )
+    # the keys that are Settings now have a section of their own below
+    values = [v for v in report.values if v[0] not in settings.MOVED_PATHS]
     print(f"\n{'setting':<42} {'value':<28} source")
-    for key, value, source in report.values:
+    for key, value, source in values:
         print(f"{key:<42} {_mask(key, value):<28} {source}")
 
     print(
-        f"\nfrom config.yaml: {len(report.overrides)}, "
-        f"defaults: {len(report.defaults)}"
+        f"\nfrom config.yaml: "
+        f"{sum(1 for v in values if v[2] == 'config.yaml')}, "
+        f"defaults: {sum(1 for v in values if v[2] == 'default')}"
     )
 
     print("\nkeys in config.yaml MoonLan does not know (ignored):")
@@ -983,7 +988,7 @@ def run_config_audit(cfg) -> None:
         print("  none")
 
     print("\nkeys missing from config.yaml (defaults apply):")
-    missing = report.defaults if report.exists else []
+    missing = [v for v in values if v[2] == "default"] if report.exists else []
     if missing:
         for key, value, _ in missing:
             print(f"  {key} = {_mask(key, value)}")
@@ -1010,6 +1015,7 @@ def run_config_audit(cfg) -> None:
         for problem in report.problems:
             print(f"  {problem}")
 
+    _print_settings(cfg, settings_rows or {})
     _print_node_menu(cfg)
     _print_oui(cfg)
     _print_https(cfg)
@@ -1031,17 +1037,63 @@ def run_config_audit(cfg) -> None:
     )
     print(header)
     for ip in cfg.switches:
-        settings = cfg.host_snmp(ip)
+        polled = cfg.host_snmp(ip)
         cells = []
         for name in columns:
-            value = getattr(settings, name)
+            value = getattr(polled, name)
             if name in SECRET_KEYS:
                 value = _mask(name, value)
-            mark = "*" if name in settings.explicit else " "
+            mark = "*" if name in polled.explicit else " "
             cells.append(f"{str(value) + mark:>21}")
         print(f"  {ip:<18}" + "".join(cells))
 
     _print_poll_times(cfg)
+
+
+def _setting_value(entry_key: str, value) -> str:
+    if entry_key in settings.PERSONAL:
+        return f"{len(value)} address(es)"
+    if entry_key == "alarm_notify":
+        changed = [t for t, ch in value.items()
+                   if ch != settings.BY_KEY["alarm_notify"].default().get(t)]
+        return f"{len(changed)} type(s) not as by default" if changed else "as by default"
+    if isinstance(value, float):
+        return f"{value:g}"
+    return str(value)
+
+
+def _print_settings(cfg, rows: dict) -> None:
+    """Part of `--config` (v0.8.4): the settings changed from the page —
+    each with its value, where it comes from, who changed it and when —
+    and the keys config.yaml still has that nothing reads any more."""
+    print("\nSettings (the Actions menu → Settings; kept in the database):")
+    if cfg.demo:
+        answer = _ask_service(cfg, "/api/settings")
+        if answer is None:
+            print("  demo mode: the settings live in the running demo's memory")
+            return
+        rows = {
+            e["key"]: {"updated_at": e["updated_at"],
+                       "updated_by": e["updated_by"]}
+            for e in answer["settings"] if e["source"] == "database"
+        }
+    print(f"  {'setting':<42} {'value':<24} {'source':<9} changed")
+    for s in settings.SETTINGS:
+        row = rows.get(s.key)
+        changed = ""
+        if row:
+            when = time.strftime("%Y-%m-%d %H:%M",
+                                 time.localtime(row["updated_at"] or 0))
+            changed = f"{when} by {row['updated_by'] or '(sign-in off)'}"
+        print(f"  {s.key:<42} "
+              f"{_setting_value(s.key, settings.current(cfg, s.key)):<24} "
+              f"{'database' if row else 'default':<9} {changed}")
+    unused = sorted({
+        settings.setting_of(key) for key, _, source in cfg.report.values
+        if source == "config.yaml" and key in settings.MOVED_PATHS
+    })
+    print("\nkeys in config.yaml that are Settings now (not read — remove them):")
+    print("  " + (", ".join(unused) if unused else "none"))
 
 
 def _print_node_menu(cfg) -> None:
@@ -2379,6 +2431,10 @@ def main() -> None:
             "--config is given"
         )
     cfg = load_config()
+    # Settings (v0.8.4) are in the database: every section below sees
+    # the values the service runs with, not the ones config.yaml once had
+    settings_rows = {} if cfg.demo else settings.read_rows(cfg.db_path)
+    settings.overlay(cfg, settings_rows)
     community = args.community or cfg.snmp.community
     timeout = args.timeout or cfg.snmp.timeout
     _SNMP["retries"] = cfg.snmp.retries
@@ -2392,7 +2448,7 @@ def main() -> None:
         # somebody adds is then clean without being told to be.
         sys.stdout = AnonymizingWriter(sys.stdout, _ANON)
     if args.config:
-        run_config_audit(cfg)
+        run_config_audit(cfg, settings_rows)
     elif args.oui:
         run_oui_lookup(args.oui, cfg)
     elif args.skipped:

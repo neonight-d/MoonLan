@@ -68,6 +68,10 @@ CERT_CHECK_SECONDS = 86400
 vendors = oui.Registry.load(config.oui_folder())
 # In demo mode the DB lives in memory so the real one is not polluted
 db = Database(":memory:" if config.demo else config.db_path)
+# Settings (v0.8.4): the database's values onto the config, and
+# config.yaml's moved into the database where it has none. Before
+# anything below reads the config; said in the log at startup.
+settings_loaded = settings.load(config, db)
 # Accounts and sessions: the same database — except in demo mode, where
 # they need a file python -m moonlan.users can reach (see
 # Config.users_db_path)
@@ -2017,9 +2021,11 @@ def _log_config() -> None:
         else "in memory (demo mode)",
         "" if not config.demo else "  — the real inventory is not touched",
     )
+    # the keys that are Settings now are counted there, not here
+    read = [v for v in report.values if v[0] not in settings.MOVED_PATHS]
     summary = (
-        f"Config: {len(report.overrides)} from {report.path}, "
-        f"{len(report.defaults)} defaults"
+        f"Config: {sum(1 for v in read if v[2] == 'config.yaml')} from "
+        f"{report.path}, {sum(1 for v in read if v[2] == 'default')} defaults"
     )
     if report.unknown:
         log.warning(
@@ -2033,6 +2039,7 @@ def _log_config() -> None:
         log.warning("config.yaml switches: %s", problem)
     for problem in report.menu_problems:
         log.warning("config.yaml context_menu: %s", problem)
+    _log_settings()
     _log_public_url()
     passkeys.log_state(public_url)
     oui.log_state(vendors)
@@ -2079,6 +2086,56 @@ def _log_config() -> None:
                 + ")"
                 for ip in custom
             ),
+        )
+
+
+def _setting_problem(error: dict) -> str:
+    """An error of settings.check() in words, for the log"""
+    code = error.get("code")
+    if code == "range":
+        return f"out of range {error['min']}…{error['max']}"
+    if code == "type":
+        return f"not a {error['kind']}"
+    if code in ("email", "chat_id"):
+        return f"{error['value']!r} is not an address"
+    if code == "channel":
+        return f"no channel {error['value']!r} (email, telegram, syslog)"
+    if code == "too_many":
+        return f"more than {error['max']} addresses"
+    return code or "not valid"
+
+
+def _log_settings() -> None:
+    """What the start did with the settings config.yaml still has
+    (v0.8.4): moved into the database, or no longer read."""
+    loaded = settings_loaded
+    counts = Counter(
+        "database" if key in db.settings() else "default"
+        for key in settings.BY_KEY
+    )
+    log.info(
+        "Settings: %d changed (in the database), %d defaults — the Actions "
+        "menu → Settings", counts["database"], counts["default"],
+    )
+    if loaded.moved:
+        log.info(
+            "Settings: moved from config.yaml into the database: %s",
+            ", ".join(loaded.moved),
+        )
+    for key, value, error in loaded.invalid:
+        log.error(
+            "config.yaml %s = %s: %s — not moved into Settings; the default "
+            "applies", key, value, _setting_problem(error),
+        )
+    for key, value, error in loaded.stale:
+        log.error(
+            "Setting %s = %s in the database: %s — the default applies; set "
+            "it again in Settings", key, value, _setting_problem(error),
+        )
+    if loaded.unused:
+        log.warning(
+            "In Settings now, so config.yaml's values are not used — remove "
+            "them from config.yaml: %s", ", ".join(loaded.unused),
         )
 
 
