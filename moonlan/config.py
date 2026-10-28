@@ -203,7 +203,7 @@ DEFAULT_ALARM_NOTIFY: dict[str, list[str]] = {
     # …and its silent disappearance is worth a line in the log
     "loop_detection_disabled": ["syslog"],
     # The certificate MoonLan serves runs out within two weeks
-    "tls_cert_expiring": ["syslog", "telegram"],
+    "tls_cert_expiring": ["telegram", "syslog"],
     # A key's signature counter went back: somebody may hold a copy
     "passkey_clone_suspected": ["email", "telegram", "syslog"],
 }

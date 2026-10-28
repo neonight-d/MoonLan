@@ -200,6 +200,16 @@ CREATE TABLE IF NOT EXISTS notes (
     missing_scans INTEGER DEFAULT 0,
     seen_at       REAL DEFAULT NULL
 );
+-- Settings changed from the page (v0.8.4): what the map shows and how
+-- alarms rise. No row — the default (moonlan/settings.py); the value
+-- is JSON. updated_by is the account, or "config.yaml" for a value
+-- moved from the file at a start.
+CREATE TABLE IF NOT EXISTS settings (
+    key        TEXT PRIMARY KEY,
+    value      TEXT,
+    updated_at REAL,
+    updated_by TEXT
+);
 """
 
 
@@ -1188,6 +1198,34 @@ class Database:
             self._conn.execute(
                 "UPDATE hosts SET last_ping_ok = ? WHERE ping_up = 1", (ts,)
             )
+
+    # ---------- settings (v0.8.4) ----------
+
+    def settings(self) -> dict[str, dict]:
+        """key -> {value (JSON), updated_at, updated_by}"""
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT key, value, updated_at, updated_by FROM settings"
+            ).fetchall()
+        return {row["key"]: dict(row) for row in rows}
+
+    def save_settings(self, values: dict[str, str], ts: float,
+                      user: str) -> None:
+        """Several settings in one transaction: all of them or none"""
+        with self._lock, self._conn:
+            self._conn.executemany(
+                "INSERT INTO settings (key, value, updated_at, updated_by) "
+                "VALUES (?, ?, ?, ?) ON CONFLICT(key) DO UPDATE SET "
+                "value = excluded.value, updated_at = excluded.updated_at, "
+                "updated_by = excluded.updated_by",
+                [(key, value, ts, user) for key, value in values.items()],
+            )
+
+    def delete_setting(self, key: str) -> bool:
+        with self._lock, self._conn:
+            cur = self._conn.execute("DELETE FROM settings WHERE key = ?",
+                                     (key,))
+        return cur.rowcount > 0
 
     # ---------- journal ----------
 

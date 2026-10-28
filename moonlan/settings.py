@@ -8,11 +8,19 @@ listen, what to poll and with which community, how to reach the mail
 server and the bot. Everything here is described once, in SETTINGS —
 its type, its range, its section on the page, when a change takes
 effect — and its default is the field of `Config`, never a copy.
+
+A value is put onto the live `config` by changing the field in place.
+The alarm engine holds `config.thresholds` and `config.notifications`,
+the notifier `config.alarm_notify`: a new object in their place would
+not be seen by either.
 """
 
 from __future__ import annotations
 
 import copy
+import json
+import re
+import time
 from dataclasses import dataclass
 
 from .config import DEFAULT_ALARM_NOTIFY, Config
@@ -27,6 +35,17 @@ SECTIONS = ("map", "polling", "thresholds", "channels", "recipients")
 APPLIES = ("now", "next_scan", "next_cycle", "next_cleanup")
 
 CHANNELS = ("email", "telegram", "syslog")
+
+# A list longer than this is a mistake, not a mailing list
+LIST_MAX = 50
+
+# Loose on purpose: user@localhost is a working address on a server
+# with its own mail system, and the mail server is the judge of the
+# rest. What is refused is what cannot be one address at all.
+EMAIL = re.compile(r"^[^@\s<>,;\"']+@[^@\s<>,;\"']+$")
+# A chat id is a number (negative for a group), or @name for a channel
+CHAT_ID = re.compile(r"^(-?\d{1,20}|@[A-Za-z0-9_]{4,32})$")
+
 
 @dataclass(frozen=True)
 class Setting:
@@ -172,3 +191,221 @@ def _get(obj, key: str):
     for part in key.split("."):
         obj = getattr(obj, part)
     return obj
+
+
+def current(cfg: Config, key: str):
+    return copy.deepcopy(_get(cfg, key))
+
+
+def apply(cfg: Config, key: str, value) -> None:
+    """Puts a checked value onto the live config — the field changed in
+    place, on the object everybody already holds."""
+    if key == "alarm_notify":
+        # item by item, never cleared first: a notification sent from
+        # another thread meanwhile finds every type in its place
+        for alarm_type, channels in value.items():
+            cfg.alarm_notify[alarm_type] = list(channels)
+        return
+    head, _, name = key.rpartition(".")
+    owner = _get(cfg, head) if head else cfg
+    setattr(owner, name, copy.deepcopy(value))
+
+
+def _number(setting: Setting, value):
+    """(value, error): a number of the setting's kind, in its range"""
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None, {"code": "type", "kind": setting.kind}
+    if setting.kind == "int":
+        if isinstance(value, float):
+            if not value.is_integer():
+                return None, {"code": "type", "kind": "int"}
+            value = int(value)
+    else:
+        value = float(value)
+    if not (setting.minimum <= value <= setting.maximum):
+        return None, {"code": "range", "min": _plain(setting.minimum),
+                      "max": _plain(setting.maximum)}
+    return value, None
+
+
+def _plain(number):
+    """3.0 -> 3: a range the page shows as people write it"""
+    return int(number) if float(number).is_integer() else number
+
+
+def _list(setting: Setting, value):
+    if not isinstance(value, list) or not all(
+        isinstance(v, (str, int)) and not isinstance(v, bool) for v in value
+    ):
+        return None, {"code": "type", "kind": "list"}
+    items: list[str] = []
+    pattern = EMAIL if setting.item == "email" else CHAT_ID
+    for raw in value:
+        item = str(raw).strip()
+        if setting.item == "email":
+            item = item.lower()
+        if not pattern.match(item):
+            return None, {"code": setting.item, "value": item}
+        if item not in items:
+            items.append(item)
+    if len(items) > LIST_MAX:
+        return None, {"code": "too_many", "max": LIST_MAX}
+    return items, None
+
+
+def check_table(value, base: dict | None = None):
+    """(table, errors): alarm type -> channels, every type present.
+
+    A partial table changes the types it names and keeps the rest from
+    `base`. Errors are per type, keyed "alarm_notify.<type>"."""
+    table = copy.deepcopy(base if base is not None else DEFAULT_ALARM_NOTIFY)
+    if not isinstance(value, dict):
+        return None, {"alarm_notify": {"code": "type", "kind": "table"}}
+    errors: dict[str, dict] = {}
+    for alarm_type, channels in value.items():
+        where = f"alarm_notify.{alarm_type}"
+        if alarm_type not in DEFAULT_ALARM_NOTIFY:
+            errors[where] = {"code": "alarm_type", "value": str(alarm_type)}
+            continue
+        if not isinstance(channels, list):
+            errors[where] = {"code": "type", "kind": "list"}
+            continue
+        wrong = [c for c in channels if c not in CHANNELS]
+        if wrong:
+            errors[where] = {"code": "channel", "value": str(wrong[0])}
+            continue
+        table[alarm_type] = [c for c in CHANNELS if c in channels]
+    return table, errors
+
+
+def check(setting: Setting, value, cfg: Config | None = None):
+    """(normalized value, error or None) for one setting"""
+    if setting.kind in ("int", "float"):
+        return _number(setting, value)
+    if setting.kind == "bool":
+        if not isinstance(value, bool):
+            return None, {"code": "type", "kind": "bool"}
+        return value, None
+    if setting.kind == "list":
+        return _list(setting, value)
+    table, errors = check_table(
+        value, cfg.alarm_notify if cfg is not None else None
+    )
+    if errors:
+        where, error = next(iter(errors.items()))
+        return None, {**error, "where": where}
+    return table, None
+
+
+def validate(cfg: Config, changes: dict):
+    """({key: normalized}, {key: error}): everything checked, nothing
+    applied. An unknown key is an error, not something to skip."""
+    if not isinstance(changes, dict):
+        return {}, {"": {"code": "type", "kind": "object"}}
+    good: dict = {}
+    errors: dict[str, dict] = {}
+    for key, value in changes.items():
+        setting = BY_KEY.get(key)
+        if setting is None:
+            errors[key] = {"code": "unknown"}
+            continue
+        normalized, error = check(setting, value, cfg)
+        if error:
+            errors[key] = error
+        else:
+            good[key] = normalized
+    return good, errors
+
+
+# ---------- what the page and diag are told ----------
+
+def setting_of(path: str) -> str:
+    """The setting a journal change belongs to: "alarm_notify.host_down"
+    is the table's"""
+    return "alarm_notify" if path.startswith("alarm_notify.") else path
+
+
+def changes_between(key: str, before, after) -> list[dict]:
+    """What the journal and the log say about one key: the table per
+    alarm type, a list of people's addresses by its length only — the
+    journal is for every viewer."""
+    if key == "alarm_notify":
+        return [
+            {"key": f"alarm_notify.{t}", "from": before.get(t, []),
+             "to": after.get(t, [])}
+            for t in DEFAULT_ALARM_NOTIFY
+            if before.get(t, []) != after.get(t, [])
+        ]
+    if before == after:
+        return []
+    if key in PERSONAL:
+        return [{"key": key, "from": len(before), "to": len(after),
+                 "count": True}]
+    return [{"key": key, "from": before, "to": after}]
+
+
+def log_line(changes: list[dict]) -> str:
+    """offline_group_threshold 2 → 3, alarm_notify.port_util [syslog] →
+    [telegram, syslog], notifications.email.mail_to 2 → 3 addresses"""
+
+    def word(value, count=False):
+        if count:
+            return f"{value} address(es)"
+        if isinstance(value, list):
+            return "[" + ", ".join(value) + "]"
+        if isinstance(value, bool):
+            return "on" if value else "off"
+        return f"{value:g}" if isinstance(value, float) else str(value)
+
+    return ", ".join(
+        f"{c['key']} {word(c['from'], c.get('count'))} → "
+        f"{word(c['to'], c.get('count'))}"
+        for c in changes
+    )
+
+
+# ---------- the database ----------
+
+def save(cfg: Config, db, changes: dict, user: str,
+         now: float | None = None):
+    """A change from the page: everything checked, then everything
+    written and applied, or nothing. Returns (changes for the journal,
+    errors); one journal entry per save."""
+    now = time.time() if now is None else now
+    good, errors = validate(cfg, changes)
+    if errors:
+        return [], errors
+    diff: list[dict] = []
+    to_store: dict[str, str] = {}
+    for key, value in good.items():
+        before = current(cfg, key)
+        said = changes_between(key, before, value)
+        if not said:
+            continue
+        diff += said
+        to_store[key] = json.dumps(value)
+    if not to_store:
+        return [], {}
+    db.save_settings(to_store, now, user)
+    for key in to_store:
+        apply(cfg, key, good[key])
+    db.add_event(now, "settings_changed", "", json.dumps({"changes": diff}),
+                 user)
+    return diff, {}
+
+
+def reset(cfg: Config, db, key: str, user: str, now: float | None = None):
+    """Back to the default: the row goes, the default applies. Returns
+    the journal's changes ([] when it was the default already)."""
+    now = time.time() if now is None else now
+    s = BY_KEY[key]
+    before = current(cfg, key)
+    db.delete_setting(key)
+    apply(cfg, key, s.default())
+    diff = changes_between(key, before, s.default())
+    if diff:
+        for change in diff:
+            change["reset"] = True
+        db.add_event(now, "settings_changed", "",
+                     json.dumps({"changes": diff}), user)
+    return diff

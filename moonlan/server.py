@@ -20,7 +20,7 @@ from pydantic import BaseModel
 
 from . import (
     __version__, about, corruption, counters, demo, https, loopdetect, menu,
-    notes, oui, passkeys, pinger, probes, signin, stp,
+    notes, oui, passkeys, pinger, probes, settings, signin, stp,
 )
 from .alarms import AlarmEngine
 from .config import Config, load_config, parse_uplink_ports
@@ -766,7 +766,9 @@ async def _purge_layout_once() -> None:
     """Forgets positions of nodes that are both old and gone.
 
     Runs after the first scan of this process, because that is the
-    first moment anything knows which nodes exist. A device switched
+    first moment anything knows which nodes exist — and once a day
+    after it (periodic_cleanup), so a layout_keep_days changed in
+    Settings holds without a restart. A device switched
     off for the night keeps its place however long the night is; only
     age decides, and only for something the map no longer has. The
     same scan says what each node hangs off, so an offset recorded
@@ -776,6 +778,10 @@ async def _purge_layout_once() -> None:
     if layout_purged:
         return
     layout_purged = True
+    await purge_layout()
+
+
+async def purge_layout() -> None:
     gone = await asyncio.to_thread(
         db.purge_layout, config.layout_keep_days, _layout_node_ids()
     )
@@ -1479,6 +1485,43 @@ async def resolve_names() -> None:
         log.info("Reverse DNS: got %d names out of %d", resolved, len(candidates))
 
 
+# A loop's sleep, cut short when its interval is changed in Settings
+# (v0.8.4): without it a new interval held only after the sleep in
+# progress — up to ten minutes for the scan.
+interval_changed = {
+    key: asyncio.Event() for key in settings.INTERVALS
+}
+
+
+async def sleep_interval(key: str, seconds) -> None:
+    """Sleeps until the next run is due: `seconds()` after the sleep
+    began. A changed interval wakes it, and the due time is counted
+    again from the same start — a shorter one may be due at once.
+    `seconds()` None — only on request: until the interval changes."""
+    began = time.monotonic()
+    changed = interval_changed[key]
+    while True:
+        changed.clear()
+        interval = seconds()
+        if interval is None:
+            await changed.wait()
+            continue
+        left = began + interval - time.monotonic()
+        if left <= 0:
+            return
+        try:
+            await asyncio.wait_for(changed.wait(), left)
+        except asyncio.TimeoutError:
+            return
+
+
+def _scan_seconds() -> float | None:
+    # 0 — only on request (the Actions menu, /api/scan), as documented;
+    # before v0.8.4 it meant once an hour
+    interval = config.scan_interval_minutes
+    return interval * 60 if interval > 0 else None
+
+
 async def periodic_scan() -> None:
     while True:
         try:
@@ -1489,8 +1532,7 @@ async def periodic_scan() -> None:
             # failed, and with what
             state.scan_failed(exc)
             log.exception("Network scan failed")
-        interval = config.scan_interval_minutes
-        await asyncio.sleep(interval * 60 if interval > 0 else 3600)
+        await sleep_interval("scan_interval_minutes", _scan_seconds)
 
 
 async def run_ping() -> None:
@@ -1540,7 +1582,9 @@ async def periodic_ping() -> None:
             await run_ping()
         except Exception:
             log.exception("Ping monitoring failed")
-        await asyncio.sleep(max(config.ping_interval_seconds, 1))
+        await sleep_interval(
+            "ping_interval_seconds", lambda: max(config.ping_interval_seconds, 1)
+        )
 
 
 def _lag_groups(sw: SwitchData) -> dict[int, list[int]]:
@@ -1787,7 +1831,10 @@ async def periodic_counters() -> None:
             await run_counters()
         except Exception:
             log.exception("Counter polling failed")
-        await asyncio.sleep(max(config.counters_interval_seconds, 5))
+        await sleep_interval(
+            "counters_interval_seconds",
+            lambda: max(config.counters_interval_seconds, 5),
+        )
 
 
 def resource_usage() -> tuple[int, int]:
@@ -1803,6 +1850,27 @@ def resource_usage() -> tuple[int, int]:
 
 
 RESOURCE_LOG_SECONDS = 600
+
+
+# The cleanup: hosts past host_retention_days and saved positions past
+# layout_keep_days. At the start, and once a day after it (v0.8.4):
+# before, only a restart applied a changed retention.
+CLEANUP_SECONDS = 86400
+
+
+async def periodic_cleanup() -> None:
+    while True:
+        await asyncio.sleep(CLEANUP_SECONDS)
+        try:
+            await purge_old_hosts()
+            await alarm_engine.clear_missing_hosts(
+                set(await asyncio.to_thread(db.hosts_by_mac))
+            )
+            if layout_purged:
+                # the map exists: a scan has run since the start
+                await purge_layout()
+        except Exception:
+            log.exception("Cleanup failed")
 
 
 async def periodic_resource_log() -> None:
@@ -2273,6 +2341,7 @@ async def lifespan(app: FastAPI):
         asyncio.create_task(periodic_counters()),
         asyncio.create_task(periodic_resource_log()),
         asyncio.create_task(periodic_certificate_check()),
+        asyncio.create_task(periodic_cleanup()),
     ]
     yield
     for task in tasks:
