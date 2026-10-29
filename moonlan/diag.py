@@ -68,7 +68,9 @@ from .config import (
     parse_uplink_ports,
 )
 from .snmpval import as_octets, is_octets
-from .corruption import find_suspects, sample_mac
+from .corruption import (
+    candidates, find_suspects, sample_mac, samples_by_switch,
+)
 from .counters import CounterStore, Sample
 from .topology import (
     detect_bridges,
@@ -1588,26 +1590,31 @@ def _corruption_section(
 ) -> None:
     """The distorted copies in this MAC table, grouped by port.
 
-    The database says which addresses are real (confirmed, or holding
-    an IP); everything else on the same port is measured against them.
+    The same rules as the service (v0.8.5): an address the database
+    has not accepted, measured against the ones it has accepted on
+    this switch — on any port, and for the grace window after they
+    were last seen there.
     """
     print("\nsuspected corrupted MACs:")
     db_rows = {r["mac"]: r for r in _db_snapshot(cfg.db_path) or []}
     hosts: list[dict] = []
-    pending: set[str] = set()
     for row in rows:
         if row["reason"]:
             continue
         if_index = port_to_ifindex.get(row["bridge_port"])
         port = names.get(if_index, str(row["bridge_port"]))
         hosts.append({"mac": row["mac"], "switch": host, "port": port})
-        record = db_rows.get(row["mac"])
-        if record is None or (
-            not record.get("confirmed") and not record["ip"]
-        ):
-            pending.add(row["mac"])
+    # what the database places on this switch, and nothing else: the
+    # table also holds the rest of the network on its uplinks, and a
+    # sample from there is not one the damaged frames came in with
+    samples = samples_by_switch(
+        [], db_rows, None, cfg.host_grace_hours * 3600, time.time()
+    )
     suspects = find_suspects(
-        hosts, pending, cfg.thresholds.corruption_hamming_bits
+        hosts,
+        candidates((h["mac"] for h in hosts), db_rows) if db_rows else set(),
+        {host: samples.get(host, set())},
+        cfg.thresholds.corruption_hamming_bits,
     )
     if not suspects:
         print("  none — every address here is either confirmed or far "
@@ -1625,7 +1632,7 @@ def _corruption_section(
             )
     print(
         f"  ^ addresses within {cfg.thresholds.corruption_hamming_bits} bits "
-        f"of a real one on the same port: the switch learned them from "
+        f"of a real one on the same switch: the switch learned them from "
         f"damaged frames"
     )
 

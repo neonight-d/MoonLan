@@ -92,9 +92,17 @@ v0.6.9 scenarios:
   there, and the two nobody else has ever seen go to "Not on map"
   rather than being hung off the one cable they cannot be behind.
 
+v0.8.5 scenarios:
+- the port with damaged frames is on access-sw-1, which is polled in
+  full every scan (it used to be on access-sw-2, which runs out of its
+  budget from the second scan on, so its copies never reached the
+  database at all). The errors are inbound only: the device's
+  transmitter, not the cable. From the 13th scan on the copies repeat
+  — seen for the second time, and never confirmed.
+
 v0.5.8 scenarios:
-- a port whose cable starts failing on the second scan: the switch
-  learns five distorted copies of the address of the device behind it
+- a port whose device starts sending damaged frames on the second
+  scan: the switch learns distorted copies of its address
   -> port_frame_corruption, and the copies never reach the map;
 - a device visible only through the trunks, placed approximately.
 
@@ -158,13 +166,15 @@ LAG_IFINDEX = 1000  # ifIndex of the logical port Po1
 # MAC — the kind that leaves a new "device" behind on every visit
 LATECOMERS = {"00:ee:00:00:00:01": 9, "b2:1a:7c:44:55:66": 10}  # mac -> ray1 port
 
-# A port with a failing cable. Two real cameras live behind it; from
-# the second scan on, the switch also learns distorted copies of the
-# first one's address out of the damaged frames — different ones every
-# poll, which is exactly how it looks on real hardware. The second
-# camera is 12 bits away from the first: far enough that the 8-bit rule
-# leaves it alone, which is the point of having a threshold.
-CORRUPT_PORT = 6            # Gi0/6 of access-sw-2
+# A port with damaged frames. Two real cameras live behind it; from
+# the second scan on, the first one's transmitter garbles frames and
+# the switch learns distorted copies of its address out of them —
+# different ones every poll, which is exactly how it looks on real
+# hardware. The second camera is 12 bits away from the first: far
+# enough that the 8-bit rule leaves it alone, which is the point of
+# having a threshold.
+CORRUPT_SWITCH = "10.0.0.21"  # access-sw-1, polled in full every scan
+CORRUPT_PORT = 11             # Gi0/11
 CORRUPT_REAL = "20:7b:d5:1a:31:8d"
 CORRUPT_IP = "10.0.99.57"
 CORRUPT_NEIGHBOR = "20:77:b5:7c:37:87"
@@ -529,18 +539,16 @@ def demo_network() -> list[SwitchData]:
     for port in (12, 13, 14):
         connect_host(core, port, 11)
 
-    # A real device on access-sw-2 Gi0/6 whose cable starts failing from
-    # the second scan on: the switch then learns copies of its address
-    # out of the damaged frames. On a real port the copies differ every
-    # time; fixed ones make the demo a repeatable regression case.
-    ray2.ports[CORRUPT_PORT].oper_up = True
-    ray2.port_pvid[CORRUPT_PORT] = 8
+    # A real device on access-sw-1 Gi0/11 whose transmitter starts
+    # garbling frames from the second scan on: the switch then learns
+    # copies of its address out of the damaged frames. On a real port
+    # the copies differ every time; fixed ones make the demo a
+    # repeatable regression case.
     macs = [CORRUPT_REAL, CORRUPT_NEIGHBOR]
     if _scan_count >= 2:
         macs += _corrupt_copies(_scan_count)
     for mac in macs:
-        ray2.fdb[mac] = CORRUPT_PORT
-        core.fdb[mac] = core_port_to_ray[ray2.ip]
+        connect_host(ray1, CORRUPT_PORT, 8, mac)
 
     # Seen on the core's trunk to ray3 and on ray3's own uplink, on no
     # host port anywhere: it is placed on the trunk with the better
@@ -992,8 +1000,12 @@ def enrich_db(db: Database, hosts: list[dict]) -> None:
 
     rows = db.hosts_by_mac()
     # An address ARP knows is confirmed on the spot, so the demo must
-    # not hand one to a MAC whose whole point is to stay unconfirmed
-    hosts = [h for h in hosts if not h.get("unconfirmed")]
+    # not hand one to a MAC whose whole point is to stay unconfirmed —
+    # a damaged copy above all, seen twice or not
+    hosts = [
+        h for h in hosts
+        if not h.get("unconfirmed") and not h.get("suspect_corrupt")
+    ]
     # The device whose frames arrive damaged is an ordinary one: it has
     # an IP, answers ping and stays on the map — only the copies of its
     # address do not. Its address is set aside from the positional
@@ -1232,9 +1244,11 @@ class DemoCounters:
     ERROR_SWITCH = "10.0.0.22"  # access-sw-2
     ERROR_PORT = 3              # Gi0/3: damaged frames
     DISCARD_PORT = 4            # Gi0/4: filtering, no errors at all
-    # Gi0/6 is the failing cable: the same fault the invented MAC
-    # addresses come from, so the corruption alarm goes critical
-    CORRUPT_ERROR_PORT = CORRUPT_PORT
+    # access-sw-1 Gi0/11 is the garbling transmitter: the same fault
+    # the invented MAC addresses come from, so the corruption alarm
+    # goes critical. Inbound only — the device sends the damage, the
+    # switch's own frames arrive intact.
+    CORRUPT_ERROR = (CORRUPT_SWITCH, CORRUPT_PORT)
     AVG_FRAME_BYTES = 800       # to turn octets into packet counters
     # One member of the core—ray1 LACP (the same physical cable seen
     # from both ends) flaps on a timer -> lag_degraded raise and clear,
@@ -1296,6 +1310,8 @@ class DemoCounters:
                 tot[1] += d_out
                 tot[6] += d_in / self.AVG_FRAME_BYTES   # in packets
                 tot[7] += d_out / self.AVG_FRAME_BYTES  # out packets
+                if (sw.ip, p.if_index) == self.CORRUPT_ERROR and self._cycle >= 2:
+                    tot[2] += 34 * dt / 60
                 if sw.ip == self.ERROR_SWITCH and self._cycle >= 2:
                     if p.if_index == self.ERROR_PORT:
                         # 120 damaged frames a minute, split in/out:
@@ -1303,9 +1319,6 @@ class DemoCounters:
                         # port's frames, so both error rules agree
                         tot[2] += 90 * dt / 60
                         tot[3] += 30 * dt / 60
-                    elif p.if_index == self.CORRUPT_ERROR_PORT:
-                        tot[2] += 40 * dt / 60
-                        tot[3] += 20 * dt / 60
                     elif p.if_index == self.DISCARD_PORT:
                         # a port that filters a lot and breaks nothing
                         tot[4] += 600 * dt / 60

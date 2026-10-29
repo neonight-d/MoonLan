@@ -449,6 +449,33 @@ async def run_scan() -> None:
             },
             confirm_scans,
         )
+        # Damaged copies of a MAC are looked for among the addresses the
+        # database has not accepted, and measured against the ones it
+        # had accepted BEFORE this poll (v0.8.5). The projection above
+        # will not do for that: a copy seen for the second time is not
+        # in it — it is about to be confirmed — and it used to be taken
+        # for a sample and confirmed. An empty database is the initial
+        # inventory, as above: nothing in it to be a copy of.
+        with_ip = set(arp)
+        grace = config.host_grace_hours * 3600
+        copy_candidates = corruption.candidates(
+            {mac for sw in collected if sw.reachable for mac in sw.fdb},
+            db_rows, with_ip,
+        ) if db_rows else set()
+        # …and the ones that will be found to be copies keep out of the
+        # per-port device counts already, or a few of them seen twice
+        # would make the port behind one real device a switch without
+        # SNMP
+        voting_out = unconfirmed
+        if config.filter_suspect_macs:
+            voting_out = unconfirmed | corruption.likely_copies(
+                {sw.ip: set(sw.fdb) for sw in collected if sw.reachable},
+                copy_candidates,
+                corruption.samples_by_switch(
+                    [], db_rows, with_ip, grace, time.time()
+                ),
+                config.thresholds.corruption_hamming_bits,
+            )
         # What the database already knows about each port feeds the
         # unmanaged-switch threshold, so groups survive FDB aging
         (
@@ -462,7 +489,7 @@ async def run_scan() -> None:
                 db_rows, {sw.ip for sw in collected if sw.reachable}
             ),
             sticky_pseudo_ports=prev_pseudo_ports,
-            unconfirmed_macs=unconfirmed,
+            unconfirmed_macs=voting_out,
             place_trunk_only=config.place_trunk_only_hosts,
             uplink_ports=_uplink_ports(),
             remembered_locations=_remembered_locations(db_rows),
@@ -479,12 +506,19 @@ async def run_scan() -> None:
         prev_pseudo_ports = {
             (p["switch"], p["port"]) for p in pseudo_switches
         }
-        # Addresses a bit or two away from a real one on the same port:
-        # a failing cable, not new devices. They are held back from
-        # confirmation for as long as they look like copies — otherwise
-        # a permanently damaged port would simply confirm its phantoms.
+        # Addresses a bit or two away from a real one on the same
+        # switch: damaged frames, not new devices. They are held back
+        # from confirmation for as long as they look like copies —
+        # otherwise a permanently damaged port would simply confirm its
+        # phantoms. A sample counts on any port of the switch and for
+        # the grace window after it was last seen: a device switched
+        # off or moved to the next port leaves its copies behind.
         suspects = corruption.find_suspects(
-            hosts, unconfirmed, config.thresholds.corruption_hamming_bits
+            hosts, copy_candidates,
+            corruption.samples_by_switch(
+                hosts, db_rows, with_ip, grace, time.time()
+            ),
+            config.thresholds.corruption_hamming_bits,
         )
         _apply_suspects(hosts, suspects)
         suspect_macs = {
@@ -561,7 +595,12 @@ async def run_scan() -> None:
                 "MACs awaiting confirmation (%d poll(s) each): %d",
                 confirm_scans, len(unconfirmed),
             )
-        if not config.filter_suspect_macs:
+        if config.filter_suspect_macs:
+            # off the map whatever the database holds: a switch past its
+            # budget is drawn from a reading nobody wrote down, and its
+            # copies are in no table of unconfirmed addresses
+            unconfirmed |= suspect_macs
+        else:
             unconfirmed -= suspect_macs  # draw the damage instead
         hosts = [h for h in hosts if h["mac"] not in unconfirmed]
         fdb_macs = {h["mac"] for h in hosts}

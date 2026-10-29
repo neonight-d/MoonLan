@@ -43,7 +43,11 @@ from moonlan.topology import FdbStability, build_topology  # noqa: E402
 CORE, SLOW = SWITCHES[0], SWITCHES[1]
 OTHERS = SWITCHES[2:]
 DEVICE = "aa:bb:cc:00:00:07"
-NEWCOMER = "aa:bb:cc:00:00:99"
+# Far from DEVICE on purpose. It used to be aa:bb:cc:00:00:99, five bits
+# from DEVICE on the same port and without an IP — which is exactly
+# what a damaged copy of DEVICE looks like, and since v0.8.5 one is
+# held back as such for as long as it looks like that.
+NEWCOMER = "aa:bb:cc:5a:f0:99"
 
 
 def switch(ip: str, name: str, octet: int) -> SwitchData:
