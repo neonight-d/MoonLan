@@ -581,6 +581,14 @@ loaded — `python -m moonlan.oui update`).
 Port status, speed, traffic rates, errors, discards, LAG membership,
 LLDP information, link changes, and loop-detection state.
 
+A port whose MAC table holds damaged copies of an address carries them
+in `suspect_macs` (`[{mac, sample, distance}]`: the copy, the address
+it is a copy of, the bits between them) and, since v0.8.5,
+`suspect_samples` — `[{mac, vendor, n}]`, the addresses the copies are
+of, the most copies first, with the maker when the IEEE register knows
+it. One address means its network adapter; several, the port (see
+[MAC copies and errors on a port](NETWORK.md#mac-copies-and-errors-on-a-port)).
+
 ## Monitoring
 
 ### GET /api/stp
@@ -611,6 +619,12 @@ A code the page does not know is shown as `reason`.
 Query parameters: `active=1` for active alarms, `active=0` for
 cleared ones, and `limit=1..500`.
 
+An active `port_frame_corruption` carries `corruption` (v0.8.5) while
+the service knows the copies behind it — not right after a restart,
+until a scan finds them again: `samples`, as `suspect_samples` above;
+`errors_in`, the port's inbound errors over `minutes` (one scan
+interval), or null when the counters do not know them.
+
 ### POST /api/alarms/{id}/clear
 
 Manually clears an active alarm; the journal records who did.
@@ -627,6 +641,11 @@ knows carries its `vendor`, looked up when asked.
 "reason"}` and, by the reason, `behind` (LLDP puts `b` behind that
 switch) or `cycle` (the ring it was the weakest edge of). An entry
 written before v0.8.2 is the English line it was then.
+
+`copies_removed` (v0.8.5) is one batch of damaged copies taken off the
+map: `mac` is the address they are copies of, `details` is `{"switch",
+"ports", "n", "macs"}` — the addresses themselves are in the data, not
+a line each.
 
 ## Inventory
 

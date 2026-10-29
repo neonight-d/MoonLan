@@ -750,5 +750,92 @@ class HintWordsTest(unittest.TestCase):
         self.assertIn("inbound errors in 10 min: 340", en["alarm"])
 
 
+
+# Fourteen scans of the demo in a process of its own (the service reads
+# its configuration once, at import): from the 13th on, its copies
+# repeat — the case the old rule confirmed
+DEMO_SCANS = r"""
+import asyncio, json, logging
+logging.disable(logging.CRITICAL)
+from moonlan import demo, server
+from asgi_client import call
+
+out = {"scans": []}
+port = (demo.CORRUPT_SWITCH, f"Gi0/{demo.CORRUPT_PORT}")
+real = {demo.CORRUPT_REAL, demo.CORRUPT_NEIGHBOR}
+
+
+async def scans():
+    for _ in range(14):
+        await server.run_scan()
+        rows = server.db.hosts_by_mac()
+        topo = server.state.as_dict()
+        out["scans"].append({
+            "drawn": sorted(h["mac"] for h in topo["hosts"]
+                            if (h["switch"], h["port"]) == port),
+            "grouped": [g["count"] for g in topo["offline_groups"]
+                        if (g["switch"], g["port"]) == port],
+            "pseudo": [p["id"] for p in topo["pseudo_switches"]
+                       if (p["switch"], p["port"]) == port],
+            "confirmed": sorted(
+                mac for mac, row in rows.items()
+                if (row["switch_ip"], row["port"]) == port
+                and mac not in real and row["confirmed"]
+                and not row["corrupt_of"]),
+            "held": sum(1 for mac, row in rows.items()
+                        if (row["switch_ip"], row["port"]) == port
+                        and not row["confirmed"]),
+        })
+
+asyncio.run(scans())
+out["events"] = [json.loads(e["details"])["n"] for e in call(
+    server.app, "GET", "/api/journal").json()["events"]
+    if e["event"] == "copies_removed"]
+ports = call(server.app, "GET", f"/api/switch/{port[0]}/ports").json()["ports"]
+out["samples"] = next(p for p in ports if p["name"] == port[1])["suspect_samples"]
+out["alarms"] = [a.get("corruption") for a in call(
+    server.app, "GET", "/api/alarms").json()["alarms"]
+    if a["type"] == "port_frame_corruption"]
+out["real"] = sorted(real)
+print(json.dumps(out))
+"""
+
+
+class DemoTest(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        import os
+        import subprocess
+        import tempfile
+        root = Path(__file__).resolve().parent.parent
+        with tempfile.TemporaryDirectory() as tmp:
+            config = Path(tmp) / "config.yaml"
+            config.write_text(f"db_path: {Path(tmp) / 'moonlan.db'}\n", encoding="utf-8")
+            env = {**os.environ, "MOONLAN_DEMO": "1", "MOONLAN_CONFIG": str(config),
+                   "PYTHONPATH": os.pathsep.join([str(root), str(root / "tests")])}
+            done = subprocess.run([sys.executable, "-c", DEMO_SCANS], cwd=tmp, env=env,
+                                  capture_output=True, text=True, timeout=300, check=True)
+        cls.out = json.loads(done.stdout.strip().splitlines()[-1])
+
+    def test_no_copy_on_the_map_in_any_scan(self):
+        for n, scan in enumerate(self.out["scans"], start=1):
+            with self.subTest(scan=n):
+                self.assertEqual(scan["drawn"], self.out["real"])
+                self.assertEqual(scan["confirmed"], [])
+                self.assertEqual(scan["grouped"], [])
+                self.assertEqual(scan["pseudo"], [])
+        # they are there, held back: three new ones a scan, 32 in all
+        self.assertEqual(self.out["scans"][-1]["held"], 32)
+
+    def test_the_old_copies_go_in_one_entry(self):
+        self.assertEqual(self.out["events"], [12])
+
+    def test_the_panel_and_the_alarm_say_one_address(self):
+        from moonlan import demo
+        self.assertEqual([s["mac"] for s in self.out["samples"]], [demo.CORRUPT_REAL])
+        (alarm,) = self.out["alarms"]
+        self.assertEqual([s["mac"] for s in alarm["samples"]], [demo.CORRUPT_REAL])
+
+
 if __name__ == "__main__":
     unittest.main()

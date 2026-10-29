@@ -221,49 +221,76 @@ link speed).
 ## Frame corruption: how to read the alarm
 
 ```
-WARNING port_frame_corruption: 10.0.0.44:1/3 — 7 distorted copies of
-20:7b:d5:1a:31:8d in the MAC table (20:7b:d5:1a:31:9d, 20:7b:d5:7a:34:07,
-…) — check the cable, the patch cord and the port
+WARNING port_frame_corruption: 10.0.0.44:1/5 — 7 distorted copies of
+20:7b:d5:1a:31:8d in the MAC table (20:7b:d5:1a:31:87, 20:7b:d5:1a:31:8f,
+…) — all of one address: its network adapter is the likelier fault; try
+the device through another adapter; inbound errors in 10 min: 340
 ```
 
 A switch learns the source address of every frame it forwards. When the
-frames themselves arrive damaged — a failing cable or patch cord, a
-dying transceiver, interference on a long run — the switch faithfully
-learns the damaged addresses too. Next to the real `20:7b:d5:1a:31:8d`
-the MAC table grows `20:7b:d5:1a:31:9d` (one bit away),
-`20:7b:d5:7a:34:07`, `20:77:b5:7c:37:87`. Each of them lives for a poll
-or two, never answers ARP, and used to settle on the map as a device.
+frames themselves arrive damaged — a failing transmitter, cable or patch
+cord, a dying transceiver, interference on a long run — the switch
+faithfully learns the damaged addresses too. Next to the real
+`20:7b:d5:1a:31:8d` the MAC table grows `20:7b:d5:1a:31:9d` (one bit
+away), `20:7b:d5:1a:31:87`, `80:7b:d5:1a:31:8d`. Each of them lives for
+a poll or two and never answers ARP.
 
-MoonLan reads the pattern for what it is: an unconfirmed, IP-less
-address within `corruption_hamming_bits` (8) of a confirmed one **on
-the same port**. Those addresses are kept off the map, the port carries
-a ⚠ mark in the "Ports" panel listing them, and once
-`corruption_macs_threshold` (5) of them accumulate inside
-`notifications.flap_window_seconds`, the port raises the alarm. If the
-port's error counters are alarming too — or were recently — the
-standing alarm is upgraded to **critical** and says so: two independent
-symptoms of one physical fault.
+MoonLan reads the pattern for what it is: an address the database has
+not accepted as a device and that has no IP, within
+`corruption_hamming_bits` (8) of one it had accepted **on the same
+switch** — on any port of it, in this poll or within `host_grace_hours`
+of it. Those addresses are kept off the map however many polls they
+are seen in, the port they are on carries a ⚠ mark in the "Ports"
+panel listing them, and once `corruption_macs_threshold` (5) of them
+accumulate inside `notifications.flap_window_seconds`, the port raises
+the alarm. If the port's error counters are alarming too — or were
+recently — the standing alarm is upgraded to **critical** and says so:
+two independent symptoms of one physical fault.
+
+The alarm and the ⚠ mark say which fault is likelier
+([MAC copies and errors on a port](NETWORK.md#mac-copies-and-errors-on-a-port)):
+
+- **copies of one address** — that device's network adapter. Connect
+  the device through another adapter, or another device to the port;
+- **copies of several addresses** — what they share: the cable, the
+  patch cord, the port, or an unmanaged switch behind it.
+
+The alarm in the page carries the port's inbound errors over one scan
+interval, when the counters know them.
+
+Before v0.8.5 a copy seen in two polls in a row was confirmed as a
+device. Those records are found by what they are — confirmed by
+sightings alone, never an IP, an ARP entry, a ping reply or a name, at
+most ten sightings, nobody watching them or labelling them, near an
+address with an IP on the same switch, and at least
+`corruption_macs_threshold` of them around that one address — and
+taken off the map at the first start, with one journal entry for the
+batch ("Damaged MAC copies removed · 20:7b:d5:1a:31:8d: 104 addresses on
+… 1/5"). The next daily cleanup deletes them.
 
 To see the evidence:
 
 ```bash
 python -m moonlan.diag --fdb 10.0.0.44            # whole MAC table
-python -m moonlan.diag --fdb 10.0.0.44 --iface 1/3  # one port
+python -m moonlan.diag --fdb 10.0.0.44 --iface 1/5  # one port
+python -m moonlan.diag --port 10.0.0.44 --iface 1/5 # its error counters
 ```
 
-The last section groups the corrupted addresses by port: the real MAC
-each group is a distortion of, every copy with its Hamming distance and
-whether anything ever gave it an IP.
+The last section of `--fdb` groups the corrupted addresses by port: the
+real MAC each group is a distortion of, every copy with its Hamming
+distance and whether anything ever gave it an IP.
 
-What to do: replace the patch cord first, then the cable run, then move
-the device to another port. If the copies stop appearing, the alarm
-clears itself once the flap window passes without a new one.
+If the copies stop appearing, the alarm clears itself once the flap
+window passes without a new one.
 
-Two devices with neighbouring factory MACs on one port are not a false
-positive: they answer ARP, which confirms them and takes them out of
-the candidate set. A device that never gets an IP and sits near another
-one can be flagged — `filter_suspect_macs: false` draws such addresses
-anyway, and `--fdb` always shows what was matched against what.
+Two devices with neighbouring factory MACs on one switch are not a
+false positive as long as they answer ARP: an IP confirms an address
+and takes it out of the candidates for good. A device that never gets
+an IP and sits within the threshold of another one on its switch is
+held back as a copy — it shows in the ⚠ list of its port with the
+address it is taken for a copy of. `filter_suspect_macs: false` draws
+such addresses anyway, a smaller `corruption_hamming_bits` narrows the
+match, and `--fdb` always shows what was matched against what.
 
 ## Sharing a diagnostic report
 

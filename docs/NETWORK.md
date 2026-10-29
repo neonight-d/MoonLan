@@ -1,6 +1,6 @@
 # LLDP, spanning tree and loop detection
 
-What MoonLan reads from the protocols the switches speak about each other, and how to read its verdicts.
+What MoonLan reads from the protocols the switches speak about each other, and how to read its verdicts — and, at the end, what the MAC tables say about a port that hands the switch damaged frames.
 
 ## LLDP
 
@@ -340,3 +340,38 @@ switched off. They had not been read at all.
 `diag --loop` prints which of the two ways matched. `matched by probe`
 on a model that is already in the table is the signal that the table
 has drifted from the hardware again.
+
+## MAC copies and errors on a port
+
+A switch learns the source address of every frame that reaches a port.
+A frame damaged on its way in can still carry a readable source
+address — with a bit or two flipped — and the switch learns that one
+too: `20:7b:d5:1a:31:87` and `80:7b:d5:1a:31:8d` beside the real
+`20:7b:d5:1a:31:8d`. So copies come together with **inbound** errors on
+the same port (`diag --port <switch> --iface <port>`): the damage
+travels from the device to the switch. Outbound errors at zero mean the
+switch's own frames reach the device intact.
+
+Which addresses the copies are of says where to look:
+
+- **One address.** Its device's transmitter garbles frames: a network
+  adapter, often a USB one or the Ethernet of a USB-C hub. A cable
+  tester finds nothing, and moving the device to another port changes
+  nothing — the copies follow it. Connect the device through another
+  adapter (a laptop's built-in port, say) and the copies stop.
+- **Several addresses on one port.** What they share is at fault: the
+  cable, the patch cord, the port itself, or an unmanaged switch
+  behind it.
+
+The ⚠ mark in the "Ports" panel and the `port_frame_corruption` alarm
+say which of the two it is, the maker of the adapter when the IEEE
+register knows it, and the alarm carries the port's inbound errors over
+one scan interval. One case it was written for: 111 copies of one
+address on a port, almost 60 000 inbound errors on 42 million inbound
+packets and none outbound, a cable that tested fine and a port change
+that did not help — the Ethernet of a USB-C hub.
+
+The copies never become devices: see
+[Frame corruption](DIAGNOSTICS.md#frame-corruption-how-to-read-the-alarm)
+for the rule and for what happens to the ones an older version
+confirmed.

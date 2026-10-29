@@ -6,6 +6,59 @@ for before the next one started.
 
 Русская версия — [CHANGELOG_RU.md](CHANGELOG_RU.md).
 
+## v0.8.5 — 2026-10-29
+
+Damaged copies of a MAC stay off the map. From a port that showed
+"Offline · 111": a hundred and eleven addresses, almost all of them
+copies of one, with "Hide damaged copies of MAC addresses" on.
+
+**Why the filter let them through.** A copy was looked for only among
+the addresses that would still be unconfirmed after the poll. With
+`new_host_confirm_scans: 2` a copy seen for the second time was not
+among them — it was about to be confirmed — so it was measured as a
+real address instead, and confirmed. Every copy that stayed in a MAC
+table for two polls became a device, and copies of copies became the
+real addresses the next copies were measured against.
+
+**Now.** What may be a copy and what is real are two sets: an address
+the database has not accepted (no IP, not confirmed, or new) however
+many polls it is seen in, against the ones it had accepted before this
+poll, or with an IP. A real address counts on any port of the same
+switch, and for `host_grace_hours` after it was last seen there: a
+computer switched off, or moved from port 3 to port 5, leaves its
+copies behind. On another switch it does not count. An IP still
+confirms an address, however alike. The copies no longer make their
+port "a switch without SNMP" either.
+
+**The copies already confirmed** — about a hundred on the server that
+reported it — are found by their record: never an IP, an ARP entry, a
+ping reply or a name, at most ten sightings, not watched, no label or
+note, near an address with an IP on the same switch, and at least
+`corruption_macs_threshold` (5) of them around that one address — two
+machines of one batch never make a crowd like that. The first start or
+scan takes them off the map, out of the offline groups and the list
+beside it, with one journal entry: "Damaged MAC copies removed ·
+20:7b:d5:1a:31:8d: 104 addresses on … 1/5", the addresses in its data.
+The next daily cleanup deletes them. A new column, `hosts.corrupt_of`,
+is added at the start.
+
+**Adapter or port.** The ⚠ mark in the ports panel and the
+`port_frame_corruption` alarm said "check the cable, the patch cord and
+the port". Here the cable tested fine and another port did not help:
+the Ethernet of a USB-C hub garbled what it sent. Copies of one address
+now say that device's network adapter is the likelier fault (with its
+maker, when the IEEE register knows it); copies of several, the cable,
+the patch cord, the port or an unmanaged switch behind it. The alarm in
+the page adds the port's inbound errors over one scan interval —
+"inbound errors in 10 min: 340". Worded in the page, in both languages.
+
+**The demo** has its damaged port on access-sw-1 now, polled in full
+every scan: on access-sw-2, which runs out of its budget from the
+second scan on, the copies never reached the database and were drawn on
+the map. Its errors are inbound only, the copies repeat from the 13th
+scan on, and a dozen copies an older version confirmed are taken off
+the map by the first scan.
+
 ## v0.8.4 — 2026-10-28
 
 Settings in the page, alarms to one's own mail and Telegram. From the

@@ -269,12 +269,32 @@ Everything MoonLan does, as of v0.8.4 — the list the README used to carry. The
   with an IP, which is what happens to every real newcomer. Addresses
   a failing cable invents live for a poll or two and now never reach
   the map, the device counter or the journal.
-- Frame corruption is named: an unconfirmed, IP-less address a few bits
-  away from a real one on the same port is a damaged copy of it, not a
-  device. Such addresses are held off the map, listed on the port with
-  a ⚠ mark, and once enough of them pile up the port raises
-  `port_frame_corruption` — critical when the port's error counters
-  agree. See [Frame corruption](DIAGNOSTICS.md#frame-corruption-how-to-read-the-alarm).
+- Frame corruption is named: an address the database has not accepted
+  and that has no IP, a few bits away from one it had accepted on the
+  same switch (any port of it, this poll or within the grace window),
+  is a damaged copy of it, not a device — however many polls it is
+  seen in (v0.8.5; before, a copy seen twice was confirmed). Such
+  addresses are held off the map and out of the per-port counts,
+  listed on the port with a ⚠ mark, and once enough of them pile up
+  the port raises `port_frame_corruption` — critical when the port's
+  error counters agree. An IP still confirms an address, however alike.
+  See [Frame corruption](DIAGNOSTICS.md#frame-corruption-how-to-read-the-alarm).
+- The ⚠ mark and the alarm say which fault is likelier: copies of one
+  address — that device's network adapter (with its maker, when the
+  IEEE register knows it); of several — the cable, the patch cord, the
+  port or an unmanaged switch behind it. The alarm in the page adds the
+  port's inbound errors over one scan interval. See
+  [MAC copies and errors on a port](NETWORK.md#mac-copies-and-errors-on-a-port).
+- Copies an older version confirmed are found by their record: never an
+  IP, an ARP entry, a ping reply or a name, at most ten sightings, not
+  watched, no label or note, near an address with an IP on the same
+  switch — and at least `corruption_macs_threshold` of them around that
+  one address, which two real machines of one batch never make. They
+  leave the map, the offline groups and the list beside the map at the
+  first start or scan, with one journal entry for the batch ("Damaged
+  MAC copies removed · …: 104 addresses on … 1/5"), and the daily
+  cleanup deletes them. With `filter_suspect_macs` off nothing of this
+  happens: that is the choice to draw the damage.
 - Devices behind switches MoonLan does not poll stay on the map: a MAC
   visible only on trunk ports is drawn on the trunk with the best claim
   to it, marked "approximate" with a dashed edge, instead of

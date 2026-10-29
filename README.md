@@ -202,7 +202,7 @@ MoonLan/
 │   ├── snmp_collector.py   # SNMP polling and device data
 │   ├── topology.py         # topology inference and map state
 │   ├── counters.py         # traffic/error counters and rates
-│   ├── corruption.py       # damaged copies of a real MAC on one port
+│   ├── corruption.py       # damaged copies of a real MAC on one switch
 │   ├── lldp.py             # LLDP processing
 │   ├── stp.py              # STP/RSTP processing
 │   ├── loopdetect.py       # vendor loop-detection profiles
@@ -293,6 +293,7 @@ See **[CONTRIBUTING.md](CONTRIBUTING.md)**.
 | v0.8.2 ✓ | Russian without English in it, a page that stays put on a phone, the lists from the keyboard |
 | v0.8.3 ✓ | Names from the network as text, ports on an upright phone, an image on Docker Hub |
 | v0.8.4 ✓ | Settings in the page, alarms to one's own mail and Telegram |
+| v0.8.5 ✓ | Damaged copies of a MAC stay off the map; the alarm says adapter or port |
 | v0.9 | Windows computer inventory (WMI/WinRM) |
 
 Every version so far: [CHANGELOG.md](CHANGELOG.md).

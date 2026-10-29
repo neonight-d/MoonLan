@@ -235,7 +235,7 @@ and by `PUT /api/settings` ([API.md](API.md#settings-v084)).
 | `stale_rate_hide_minutes` | `30` | 1…1440 | at once | A measured rate is shown dimmed with its age up to this, then the cell empties. |
 | `stale_switch_scans` | `5` | 1…100 | next scan | Scans in a row a switch may miss its budget before its card says so and switch_stale is raised. |
 | `monitored_by_default` | `false` | true / false | at once | `true` raises host_down for every host, not only those marked "Monitor". |
-| `filter_suspect_macs` | `true` | true / false | next scan | Keep damaged copies of a real address off the map (`false` — draw them). |
+| `filter_suspect_macs` | `true` | true / false | next scan | Keep damaged copies of a real address off the map, and the ones confirmed before v0.8.5 too — taken off at once, deleted at the daily cleanup (`false` — draw them all). |
 | `place_trunk_only_hosts` | `true` | true / false | next scan | A MAC seen only on trunks is drawn on the trunk with the best claim, marked approximate. |
 
 ### Polling
@@ -256,8 +256,8 @@ and by `PUT /api/settings` ([API.md](API.md#settings-v084)).
 | `thresholds.port_utilization_percent` | `90` | 1…100 | next ping or counters cycle | port_util: % of the link speed (of the total, for a LAG). |
 | `thresholds.port_alarm_cycles` | `3` | 1…100 | next ping or counters cycle | Cycles over or under a threshold before a port alarm rises or clears. |
 | `thresholds.mass_down_hosts` | `3` | 0…1000 | next ping or counters cycle | port_hosts_down: devices of one port gone silent in one ping cycle. |
-| `thresholds.corruption_hamming_bits` | `8` | 1…24 | next scan | How far a MAC may sit from a real one on the same port and still be its damaged copy. |
-| `thresholds.corruption_macs_threshold` | `5` | 1…1000 | next scan | Copies on one port within the flap window → port_frame_corruption. |
+| `thresholds.corruption_hamming_bits` | `8` | 1…24 | next scan | How far a MAC may sit from a real one on the same switch and still be its damaged copy. |
+| `thresholds.corruption_macs_threshold` | `5` | 1…1000 | next scan | Copies on one port within the flap window → port_frame_corruption; and how many confirmed IP-less copies one address needs around it before they are taken for copies (v0.8.5). |
 | `thresholds.stp_changes_per_cycle` | `3` | 0…10000 | next scan | stp_topology_change: topology changes per scan on an operating switch. |
 | `thresholds.flaps_per_window` | `4` | 0…1000 | next ping or counters cycle | port_flapping: link state transitions… |
 | `thresholds.flap_window_minutes` | `10` | 1…1440 | next ping or counters cycle | …inside this window. |
