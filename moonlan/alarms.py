@@ -555,13 +555,23 @@ class AlarmEngine:
                 "lag_degraded", subject, f"all {total} LAG members are up"
             )
 
-    async def on_corruption(self, suspects: dict[str, list[dict]]) -> None:
+    async def on_corruption(
+        self, suspects: dict[str, list[dict]],
+        inbound_errors=None, window_minutes: float = 10.0, maker=None,
+    ) -> None:
         """One scan's distorted MACs, keyed by "switch ip:port".
 
         Counted over the flap window rather than per scan: a bad cable
         produces a few invented addresses per poll, and it is their
         accumulation that is the symptom. Every address is counted once
         — an artifact that lingers must not keep pushing the total up.
+
+        The message says which fault is likelier (v0.8.5): copies of one
+        address point at that device's transmitter, copies of several
+        at what they share — the cable, the port, a switch behind it.
+        `inbound_errors(subject)` is the port's inbound error count over
+        `window_minutes`, None when unknown; `maker(mac)` the maker's
+        name or "".
         """
         threshold = self._thresholds.corruption_macs_threshold
         if threshold <= 0:
@@ -586,16 +596,31 @@ class AlarmEngine:
                 continue
             if len(seen) < threshold:
                 continue
-            samples: dict[str, int] = {}
-            for _ts, sample in seen.values():
-                samples[sample] = samples.get(sample, 0) + 1
-            sample = max(samples, key=lambda mac: (samples[mac], mac))
+            samples = self.corruption_samples(subject)
+            sample = next(iter(samples))
             copies = ", ".join(sorted(seen)[:5])
             confirmed = self._errors_recent(subject, now, window)
-            message = (
-                f"{len(seen)} distorted copies of {sample} in the MAC table "
-                f"({copies}) — check the cable, the patch cord and the port"
-            )
+            if len(samples) == 1:
+                who = maker(sample) if maker else ""
+                message = (
+                    f"{len(seen)} distorted copies of {sample}"
+                    f"{f' ({who})' if who else ''} in the MAC table "
+                    f"({copies}) — all of one address: its network "
+                    f"adapter is the likelier fault; try the device "
+                    f"through another adapter"
+                )
+            else:
+                message = (
+                    f"{len(seen)} distorted copies of {len(samples)} "
+                    f"addresses in the MAC table ({copies}) — likelier "
+                    f"the cable, the patch cord, the port or an unmanaged "
+                    f"switch behind it"
+                )
+            errors = inbound_errors(subject) if inbound_errors else None
+            if errors is not None:
+                message += (
+                    f"; inbound errors in {window_minutes:g} min: {errors}"
+                )
             if confirmed:
                 message += "; confirmed by the port's error counters"
             severity = "critical" if confirmed else None
@@ -607,6 +632,15 @@ class AlarmEngine:
             await self._raise(
                 "port_frame_corruption", subject, message, severity=severity
             )
+
+    def corruption_samples(self, subject: str) -> dict[str, int]:
+        """The addresses the copies seen on a port inside the flap
+        window are of -> how many copies each, most first; empty when
+        nothing is known (a start since, or none seen)."""
+        counts: dict[str, int] = {}
+        for _ts, sample in self._corrupt.get(subject, {}).values():
+            counts[sample] = counts.get(sample, 0) + 1
+        return dict(sorted(counts.items(), key=lambda kv: (-kv[1], kv[0])))
 
     async def _escalate(
         self, alarm_type: str, subject: str, severity: str | None, message: str

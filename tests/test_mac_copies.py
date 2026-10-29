@@ -17,6 +17,7 @@ the grace window.
 Run with:  python -m unittest discover -s tests
 """
 
+import asyncio
 import json
 import sys
 import time
@@ -185,7 +186,15 @@ class ScanCase(unittest.IsolatedAsyncioTestCase):
         server.db._conn.execute("DELETE FROM hosts")
         server.db._conn.execute("DELETE FROM journal")
         server.db._conn.execute("DELETE FROM notes")
+        server.db._conn.execute(
+            "DELETE FROM alarms WHERE type = 'port_frame_corruption'"
+        )
         server.db._conn.commit()
+        server.alarm_engine._corrupt.clear()
+        server.alarm_engine._active = {
+            key for key in server.alarm_engine._active
+            if key[0] != "port_frame_corruption"
+        }
 
     def tearDown(self):
         server.get_collector = self._get_collector
@@ -567,6 +576,178 @@ class JournalWordsTest(unittest.TestCase):
             ["104 адреса", "1 адрес", "2 адреса", "5 адресов", "21 адрес"],
         )
         self.assertEqual(out["other"], "")
+
+
+
+class AlarmWordsTest(unittest.IsolatedAsyncioTestCase):
+    """The message the channels get says which fault is likelier."""
+
+    def setUp(self):
+        from moonlan.alarms import AlarmEngine
+        from moonlan.config import Config
+        from moonlan.db import Database
+        from moonlan.notify import Notifier
+        cfg = Config()
+        self.db = Database(":memory:")
+        self.addCleanup(self.db.close)
+        self.engine = AlarmEngine(self.db, Notifier(cfg), cfg.thresholds,
+                                  cfg.notifications)
+
+    def message(self) -> str:
+        (row,) = self.db.alarms(True, 10)
+        self.assertEqual(row["type"], "port_frame_corruption")
+        return row["message"]
+
+    async def test_copies_of_one_address(self):
+        found = [{"mac": mac, "sample": SAMPLE, "distance": 1} for mac in HUNDRED[:6]]
+        await self.engine.on_corruption(
+            {f"{ACCESS}:1/5": found},
+            inbound_errors=lambda subject: 340 if subject == f"{ACCESS}:1/5" else None,
+            window_minutes=10, maker=lambda mac: "Realtek" if mac == SAMPLE else "",
+        )
+        message = self.message()
+        self.assertIn(f"6 distorted copies of {SAMPLE} (Realtek)", message)
+        self.assertIn("its network adapter is the likelier fault", message)
+        self.assertIn("; inbound errors in 10 min: 340", message)
+        self.assertNotIn("cable", message)
+        self.assertEqual(self.engine.corruption_samples(f"{ACCESS}:1/5"), {SAMPLE: 6})
+
+    async def test_copies_of_several_addresses(self):
+        other = "00:1e:67:aa:bb:01"
+        found = [{"mac": mac, "sample": SAMPLE, "distance": 1} for mac in HUNDRED[:4]]
+        found += [{"mac": flip(other, n), "sample": other, "distance": 1} for n in (1, 2)]
+        await self.engine.on_corruption({f"{ACCESS}:1/5": found})
+        message = self.message()
+        self.assertIn("6 distorted copies of 2 addresses", message)
+        self.assertIn("the cable, the patch cord, the port or an unmanaged switch", message)
+        # no counters, no number
+        self.assertNotIn("inbound errors", message)
+        self.assertEqual(self.engine.corruption_samples(f"{ACCESS}:1/5"),
+                         {SAMPLE: 4, other: 2})
+
+
+class InboundErrorsTest(unittest.TestCase):
+    def test_counted_over_the_window_and_unknown_is_not_zero(self):
+        from moonlan.counters import CounterStore, Sample
+        store = CounterStore()
+        now = time.time()
+        errors = 0
+        for n in range(16):
+            # 34 inbound errors a minute for a quarter of an hour
+            store.update(ACCESS, {5: Sample(ts=now - (15 - n) * 60, in_errors=errors),
+                                  6: Sample(ts=now - (15 - n) * 60)})
+            errors += 34
+        self.assertEqual(store.inbound_errors(ACCESS, 5, now - 600), 340)
+        self.assertEqual(store.inbound_errors(ACCESS, 5, now - 3600), 510)
+        self.assertIsNone(store.inbound_errors(ACCESS, 6, now - 600))
+        self.assertIsNone(store.inbound_errors(ACCESS, 7, now - 600))
+
+
+class HintScanTest(ScanCase):
+    """What the alarm list and the ports panel are given to word."""
+
+    async def test_the_alarm_and_the_panel_carry_the_addresses(self):
+        from asgi_client import call
+        await self.inventory(access={SAMPLE: 5})
+        copies = iter(HUNDRED)
+        for _ in range(3):
+            # different copies every poll, the way a transmitter makes them
+            self.collector.access.update({next(copies): 5, next(copies): 5})
+            await server.run_scan()
+        # the client runs a loop of its own: from a thread, beside this one
+        alarms = (await asyncio.to_thread(call, server.app, "GET", "/api/alarms")
+                  ).json()["alarms"]
+        (alarm,) = [a for a in alarms if a["type"] == "port_frame_corruption"]
+        self.assertEqual(alarm["subject"], f"{ACCESS}:Gi0/5")
+        self.assertEqual(alarm["corruption"]["samples"],
+                         [{"mac": SAMPLE, "vendor": "", "n": 6}])
+        self.assertIsNone(alarm["corruption"]["errors_in"])  # no counters here
+        self.assertEqual(alarm["corruption"]["minutes"], 10)
+
+        ports = (await asyncio.to_thread(
+            call, server.app, "GET", f"/api/switch/{ACCESS}/ports")).json()["ports"]
+        port = next(p for p in ports if p["name"] == "Gi0/5")
+        self.assertEqual(port["suspect_samples"], [{"mac": SAMPLE, "vendor": "", "n": 6}])
+        self.assertEqual(len(port["suspect_macs"]), 6)
+
+    def test_the_port_s_inbound_errors_by_its_name(self):
+        from moonlan.counters import Sample
+        sw = switch(ACCESS, "access-sw", 2)
+        server.switch_data[ACCESS] = sw
+        store = server.counter_store
+        self.addCleanup(lambda: [store._rates.pop((ACCESS, 5), None),
+                                 store._last.pop((ACCESS, 5), None)])
+        now = time.time()
+        for n, errors in enumerate((0, 100, 300)):
+            store.update(ACCESS, {5: Sample(ts=now - (2 - n) * 60, in_errors=errors)})
+        self.assertEqual(server._subject_inbound_errors(f"{ACCESS}:Gi0/5"), 300)
+        self.assertIsNone(server._subject_inbound_errors(f"{ACCESS}:Gi0/9"))
+        self.assertIsNone(server._subject_inbound_errors("192.0.2.1:Gi0/5"))
+
+
+HINT_PAGE = r"""
+const out = {};
+const one = [{ mac: "20:7b:d5:1a:31:8d", vendor: "Realtek", n: 104 }];
+const nameless = [{ mac: "20:7b:d5:1a:31:8d", vendor: "", n: 104 }];
+const several = [{ mac: "20:7b:d5:1a:31:8d", vendor: "", n: 3 }, { mac: "00:1e:67:aa:bb:01", vendor: "", n: 2 }];
+for (const l of ["en", "ru"]) {
+  lang = l;
+  out[l] = {
+    one: copiesVerdict(one, "suspectOneHint", "suspectManyHint"),
+    nameless: copiesVerdict(nameless, "suspectOneHint", "suspectManyHint"),
+    several: copiesVerdict(several, "suspectOneHint", "suspectManyHint"),
+    none: copiesVerdict(undefined, "suspectOneHint", "suspectManyHint"),
+    alarm: corruptionAlarmText({ samples: one, errors_in: 340, minutes: 10 }),
+    alarmSeveral: corruptionAlarmText({ samples: several, errors_in: null, minutes: 10 }),
+    old: corruptionAlarmText(undefined),
+  };
+}
+__done(out);
+"""
+
+
+class HintWordsTest(unittest.TestCase):
+    def test_every_word_in_both_languages(self):
+        from web_source import strings
+        for lang in ("en", "ru"):
+            words = strings(lang)
+            for key in ("suspectOneHint", "suspectManyHint", "corruptionOne",
+                        "corruptionMany", "corruptionErrorsIn"):
+                with self.subTest(lang=lang, key=key):
+                    self.assertTrue(words.get(key))
+                    if key.endswith("One") or key == "suspectOneHint":
+                        self.assertIn("{mac}{maker}", words[key])
+        # the old advice is not the whole story any more
+        self.assertNotIn("кабель", strings("ru")["suspectMacsHint"])
+
+    def test_the_page_words_it(self):
+        from web_source import NODE, run_page
+        if not NODE:
+            self.skipTest("needs node to run the page's JavaScript")
+        out = run_page(HINT_PAGE)
+        ru, en = out["ru"], out["en"]
+        self.assertEqual(
+            ru["one"],
+            "Копии одного адреса 20:7b:d5:1a:31:8d (Realtek) — вероятнее всего, "
+            "неисправен его сетевой адаптер. Проверьте подключение этого "
+            "устройства через другой адаптер.",
+        )
+        self.assertIn("20:7b:d5:1a:31:8d —", ru["nameless"])
+        self.assertIn("кабель, патч-корд, порт или неуправляемый коммутатор", ru["several"])
+        self.assertEqual(ru["none"], "")
+        self.assertEqual(
+            ru["alarm"],
+            "Копии одного адреса 20:7b:d5:1a:31:8d (Realtek) — вероятнее всего, "
+            "неисправен его сетевой адаптер · входящих ошибок за 10 мин: 340",
+        )
+        self.assertNotIn("ошибок", ru["alarmSeveral"])
+        self.assertEqual(ru["old"], "")
+        # nothing English in the Russian ones but the address and the maker
+        for text in ru.values():
+            self.assertNotRegex(text.replace("20:7b:d5:1a:31:8d", "")
+                                .replace("Realtek", ""), "[A-Za-z]", text)
+        self.assertIn("network adapter", en["one"])
+        self.assertIn("inbound errors in 10 min: 340", en["alarm"])
 
 
 if __name__ == "__main__":

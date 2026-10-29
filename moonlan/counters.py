@@ -151,6 +151,9 @@ class PortRates:
     # errors as a share of all frames on the port (0.01 = 1%); None
     # when the switch exposes no packet counters
     error_ratio: float | None = None
+    # the interval the rates were measured over: a rate times this is
+    # a count, which "inbound errors in 10 min" needs (v0.8.5)
+    seconds: float | None = None
 
     @staticmethod
     def _total(a: float | None, b: float | None) -> float | None:
@@ -473,6 +476,7 @@ class CounterStore:
                 in_discards_per_min=per_min[2],
                 out_discards_per_min=per_min[3],
                 error_ratio=_error_ratio(prev, cur),
+                seconds=dt,
             )
             fresh[if_index] = rates
             self._rates.setdefault(key, deque(maxlen=self._history)).append(rates)
@@ -506,6 +510,19 @@ class CounterStore:
 
     def history(self, ip: str, if_index: int) -> list[PortRates]:
         return list(self._rates.get((ip, if_index), ()))
+
+    def inbound_errors(self, ip: str, if_index: int, since: float) -> int | None:
+        """Inbound errors counted by the cycles that ended after `since`;
+        None when none of them has an answer for the column — unknown,
+        not zero."""
+        total: float | None = None
+        for rates in self._rates.get((ip, if_index), ()):
+            if rates.ts <= since or rates.in_errors_per_min is None:
+                continue
+            if not rates.seconds:
+                continue
+            total = (total or 0.0) + rates.in_errors_per_min * rates.seconds / 60
+        return None if total is None else round(total)
 
 
 def rate_for_display(

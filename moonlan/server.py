@@ -758,7 +758,10 @@ async def run_scan() -> None:
         await alarm_engine.on_stp(stp_report)
         await alarm_engine.on_corruption(
             {f"{sw_ip}:{port}": found
-             for (sw_ip, port), found in suspects.items()}
+             for (sw_ip, port), found in suspects.items()},
+            inbound_errors=_subject_inbound_errors,
+            window_minutes=_copies_window() / 60,
+            maker=lambda mac: vendors.lookup(mac).name or "",
         )
         if new_macs and first_scan_done:
             rows = await asyncio.to_thread(db.hosts_by_mac)
@@ -1144,6 +1147,43 @@ def _is_known_bridge(bridge: dict) -> bool:
     return (
         bridge["chassis_id"].lower() in known
         or bridge.get("mgmt_ip", "").lower() in known
+    )
+
+
+def _copy_counts(found: list[dict]) -> dict[str, int]:
+    """The addresses a port's copies are of -> how many, most first"""
+    counts = Counter(s["sample"] for s in found)
+    return dict(sorted(counts.items(), key=lambda kv: (-kv[1], kv[0])))
+
+
+def _copy_samples(counts: dict[str, int]) -> list[dict]:
+    """[{mac, vendor, n}] for the page, which words the conclusion"""
+    return [
+        {"mac": mac, "vendor": vendors.lookup(mac).name or "", "n": n}
+        for mac, n in counts.items()
+    ]
+
+
+def _copies_window() -> float:
+    """What "inbound errors in N min" counts over: one scan interval —
+    the copies a scan finds were learned since the one before it."""
+    return (config.scan_interval_minutes or 10) * 60
+
+
+def _subject_inbound_errors(subject: str) -> int | None:
+    """Inbound errors of the port "switch ip:port" over _copies_window();
+    None while the counters do not know."""
+    ip, _sep, port = subject.partition(":")
+    sw = switch_data.get(ip)
+    if sw is None:
+        return None
+    if_index = next(
+        (i for i in sw.ports if port_name(sw, i) == port), None
+    )
+    if if_index is None:
+        return None
+    return counter_store.inbound_errors(
+        ip, if_index, time.time() - _copies_window()
     )
 
 
@@ -2966,8 +3006,13 @@ async def api_switch_ports(ip: str) -> dict:
             "rate_age_seconds": None if age is None else round(age),
             "hosts": host_counts.get(name, 0),
             "monitored_hosts": monitored_counts.get(name, 0),
-            # MACs that look like damaged copies of a real one here
+            # MACs that look like damaged copies of a real one here,
+            # and the addresses they are copies of: one of them points
+            # at that device's adapter, several at the port (v0.8.5)
             "suspect_macs": suspect_by_port.get((ip, name), []),
+            "suspect_samples": _copy_samples(
+                _copy_counts(suspect_by_port.get((ip, name), []))
+            ),
             # link-state transitions inside the flap window
             "flaps": flapping.get(name, ZERO_FLAPS).count,
             "flaps_last": flapping.get(name, ZERO_FLAPS).last,
@@ -3229,6 +3274,15 @@ async def api_alarms(
         row.update(_alarm_meta(row, db_hosts, sw_names))
         row["flapping"] = key in flapping
         row["raise_count"], row["last_raise"] = stats.get(key, (1, row["ts_raised"]))
+        if row["type"] == "port_frame_corruption" and active:
+            # which fault is likelier, as data the page words (v0.8.5)
+            samples = alarm_engine.corruption_samples(row["subject"])
+            if samples:
+                row["corruption"] = {
+                    "samples": _copy_samples(samples),
+                    "errors_in": _subject_inbound_errors(row["subject"]),
+                    "minutes": _copies_window() / 60,
+                }
     return {
         "alarms": rows,
         "flap_window_hours": config.notifications.flap_window_seconds / 3600,

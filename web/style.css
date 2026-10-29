@@ -474,6 +474,8 @@ main { flex: 1; display: flex; min-height: 0; position: relative; }
   color: var(--text);
 }
 .alarm-sub { color: var(--text-dim); font-size: 0.78rem; }
+/* which fault is likelier, under a frame corruption alarm (v0.8.5) */
+.alarm-why { font-size: 0.8rem; word-break: break-word; }
 .flap-since { color: var(--text-dim); font-size: 0.72rem; }
 .sev {
   flex: none;

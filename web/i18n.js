@@ -663,8 +663,17 @@ const I18N = {
     suspectMacs: "Suspected frame corruption: {n} addresses",
     suspectMacsHint:
       "The MAC table of this port holds addresses a few bits away from "
-      + "a real one: the switch learned them from damaged frames. Check "
-      + "the cable, the patch cord and the port itself.",
+      + "a real one: the switch learned them from damaged frames.",
+    // which fault is likelier (v0.8.5): {maker} is " (maker)" or nothing
+    suspectOneHint:
+      "Copies of one address, {mac}{maker}: most likely its network "
+      + "adapter is faulty. Check this device through another adapter.",
+    suspectManyHint:
+      "Copies of several addresses on one port: likelier the cable, the "
+      + "patch cord, the port or an unmanaged switch behind it.",
+    corruptionOne: "Copies of one address, {mac}{maker} — most likely its network adapter",
+    corruptionMany: "Copies of several addresses — likelier the cable, the patch cord, the port or an unmanaged switch behind it",
+    corruptionErrorsIn: "inbound errors in {minutes} min: {n}",
     lagMembersShort: "({active}/{total} members)",
     clearBtn: "Clear",
     clearConfirm: "Clear this alarm?",
@@ -1832,8 +1841,17 @@ const I18N = {
     suspectMacs: "Подозрение на повреждение кадров: {n} адресов",
     suspectMacsHint:
       "В таблице MAC этого порта есть адреса, отличающиеся от реального "
-      + "на несколько бит: коммутатор выучил их из повреждённых кадров. "
-      + "Проверьте кабель, патч-корд и сам порт.",
+      + "на несколько бит: коммутатор выучил их из повреждённых кадров.",
+    suspectOneHint:
+      "Копии одного адреса {mac}{maker} — вероятнее всего, неисправен его "
+      + "сетевой адаптер. Проверьте подключение этого устройства через "
+      + "другой адаптер.",
+    suspectManyHint:
+      "Копии нескольких адресов на одном порту — вероятнее кабель, "
+      + "патч-корд, порт или неуправляемый коммутатор за ним.",
+    corruptionOne: "Копии одного адреса {mac}{maker} — вероятнее всего, неисправен его сетевой адаптер",
+    corruptionMany: "Копии нескольких адресов — вероятнее кабель, патч-корд, порт или неуправляемый коммутатор за ним",
+    corruptionErrorsIn: "входящих ошибок за {minutes} мин: {n}",
     lagMembersShort: "({active}/{total})",
     clearBtn: "Снять",
     clearConfirm: "Снять эту тревогу?",

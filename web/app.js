@@ -8394,12 +8394,12 @@ function renderPorts(data) {
         const chip = document.createElement("span");
         chip.className = "chip warn";
         chip.textContent = "⚠ " + suspect.length;
-        chip.title =
-          fmt("suspectMacs", { n: suspect.length }) + "\n" +
-          t("suspectMacsHint") + "\n" +
-          suspect
-            .map((s) => s.mac + " ← " + s.sample + " (" + s.distance + ")")
-            .join("\n");
+        chip.title = [
+          fmt("suspectMacs", { n: suspect.length }),
+          t("suspectMacsHint"),
+          copiesVerdict(p.suspect_samples, "suspectOneHint", "suspectManyHint"),
+          ...suspect.map((s) => s.mac + " ← " + s.sample + " (" + s.distance + ")"),
+        ].filter(Boolean).join("\n");
         marks.append(" ", chip);
       }
       // cut short on a phone: the whole of it in the tooltip
@@ -8583,6 +8583,13 @@ function renderAlarms() {
         port.textContent = t("portLabel") + ": " + a.port;
         li.append(port);
       }
+      const why = corruptionAlarmText(a.corruption);
+      if (why) {
+        const line = document.createElement("div");
+        line.className = "alarm-why";
+        line.textContent = why;
+        li.append(line);
+      }
       // counter alarms: jump straight to the port they are about
       if (
         a.switch_ip &&
@@ -8608,6 +8615,28 @@ function renderAlarms() {
   };
   section("alarmsActive", lastAlarms.active, true);
   section("alarmsCleared", lastAlarms.cleared, false);
+}
+
+/* Which fault the damaged copies on a port point at (v0.8.5): copies
+   of one address — that device's network adapter; of several — what
+   they share, the cable, the port or a switch behind it. The server
+   sends the addresses and their makers; the words are the page's. */
+function copiesVerdict(samples, oneKey, manyKey) {
+  if (!samples || !samples.length) return "";
+  if (samples.length > 1) return t(manyKey);
+  const s = samples[0];
+  return fmt(oneKey, { mac: s.mac, maker: s.vendor ? " (" + s.vendor + ")" : "" });
+}
+
+/* The same in one line under a port_frame_corruption alarm, with the
+   port's inbound errors when the counters know them */
+function corruptionAlarmText(c) {
+  if (!c) return "";
+  const parts = [copiesVerdict(c.samples, "corruptionOne", "corruptionMany")];
+  if (c.errors_in != null) {
+    parts.push(fmt("corruptionErrorsIn", { n: c.errors_in, minutes: c.minutes }));
+  }
+  return parts.filter(Boolean).join(" · ");
 }
 
 /* ---------- STP panel ---------- */
