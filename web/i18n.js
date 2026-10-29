@@ -660,7 +660,7 @@ const I18N = {
     al_port_hosts_down: "Mass host outage",
     al_lag_degraded: "LAG degraded",
     al_port_frame_corruption: "Frame corruption",
-    suspectMacs: "Suspected frame corruption: {n} addresses",
+    suspectMacs: "Suspected frame corruption: {count}",
     suspectMacsHint:
       "The MAC table of this port holds addresses a few bits away from "
       + "a real one: the switch learned them from damaged frames.",
@@ -1838,7 +1838,7 @@ const I18N = {
     al_port_hosts_down: "Массовое отключение хостов",
     al_lag_degraded: "Деградация LAG",
     al_port_frame_corruption: "Повреждение кадров",
-    suspectMacs: "Подозрение на повреждение кадров: {n} адресов",
+    suspectMacs: "Подозрение на повреждение кадров: {count}",
     suspectMacsHint:
       "В таблице MAC этого порта есть адреса, отличающиеся от реального "
       + "на несколько бит: коммутатор выучил их из повреждённых кадров.",

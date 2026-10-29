@@ -698,6 +698,7 @@ for (const l of ["en", "ru"]) {
     several: copiesVerdict(several, "suspectOneHint", "suspectManyHint"),
     none: copiesVerdict(undefined, "suspectOneHint", "suspectManyHint"),
     alarm: corruptionAlarmText({ samples: one, errors_in: 340, minutes: 10 }),
+    count: [1, 3, 5, 21].map((n) => fmt("suspectMacs", { count: plural("evAddresses", n) })),
     alarmSeveral: corruptionAlarmText({ samples: several, errors_in: null, minutes: 10 }),
     old: corruptionAlarmText(undefined),
   };
@@ -743,9 +744,13 @@ class HintWordsTest(unittest.TestCase):
         self.assertNotIn("ошибок", ru["alarmSeveral"])
         self.assertEqual(ru["old"], "")
         # nothing English in the Russian ones but the address and the maker
-        for text in ru.values():
+        for text in (v for v in ru.values() if isinstance(v, str)):
             self.assertNotRegex(text.replace("20:7b:d5:1a:31:8d", "")
                                 .replace("Realtek", ""), "[A-Za-z]", text)
+        # the number agrees with its word: not "3 адресов"
+        self.assertEqual([c.rsplit(": ", 1)[1] for c in ru["count"]],
+                         ["1 адрес", "3 адреса", "5 адресов", "21 адрес"])
+        self.assertEqual(en["count"][1], "Suspected frame corruption: 3 addresses")
         self.assertIn("network adapter", en["one"])
         self.assertIn("inbound errors in 10 min: 340", en["alarm"])
 

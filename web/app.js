@@ -8395,7 +8395,7 @@ function renderPorts(data) {
         chip.className = "chip warn";
         chip.textContent = "⚠ " + suspect.length;
         chip.title = [
-          fmt("suspectMacs", { n: suspect.length }),
+          fmt("suspectMacs", { count: plural("evAddresses", suspect.length) }),
           t("suspectMacsHint"),
           copiesVerdict(p.suspect_samples, "suspectOneHint", "suspectManyHint"),
           ...suspect.map((s) => s.mac + " ← " + s.sample + " (" + s.distance + ")"),
