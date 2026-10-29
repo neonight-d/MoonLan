@@ -730,6 +730,11 @@ const I18N = {
       "while; the device stays in the inventory until the retention " +
       "window ends.",
     ev_hosts_purged: "Old hosts removed",
+    // damaged copies of a MAC confirmed before v0.8.5, one entry a batch
+    ev_copies_removed: "Damaged MAC copies removed",
+    evCopies: "{sample}: {count} on {switch} {ports}",
+    evAddresses_one: "{n} address",
+    evAddresses_other: "{n} addresses",
     ev_link_dropped: "Link withdrawn",
     // a withdrawn link in the journal (v0.8.2): which and why
     evLinkEnds: "{a} {a_port} — {b} {b_port} ({source})",
@@ -1895,6 +1900,12 @@ const I18N = {
       "MAC-адрес давно не появлялся в таблицах коммутаторов; устройство " +
       "остаётся в инвентаре до истечения срока хранения.",
     ev_hosts_purged: "Удалены старые хосты",
+    ev_copies_removed: "Убраны искажённые копии",
+    evCopies: "{sample}: {count} на {switch} {ports}",
+    evAddresses_one: "{n} адрес",
+    evAddresses_few: "{n} адреса",
+    evAddresses_many: "{n} адресов",
+    evAddresses_other: "{n} адреса",
     ev_link_dropped: "Связь снята",
     evLinkEnds: "{a} {a_port} — {b} {b_port} ({source})",
     evLinkSource_fdb: "таблицы MAC",

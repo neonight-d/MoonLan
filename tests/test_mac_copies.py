@@ -17,6 +17,7 @@ the grace window.
 Run with:  python -m unittest discover -s tests
 """
 
+import json
 import sys
 import time
 import unittest
@@ -161,7 +162,9 @@ class StubCollector:
         return switch(host, f"sw-{host}", int(host.rsplit(".", 1)[1]) + 10)
 
 
-class ScanTest(unittest.IsolatedAsyncioTestCase):
+class ScanCase(unittest.IsolatedAsyncioTestCase):
+    """The service with a stub collector, scan by scan."""
+
     def setUp(self):
         self.collector = StubCollector()
         self._get_collector = server.get_collector
@@ -181,6 +184,7 @@ class ScanTest(unittest.IsolatedAsyncioTestCase):
         server.prev_pseudo_ports = set()
         server.db._conn.execute("DELETE FROM hosts")
         server.db._conn.execute("DELETE FROM journal")
+        server.db._conn.execute("DELETE FROM notes")
         server.db._conn.commit()
 
     def tearDown(self):
@@ -223,6 +227,8 @@ class ScanTest(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(self.new_macs(mac), 0)
                 self.assertNotIn(mac, self.drawn())
 
+
+class ScanTest(ScanCase):
     async def test_seen_in_three_polls_in_a_row_it_is_never_a_device(self):
         """The bug itself: it used to be confirmed in the second."""
         await self.inventory(access={SAMPLE: 7})
@@ -312,6 +318,255 @@ class ScanTest(unittest.IsolatedAsyncioTestCase):
         await server.run_scan()
         await server.run_scan()
         self.assertTrue(self.row(FAR)["confirmed"])
+
+
+
+def flip(mac: str, *bits: int) -> str:
+    """mac with the given bits of its last three octets flipped"""
+    number = corruption.mac_number(mac)
+    for bit in bits:
+        number ^= 1 << bit
+    return ":".join(f"{b:02x}" for b in number.to_bytes(6, "big"))
+
+
+# a hundred copies around the hub's address, one or two bits each
+HUNDRED = sorted({flip(SAMPLE, a, b) for a in range(24) for b in range(a, 24)
+                  if a != b or a % 3 == 0})[:100]
+
+
+def record(mac: str, **fields) -> dict:
+    row = {
+        "mac": mac, "ip": "", "name": "", "switch_ip": ACCESS, "port": "1/5",
+        "last_seen": 1000.0, "last_arp": 0, "ip_confirmed": 0,
+        "last_ping_ok": 0, "monitored": 0, "seen_count": 2, "confirmed": 1,
+        "corrupt_of": "",
+    }
+    row.update(fields)
+    return row
+
+
+class OldCopiesTest(unittest.TestCase):
+    """What an older version confirmed: found by the record alone."""
+
+    def rows(self, *extra: dict, copies=HUNDRED) -> dict[str, dict]:
+        rows = {SAMPLE: record(SAMPLE, ip="10.0.99.49", last_arp=900.0,
+                               ip_confirmed=900.0, last_ping_ok=950.0,
+                               seen_count=4000)}
+        rows.update((mac, record(mac)) for mac in copies)
+        rows.update((row["mac"], row) for row in extra)
+        return rows
+
+    def test_the_hundred_from_the_screenshot(self):
+        self.assertEqual(len(HUNDRED), 100)
+        batches = corruption.confirmed_copies(self.rows(), set(), 8, 5)
+        self.assertEqual(len(batches), 1)
+        self.assertEqual(batches[0]["sample"], SAMPLE)
+        self.assertEqual(batches[0]["switch"], ACCESS)
+        self.assertEqual(batches[0]["macs"], HUNDRED)
+        self.assertEqual(batches[0]["ports"], ["1/5"])
+
+    def test_a_real_neighbour_and_four_copies_are_left_alone(self):
+        """Two machines of one batch a bit apart, one without an IP: it
+        has been in the tables for days. Four copies are not a crowd."""
+        neighbour = record(flip(SAMPLE, 20), seen_count=500)
+        rows = self.rows(neighbour, copies=HUNDRED[:4])
+        self.assertEqual(corruption.confirmed_copies(rows, set(), 8, 5), [])
+        # …and a fifth copy makes it a crowd, the neighbour still apart
+        rows = self.rows(neighbour, copies=HUNDRED[:5])
+        (batch,) = corruption.confirmed_copies(rows, set(), 8, 5)
+        self.assertEqual(batch["macs"], HUNDRED[:5])
+
+    def test_a_note_a_label_or_a_watch_keeps_it(self):
+        labelled, watched = HUNDRED[0], HUNDRED[1]
+        rows = self.rows()
+        rows[watched]["monitored"] = 1
+        (batch,) = corruption.confirmed_copies(rows, {labelled}, 8, 5)
+        self.assertNotIn(labelled, batch["macs"])
+        self.assertNotIn(watched, batch["macs"])
+        self.assertEqual(len(batch["macs"]), 98)
+
+    def test_anything_that_ever_had_an_address_is_left_alone(self):
+        for field, value in (("ip", "10.0.99.7"), ("last_arp", 900.0),
+                             ("ip_confirmed", 900.0), ("last_ping_ok", 900.0),
+                             ("name", "pc.example.local"), ("seen_count", 11),
+                             ("confirmed", 0)):
+            with self.subTest(field):
+                rows = self.rows(copies=HUNDRED[:5])
+                rows[HUNDRED[0]][field] = value
+                # four left: not a crowd any more
+                self.assertEqual(corruption.confirmed_copies(rows, set(), 8, 5), [])
+
+    def test_the_sample_must_have_an_ip_on_the_same_switch(self):
+        rows = self.rows()
+        rows[SAMPLE]["switch_ip"] = CORE
+        self.assertEqual(corruption.confirmed_copies(rows, set(), 8, 5), [])
+
+    def test_marked_ones_count_and_are_not_marked_again(self):
+        rows = self.rows()
+        for mac in HUNDRED[:99]:
+            rows[mac]["corrupt_of"] = SAMPLE
+        (batch,) = corruption.confirmed_copies(rows, set(), 8, 5)
+        self.assertEqual(batch["macs"], HUNDRED[99:])
+        rows[HUNDRED[99]]["corrupt_of"] = SAMPLE
+        self.assertEqual(corruption.confirmed_copies(rows, set(), 8, 5), [])
+
+
+class MigrationTest(unittest.TestCase):
+    def test_an_older_database_gets_the_column(self):
+        import sqlite3
+        import tempfile
+        from moonlan.db import Database
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "old.db"
+            conn = sqlite3.connect(path)
+            conn.execute(
+                "CREATE TABLE hosts (mac TEXT PRIMARY KEY, ip TEXT DEFAULT '', "
+                "name TEXT DEFAULT '', switch_ip TEXT DEFAULT '', "
+                "port TEXT DEFAULT '', first_seen REAL NOT NULL, "
+                "last_seen REAL NOT NULL, last_ping_ok REAL DEFAULT 0, "
+                "ping_up INTEGER DEFAULT 0)"
+            )
+            conn.execute(
+                "INSERT INTO hosts (mac, first_seen, last_seen) VALUES (?, 1, 1)",
+                (COPY,),
+            )
+            conn.commit()
+            conn.close()
+            with self.assertLogs("moonlan", "INFO") as logs:
+                db = Database(path)
+            self.assertIn("DB migration: added hosts.corrupt_of column",
+                          "\n".join(logs.output))
+            self.assertEqual(db.hosts_by_mac()[COPY]["corrupt_of"], "")
+            db.close()
+
+
+class OldCopiesScanTest(ScanCase):
+    """The database of the service from the operator's report: the hub
+    behind port 5, a hundred copies of its address confirmed, an
+    "Offline · 100" beside it."""
+
+    def setUp(self):
+        super().setUp()
+        now = time.time()
+        server.db.seed_host(SAMPLE, ACCESS, "Gi0/5", 1, first_seen=now - 86400,
+                            last_seen=now, seen_count=400)
+        server.db.set_ips({SAMPLE: "10.0.99.49"})
+        for n, mac in enumerate(HUNDRED):
+            port = "Gi0/5" if n % 4 else "Gi0/3"  # the hub was on port 3 first
+            server.db.seed_host(mac, ACCESS, port, 1, first_seen=now - 7200,
+                                last_seen=now - 3600, seen_count=2)
+        self.collector.access = {SAMPLE: 5}
+
+    def events(self) -> list:
+        return server.db._conn.execute(
+            "SELECT mac, details FROM journal WHERE event = 'copies_removed'"
+        ).fetchall()
+
+    async def test_off_the_map_in_one_entry_and_gone_after_the_cleanup(self):
+        await server.hide_confirmed_copies()
+        (event,) = self.events()
+        self.assertEqual(event["mac"], SAMPLE)
+        data = json.loads(event["details"])
+        self.assertEqual(data["n"], 100)
+        self.assertEqual(sorted(data["macs"]), HUNDRED)
+        self.assertEqual((data["switch"], data["ports"]), (ACCESS, ["Gi0/5", "Gi0/3"]))
+
+        await server.run_scan()
+        drawn = server.state.as_dict()
+        self.assertEqual(self.drawn(), {SAMPLE})
+        self.assertEqual(drawn["offline_groups"], [])
+        self.assertEqual(drawn["unlocated"], [])
+        self.assertEqual(server._known_hosts_per_port(server.db.hosts_by_mac(), {ACCESS}),
+                         {(ACCESS, "Gi0/5"): 1})
+        self.assertEqual(len(self.events()), 1)     # not once a scan
+
+        await server.purge_copies()
+        self.assertEqual(set(server.db.hosts_by_mac()), {SAMPLE})
+        self.assertEqual(len(self.events()), 1)
+        self.assertEqual(server.db._conn.execute(
+            "SELECT COUNT(*) FROM journal WHERE event <> 'copies_removed'"
+        ).fetchone()[0], 0)
+
+    async def test_after_every_scan(self):
+        """No start in between: the scan finds them itself."""
+        await server.run_scan()
+        self.assertEqual(len(self.events()), 1)
+        self.assertEqual(self.drawn(), {SAMPLE})
+
+    async def test_back_in_the_table_it_is_still_a_copy(self):
+        await server.hide_confirmed_copies()
+        self.collector.access.update({mac: 5 for mac in HUNDRED[:3]})
+        await server.run_scan()
+        self.assertEqual(self.drawn(), {SAMPLE})
+        self.assertEqual(
+            sorted(s["mac"] for s in server.suspect_by_port[(ACCESS, "Gi0/5")]),
+            sorted(HUNDRED[:3]),
+        )
+        self.assertEqual(server.state.as_dict()["pseudo_switches"], [])
+
+    async def test_an_ip_takes_it_back(self):
+        await server.hide_confirmed_copies()
+        server.db.set_ips({HUNDRED[0]: "10.0.99.50"})
+        self.assertEqual(server.db.hosts_by_mac()[HUNDRED[0]]["corrupt_of"], "")
+        await server.purge_copies()
+        self.assertIn(HUNDRED[0], server.db.hosts_by_mac())
+
+    async def test_with_the_filter_off_nothing_is_marked_or_removed(self):
+        server.config.filter_suspect_macs = False
+        await server.hide_confirmed_copies()
+        await server.run_scan()
+        self.assertEqual(self.events(), [])
+        self.assertTrue(set(HUNDRED) <= self.drawn())
+        server.db.mark_copies(SAMPLE, HUNDRED)
+        await server.purge_copies()
+        self.assertEqual(len(server.db.hosts_by_mac()), 101)
+
+
+
+JOURNAL_PAGE = r"""
+const out = {};
+topology = { switches: [{ ip: "10.0.0.2", name: "access-sw" }] };
+for (const l of ["en", "ru"]) {
+  lang = l;
+  out[l] = [104, 1, 2, 5, 21].map((n) => copiesEventText({
+    event: "copies_removed", mac: "20:7b:d5:1a:31:8d",
+    details: JSON.stringify({ switch: "10.0.0.2", ports: ["Gi0/5", "Gi0/3"], n: n,
+                              macs: ["20:7b:d5:1a:31:87"] }),
+  }));
+}
+out.other = copiesEventText({ event: "new_mac", mac: "20:7b:d5:1a:31:8d", details: "" });
+__done(out);
+"""
+
+
+class JournalWordsTest(unittest.TestCase):
+    def test_both_languages_have_the_entry(self):
+        from web_source import strings
+        for lang in ("en", "ru"):
+            words = strings(lang)
+            with self.subTest(lang):
+                for key in ("ev_copies_removed", "evCopies", "evAddresses_one",
+                            "evAddresses_other"):
+                    self.assertTrue(words.get(key), key)
+        ru = strings("ru")
+        self.assertEqual(ru["ev_copies_removed"], "Убраны искажённые копии")
+        for key in ("evAddresses_few", "evAddresses_many"):
+            self.assertTrue(ru.get(key), key)
+
+    def test_the_page_words_it(self):
+        from web_source import NODE, run_page
+        if not NODE:
+            self.skipTest("needs node to run the page's JavaScript")
+        out = run_page(JOURNAL_PAGE)
+        self.assertEqual(out["en"][0],
+                         "20:7b:d5:1a:31:8d: 104 addresses on access-sw Gi0/5, Gi0/3")
+        self.assertEqual(out["en"][1],
+                         "20:7b:d5:1a:31:8d: 1 address on access-sw Gi0/5, Gi0/3")
+        self.assertEqual(
+            [text.split(": ", 1)[1].split(" на ")[0] for text in out["ru"]],
+            ["104 адреса", "1 адрес", "2 адреса", "5 адресов", "21 адрес"],
+        )
+        self.assertEqual(out["other"], "")
 
 
 if __name__ == "__main__":

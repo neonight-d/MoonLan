@@ -53,7 +53,10 @@ CREATE TABLE IF NOT EXISTS hosts (
     last_arp   REAL DEFAULT 0,            -- last seen in a router's ARP table
     ip_confirmed REAL DEFAULT 0,          -- when ARP last tied this IP to this MAC
     seen_count INTEGER DEFAULT 0,         -- polls this MAC was in an FDB
-    confirmed  INTEGER DEFAULT 0          -- 1 = real enough to go on the map
+    confirmed  INTEGER DEFAULT 0,         -- 1 = real enough to go on the map
+    -- a damaged copy of this address, confirmed before v0.8.5 held
+    -- copies back: off the map, deleted at the next daily cleanup
+    corrupt_of TEXT DEFAULT ''
 );
 CREATE TABLE IF NOT EXISTS journal (
     id      INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -323,6 +326,11 @@ class Database:
                 "UPDATE hosts SET confirmed = 1 WHERE ip <> '' OR last_seen > 0"
             )
             log.info("DB migration: added hosts.confirmed column")
+        if "corrupt_of" not in columns:
+            self._conn.execute(
+                "ALTER TABLE hosts ADD COLUMN corrupt_of TEXT DEFAULT ''"
+            )
+            log.info("DB migration: added hosts.corrupt_of column")
         # An IP belongs to exactly one MAC. Stale ARP pairs (a device
         # changed its MAC, DHCP reassigned the address) used to leave
         # the same IP on several host rows, and then one unreachable
@@ -559,9 +567,11 @@ class Database:
                     "UPDATE hosts SET ip = '' WHERE ip = ? AND mac <> ?",
                     (ip, mac),
                 )
+                # an address that answers ARP is a device, whatever it
+                # looked like a copy of
                 cur = self._conn.execute(
-                    "UPDATE hosts SET ip = ?, last_arp = ?, ip_confirmed = ? "
-                    "WHERE mac = ?",
+                    "UPDATE hosts SET ip = ?, last_arp = ?, ip_confirmed = ?, "
+                    "corrupt_of = '' WHERE mac = ?",
                     (ip, now, now, mac),
                 )
                 if cur.rowcount == 0 and create_missing:
@@ -579,6 +589,21 @@ class Database:
         with self._lock, self._conn:
             self._conn.execute(
                 "UPDATE hosts SET ip_confirmed = ? WHERE mac = ?", (ts, mac)
+            )
+
+    def seed_host(
+        self, mac: str, switch_ip: str, port: str, vlan: int, *,
+        first_seen: float, last_seen: float, seen_count: int,
+    ) -> None:
+        """Writes a confirmed host record as an older version left it,
+        with no journal entry of its own (demo seeding)."""
+        with self._lock, self._conn:
+            self._conn.execute(
+                "INSERT OR REPLACE INTO hosts (mac, switch_ip, port, vlan, "
+                "first_seen, last_seen, seen_count, confirmed) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, 1)",
+                (mac, switch_ip, port, vlan, first_seen, last_seen,
+                 seen_count),
             )
 
     def set_last_seen(self, mac: str, ts: float) -> None:
@@ -620,6 +645,28 @@ class Database:
         with self._lock, self._conn:
             cur = self._conn.executemany(
                 "DELETE FROM hosts WHERE mac = ?", [(m,) for m in macs]
+            )
+        return cur.rowcount
+
+    def mark_copies(self, sample: str, macs: list[str]) -> int:
+        """Marks confirmed records as damaged copies of `sample`; returns
+        how many were marked. They stay in the table until the next
+        cleanup (delete_copies), off the map meanwhile."""
+        if not macs:
+            return 0
+        with self._lock, self._conn:
+            cur = self._conn.executemany(
+                "UPDATE hosts SET corrupt_of = ? "
+                "WHERE mac = ? AND corrupt_of = '' AND ip = ''",
+                [(sample, mac) for mac in macs],
+            )
+        return cur.rowcount
+
+    def delete_copies(self) -> int:
+        """Removes every record marked as a damaged copy."""
+        with self._lock, self._conn:
+            cur = self._conn.execute(
+                "DELETE FROM hosts WHERE corrupt_of <> ''"
             )
         return cur.rowcount
 

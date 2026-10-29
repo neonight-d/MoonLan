@@ -24,6 +24,13 @@ and what was real before this poll began.
 
 from __future__ import annotations
 
+from collections import Counter
+
+# A copy confirmed before v0.8.5 was seen in a poll or two: the damaged
+# frame is gone, and so is the address. Past this many sightings a
+# record is something that keeps coming back — not what this is about.
+MAX_COPY_SIGHTINGS = 10
+
 def mac_number(mac: str) -> int | None:
     """A MAC as a 48-bit number; None if it cannot be parsed."""
     try:
@@ -44,10 +51,11 @@ def hamming_distance(a: str, b: str) -> int:
 
 
 def _real(mac: str, row: dict | None, with_ip: set[str]) -> bool:
-    """Accepted before this poll: confirmed, or holding an IP."""
+    """Accepted before this poll: confirmed, or holding an IP. A record
+    marked as a damaged copy is not, whatever its confirmed flag says."""
     if mac in with_ip:
         return True
-    if row is None:
+    if row is None or row.get("corrupt_of"):
         return False
     return bool(row.get("confirmed") or row.get("ip"))
 
@@ -182,6 +190,81 @@ def likely_copies(
                 if _nearest(mac, real, max_bits)[0] > 0:
                     likely.add(mac)
     return likely
+
+
+def _never_addressed(mac: str, row: dict, noted: set[str]) -> bool:
+    """A confirmed record nothing but the MAC tables ever vouched for,
+    seen in a few polls, and nobody's business: no IP, no ARP entry, no
+    ping reply, no name; not watched, no label and no note. With no
+    ARP entry ever, it was confirmed by sightings — ARP had nothing to
+    confirm it with."""
+    return (
+        bool(row.get("confirmed"))
+        and bool(row.get("switch_ip"))
+        and not row.get("ip")
+        and not row.get("last_arp")
+        and not row.get("ip_confirmed")
+        and not row.get("last_ping_ok")
+        and not row.get("name")
+        and not row.get("monitored")
+        and row.get("seen_count", 0) <= MAX_COPY_SIGHTINGS
+        and mac not in noted
+    )
+
+
+def confirmed_copies(
+    rows: dict[str, dict], noted: set[str], max_bits: int, threshold: int,
+) -> list[dict]:
+    """The damaged copies the database confirmed before v0.8.5 held
+    them back, in batches: one per address they are copies of.
+
+    rows are the hosts table by MAC; noted the MACs with a label or a
+    note on their node. A record counts if it never had an address
+    (_never_addressed) and sits within max_bits of an address WITH an
+    IP on the same switch — and only in a crowd: at least `threshold`
+    of them around one address. Two real machines of one batch may
+    differ by a bit, and one of them may have no IP; five IP-less
+    neighbours each seen in a poll or two do not happen to a real
+    batch.
+
+    Records already marked count towards the crowd of their address,
+    so a straggler joins its batch. Returns [{sample, switch, macs,
+    ports}] of the records to mark now, `ports` the ports they were
+    seen on, the most crowded first.
+    """
+    if max_bits <= 0 or threshold <= 0:
+        return []
+    addressed: dict[str, set[str]] = {}
+    for mac, row in rows.items():
+        if row.get("ip") and row.get("switch_ip"):
+            addressed.setdefault(row["switch_ip"], set()).add(mac)
+    crowds: dict[tuple[str, str], list[str]] = {}
+    for mac, row in rows.items():
+        if row.get("corrupt_of"):
+            crowds.setdefault(
+                (row["switch_ip"], row["corrupt_of"]), []
+            ).append(mac)
+        elif _never_addressed(mac, row, noted):
+            distance, sample = _nearest(
+                mac, addressed.get(row["switch_ip"], set()), max_bits
+            )
+            if distance > 0:
+                crowds.setdefault((row["switch_ip"], sample), []).append(mac)
+    batches: list[dict] = []
+    for (switch, sample), macs in sorted(crowds.items()):
+        if len(macs) < threshold:
+            continue
+        new = sorted(mac for mac in macs if not rows[mac].get("corrupt_of"))
+        if not new:
+            continue
+        ports = Counter(rows[mac]["port"] for mac in new)
+        batches.append({
+            "sample": sample,
+            "switch": switch,
+            "macs": new,
+            "ports": sorted(ports, key=lambda port: (-ports[port], port)),
+        })
+    return batches
 
 
 def sample_mac(suspects: list[dict]) -> str:

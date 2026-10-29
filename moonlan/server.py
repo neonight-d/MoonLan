@@ -465,10 +465,11 @@ async def run_scan() -> None:
         # …and the ones that will be found to be copies keep out of the
         # per-port device counts already, or a few of them seen twice
         # would make the port behind one real device a switch without
-        # SNMP
+        # SNMP. Neither do the records marked as copies (v0.8.5).
         voting_out = unconfirmed
         if config.filter_suspect_macs:
-            voting_out = unconfirmed | corruption.likely_copies(
+            voting_out = unconfirmed | _marked_copies(db_rows)
+            voting_out |= corruption.likely_copies(
                 {sw.ip: set(sw.fdb) for sw in collected if sw.reachable},
                 copy_candidates,
                 corruption.samples_by_switch(
@@ -589,22 +590,27 @@ async def run_scan() -> None:
         new_macs += await asyncio.to_thread(db.confirm_hosts_with_ip)
         if new_macs:
             log.info("New MACs confirmed: %d", len(new_macs))
+        # copies confirmed before v0.8.5 held them back, now that this
+        # poll's sightings and addresses are written
+        await hide_confirmed_copies()
         unconfirmed = await asyncio.to_thread(db.unconfirmed_macs)
         if unconfirmed:
             log.info(
                 "MACs awaiting confirmation (%d poll(s) each): %d",
                 confirm_scans, len(unconfirmed),
             )
+        db_rows = await asyncio.to_thread(db.hosts_by_mac)
         if config.filter_suspect_macs:
             # off the map whatever the database holds: a switch past its
             # budget is drawn from a reading nobody wrote down, and its
-            # copies are in no table of unconfirmed addresses
-            unconfirmed |= suspect_macs
+            # copies are in no table of unconfirmed addresses. Nor in
+            # an offline group, behind a trunk or in the list beside
+            # the map: _assemble_hosts leaves out what is in this set.
+            unconfirmed |= suspect_macs | _marked_copies(db_rows)
         else:
             unconfirmed -= suspect_macs  # draw the damage instead
         hosts = [h for h in hosts if h["mac"] not in unconfirmed]
         fdb_macs = {h["mac"] for h in hosts}
-        db_rows = await asyncio.to_thread(db.hosts_by_mac)
         await _release_unconfirmed_ips(db_rows)
         hosts, offline_groups, unlocated, trunk_groups = _assemble_hosts(
             hosts, db_rows, pseudo_switches, {sw["ip"] for sw in switches},
@@ -1273,6 +1279,8 @@ def _known_hosts_per_port(
         if not row["confirmed"]:
             continue  # not a device yet: it must not push a port over
                       # the unmanaged-switch threshold
+        if row.get("corrupt_of") and config.filter_suspect_macs:
+            continue  # a damaged copy, never one
         if row["switch_ip"] in switch_ips and row["port"]:
             if grace > 0 and now - row["last_seen"] < grace:
                 counts[(row["switch_ip"], row["port"])] += 1
@@ -1913,6 +1921,7 @@ async def periodic_cleanup() -> None:
         await asyncio.sleep(CLEANUP_SECONDS)
         try:
             await purge_old_hosts()
+            await purge_copies()
             await alarm_engine.clear_missing_hosts(
                 set(await asyncio.to_thread(db.hosts_by_mac))
             )
@@ -2409,6 +2418,68 @@ async def purge_old_hosts() -> None:
         )
 
 
+def _marked_copies(db_rows: dict[str, dict]) -> set[str]:
+    """Records marked as damaged copies (v0.8.5)."""
+    return {mac for mac, row in db_rows.items() if row.get("corrupt_of")}
+
+
+async def hide_confirmed_copies() -> None:
+    """Damaged copies the database confirmed before v0.8.5 held them
+    back: marked, off the map from this moment, and deleted at the next
+    daily cleanup. One journal entry per batch — the copies of one
+    address — with the addresses in its data, not a line for each.
+
+    At the start and after every scan. Cheap: confirmed records that
+    never had an address are few. With filter_suspect_macs off nothing
+    is marked: that is the choice to draw the damage.
+    """
+    if not config.filter_suspect_macs:
+        return
+    rows = await asyncio.to_thread(db.hosts_by_mac)
+    notes = await asyncio.to_thread(db.notes)
+    noted = {
+        node_id[len("host:"):] for node_id, note in notes.items()
+        if node_id.startswith("host:")
+        and (note.get("label") or note.get("note"))
+    }
+    batches = corruption.confirmed_copies(
+        rows, noted, config.thresholds.corruption_hamming_bits,
+        config.thresholds.corruption_macs_threshold,
+    )
+    for batch in batches:
+        marked = await asyncio.to_thread(
+            db.mark_copies, batch["sample"], batch["macs"]
+        )
+        if not marked:
+            continue
+        log.info(
+            "Damaged copies of %s taken off the map: %d address(es) on %s "
+            "%s, confirmed as devices before v0.8.5 held copies back. "
+            "They are deleted at the next daily cleanup.",
+            batch["sample"], marked, batch["switch"],
+            ", ".join(batch["ports"]),
+        )
+        await asyncio.to_thread(
+            db.add_event, time.time(), "copies_removed", batch["sample"],
+            json.dumps({
+                "switch": batch["switch"],
+                "ports": batch["ports"],
+                "n": marked,
+                "macs": batch["macs"],
+            }),
+        )
+
+
+async def purge_copies() -> None:
+    """Cleanup: the records marked as damaged copies go. Not while the
+    filter is off — they are what is drawn then."""
+    if not config.filter_suspect_macs:
+        return
+    removed = await asyncio.to_thread(db.delete_copies)
+    if removed:
+        log.info("Removed %d records of damaged MAC copies", removed)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     logging.basicConfig(
@@ -2430,6 +2501,8 @@ async def lifespan(app: FastAPI):
     )
     await purge_invalid_macs()
     await purge_old_hosts()
+    await purge_copies()
+    await hide_confirmed_copies()
     await drop_unpinned_positions()
     await alarm_engine.load()
     await alarm_engine.clear_missing_hosts(

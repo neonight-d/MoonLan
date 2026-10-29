@@ -8844,7 +8844,8 @@ function renderJournal(events) {
       const host = document.createElement("span");
       host.className = "ev-host";
       host.textContent = accountEventText(ev) || noteEventText(ev) ||
-        settingsEventText(ev) || linkDroppedText(ev) || ev.name || ev.ip || ev.mac ||
+        settingsEventText(ev) || linkDroppedText(ev) || copiesEventText(ev) ||
+        ev.name || ev.ip || ev.mac ||
         layoutEventText(ev);
       if (ev.vendor) {
         // a new device says who made it; any other event keeps it to
@@ -8987,6 +8988,25 @@ function linkDroppedText(ev) {
       behind: switchName(data.behind || ""), cycle: data.cycle || "",
     });
   return why ? link + ": " + why : link;
+}
+
+/* Damaged copies of a MAC taken off the map (v0.8.5): "20:7b:d5:1a:31:8d:
+   104 addresses on access-sw-4 1/5". One entry for the batch; the
+   addresses are in its data, not a line each. */
+function copiesEventText(ev) {
+  if (ev.event !== "copies_removed") return "";
+  let data = {};
+  try {
+    data = JSON.parse(ev.details);
+  } catch (e) {
+    return ev.details || "";
+  }
+  return fmt("evCopies", {
+    sample: ev.mac,
+    count: plural("evAddresses", data.n || 0),
+    switch: switchName(data.switch || ""),
+    ports: (data.ports || []).join(", "),
+  });
 }
 
 /* A name or a note changed, deleted or moved: the node, then what

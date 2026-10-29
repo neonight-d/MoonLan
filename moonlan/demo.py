@@ -99,6 +99,9 @@ v0.8.5 scenarios:
   database at all). The errors are inbound only: the device's
   transmitter, not the cable. From the 13th scan on the copies repeat
   — seen for the second time, and never confirmed.
+- a dozen copies confirmed before v0.8.5 held them back sit in the
+  database on that port, an "Offline · 12" the version before drew;
+  the first scan takes them off the map under one journal entry.
 
 v0.5.8 scenarios:
 - a port whose device starts sending damaged frames on the second
@@ -364,6 +367,22 @@ def _corrupt_copies(scan: int) -> list[str]:
         bit = (scan * CORRUPT_PER_SCAN + n) % 32  # never the first octet
         flipped = list(octets)
         flipped[2 + bit // 8] ^= 1 << (bit % 8)
+        copies.append(":".join(f"{o:02x}" for o in flipped))
+    return copies
+
+
+OLD_COPIES = 12  # confirmed by the version before v0.8.5
+
+
+def _old_copies() -> list[str]:
+    """Copies of the camera's address with two bits flipped — what an
+    older version confirmed as devices, a poll or two each."""
+    octets = [int(part, 16) for part in CORRUPT_REAL.split(":")]
+    copies = []
+    for n in range(OLD_COPIES):
+        flipped = list(octets)
+        for bit in (n, n + 7):
+            flipped[3 + bit % 24 // 8] ^= 1 << (bit % 8)
         copies.append(":".join(f"{o:02x}" for o in flipped))
     return copies
 
@@ -1092,6 +1111,7 @@ def enrich_db(db: Database, hosts: list[dict]) -> None:
     if not _journal_seeded and len(hosts) > 6:
         _journal_seeded = True
         _seed_offmap_hosts(db, now)
+        _seed_old_copies(db, now)
         db.add_event(now - 40 * 60, "host_down", hosts[6]["mac"], "10.0.99.16")
         db.add_event(now - 15 * 60, "host_down", hosts[1]["mac"], "pc-02.demo.lan")
         db.add_event(now - 5 * 60, "host_up", hosts[3]["mac"], "pc-04.demo.lan")
@@ -1130,6 +1150,18 @@ UNLOCATED_HOSTS = [
     ("00:ee:00:00:0b:01", "10.4.23.14", "audit-220.demo.lan"),
     ("00:ee:00:00:0b:02", "10.4.23.51", "cam-hall.demo.lan"),
 ]
+
+
+def _seed_old_copies(db: Database, now: float) -> None:
+    """Records an older version confirmed: copies of the camera's
+    address, no IP, a poll or two each, last seen over the last few
+    hours. It drew them as an offline group of their own on the port."""
+    for n, mac in enumerate(_old_copies()):
+        seen = now - (n + 1) * 1800
+        db.seed_host(
+            mac, CORRUPT_SWITCH, f"Gi0/{CORRUPT_PORT}", 8,
+            first_seen=seen - 600, last_seen=seen, seen_count=2,
+        )
 
 
 def _seed_offmap_hosts(db: Database, now: float) -> None:
