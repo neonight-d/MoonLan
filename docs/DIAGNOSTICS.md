@@ -40,6 +40,25 @@ rejected. `--iface` narrows the listing to one port, while rejected
 rows are always shown — they carry no usable port. For a MAC, `--host`
 also names its maker.
 
+Since v0.8.6 a row on a bridge-port missing from `dot1dBasePortIfIndex`
+is accepted only when that bridge-port is an inferred aggregate — the
+service's rule, decided the same way (see
+[Aggregates without LAG-MIB](NETWORK.md#aggregates-without-lag-mib)).
+An aggregate's rows show its name, `(LAG Slot0/1+Slot0/2)`. Any other
+is rejected with the reason and counted apart in the summary:
+
+```
+  dot1dTpFdbPort  len 6  00:1b:2c:3d:4e:5f  bridge-port 402792706   REJECTED: bridge-port 402792706 is not in dot1dBasePortIfIndex, and it is not an aggregate
+
+summary: 9 rows, accepted 8, rejected 1 (bad suffix: 0, bad MAC: 0, unknown bridge-port: 1)
+```
+
+The service drops the same rows, says "unknown bridge-port: N" in its
+FDB line and gives each new switch and bridge-port pair one WARNING
+with up to three of the addresses. Section 5 of
+`python -m moonlan.diag <switch>` marks such a bridge-port as dropped,
+and an aggregate's as an aggregate.
+
 ## Who made a device
 
 ```bash

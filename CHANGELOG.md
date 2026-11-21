@@ -6,6 +6,83 @@ for before the next one started.
 
 Русская версия — [CHANGELOG_RU.md](CHANGELOG_RU.md).
 
+## v0.8.6 — 2026-11-22
+
+A phone with the sections at the bottom, aggregates named by their
+members, a journal that can be filtered and read back. From the
+acceptance of v0.8.5 on the production network.
+
+**A phone.** On a Pixel 10 the header took four rows — the name, the
+status with RU/EN, seven buttons, the account — plus the "List and
+search" bar: 184 px, a fifth of the screen, all of it out of the
+thumb's reach. At 720 px and narrower the header is now one row, the
+name and a status button: the time of the scan, and a mark with how
+many switches ran out of time when some did; a tap opens the whole
+sentence and what is behind it, which a computer has in the tooltip.
+The notice under it is one line, a tap shows all of it. The sections
+are a bar at the bottom: **Map**, **Search** (the lists and the search
+on the whole screen; a row goes back to the map with the node chosen
+and its card open), **Alarms** (the bell's count on it), **Journal**
+and **More** — the account and RU / EN, the STP tree, Arrange as a
+switch, the items of Actions with their groups (the same data as the
+menu: an item added there is here too), Sign out; what a role may not
+use is grey with the reason. The map's tools stand at the bottom
+right: freeze, port numbers and a new "fit to the screen". Arranging,
+when on, is a bar on the map with "Turn off" in it. A card is a sheet
+over the lower half of the map; every other panel fills the room
+between the header and the bar, and × goes back to where it was opened
+from — More, the alarms, the card, the map. Each view is one history
+entry, so Android's Back steps back one at a time, as Esc does; a
+reload opens the map. The "List and search" bar and its stored state
+are gone. Wider than 720 px nothing changes.
+
+**Aggregates by their members.** The LACP link between mb0 and mb1 was
+right, and its ends were called "bridge-port 1" and "bridge-port 25" —
+numbers D-Link changes when the members flap. An aggregate inferred
+from the `dot1dBasePortIfIndex` gaps is now "LAG Slot0/1+Slot0/2",
+"LAG 1/25+1/26", on both ends of the link, the group behind the trunk,
+the devices, the STP table and the export. In the ports panel its row
+was "no link, 0, —" beside its live members; it is now made of them —
+up when one is, the speed of those that are up, traffic, errors and
+discards summed, `aggregate` and `members` in the API.
+
+**A synthetic port only for an aggregate.** An Edge-Core ES3528M once
+answered a MAC-table row with bridge-port 402792706, on a mapping with
+no gaps. The collector made it a port before asking whether it was an
+aggregate, and "-402792706" stayed in the database as the port of
+three devices — "Offline · 3". A bridge-port missing from the mapping
+is now a port only when it is an aggregate; otherwise its rows are
+dropped, counted in the FDB line ("unknown bridge-port: 1"), reported
+once per process with the number and the addresses, and listed as
+rejected by `diag --fdb`. A port is never named by a negative number;
+an index the poll has no port for places no device and draws a link
+end as "?". After each full poll the database follows: "bridge-port N"
+of an aggregate takes its new name, any other "bridge-port N" and every
+"-N" is reset (the device goes off the map until it is seen again), and
+the layout and notes keys are renamed where the aggregate is known.
+
+**Loop Detection and spanning tree.** `loop_detection_disabled` on mb0
+said "this network runs no spanning tree" for two months after RSTP had
+been switched on and its root confirmed by the neighbours: the words
+were in the text and nowhere in the check. It now looks at the switch's
+STP verdict: off with a tree running raises nothing and clears the
+active alarm in the next counters cycle; off without one, or with STP
+not visible, says so about this switch.
+
+**The journal.** Of the last 1000 events 952 were pings, the API gave
+at most 1000 (12.9 hours there) and the page 100. Every event now has a
+group — alarms, ping, devices, map, users, settings, other — kept in
+one place on the server and sent with it. `/api/journal` takes `group`
+(repeatable) and `before`, and says where the next page starts; a new
+`(event, id)` index makes any page about a millisecond on 500 000 rows.
+The page has a row of filters and "Show more".
+
+**The demo** names its D-Link trunks "LAG …" and renames the note left
+under the old name; access-sw-4 answers a row on bridge-port 402792706
+every scan, dropped with one warning; the core has Loop Detection off
+with its tree running and no alarm; the journal starts with an event
+of every group.
+
 ## v0.8.5 — 2026-10-29
 
 Damaged copies of a MAC stay off the map. From a port that showed

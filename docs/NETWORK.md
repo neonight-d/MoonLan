@@ -293,9 +293,23 @@ direction. A port with LBD switched off on the switch shows a dash.
   time. Cleared when the status returns to normal — the switch releases
   the port itself — with how long the loop held.
 - `loop_detection_disabled` (**info**, syslog by default): a switch that
-  answers the branch reports loop detection switched off globally. With
-  no spanning tree running, this is the only loop protection there is,
-  and its silent disappearance is worth a line.
+  answers the branch reports loop detection switched off globally, and
+  spanning tree is not running on it. With no spanning tree, this is
+  the only loop protection there is, and its silent disappearance is
+  worth a line: "…and spanning tree is not running on this switch —
+  nothing is watching for loops on it", or, when the switch's STP is
+  not visible over SNMP at all, "…and spanning tree on this switch is
+  not visible over SNMP…".
+
+  Since v0.8.6 the condition looks at the tree, not only the text. The
+  switch's own STP verdict after the cross-switch test (see
+  [STP status](#stp-status)) decides: Loop Detection off with spanning
+  tree running raises nothing, and an active alarm is cleared in the
+  next counters cycle, "spanning tree is running on this switch".
+  Before, the words "this network runs no spanning tree" were written
+  into the alarm and checked by nothing: on mb0 it went on saying so
+  for two months after RSTP had been switched on and the neighbours
+  had confirmed mb0 as its root.
 
 On the map a port with a loop gets a red edge labelled LOOP and its
 switch is outlined in red, the way an unreachable switch is.
@@ -340,6 +354,61 @@ switched off. They had not been read at all.
 `diag --loop` prints which of the two ways matched. `matched by probe`
 on a model that is already in the table is the signal that the table
 has drifted from the hardware again.
+
+## Aggregates without LAG-MIB
+
+D-Link does not answer IEEE8023-LAG-MIB. Its LACP members vanish from
+`dot1dBasePortIfIndex`, and the trunk's MAC table lives on a bridge-port
+that maps to no interface — on these models the number of one of the
+members. MoonLan infers the aggregate from that: the physical ports
+missing from the mapping are its members, grouped around the unmapped
+bridge-ports the MAC table names. The aggregate gets a synthetic port,
+ifIndex `-<bridge-port>`.
+
+**Named by its members (v0.8.6).** The synthetic port is called
+`LAG <members>`, the members' names by ascending ifIndex:
+`LAG Slot0/1+Slot0/2`, `LAG 1/25+1/26`. The name is set once, right
+after the inference, and everything that names a port takes it: both
+ends of a link, a group behind a trunk, an offline group, the devices,
+the STP table, the export. It used to be `bridge-port 1` and
+`bridge-port 25` — a number D-Link changes when the members flap
+(v0.5.1), where the membership does not, which is why the alarm label
+`lag[…]` was built from the members all along.
+
+**In the ports panel** the aggregate has a row of its own beside its
+first member, marked as an aggregate with the members on its second
+line. Its counters are never polled (v0.6.6), so the row is made of the
+members': up when one of them is, the speed of those that are up,
+traffic, errors and discards summed — one member without a reading and
+the sum is unknown — and as old as the oldest member's reading. It used
+to read "no link, 0, —" next to its live members, a port that looked
+down.
+
+**Only an aggregate.** A synthetic port used to be made for any
+bridge-port the mapping does not have, the moment a MAC-table row named
+it — before anyone asked whether it was an aggregate. An Edge-Core
+ES3528M (10.3.6.5), whose mapping has no gaps, once answered a row with
+bridge-port 402792706: the port it got stayed in the database as
+`-402792706`, three devices sat on it as "Offline · 3", and nothing ever
+removed it. Now the rule v0.6.8 set for phantom aggregates applies to
+the MAC table too: without the signs of an aggregate there is no
+synthetic port. Its rows are dropped; the FDB line of the log counts
+them (`unknown bridge-port: 1`), each new switch and bridge-port pair
+gets one WARNING for the life of the process with the number, the count
+and up to three MACs, and `diag --fdb` lists the rows as rejected with
+the reason. A port is never named by a negative number either: an index
+the poll has no port for is no place to draw a device at (it is listed
+off the map) and a link end of `?`.
+
+**Names already in the database** are dealt with after every full poll
+of a switch — not a saved reading. A device on `bridge-port N` where N
+is an aggregate of this poll takes the new name; any other
+`bridge-port N`, and every `-N`, is reset to no port, and the device is
+listed off the map until it is seen again. The `trunk:`, `offline:` and
+`pseudo:` keys of the layout and the notes are renamed where the
+aggregate is known; the others are left — a note goes to "Notes without
+a node", a position ages out. One INFO line per switch says how many
+were renamed and how many reset.
 
 ## MAC copies and errors on a port
 

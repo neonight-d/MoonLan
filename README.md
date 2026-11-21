@@ -294,6 +294,7 @@ See **[CONTRIBUTING.md](CONTRIBUTING.md)**.
 | v0.8.3 ✓ | Names from the network as text, ports on an upright phone, an image on Docker Hub |
 | v0.8.4 ✓ | Settings in the page, alarms to one's own mail and Telegram |
 | v0.8.5 ✓ | Damaged copies of a MAC stay off the map; the alarm says adapter or port |
+| v0.8.6 ✓ | A phone with the sections at the bottom, aggregates named by their members, a journal filter |
 | v0.9 | Windows computer inventory (WMI/WinRM) |
 
 Every version so far: [CHANGELOG.md](CHANGELOG.md).

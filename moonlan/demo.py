@@ -92,6 +92,27 @@ v0.6.9 scenarios:
   there, and the two nobody else has ever seen go to "Not on map"
   rather than being hung off the one cable they cannot be behind.
 
+v0.8.6 scenarios:
+- the D-Link-style trunks are named by their members, "LAG Gi0/3+Gi0/4"
+  on the core and "LAG Gi0/23+Gi0/24" on access-sw-3, on the link, the
+  group behind it and the ports panel, where the aggregate's row is
+  its members' sums. The note given to the group behind the core's
+  trunk still has its old key ("bridge-port 3"): the first scan
+  renames it, the way an upgraded server renames a real one;
+- access-sw-4, the Edge-Core-like one, answers a MAC-table row on
+  bridge-port 402792706 every scan, on a switch whose mapping has no
+  gaps. It is no aggregate, so the row is dropped — one WARNING in the
+  log for the life of the process, "unknown bridge-port: 1" in the FDB
+  line. (Devices an older version left on such a port are not seeded:
+  any record at start would end the demo's first scan being its
+  initial inventory — tests/test_lag_ports.py has them instead);
+- the core has Loop Detection switched off globally and spanning tree
+  running, its root confirmed by the neighbours — as mb0 does: no
+  loop_detection_disabled. access-sw-3 has it off with no tree, and
+  keeps the alarm;
+- the journal starts with an event of every group: alarms, pings,
+  devices, the map, accounts and settings.
+
 v0.8.5 scenarios:
 - the port with damaged frames is on access-sw-1, which is polled in
   full every scan (it used to be on access-sw-2, which runs out of its
@@ -125,6 +146,7 @@ v0.5.3 scenarios:
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import random
 import time
@@ -153,6 +175,7 @@ from .snmp_collector import (
     lag_port_name,
     parse_fdb_entry,
     sane_lag_members,
+    settle_synthetic_ports,
 )
 
 # The RNG is re-seeded inside demo_network so every scan rebuilds the
@@ -346,6 +369,8 @@ NO_PROFILE_SYS_OBJECT_ID = "1.3.6.1.4.1.11.2.3.7.11.180"
 NO_PROFILE_SWITCH = "10.0.0.24"   # access-sw-4
 # Loop Detection switched off globally on a switch that does report it
 LBD_OFF_SWITCH = "10.0.0.23"      # access-sw-3
+# …and off on the core too, where spanning tree runs (v0.8.6): no alarm
+LBD_OFF_STP_SWITCH = "10.0.0.10"  # core-sw
 # A real loop: the unmanaged box on access-sw-1 Gi0/14 got both ends of
 # a patch cord. The loop appears on the second counters cycle and stays.
 LOOP_SWITCH = "10.0.0.21"         # access-sw-1
@@ -639,8 +664,11 @@ def demo_network() -> list[SwitchData]:
         ray2.over_budget = True
         ray2.over_budget_scans = _scan_count - 1
         ray2.polled_at = time.time() - 640
+    # every scan: a MAC-table row on a bridge-port the switch does not
+    # map, and no aggregate behind it (v0.8.6)
+    unknown = _drop_unknown_bridge_port(ray4)
     if _scan_count == 1:
-        _report_rejected_fdb(ray4)
+        _report_rejected_fdb(ray4, unknown)
     # every scan: the switch keeps answering the LAG column with the
     # same impossible number, and every scan it is dropped
     _report_rejected_lag(ray4)
@@ -991,7 +1019,36 @@ def _report_rejected_lag(sw: SwitchData) -> None:
         )
 
 
-def _report_rejected_fdb(sw: SwitchData) -> None:
+# What 10.3.6.5 once answered a MAC-table row with: a bridge-port that
+# is in no mapping, on a switch whose mapping has no gaps (v0.8.6)
+PHANTOM_BRIDGE_PORT = 402792706
+PHANTOM_FDB_MAC = "00:1b:2c:3d:4e:5f"
+
+
+def _drop_unknown_bridge_port(sw: SwitchData) -> int:
+    """The row as the collector meets it — a synthetic port made for
+    it while the MAC table is read — through the collector's own rule:
+    no aggregate, no port. Returns how many rows went."""
+    if_index = -PHANTOM_BRIDGE_PORT
+    sw.ports[if_index] = PortInfo(
+        if_index=if_index, name=f"bridge-port {PHANTOM_BRIDGE_PORT}",
+        is_physical=False,
+    )
+    sw.fdb[PHANTOM_FDB_MAC] = if_index
+    physical = {
+        p.if_index for p in sw.ports.values() if p.is_physical and p.if_index > 0
+    }
+    # the mapping has every physical port: nothing for an aggregate
+    sw.lag_groups.update(
+        infer_lag_groups(physical, physical, {PHANTOM_BRIDGE_PORT})
+    )
+    dropped = settle_synthetic_ports(
+        sw, {PHANTOM_BRIDGE_PORT: [PHANTOM_FDB_MAC]}, sw.ip
+    )
+    return sum(len(macs) for macs in dropped.values())
+
+
+def _report_rejected_fdb(sw: SwitchData, unknown: int = 0) -> None:
     """Runs the demo's bogus rows through the collector's validator."""
     bad_suffix = bad_mac = 0
     for suffix, value, expected_len in BOGUS_FDB_ROWS:
@@ -1003,8 +1060,9 @@ def _report_rejected_fdb(sw: SwitchData) -> None:
         else:
             bad_mac += 1
     log.info(
-        "%s FDB: %d entries rejected (bad suffix: %d, bad MAC: %d)",
-        sw.ip, bad_suffix + bad_mac, bad_suffix, bad_mac,
+        "%s FDB: %d entries rejected (bad suffix: %d, bad MAC: %d, "
+        "unknown bridge-port: %d)",
+        sw.ip, bad_suffix + bad_mac + unknown, bad_suffix, bad_mac, unknown,
     )
 
 
@@ -1122,6 +1180,27 @@ def enrich_db(db: Database, hosts: list[dict]) -> None:
         db.add_event(now - 40 * 60, "host_down", hosts[6]["mac"], "10.0.99.16")
         db.add_event(now - 15 * 60, "host_down", hosts[1]["mac"], "pc-02.demo.lan")
         db.add_event(now - 5 * 60, "host_up", hosts[3]["mac"], "pc-04.demo.lan")
+        _seed_journal_groups(db, now)
+
+
+def _seed_journal_groups(db: Database, now: float) -> None:
+    """An event of every group the journal's filters choose from
+    (v0.8.6) — the alarms, the pings, new devices and copies come by
+    themselves: the map, the accounts and the settings are written as
+    a person would have left them. An account made and removed again,
+    so that sign-in is still off; a threshold set back to its default."""
+    db.add_event(now - 2 * 86400, "user_added", "trainee",
+                 json.dumps({"role": "viewer"}), "@console")
+    db.add_event(now - 86400, "user_deleted", "trainee",
+                 json.dumps({"role": "viewer"}), "@console")
+    db.add_event(now - 26 * 3600, "settings_changed", "", json.dumps({
+        "changes": [{"key": "offline_group_threshold", "from": 3, "to": 2,
+                     "reset": True}],
+    }))
+    db.add_event(now - 25 * 3600, "note_changed", DEMO_NOTES[0][0],
+                 json.dumps({"label": DEMO_NOTES[0][1]}))
+    db.add_event(now - 24 * 3600, "layout_pinned", "",
+                 json.dumps({"ids": ["sw:10.0.0.10"], "n": 1}))
 
 
 # Devices whose MAC is no longer in any FDB: still drawn at the port
@@ -1395,7 +1474,7 @@ class DemoCounters:
         data.profile = profile.name
         data.matched_by = "sysObjectID"
         data.root = profile.roots[LOOP_SYS_OBJECT_ID]
-        data.enabled = sw.ip != LBD_OFF_SWITCH
+        data.enabled = sw.ip not in (LBD_OFF_SWITCH, LBD_OFF_STP_SWITCH)
         data.mode = 1        # port-based
         data.interval = 5
         data.recover_time = 300

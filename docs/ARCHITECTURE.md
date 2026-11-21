@@ -66,7 +66,9 @@ The web layer is static HTML/CSS/JavaScript. The browser refreshes API data and 
    `sysDescr`, the interface table (IF-MIB) and the MAC forwarding
    table (BRIDGE-MIB / Q-BRIDGE-MIB). FDB entries on bridge-ports
    missing from `dot1dBasePortIfIndex` (trunks on some D-Link models)
-   are kept on synthetic ports instead of being dropped.
+   are kept on a synthetic port, `LAG <members>`, when the gaps in the
+   mapping make that bridge-port an aggregate; any other unmapped
+   bridge-port is dropped with its rows (v0.8.6).
 2. Physical member ports of LACP aggregates (IEEE8023-LAG-MIB) are
    mapped to the logical aggregate port and treated as one port.
 3. A link between switches A and B is drawn only when it is direct:

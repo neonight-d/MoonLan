@@ -15,7 +15,11 @@ Everything MoonLan does, as of v0.8.4 — the list the README used to carry. The
   for a while and then tried again, out loud in the log both times.
 - MAC address tables (BRIDGE-MIB and Q-BRIDGE-MIB) from every switch,
   including entries on trunk bridge-ports missing from
-  `dot1dBasePortIfIndex` (e.g. D-Link LACP trunks).
+  `dot1dBasePortIfIndex` (e.g. D-Link LACP trunks). Such a trunk is
+  named by its members, `LAG Slot0/1+Slot0/2`, everywhere a port name
+  appears, and its row in the ports panel is the sum of its members;
+  a bridge-port missing from the mapping that is not an aggregate is
+  no port at all, and its rows are dropped and counted (v0.8.6).
 - Accurate topology inference: a switch-to-switch link is drawn only when
   it is direct (FDB set-intersection criterion) — no false links between
   the rays of a star. A switch is recognized in neighbors' FDB by its full
@@ -429,7 +433,11 @@ Everything MoonLan does, as of v0.8.4 — the list the README used to carry. The
   the error text, instead of the empty "no data yet" that a service
   which has only just started shows.
 - Event journal: new MAC addresses, hosts going down and coming back,
-  alarm raises/clears. Data is stored in SQLite and survives restarts.
+  alarm raises/clears, the map, accounts and settings. Data is stored in
+  SQLite and survives restarts. A row of filters under its title — All,
+  Alarms, Devices, Ping, Map, Users, Settings, one at a time, kept in
+  the browser — and "Show more" at the bottom, page after page, back
+  past any number of events (v0.8.6).
 - Two-panel web UI: device list with search on the left, interactive
   auto-refreshing network map on the right. The search finds a switch
   by its name, address, bridge MAC, maker, model and sysDescr, a device
@@ -442,14 +450,31 @@ Everything MoonLan does, as of v0.8.4 — the list the README used to carry. The
   a switch is said to run a spanning tree or not, a withdrawn link in
   the journal — comes as a code and its numbers and is worded by the
   page; what a switch, a ping or the system said stays as it was said.
-  A change of language redraws every open panel and dialog. On a phone
-  (720 px and narrower) the list stands
-  over the map, and a "List and search" bar between the header and the
-  map folds it away: the map takes the whole height at once, looking at
-  the same spot, and the choice is kept in the browser. The page itself
-  never scrolls on a phone — a long card, a menu or the list scrolls
-  inside itself — and the header's buttons take a finger's 44 by 44
-  px around them without looking any larger. Two fingers still zoom.
+  A change of language redraws every open panel and dialog. The page
+  itself never scrolls on a phone — a long card, a menu or the list
+  scrolls inside itself. Two fingers still zoom.
+- A phone (720 px and narrower, v0.8.6): the header is one row, the
+  name and a status button — the time of the scan, with a mark and how
+  many switches ran out of time when some did; a tap shows the whole
+  sentence and what is behind it, which a computer has in the tooltip.
+  The sections are a bar at the bottom, under the thumb: **Map**;
+  **Search**, the lists and the search on the whole screen, where a row
+  goes back to the map with the node chosen and its card open;
+  **Alarms**, with the bell's count on it; **Journal**, with its
+  filters; and **More** — the account and RU / EN, the STP tree,
+  Arrange as a switch, the items of Actions with their groups (one
+  list feeds both: an item added to Actions is in More too), Sign out.
+  What a role may not do is grey with the reason, as everywhere. The
+  map's tools stand at the bottom right: freeze, port numbers (their
+  menu opens above the button) and "fit the map to the screen".
+  Arranging, once on, is a bar on the map with "Turn off" in it. A
+  node's or a link's card is a sheet over the lower half of the map,
+  the map above it still seen and touched; every other panel fills the
+  room between the header and the bar, and × goes back to where it was
+  opened from — More, the alarms, the card, the map. Android's Back
+  does the same, one step at a time, and so does Esc; Map closes
+  everything; a reload opens the map. Wider than 720 px nothing of it
+  shows: the computer's header, panels and Actions are as they were.
 - The lists from the keyboard: the map is a canvas, and the lists on
   the left are the keyboard's way onto it. Each row is a button; Tab
   from the search goes to the first row found, ↑ and ↓ to the next

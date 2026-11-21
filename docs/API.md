@@ -589,6 +589,18 @@ of, the most copies first, with the maker when the IEEE register knows
 it. One address means its network adapter; several, the port (see
 [MAC copies and errors on a port](NETWORK.md#mac-copies-and-errors-on-a-port)).
 
+An aggregate inferred from the `dot1dBasePortIfIndex` gaps (v0.8.6) is
+a row of its own, with a negative `if_index`, the name `LAG <members>`,
+`aggregate: true` and `members` — the names of its physical ports. Its
+counters are never polled, so its row is made of the members': up when
+one of them is, `speed_mbps` the sum of those that are up, `in_mbps`,
+`out_mbps`, `errors_per_min` and `discards_per_min` summed (null when
+any member has no reading), and the age of the oldest member's reading.
+The members' `lag` is the aggregate's name. Every other port has
+`aggregate: false` and `members: []`; an IEEE8023-LAG-MIB aggregate
+(positive `if_index`, counters of its own) is one of them. See
+[Aggregates without LAG-MIB](NETWORK.md#aggregates-without-lag-mib).
+
 ## Monitoring
 
 ### GET /api/stp
@@ -631,10 +643,41 @@ Manually clears an active alarm; the journal records who did.
 
 ### GET /api/journal
 
-Recent journal events, newest first; `limit` up to 1000. Each carries
-`user`: who did it, `"@console"` for `python -m moonlan.users`, empty
-for what MoonLan did itself. An event about a device the IEEE register
-knows carries its `vendor`, looked up when asked.
+Journal events, newest first, a page at a time (v0.8.6):
+
+| Parameter | Meaning |
+|---|---|
+| `limit` | events per page, 1–1000 (100 by default) |
+| `group` | `alarms`, `ping`, `devices`, `map`, `users`, `settings` or `other`; may repeat (`group=alarms&group=devices`), none means every event |
+| `before` | an event id: the page is the events below it |
+
+```json
+{"events": [{"id": 5120, "ts": 1795290000.0, "event": "alarm_raised",
+             "group": "alarms", "mac": "10.0.0.10", "details": "…",
+             "user": "", "name": null, "ip": null}],
+ "next_before": 5120}
+```
+
+`next_before` is the id to pass as `before` for the next page — the id
+of this page's last event — and `null` when there is nothing below it.
+An unknown group is refused with 400, `{"error": "unknown_group",
+"groups": [...], "known": [...]}`.
+
+Every event carries its `group`. The groups are kept in one place on
+the server (`JOURNAL_GROUPS` in `moonlan/server.py`): `alarms` —
+`alarm_raised`, `alarm_cleared`; `ping` — `host_down`, `host_up`;
+`devices` — `new_mac`, `hosts_purged`, `copies_removed`, `monitor_on`,
+`monitor_off`, `ip_released`; `map` — `layout_pinned`,
+`layout_released`, `layout_saved`, `layout_cleared`, `note_changed`,
+`note_moved`, `notes_imported`, `link_dropped`; `users` — sign-ins,
+accounts, keys and one's own notifications; `settings` —
+`settings_changed`, `settings_moved`; `other` — an event in none of
+them.
+
+Each event carries `user`: who did it, `"@console"` for
+`python -m moonlan.users`, empty for what MoonLan did itself. An event
+about a device the IEEE register knows carries its `vendor`, looked up
+when asked.
 
 `details` is data where the page words the event itself: since v0.8.2 a
 `link_dropped` carries `{"a", "a_port", "b", "b_port", "source",
