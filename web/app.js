@@ -22,6 +22,8 @@ const els = {
   journal: document.getElementById("journal"),
   journalBtn: document.getElementById("journal-btn"),
   journalList: document.getElementById("journal-list"),
+  journalFilters: document.getElementById("journal-filters"),
+  journalMore: document.getElementById("journal-more"),
   journalClose: document.getElementById("journal-close"),
   notesPanel: document.getElementById("notes-panel"),
   printSheet: document.getElementById("print-sheet"),
@@ -8875,57 +8877,149 @@ async function toggleStp() {
 
 /* ---------- journal ---------- */
 
+/* What the journal shows (v0.8.6): all of it, or one group — the
+   groups are the server's (JOURNAL_GROUPS beside /api/journal), and
+   each event comes with its own. One choice at a time, kept in this
+   browser. A page is 100 events; "Show more" asks for the next one,
+   below the last id shown, for as long as the server says there is
+   one. */
+const JOURNAL_GROUP_KEY = "moonlan-journal-group";
+const JOURNAL_FILTERS = ["all", "alarms", "devices", "ping", "map", "users", "settings"];
+const JOURNAL_PAGE = 100;
+let journalGroup = (() => {
+  let kept = null;
+  try {
+    kept = localStorage.getItem(JOURNAL_GROUP_KEY);
+  } catch (e) {
+    kept = null;
+  }
+  return JOURNAL_FILTERS.includes(kept) ? kept : "all";
+})();
+let journalNext = null; // next_before of the last page, null at the end
+
+function journalUrl(before) {
+  let url = "/api/journal?limit=" + JOURNAL_PAGE;
+  if (journalGroup !== "all") url += "&group=" + encodeURIComponent(journalGroup);
+  if (before != null) url += "&before=" + encodeURIComponent(before);
+  return url;
+}
+
+/* The row of filters, in the page's language, the chosen one pressed */
+function renderJournalFilters() {
+  const box = els.journalFilters;
+  box.setAttribute("aria-label", t("journalFilters"));
+  box.replaceChildren(...JOURNAL_FILTERS.map((group) => {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.dataset.group = group;
+    button.textContent = t("journalGroup_" + group);
+    button.setAttribute("aria-pressed", String(group === journalGroup));
+    button.addEventListener("click", () => setJournalGroup(group));
+    return button;
+  }));
+}
+
+async function setJournalGroup(group) {
+  if (!JOURNAL_FILTERS.includes(group)) return;
+  journalGroup = group;
+  try {
+    localStorage.setItem(JOURNAL_GROUP_KEY, group);
+  } catch (e) {
+    /* kept for this page only */
+  }
+  renderJournalFilters();
+  await loadJournal();
+}
+
+/* The first page of what is chosen. A late answer for a filter that
+   is no longer chosen is dropped: two quick presses must not end with
+   the first one's events under the second one's button. */
+async function loadJournal() {
+  const group = journalGroup;
+  const res = await api(journalUrl(null));
+  const data = await res.json();
+  if (group !== journalGroup) return;
+  lastEvents = data.events || [];
+  journalNext = data.next_before ?? null;
+  renderJournal(lastEvents);
+}
+
+/* The next page, written under the ones already shown */
+function moreJournal() {
+  if (journalNext == null) return undefined;
+  return busy("journal-more", async () => {
+    const group = journalGroup;
+    const before = journalNext;
+    const res = await api(journalUrl(before));
+    const data = await res.json();
+    if (group !== journalGroup || before !== journalNext) return;
+    const events = data.events || [];
+    lastEvents = (lastEvents || []).concat(events);
+    journalNext = data.next_before ?? null;
+    els.journalList.append(...events.map(journalItem));
+    renderJournalMore();
+  }, [els.journalMore]);
+}
+
+function renderJournalMore() {
+  els.journalMore.textContent = t("journalMore");
+  els.journalMore.classList.toggle("hidden", journalNext == null);
+}
+
 function renderJournal(events) {
-  els.journalList.replaceChildren(
-    ...events.map((ev) => {
-      const item = document.createElement("li");
-      const time = document.createElement("span");
-      time.className = "ev-time";
-      time.textContent = fmtTime(ev.ts);
-      const type = document.createElement("span");
-      type.className =
-        {
-          new_mac: "ev-new",
-          host_down: "ev-down",
-          host_up: "ev-up",
-          alarm_raised: "ev-down",
-          alarm_cleared: "ev-up",
-        }[ev.event] || "";
-      // events arrive as codes; unknown codes are shown as-is
-      if (ev.event === "account_locked") type.className = "ev-down";
-      const translated = t("ev_" + ev.event);
-      type.textContent = translated === "ev_" + ev.event ? ev.event : translated;
-      const host = document.createElement("span");
-      host.className = "ev-host";
-      host.textContent = accountEventText(ev) || noteEventText(ev) ||
-        settingsEventText(ev) || linkDroppedText(ev) || copiesEventText(ev) ||
-        ev.name || ev.ip || ev.mac ||
-        layoutEventText(ev);
-      if (ev.vendor) {
-        // a new device says who made it; any other event keeps it to
-        // the tooltip
-        if (ev.event === "new_mac") host.textContent += " · " + ev.vendor;
-        host.title = (ev.mac || "") + " · " + ev.vendor;
-      }
-      item.append(time, type, host);
-      // who did it: a pin, a reset, a cleared alarm, somebody else's
-      // account — not a sign-in, where it would only repeat the name
-      if (ev.user && !(ACCOUNT_EVENTS.has(ev.event) && ev.user === ev.mac)) {
-        const who = document.createElement("span");
-        who.className = "ev-user";
-        who.textContent = fmt("evBy", {
-          user: ev.user === "@console" ? t("evConsole") : ev.user,
-        });
-        item.append(who);
-      }
-      return item;
-    })
-  );
+  renderJournalFilters();
+  els.journalList.replaceChildren(...events.map(journalItem));
   if (!events.length) {
     const empty = document.createElement("li");
-    empty.textContent = t("noEvents");
+    empty.textContent = t(journalGroup === "all" ? "noEvents" : "journalNoneInGroup");
     els.journalList.append(empty);
   }
+  renderJournalMore();
+}
+
+/* One entry of the journal */
+function journalItem(ev) {
+  const item = document.createElement("li");
+  const time = document.createElement("span");
+  time.className = "ev-time";
+  time.textContent = fmtTime(ev.ts);
+  const type = document.createElement("span");
+  type.className =
+    {
+      new_mac: "ev-new",
+      host_down: "ev-down",
+      host_up: "ev-up",
+      alarm_raised: "ev-down",
+      alarm_cleared: "ev-up",
+    }[ev.event] || "";
+  // events arrive as codes; unknown codes are shown as-is
+  if (ev.event === "account_locked") type.className = "ev-down";
+  const translated = t("ev_" + ev.event);
+  type.textContent = translated === "ev_" + ev.event ? ev.event : translated;
+  const host = document.createElement("span");
+  host.className = "ev-host";
+  host.textContent = accountEventText(ev) || noteEventText(ev) ||
+    settingsEventText(ev) || linkDroppedText(ev) || copiesEventText(ev) ||
+    ev.name || ev.ip || ev.mac ||
+    layoutEventText(ev);
+  if (ev.vendor) {
+    // a new device says who made it; any other event keeps it to
+    // the tooltip
+    if (ev.event === "new_mac") host.textContent += " · " + ev.vendor;
+    host.title = (ev.mac || "") + " · " + ev.vendor;
+  }
+  item.append(time, type, host);
+  // who did it: a pin, a reset, a cleared alarm, somebody else's
+  // account — not a sign-in, where it would only repeat the name
+  if (ev.user && !(ACCOUNT_EVENTS.has(ev.event) && ev.user === ev.mac)) {
+    const who = document.createElement("span");
+    who.className = "ev-user";
+    who.textContent = fmt("evBy", {
+      user: ev.user === "@console" ? t("evConsole") : ev.user,
+    });
+    item.append(who);
+  }
+  return item;
 }
 
 /* A save in Settings (v0.8.4), and what a start moved from
@@ -9094,10 +9188,7 @@ async function toggleJournal() {
     return;
   }
   const stillAsked = askPanel();
-  const res = await api("/api/journal?limit=100");
-  const data = await res.json();
-  lastEvents = data.events;
-  renderJournal(lastEvents);
+  await loadJournal();
   if (!stillAsked()) return;
   hideDetails();
   closePorts();
@@ -9160,6 +9251,7 @@ els.detailsBody.addEventListener("click", (event) => {
   more.setAttribute("aria-expanded", String(open));
 });
 els.journalBtn.addEventListener("click", toggleJournal);
+els.journalMore.addEventListener("click", moreJournal);
 els.notesClose.addEventListener("click", () => els.notesPanel.classList.add("hidden"));
 els.journalClose.addEventListener("click", () =>
   els.journal.classList.add("hidden")

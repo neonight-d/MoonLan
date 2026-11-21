@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import functools
 import hashlib
 import json
 import logging
@@ -3399,16 +3400,91 @@ async def api_clear_alarm(alarm_id: int):
     return {"id": alarm_id, "cleared": True}
 
 
+# What the journal's filters on the page choose from (v0.8.6), in one
+# place. Every event the code writes belongs to one of these, or to
+# "other" by being in none of them — tests/test_journal.py reads the
+# code for every add_event and holds this to it.
+JOURNAL_GROUPS: dict[str, tuple[str, ...]] = {
+    "alarms": ("alarm_raised", "alarm_cleared"),
+    "ping": ("host_down", "host_up"),
+    "devices": (
+        "new_mac", "hosts_purged", "copies_removed", "monitor_on",
+        "monitor_off", "ip_released",
+    ),
+    "map": (
+        "layout_pinned", "layout_released", "layout_saved",
+        "layout_cleared", "note_changed", "note_moved", "notes_imported",
+        "link_dropped",
+    ),
+    # sign-ins, accounts, keys, one's own notifications: ACCOUNT_EVENTS
+    # of the page
+    "users": (
+        "login", "logout", "account_locked", "user_added", "user_role",
+        "user_password", "user_disabled", "user_enabled",
+        "user_totp_reset", "user_totp_enabled", "user_unlocked",
+        "user_sessions_closed", "user_deleted", "user_passkey_added",
+        "user_passkey_removed", "user_passkeys_reset",
+        "passkey_clone_suspected", "subscription_added",
+        "subscription_removed", "user_notifications_removed",
+    ),
+    "settings": ("settings_changed", "settings_moved"),
+}
+JOURNAL_OTHER = "other"
+EVENT_GROUP: dict[str, str] = {
+    event: group for group, events in JOURNAL_GROUPS.items()
+    for event in events
+}
+
+
 @app.get("/api/journal")
-async def api_journal(limit: int = Query(default=100, ge=1, le=1000)) -> dict:
-    events = await asyncio.to_thread(db.journal, limit)
-    for event in events:
+async def api_journal(
+    limit: int = Query(default=100, ge=1, le=1000),
+    group: list[str] | None = Query(default=None),
+    before: int | None = Query(default=None, ge=1),
+):
+    """The journal, newest first, a page at a time (v0.8.6).
+
+    `group` may repeat, none means every event; `before` is an id, and
+    the page is the events below it. `next_before` is the id to ask for
+    the page after this one, null when there is none.
+    """
+    chosen = list(dict.fromkeys(group or []))
+    unknown = [
+        g for g in chosen if g not in JOURNAL_GROUPS and g != JOURNAL_OTHER
+    ]
+    if unknown:
+        return JSONResponse(
+            {"error": "unknown_group", "groups": unknown,
+             "known": [*JOURNAL_GROUPS, JOURNAL_OTHER]},
+            status_code=400,
+        )
+    events = not_events = None
+    if chosen:
+        events = [
+            event for g in chosen if g != JOURNAL_OTHER
+            for event in JOURNAL_GROUPS[g]
+        ]
+        if JOURNAL_OTHER in chosen:
+            not_events = list(EVENT_GROUP)
+    rows = await asyncio.to_thread(
+        functools.partial(
+            db.journal, limit + 1, events=events, not_events=not_events,
+            before=before,
+        )
+    )
+    more = len(rows) > limit
+    rows = rows[:limit]
+    for event in rows:
+        event["group"] = EVENT_GROUP.get(event["event"], JOURNAL_OTHER)
         # who made the device an event is about — looked up now, not
         # stored: the register is updated, the journal is not
         name = vendors.lookup(event.get("mac") or "").name
         if name:
             event["vendor"] = name
-    return {"events": events}
+    return {
+        "events": rows,
+        "next_before": rows[-1]["id"] if more and rows else None,
+    }
 
 
 class HostPatch(BaseModel):

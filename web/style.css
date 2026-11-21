@@ -435,6 +435,31 @@ main { flex: 1; display: flex; min-height: 0; position: relative; }
 #journal-list .ev-new  { color: var(--link); }
 #journal-list .ev-down { color: var(--warn); }
 #journal-list .ev-up   { color: var(--ok); }
+/* What the journal shows (v0.8.6): one row of buttons, one pressed.
+   On a phone the row scrolls sideways instead of wrapping into three. */
+.journal-filters {
+  display: flex;
+  gap: 6px;
+  flex: 0 0 auto;
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
+  scrollbar-width: none;
+  margin: 0 0 8px;
+  padding-bottom: 2px;
+}
+.journal-filters::-webkit-scrollbar { display: none; }
+.journal-filters button {
+  flex: 0 0 auto;
+  font-size: 0.8rem;
+  padding: 4px 10px;
+  border-radius: 999px;
+  white-space: nowrap;
+}
+.journal-filters button[aria-pressed="true"] {
+  color: var(--ok);
+  border-color: var(--ok);
+}
+.journal-more { display: block; margin: 10px auto 4px; }
 
 /* ---------- alarms ---------- */
 

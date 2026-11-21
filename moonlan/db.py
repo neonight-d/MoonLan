@@ -360,6 +360,17 @@ class Database:
                 "ALTER TABLE journal ADD COLUMN user TEXT DEFAULT ''"
             )
             log.info("DB migration: added journal.user column")
+        # The journal's filters (v0.8.6) read one event at a time, newest
+        # first: (event, ts) orders a group's rows by time, and these
+        # pages go by id
+        indexed = {
+            row[1] for row in self._conn.execute("PRAGMA index_list(journal)")
+        }
+        if "journal_event_id" not in indexed:
+            self._conn.execute(
+                "CREATE INDEX journal_event_id ON journal (event, id)"
+            )
+            log.info("DB migration: added the journal (event, id) index")
         user_columns = {
             row[1] for row in self._conn.execute("PRAGMA table_info(users)")
         }
@@ -1630,17 +1641,75 @@ class Database:
 
     # ---------- journal ----------
 
-    def journal(self, limit: int = 100) -> list[dict]:
-        """Latest events, newest first; each with the host's name and IP."""
+    def journal(
+        self, limit: int = 100, *, events: list[str] | None = None,
+        not_events: list[str] | None = None, before: int | None = None,
+    ) -> list[dict]:
+        """Latest events, newest first; each with the host's name and IP.
+
+        `events` keeps those events, `not_events` keeps everything
+        else; given both, an event passes either (v0.8.6: a group and
+        "other" chosen together). `before` keeps the ids below it —
+        the page after the one that ended there.
+
+        A filtered page is read one event at a time, each a short walk
+        down journal_event_id from `before`, and the walks merged. The
+        one query `event IN (…) ORDER BY id DESC` reads like that and
+        does not run like that: SQLite takes every row of the group out
+        of the index and sorts them, 350 ms for the pings of a 500 000
+        row journal, every page.
+        """
+        select = (
+            "SELECT j.id, j.ts, j.event, j.mac, j.details, j.user, "
+            "h.name, h.ip FROM journal j LEFT JOIN hosts h ON h.mac = j.mac "
+        )
+        top = before if before is not None else 2 ** 63 - 1
         with self._lock:
+            if events is None and not_events is None:
+                rows = self._conn.execute(
+                    select + "WHERE j.id < ? ORDER BY j.id DESC LIMIT ?",
+                    (top, limit),
+                ).fetchall()
+                return [dict(row) for row in rows]
+            chosen = set(events or [])
+            if not_events is not None:
+                excluded = set(not_events)
+                chosen |= {
+                    event for event in self._journal_event_names()
+                    if event not in excluded
+                }
+            ids: list[int] = []
+            for event in sorted(chosen):
+                ids += [
+                    row[0] for row in self._conn.execute(
+                        "SELECT id FROM journal WHERE event = ? AND id < ? "
+                        "ORDER BY id DESC LIMIT ?",
+                        (event, top, limit),
+                    )
+                ]
+            ids = sorted(ids, reverse=True)[:limit]
+            if not ids:
+                return []
             rows = self._conn.execute(
-                "SELECT j.id, j.ts, j.event, j.mac, j.details, j.user, "
-                "h.name, h.ip "
-                "FROM journal j LEFT JOIN hosts h ON h.mac = j.mac "
-                "ORDER BY j.id DESC LIMIT ?",
-                (limit,),
+                select + "WHERE j.id IN (" + ",".join("?" * len(ids)) + ") "
+                "ORDER BY j.id DESC",
+                ids,
             ).fetchall()
         return [dict(row) for row in rows]
+
+    def _journal_event_names(self) -> list[str]:
+        """Every event name in the journal: one index seek per name, not
+        a pass over the rows. Called holding the lock."""
+        return [
+            row[0] for row in self._conn.execute(
+                "WITH RECURSIVE e(x) AS ("
+                " SELECT (SELECT MIN(event) FROM journal)"
+                " UNION ALL"
+                " SELECT (SELECT MIN(event) FROM journal WHERE event > e.x)"
+                " FROM e WHERE e.x IS NOT NULL"
+                ") SELECT x FROM e WHERE x IS NOT NULL"
+            )
+        ]
 
     # ---------- users ----------
 

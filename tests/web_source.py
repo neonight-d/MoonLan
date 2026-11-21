@@ -99,6 +99,13 @@ __define("fetch", () => new Promise(() => {}));
 __define("setInterval", () => 0);
 __define("requestAnimationFrame", () => 0);
 if (typeof globalThis.addEventListener !== "function") __define("addEventListener", () => {});
+// a wide screen unless the test says otherwise (v0.8.6: the phone's
+// layout is chosen by the same media query the style uses)
+if (typeof globalThis.matchMedia !== "function") {
+  __define("matchMedia", (query) => ({
+    matches: false, media: query, addEventListener() {}, removeEventListener() {},
+  }));
+}
 if (typeof navigator === "undefined") __define("navigator", { language: "en", userAgent: "node" });
 if (typeof location === "undefined") {
   __define("location", { protocol: "http:", host: "localhost", hostname: "localhost",
