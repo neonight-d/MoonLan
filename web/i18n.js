@@ -371,6 +371,15 @@ const I18N = {
       + "Routers are deliberately kept out of the host inventory.",
     nameFromLldpHintShort: "Name from LLDP: the IP address and DNS name are unknown",
     externalNetwork: "External network",
+    // an inferred aggregate's row in the ports panel (v0.8.6)
+    portAggregate: "aggregate",
+    portAggregateMembers: "members: {members}",
+    portAggregateHint:
+      "An aggregate the switch does not name: its members' bridge-ports "
+      + "are missing from dot1dBasePortIfIndex, and the MAC table of the "
+      + "trunk lives on this port. Up while a member is up; the speed is "
+      + "that of the members that are up, the traffic, errors and "
+      + "discards are their sums.",
     externalPort: "external uplink",
     externalHint:
       "This port leaves the network — a provider handover or an uplink "
@@ -1554,6 +1563,14 @@ const I18N = {
       + "Маршрутизаторы сознательно не входят в инвентарь хостов.",
     nameFromLldpHintShort: "Имя из LLDP: IP-адрес и DNS-имя неизвестны",
     externalNetwork: "Внешняя сеть",
+    portAggregate: "агрегат",
+    portAggregateMembers: "участники: {members}",
+    portAggregateHint:
+      "Агрегат, которого коммутатор не называет: bridge-порты его "
+      + "участников пропали из dot1dBasePortIfIndex, а таблица MAC транка "
+      + "живёт на этом порту. Поднят, пока поднят хотя бы один участник; "
+      + "скорость — сумма поднятых участников, трафик, ошибки и дискарды — "
+      + "суммы по участникам.",
     externalPort: "внешний аплинк",
     externalHint:
       "Этот порт ведёт наружу — стык с провайдером или аплинк к чужому "

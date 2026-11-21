@@ -8258,8 +8258,11 @@ function renderPorts(data) {
   // come from the service, which is where the intervals live.
   const staleAfter = (data.rates || {}).stale_after_seconds ?? Infinity;
   let highlighted = null;
-  // physical ports only; the server puts active ones first
-  const rows = sortPorts(data.ports.filter((p) => p.is_physical)).map((p) => {
+  // physical ports and the aggregates inferred from their bridge-ports
+  // (v0.8.6); the server puts active ones first
+  const rows = sortPorts(
+    data.ports.filter((p) => p.is_physical || p.aggregate)
+  ).map((p) => {
       const tr = document.createElement("tr");
       if (!p.oper_up) tr.className = "port-down";
       if (portsHighlight && p.name === portsHighlight) {
@@ -8317,6 +8320,22 @@ function renderPorts(data) {
       const marks = document.createElement("span");
       marks.className = "port-marks";
       nameCell.append(nameText, marks);
+      // an inferred aggregate: said so, and its members on the second
+      // line — its own name already lists them, the marks say what
+      // the row is made of
+      if (p.aggregate) {
+        tr.classList.add("port-aggregate");
+        const chip = document.createElement("span");
+        chip.className = "chip";
+        chip.textContent = t("portAggregate");
+        chip.title = t("portAggregateHint");
+        const members = document.createElement("span");
+        members.className = "port-label";
+        members.textContent = fmt("portAggregateMembers", {
+          members: (p.members || []).join(", "),
+        });
+        marks.append(" ", chip, " ", members);
+      }
       // lldpLocPortDesc: what the operator called this port on the
       // switch itself ("Library", "403 audit")
       if (p.uplink_hint) {
@@ -8421,7 +8440,10 @@ function renderPorts(data) {
         p.discards_per_min > (limits.discards_per_minute ?? Infinity);
       rateTd(p.errors_per_min, "num" + (overErr ? " over-error" : ""));
       rateTd(p.discards_per_min, "num" + (overDisc ? " over-discard" : ""));
-      loopCell(tr, p.loop, data.loop_detection);
+      // loop detection is a property of a physical port: the members'
+      // rows have it, the aggregate's says nothing
+      if (p.aggregate) tr.append(document.createElement("td"));
+      else loopCell(tr, p.loop, data.loop_detection);
       return tr;
     });
   els.portsBody.replaceChildren(...rows);

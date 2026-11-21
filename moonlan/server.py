@@ -3021,6 +3021,14 @@ async def api_switch_ports(ip: str) -> dict:
             rates, p.if_index, now, hide_age
         )
         name = p.name or str(p.if_index)
+        rate_ts = None if age is None else rates[p.if_index].ts
+        members = (
+            sorted(sw.lag_groups.get(-p.if_index, []))
+            if p.if_index < 0 else []
+        )
+        aggregate = None
+        if members:
+            aggregate = _aggregate_row(sw, members, rates, now, hide_age)
         ports.append({
             "if_index": p.if_index,
             "name": name,
@@ -3036,8 +3044,12 @@ async def api_switch_ports(ip: str) -> dict:
             # When the numbers above were measured, and how long ago.
             # None in both means this port has never been measured at
             # all — the one case "—" is allowed to mean.
-            "rate_ts": None if age is None else rates[p.if_index].ts,
+            "rate_ts": rate_ts,
             "rate_age_seconds": None if age is None else round(age),
+            # an inferred aggregate (v0.8.6): no counters of its own,
+            # ever (v0.6.6) — its row is its members' (see below)
+            "aggregate": bool(members),
+            "members": [port_name(sw, m) for m in members],
             "hosts": host_counts.get(name, 0),
             "monitored_hosts": monitored_counts.get(name, 0),
             # MACs that look like damaged copies of a real one here,
@@ -3067,6 +3079,8 @@ async def api_switch_ports(ip: str) -> dict:
             # …or one that looks like it should be, and is not listed
             "uplink_hint": uplink_suspects.get((ip, name)),
         })
+        if aggregate is not None:
+            ports[-1].update(aggregate)
     # active ports first, then by port number
     ports.sort(key=lambda p: (not p["oper_up"], abs(p["if_index"])))
     return {
@@ -3092,6 +3106,49 @@ async def api_switch_ports(ip: str) -> dict:
             "errors_per_minute": config.thresholds.errors_per_minute,
             "discards_per_minute": config.thresholds.discards_per_minute,
         },
+    }
+
+
+def _aggregate_row(
+    sw: SwitchData, members: list[int], rates: dict, now: float,
+    hide_age: float,
+) -> dict:
+    """An inferred aggregate's row in the ports panel, out of its members.
+
+    Its synthetic port has no interface behind it: no link of its own,
+    no speed, and counters are never polled for it (v0.6.6). Shown as
+    it was, it read "no link, 0, —" next to its own live members, a
+    port that looked down. So: up when a member is up, the speed of
+    the members that are up (as the link's, `_lag_info`), traffic,
+    errors and discards summed — one member not measured and the sum
+    is not known either (`_sum_known`) — and as old as its oldest
+    member's reading.
+    """
+    ports = [sw.ports[m] for m in members if m in sw.ports]
+    shown = [
+        counters.rate_for_display(rates, m, now, hide_age) for m in members
+    ]
+    known = [r for r, _age in shown]
+    ages = [age for _r, age in shown]
+
+    def total(field: str) -> float | None:
+        value = _sum_known(
+            None if r is None else getattr(r, field) for r in known
+        )
+        return _round(value)
+
+    stamps = [rates[m].ts for m, (_r, age) in zip(members, shown)
+              if age is not None]
+    measured = all(age is not None for age in ages)
+    return {
+        "oper_up": any(p.oper_up for p in ports),
+        "speed_mbps": sum(p.speed_mbps for p in ports if p.oper_up),
+        "in_mbps": total("in_mbps"),
+        "out_mbps": total("out_mbps"),
+        "errors_per_min": total("errors_per_min"),
+        "discards_per_min": total("discards_per_min"),
+        "rate_ts": min(stamps) if measured and stamps else None,
+        "rate_age_seconds": round(max(ages)) if measured and ages else None,
     }
 
 

@@ -362,6 +362,120 @@ class ServiceTest(unittest.IsolatedAsyncioTestCase):
         )
 
 
+class AggregateRowTest(unittest.IsolatedAsyncioTestCase):
+    """The aggregate's row in the ports panel is its members' (v0.8.6)."""
+
+    def setUp(self):
+        from collections import deque
+        from moonlan.counters import PortRates
+        self.deque, self.PortRates = deque, PortRates
+        server.switch_data.clear()
+        sw = SwitchData(ip=MB1, reachable=True, sys_name="comm-mb1")
+        for i in range(1, 29):
+            sw.ports[i] = PortInfo(if_index=i, name=f"1/{i}",
+                                   oper_up=i in (25, 26), speed_mbps=1000)
+        sw.lag_groups = {25: [25, 26]}
+        sw.ports[-25] = PortInfo(if_index=-25, name=MB1_LAG,
+                                 is_physical=False)
+        server.switch_data[MB1] = sw
+        self.sw = sw
+        for key in [k for k in server.counter_store._rates if k[0] == MB1]:
+            del server.counter_store._rates[key]
+
+    def tearDown(self):
+        server.switch_data.clear()
+        for key in [k for k in server.counter_store._rates if k[0] == MB1]:
+            del server.counter_store._rates[key]
+
+    def _rate(self, if_index, in_mbps, out_mbps, ago=10.0):
+        server.counter_store._rates[(MB1, if_index)] = self.deque([
+            self.PortRates(
+                ts=time.time() - ago, in_mbps=in_mbps, out_mbps=out_mbps,
+                in_errors_per_min=1.0, out_errors_per_min=0.0,
+                in_discards_per_min=2.0, out_discards_per_min=0.5,
+            )
+        ])
+
+    async def _rows(self):
+        answer = await server.api_switch_ports(MB1)
+        return {p["name"]: p for p in answer["ports"]}
+
+    async def test_the_aggregate_is_the_sum_of_its_members(self):
+        self._rate(25, 3.0, 1.0, ago=10)
+        self._rate(26, 2.0, 0.5, ago=40)
+        rows = await self._rows()
+        lag = rows[MB1_LAG]
+        self.assertTrue(lag["aggregate"])
+        self.assertEqual(lag["members"], ["1/25", "1/26"])
+        self.assertTrue(lag["oper_up"])
+        self.assertEqual(lag["speed_mbps"], 2000)
+        self.assertEqual(lag["in_mbps"], 5.0)
+        self.assertEqual(lag["out_mbps"], 1.5)
+        self.assertEqual(lag["errors_per_min"], 2.0)
+        self.assertEqual(lag["discards_per_min"], 5.0)
+        # as old as its oldest member's reading
+        self.assertAlmostEqual(lag["rate_age_seconds"], 40, delta=2)
+        # the members name the aggregate they are in
+        self.assertEqual(rows["1/25"]["lag"], MB1_LAG)
+        self.assertEqual(rows["1/26"]["lag"], MB1_LAG)
+        self.assertFalse(rows["1/25"]["aggregate"])
+        # there is no "bridge-port 25" row next to them
+        self.assertFalse([n for n in rows if n.startswith("bridge-port")])
+
+    async def test_one_member_not_measured_makes_the_sum_unknown(self):
+        self._rate(25, 3.0, 1.0)
+        rows = await self._rows()
+        lag = rows[MB1_LAG]
+        self.assertIsNone(lag["in_mbps"])
+        self.assertIsNone(lag["out_mbps"])
+        self.assertIsNone(lag["rate_age_seconds"])
+        self.assertEqual(lag["speed_mbps"], 2000)
+
+    async def test_a_degraded_aggregate_counts_the_members_that_are_up(self):
+        self.sw.ports[26].oper_up = False
+        rows = await self._rows()
+        self.assertTrue(rows[MB1_LAG]["oper_up"])
+        self.assertEqual(rows[MB1_LAG]["speed_mbps"], 1000)
+        self.sw.ports[25].oper_up = False
+        rows = await self._rows()
+        self.assertFalse(rows[MB1_LAG]["oper_up"])
+        self.assertEqual(rows[MB1_LAG]["speed_mbps"], 0)
+
+    async def test_a_lag_mib_aggregate_is_left_alone(self):
+        self.sw.ports[1000] = PortInfo(if_index=1000, name="Po1",
+                                       is_physical=False, oper_up=True,
+                                       speed_mbps=2000)
+        self.sw.lag_members = {1: 1000, 2: 1000}
+        rows = await self._rows()
+        self.assertFalse(rows["Po1"]["aggregate"])
+        self.assertEqual(rows["Po1"]["members"], [])
+        self.assertEqual(rows["Po1"]["speed_mbps"], 2000)
+
+    async def test_it_sorts_beside_its_first_member(self):
+        answer = await server.api_switch_ports(MB1)
+        names = [p["name"] for p in answer["ports"]]
+        self.assertEqual(
+            names[names.index("1/25"):names.index("1/25") + 3],
+            ["1/25", MB1_LAG, "1/26"],
+        )
+
+
+class AggregateRowPageTest(unittest.TestCase):
+    def test_the_page_shows_it_as_an_aggregate(self):
+        from web_source import function, strings
+        source = function("renderPorts")
+        self.assertIn("p.is_physical || p.aggregate", source)
+        self.assertIn('t("portAggregate")', source)
+        self.assertIn('"portAggregateMembers"', source)
+        # no loop column for it
+        self.assertIn("if (p.aggregate) tr.append(", source)
+        for lang in ("en", "ru"):
+            table = strings(lang)
+            for key in ("portAggregate", "portAggregateMembers",
+                        "portAggregateHint"):
+                self.assertTrue(table.get(key), (lang, key))
+
+
 class DiagFdbTest(unittest.TestCase):
     def test_diag_rejects_the_row_the_service_drops(self):
         agent = StubAgent(phantom=True)
