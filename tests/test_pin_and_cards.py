@@ -108,30 +108,21 @@ class ShortCardsTest(unittest.TestCase):
 
 
 class PhoneListTest(unittest.TestCase):
-    def test_the_bar(self):
-        self.assertIn('id="sidebar-toggle"', INDEX)
-        self.assertIn('aria-controls="sidebar" aria-expanded="true"', INDEX)
-        # before the list, so between the header and the map on a phone
-        self.assertLess(INDEX.index('id="sidebar-toggle"'),
-                        INDEX.index('<aside id="sidebar">'))
-        for texts in (EN, RU):
-            self.assertIn("sidebarToggle", texts)
-        self.assertEqual(RU["sidebarToggle"], "Список и поиск")
+    """The list on a phone (v0.7.9) is the Search section since v0.8.6:
+    the bar that folded it away over the map is gone, and so is the
+    key that remembered it."""
 
-    def test_only_on_a_phone(self):
-        self.assertIn(".sidebar-toggle { display: none; }", STYLE)
-        phone = STYLE[STYLE.index("@media (max-width: 720px)"):]
-        phone = phone[:phone.index("\n}\n")]
-        self.assertIn(".sidebar-toggle {", phone)
-        self.assertIn("main.sidebar-collapsed #sidebar { display: none; }", phone)
+    def test_the_bar_is_gone(self):
+        self.assertNotIn('id="sidebar-toggle"', INDEX)
+        self.assertNotIn("sidebarToggle", EN)
+        self.assertNotIn("sidebar-toggle", STYLE)
+        self.assertNotIn("moonlan-sidebar-collapsed", APP)
 
-    def test_kept_and_resized(self):
-        self.assertIn('const SIDEBAR_KEY = "moonlan-sidebar-collapsed";', APP)
-        toggle = function("toggleSidebar")
-        self.assertIn('network.setSize("100%", "100%")', toggle)
-        self.assertIn("network.getViewPosition()", toggle)
-        apply = function("applySidebarCollapsed")
-        self.assertIn('"aria-expanded"', apply)
+    def test_the_list_is_a_section_of_its_own(self):
+        self.assertIn('data-tab="search"', INDEX)
+        phone = STYLE[STYLE.index("/* ---------- a phone: one row on top"):]
+        self.assertIn("main.show-search #sidebar { display: block; }", phone)
+        self.assertIn('els.main.classList.contains("show-search")', APP)
 
 
 if __name__ == "__main__":

@@ -99,6 +99,9 @@ __define("fetch", () => new Promise(() => {}));
 __define("setInterval", () => 0);
 __define("requestAnimationFrame", () => 0);
 if (typeof globalThis.addEventListener !== "function") __define("addEventListener", () => {});
+if (typeof history === "undefined") {
+  __define("history", { state: null, length: 1, pushState() {}, replaceState() {}, go() {}, back() {} });
+}
 // a wide screen unless the test says otherwise (v0.8.6: the phone's
 // layout is chosen by the same media query the style uses)
 if (typeof globalThis.matchMedia !== "function") {

@@ -208,5 +208,21 @@ class RussianWordsTest(unittest.TestCase):
         self.assertEqual(self.out["old"], "10.0.0.10 [Gi0/2] — 10.0.0.22 [Gi0/24] (fdb): LLDP puts it behind")
 
 
+class BothLanguagesTest(unittest.TestCase):
+    """Every string in both languages (v0.8.6, with the phone's new
+    ones): a key only one of them has shows its name in the other.
+    Russian alone has the plural forms "_few" and "_many"."""
+
+    def test_the_same_keys(self):
+        en, ru = strings("en"), strings("ru")
+        plural = re.compile(r"_(few|many)$")
+        self.assertEqual(sorted(set(en) - set(ru)), [])
+        self.assertEqual(sorted(k for k in set(ru) - set(en) if not plural.search(k)), [])
+        for key in ("tabMap", "tabSearch", "tabAlarms", "tabJournal", "tabMore",
+                    "journalGroup_alarms", "journalMore", "portAggregate"):
+            self.assertTrue(en[key] and ru[key], key)
+            self.assertNotEqual(en[key], ru[key], key)
+
+
 if __name__ == "__main__":
     unittest.main()

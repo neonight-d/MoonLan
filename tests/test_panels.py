@@ -14,11 +14,13 @@ from web_source import APP, INDEX, function
 
 
 def panel_ids():
-    """The ids of every .panel and every dialog of index.html"""
+    """The ids of every .panel, every view of a phone (v0.8.6: More) and
+    every dialog of index.html"""
     ids = []
     for tag in re.findall(r"<div\b[^>]*>", INDEX):
         found = re.search(r'\bid="([^"]+)"', tag)
-        panel = re.search(r'\bclass="[^"]*\bpanel\b', tag) or 'role="dialog"' in tag
+        panel = (re.search(r'\bclass="[^"]*\b(panel|phone-view)\b', tag)
+                 or 'role="dialog"' in tag)
         if found and panel:
             ids.append(found.group(1))
     return ids
@@ -34,8 +36,11 @@ def els_key(element_id):
 class RedrawTest(unittest.TestCase):
     def test_every_panel_and_dialog_is_redrawn(self):
         ids = panel_ids()
-        # ten panels and two dialogs (sign-in, export) as of v0.8.2
-        self.assertGreaterEqual(len(ids), 12)
+        # ten panels and two dialogs (sign-in, export) as of v0.8.2;
+        # More and the status card of a phone since v0.8.6
+        self.assertGreaterEqual(len(ids), 14)
+        self.assertIn("more-view", ids)
+        self.assertIn("status-card", ids)
         for element_id in ids:
             with self.subTest(element_id):
                 key = els_key(element_id)

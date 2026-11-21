@@ -16,6 +16,11 @@
       <h1>MoonLan</h1>
       <span class="tagline" data-i18n="tagline"></span>
     </div>
+    <!-- The status on a phone (v0.8.6): the time of the scan, and a
+         mark when it is not the whole story; a tap opens the sentence
+         and what is behind it, which the tooltip says on a computer -->
+    <button type="button" id="status-btn" class="status-btn" aria-haspopup="dialog"
+            aria-expanded="false" aria-controls="status-card"></button>
     <div class="toolbar">
       <span id="scan-status" class="status"></span>
       <span id="lang-switch" class="lang-switch" role="group">
@@ -45,6 +50,12 @@
   <!-- What the header has to keep saying: that the map is open to
        everybody, or (v0.7.4, over plain HTTP) that it is not encrypted -->
   <div id="notice" class="notice hidden" role="note"></div>
+  <!-- The whole status line on a phone, under the header (v0.8.6) -->
+  <div id="status-card" class="status-card hidden" role="dialog"
+       aria-labelledby="status-card-title">
+    <p id="status-card-title" class="status-card-title"></p>
+    <div id="status-card-body"></div>
+  </div>
 
   <!-- Right-click menu. Its items are built from data (see
        menuItemsFor in app.js): diagnostic actions, links, the
@@ -58,10 +69,8 @@
   <div id="toast" class="toast" role="status" aria-live="polite"></div>
 
   <main>
-    <!-- On a phone the list stands over the map; this bar folds it
-         away (v0.7.9). Not shown wider than 720 px. -->
-    <button id="sidebar-toggle" class="sidebar-toggle" type="button"
-            aria-controls="sidebar" aria-expanded="true"></button>
+    <!-- On a phone the list and the search are a section of their own,
+         "Search" in the bar at the bottom (v0.8.6) -->
     <aside id="sidebar">
       <input id="search" type="search" autocomplete="off">
       <!-- Named nodes no other list has: switches without SNMP, bridges,
@@ -195,12 +204,31 @@
         </div>
         <div class="panel-scroll"><div id="about-body"></div></div>
       </div>
+      <!-- The map's tools on a phone (v0.8.6), over the map, under the
+           thumb: freeze, port numbers, fit the map to the screen -->
+      <div id="map-tools" class="map-tools">
+        <button type="button" id="tool-freeze" class="map-tool"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M12 12L12.0 2.0M14.6 3.0L12.0 5.5L9.4 3.0M12 12L3.3 7.0M5.5 5.2L6.4 8.8L2.9 9.8M12 12L3.3 17.0M2.9 14.2L6.4 15.2L5.5 18.8M12 12L12.0 22.0M9.4 21.0L12.0 18.5L14.6 21.0M12 12L20.7 17.0M18.5 18.8L17.6 15.3L21.1 14.2M12 12L20.7 7.0M21.1 9.8L17.6 8.8L18.5 5.2"/></svg></button>
+        <button type="button" id="tool-ports" class="map-tool" aria-haspopup="menu"
+                aria-expanded="false" aria-controls="port-labels-menu"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><rect x="3" y="6.5" width="18" height="11" rx="3"/><path d="M10.5 10.5L12.5 9v6M10.5 15h4"/></svg></button>
+        <button type="button" id="tool-fit" class="map-tool"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M4 9V4h5M15 4h5v5M20 15v5h-5M9 20H4v-5"/></svg></button>
+      </div>
+      <!-- Arranging is on: said on the map itself on a phone, where the
+           header's button that showed it is gone (v0.8.6) -->
+      <div id="arrange-banner" class="arrange-banner hidden" role="status">
+        <span id="arrange-banner-text"></span>
+        <button type="button" id="arrange-banner-off"></button>
+      </div>
       <div id="empty-state" class="hidden">
         <p data-i18n="emptyLine1"></p>
         <p data-i18n-html="emptyLine2"></p>
         <p id="empty-config" class="hidden"></p>
       </div>
     </section>
+    <!-- "More" on a phone (v0.8.6): the account, the language, STP,
+         arranging and the Actions menu's items, from the same data -->
+    <div id="more-view" class="phone-view hidden" role="region" aria-labelledby="tab-more">
+      <div id="more-body"></div>
+    </div>
     <!-- Signing in, and what has to come before anything else: a
          password of one's own, an administrator's second factor. Over
          the map rather than instead of it, so a session that ended
@@ -222,6 +250,15 @@
       </div>
     </div>
   </main>
+  <!-- The sections on a phone (v0.8.6): at the bottom, under the
+       thumb. Not shown wider than 720 px. -->
+  <nav id="tabbar" class="tabbar">
+    <button type="button" id="tab-map" class="tab" data-tab="map"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M9 4L3 6v14l6-2 6 2 6-2V4l-6 2-6-2zM9 4v14M15 6v14"/></svg><span class="tab-label" data-i18n="tabMap"></span></button>
+    <button type="button" id="tab-search" class="tab" data-tab="search"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5"/></svg><span class="tab-label" data-i18n="tabSearch"></span></button>
+    <button type="button" id="tab-alarms" class="tab" data-tab="alarms"><span class="tab-icon"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M18 16v-5a6 6 0 0 0-12 0v5l-2 2h16z"/><path d="M10.2 20.5a2 2 0 0 0 3.6 0"/></svg><span id="tab-alarms-badge" class="badge hidden"></span></span><span class="tab-label" data-i18n="tabAlarms"></span></button>
+    <button type="button" id="tab-journal" class="tab" data-tab="journal"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M9 6h11M9 12h11M9 18h11"/><path class="dot" d="M4.5 6h.01M4.5 12h.01M4.5 18h.01"/></svg><span class="tab-label" data-i18n="tabJournal"></span></button>
+    <button type="button" id="tab-more" class="tab" data-tab="more"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path class="dot" d="M5 12h.01M12 12h.01M19 12h.01"/></svg><span class="tab-label" data-i18n="tabMore"></span></button>
+  </nav>
   <!-- The map on paper (v0.8.1): filled by printSchema, shown only in
        print; the size of the paper is the @page rule in the style -->
   <div id="print-sheet"></div>

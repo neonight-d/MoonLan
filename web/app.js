@@ -67,7 +67,22 @@ const els = {
   actionsClose: document.getElementById("actions-close"),
   moreBtn: document.getElementById("more-btn"),
   main: document.querySelector("main"),
-  sidebarToggle: document.getElementById("sidebar-toggle"),
+  statusBtn: document.getElementById("status-btn"),
+  statusCard: document.getElementById("status-card"),
+  statusCardTitle: document.getElementById("status-card-title"),
+  statusCardBody: document.getElementById("status-card-body"),
+  tabbar: document.getElementById("tabbar"),
+  tabAlarms: document.getElementById("tab-alarms"),
+  tabAlarmsBadge: document.getElementById("tab-alarms-badge"),
+  moreView: document.getElementById("more-view"),
+  moreBody: document.getElementById("more-body"),
+  mapPanel: document.getElementById("map-panel"),
+  toolFreeze: document.getElementById("tool-freeze"),
+  toolPorts: document.getElementById("tool-ports"),
+  toolFit: document.getElementById("tool-fit"),
+  arrangeBanner: document.getElementById("arrange-banner"),
+  arrangeBannerText: document.getElementById("arrange-banner-text"),
+  arrangeBannerOff: document.getElementById("arrange-banner-off"),
   moreMenu: document.getElementById("more-menu"),
   userMenu: document.getElementById("user-menu"),
   notice: document.getElementById("notice"),
@@ -176,8 +191,11 @@ function applyStatic() {
   els.langRu.classList.toggle("active", lang === "ru");
   els.langEn.classList.toggle("active", lang === "en");
   applyFreeze();
-  applySidebarCollapsed();
   applyPortLabelMode();
+  els.tabbar.setAttribute("aria-label", t("tabbarLabel"));
+  els.toolFit.setAttribute("aria-label", t("fitMap"));
+  els.toolFit.title = t("fitMap");
+  els.arrangeBannerOff.textContent = t("arrangeBannerOff");
 }
 
 function setLang(newLang) {
@@ -1354,6 +1372,9 @@ let panelAsked = null;
 function askPanel() {
   const ticket = {};
   panelAsked = ticket;
+  // a panel is on its way: on a phone, what it hid to make room stays
+  // under it rather than being taken for closed (v0.8.6)
+  phoneAsked = true;
   return () => panelAsked === ticket;
 }
 
@@ -3046,6 +3067,11 @@ function applyArrangeMode() {
   // The map itself changes, not only the button: a mode you can
   // forget you are in is a mode that edits the map by accident.
   els.network.classList.toggle("arranging", arrangeMode);
+  // …and on a phone, where that button is gone, a bar on the map says
+  // so, with the way out in it (v0.8.6; hidden wider than 720 px)
+  els.arrangeBanner.classList.toggle("hidden", !arrangeMode);
+  els.arrangeBannerText.textContent = t("arrangeOnBtn");
+  if (!els.moreView.classList.contains("hidden")) renderMoreView();
 }
 
 function toggleArrangeMode() {
@@ -3060,6 +3086,10 @@ function applyFreeze() {
   labelIcon(els.freezeBtn, layoutFrozen ? t("unfreezeBtn") : t("freezeBtn"));
   els.freezeBtn.classList.toggle("active", layoutFrozen);
   els.freezeBtn.setAttribute("aria-pressed", layoutFrozen ? "true" : "false");
+  // the same switch among the map's tools on a phone
+  labelIcon(els.toolFreeze, layoutFrozen ? t("unfreezeBtn") : t("freezeBtn"));
+  els.toolFreeze.classList.toggle("active", layoutFrozen);
+  els.toolFreeze.setAttribute("aria-pressed", layoutFrozen ? "true" : "false");
 }
 
 /* The words behind an icon: the tooltip and what a screen reader says */
@@ -3072,38 +3102,6 @@ function toggleFreeze() {
   layoutFrozen = !layoutFrozen;
   localStorage.setItem(FREEZE_KEY, layoutFrozen ? "1" : "0");
   applyFreeze();
-}
-
-/* ---------- the list on a phone ----------
-
-   At 720 px and narrower the list and the search stand over the map
-   and take up to 40 % of the screen; a bar between the header and the
-   map folds them away. Wider than that there is no bar, and the side
-   panel is there whatever was stored. */
-const SIDEBAR_KEY = "moonlan-sidebar-collapsed";
-let sidebarCollapsed = localStorage.getItem(SIDEBAR_KEY) === "1";
-
-function applySidebarCollapsed() {
-  els.main.classList.toggle("sidebar-collapsed", sidebarCollapsed);
-  els.sidebarToggle.textContent =
-    t("sidebarToggle") + (sidebarCollapsed ? " ▾" : " ▴");
-  els.sidebarToggle.setAttribute("aria-expanded", sidebarCollapsed ? "false" : "true");
-}
-
-function toggleSidebar() {
-  // the map gets the room at once, looking at the same spot
-  const view = network && {
-    position: network.getViewPosition(),
-    scale: network.getScale(),
-  };
-  sidebarCollapsed = !sidebarCollapsed;
-  localStorage.setItem(SIDEBAR_KEY, sidebarCollapsed ? "1" : "0");
-  applySidebarCollapsed();
-  if (network) {
-    network.setSize("100%", "100%");
-    network.moveTo({ ...view, animation: false });
-    network.redraw();
-  }
 }
 
 /* ---------- helpers ---------- */
@@ -3249,7 +3247,70 @@ function setScanStatus(full, short, cls, hint) {
     h("span", { class: "st-short", text: short })
   );
   els.scanStatus.title = hint ? full + "\n\n" + hint : full;
+  renderStatusButton(full, short, cls, hint);
   fitHeader();
+}
+
+/* The status on a phone (v0.8.6): the short form, and when the scan is
+   not the whole story — some switches ran out of time, it failed, the
+   service is gone — a mark and how many did not make it. A tap opens
+   what the tooltip says on a computer: a phone has no tooltips. */
+let statusInfo = { full: "", hint: "", cls: "" };
+
+function renderStatusButton(full, short, cls, hint) {
+  statusInfo = { full, hint: hint || "", cls: cls || "" };
+  const late = (topology.scan_over_budget || []).length;
+  const parts = [h("span", { class: "st-short", text: short })];
+  if (["partial", "failed", "offline"].includes(cls)) {
+    const ns = "http://www.w3.org/2000/svg";
+    const icon = document.createElementNS(ns, "svg");
+    icon.setAttribute("class", "icon");
+    icon.setAttribute("viewBox", "0 0 24 24");
+    icon.setAttribute("aria-hidden", "true");
+    const path = document.createElementNS(ns, "path");
+    path.setAttribute("d", "M12 4L2.5 20h19L12 4zM12 10v4M12 17v.5");
+    icon.append(path);
+    parts.push(icon);
+    if (late) parts.push(h("span", { class: "st-count", text: String(late) }));
+  }
+  els.statusBtn.className = "status-btn" + (cls ? " " + cls : "");
+  els.statusBtn.replaceChildren(...parts);
+  els.statusBtn.setAttribute("aria-label", full);
+  if (!els.statusCard.classList.contains("hidden")) renderStatusCard();
+}
+
+/* The whole sentence, and what is behind it: the switches that ran out
+   of time, each with the moment its data is from */
+function renderStatusCard() {
+  els.statusCardTitle.textContent = statusInfo.full;
+  const parts = [];
+  const late = topology.scan_over_budget || [];
+  if (statusInfo.cls === "partial" && late.length) {
+    const byIp = Object.fromEntries((topology.switches || []).map((sw) => [sw.ip, sw]));
+    parts.push(h("ul", { class: "status-card-late" }, ...late.map((ip) =>
+      h("li", {
+        text: fmt("statusLate", {
+          name: switchName(ip),
+          when: byIp[ip] && byIp[ip].polled_at ? fmtTime(byIp[ip].polled_at) : "—",
+        }),
+      }))));
+  }
+  if (statusInfo.hint) parts.push(h("p", { class: "status-card-hint", text: statusInfo.hint }));
+  els.statusCardBody.replaceChildren(...parts);
+}
+
+function toggleStatusCard() {
+  if (!els.statusCard.classList.contains("hidden")) {
+    closeStatusCard();
+    return;
+  }
+  phonePush(phoneViews.status);
+}
+
+function closeStatusCard() {
+  const at = phoneStack.indexOf(phoneViews.status);
+  if (at >= 0) phoneCloseTo(at);
+  else phoneViews.status.hide();
 }
 
 function updateScanStatus() {
@@ -3334,7 +3395,9 @@ function fitHeader() {
     header.scrollWidth > header.clientWidth + 1 ||
     brand.scrollWidth > brand.clientWidth + 1;
   header.classList.remove("compact", "compact-more");
-  if (window.innerWidth > 860 && crowded()) {
+  // on a phone the header is the name and the status button and
+  // nothing else (v0.8.6): there is nothing to fit
+  if (!isPhone() && window.innerWidth > 860 && crowded()) {
     header.classList.add("compact");
     if (crowded()) header.classList.add("compact-more");
   }
@@ -3353,7 +3416,9 @@ function fitHeader() {
 const TAP_SIZE = 44;
 
 function tapAreas() {
-  const targets = [...document.querySelectorAll("header button, #sidebar-toggle")]
+  // the header's buttons that are left on a phone; the bar at the
+  // bottom and the map's tools are big enough by their own layout
+  const targets = [...document.querySelectorAll("header button")]
     .filter((el) => el.offsetParent !== null);
   if (!window.matchMedia("(max-width: 720px)").matches) {
     for (const el of targets) el.style.removeProperty("--tap");
@@ -3561,11 +3626,17 @@ function renderBadge() {
       ? t("alarmsBtn") + ": " + activeAlarms.length
       : t("alarmsBtn")
   );
-  els.alarmsBadge.textContent = activeAlarms.length;
-  els.alarmsBadge.classList.toggle("hidden", activeAlarms.length === 0);
-  els.alarmsBadge.classList.toggle(
-    "critical",
-    activeAlarms.some((a) => a.severity === "critical")
+  // the bell in the header and the tab at the bottom of a phone show
+  // one count, critical colour included (v0.8.6)
+  const critical = activeAlarms.some((a) => a.severity === "critical");
+  for (const badge of [els.alarmsBadge, els.tabAlarmsBadge]) {
+    badge.textContent = activeAlarms.length;
+    badge.classList.toggle("hidden", activeAlarms.length === 0);
+    badge.classList.toggle("critical", critical);
+  }
+  els.tabAlarms.setAttribute(
+    "aria-label",
+    activeAlarms.length ? t("tabAlarms") + ": " + activeAlarms.length : t("tabAlarms")
   );
 }
 
@@ -3729,7 +3800,12 @@ function renderSidebar() {
           .filter((part, i, all) => part && all.indexOf(part) === i)
           .join(" · "),
         statusClass(h),
-        () => showDetails("unloc:" + h.mac),
+        () => {
+          // no node on the map, but on a phone its card goes over the
+          // map all the same, as any row's does (v0.8.6)
+          phoneLeaveSearch();
+          showDetails("unloc:" + h.mac);
+        },
         [hostLabel(h), h.ip, h.mac, h.vendor, noteSearchText(h)].filter(Boolean).join(" "),
         "stale", "", "unloc:" + h.mac
       )
@@ -4820,6 +4896,8 @@ function applyPortLabelMode() {
   const mode = item.charAt(0).toLocaleLowerCase(lang) + item.slice(1);
   labelIcon(els.portLabelsBtn, fmt("portLabelsBtn", { mode }));
   els.portLabelsBtn.classList.toggle("active", portLabelMode !== "off");
+  labelIcon(els.toolPorts, fmt("portLabelsBtn", { mode }));
+  els.toolPorts.classList.toggle("active", portLabelMode !== "off");
   els.portLabelsMenu.setAttribute("aria-label", t("portLabelsMenu"));
 }
 
@@ -4849,6 +4927,12 @@ function setPortNumbersOnly(on) {
   if (network) network.redraw();
 }
 
+/* The button the menu belongs to: the header's, or on a phone the
+   map's tool (v0.8.6) */
+function portLabelsAnchor() {
+  return isPhone() ? els.toolPorts : els.portLabelsBtn;
+}
+
 function openPortLabelsMenu() {
   closeNodeMenu();
   closeMoreMenu(false);
@@ -4858,13 +4942,24 @@ function openPortLabelsMenu() {
     else setPortLabelMode(item.key);
   }));
   els.portLabelsMenu.classList.remove("hidden");
-  els.portLabelsBtn.setAttribute("aria-expanded", "true");
-  // under the button, its left edge on the button's
-  const button = els.portLabelsBtn.getBoundingClientRect();
+  const anchor = portLabelsAnchor();
+  anchor.setAttribute("aria-expanded", "true");
+  const button = anchor.getBoundingClientRect();
   const width = els.portLabelsMenu.offsetWidth;
-  menuUnder(els.portLabelsMenu, button.bottom + 6);
-  els.portLabelsMenu.style.left =
-    Math.max(4, Math.min(button.left, window.innerWidth - width - 8)) + "px";
+  if (anchor === els.toolPorts) {
+    // over the tool, its right edge on the button's: the tools stand
+    // at the bottom right, under the thumb
+    els.portLabelsMenu.style.maxHeight = Math.max(120, button.top - 16) + "px";
+    const height = els.portLabelsMenu.offsetHeight;
+    els.portLabelsMenu.style.top = Math.max(8, button.top - 6 - height) + "px";
+    els.portLabelsMenu.style.left =
+      Math.max(4, Math.min(button.right - width, window.innerWidth - width - 8)) + "px";
+  } else {
+    // under the button, its left edge on the button's
+    menuUnder(els.portLabelsMenu, button.bottom + 6);
+    els.portLabelsMenu.style.left =
+      Math.max(4, Math.min(button.left, window.innerWidth - width - 8)) + "px";
+  }
   const current = els.portLabelsMenu.querySelector('[aria-checked="true"]');
   if (current) current.focus();
 }
@@ -4874,7 +4969,8 @@ function closePortLabelsMenu(returnFocus) {
   els.portLabelsMenu.classList.add("hidden");
   els.portLabelsMenu.replaceChildren();
   els.portLabelsBtn.setAttribute("aria-expanded", "false");
-  if (returnFocus) els.portLabelsBtn.focus();
+  els.toolPorts.setAttribute("aria-expanded", "false");
+  if (returnFocus) portLabelsAnchor().focus();
 }
 
 /* ---------- vis-network's internals ----------
@@ -5211,6 +5307,9 @@ function holdIsAPress() {
 
 function focusNode(id) {
   if (!network) return;
+  // a row of the search on a phone: the map, the node and its card
+  // (v0.8.6) — the card is opened below, over the map
+  phoneLeaveSearch();
   network.focus(id, { scale: 1.2, animation: true });
   network.selectNodes([id]);
   setSelectedNode(id);
@@ -9261,7 +9360,6 @@ for (const th of document.querySelectorAll("#ports th[data-sort]")) {
   th.addEventListener("click", () => setPortsSort(th.dataset.sort));
 }
 els.freezeBtn.addEventListener("click", toggleFreeze);
-els.sidebarToggle.addEventListener("click", toggleSidebar);
 els.arrangeBtn.addEventListener("click", () => allowed(els.arrangeBtn) && toggleArrangeMode());
 els.portLabelsBtn.addEventListener("click", () => {
   if (els.portLabelsMenu.classList.contains("hidden")) openPortLabelsMenu();
@@ -9274,8 +9372,14 @@ document.addEventListener("click", (event) => {
   if (!els.nodeMenu.contains(event.target)) closeNodeMenu();
   if (!els.userMenu.contains(event.target)) closeUserMenu(false);
   if (!els.portLabelsMenu.contains(event.target) &&
-      !els.portLabelsBtn.contains(event.target)) {
+      !els.portLabelsBtn.contains(event.target) &&
+      !els.toolPorts.contains(event.target)) {
     closePortLabelsMenu(false);
+  }
+  // the whole status line on a phone closes on a tap anywhere else
+  if (!els.statusCard.classList.contains("hidden") &&
+      !els.statusCard.contains(event.target) && !els.statusBtn.contains(event.target)) {
+    closeStatusCard();
   }
   if (!els.moreMenu.contains(event.target) && !els.moreBtn.contains(event.target)) {
     closeMoreMenu(false);
@@ -9328,6 +9432,8 @@ document.addEventListener("keydown", (event) => {
     closeNodeMenu();
     closeMoreMenu(false);
     closePortLabelsMenu(false);
+    // the top view or panel on a phone, as Back closes it (v0.8.6)
+    if (isPhone() && phoneStack.length) phoneBack();
   }
 });
 
@@ -9354,6 +9460,397 @@ function togglePinOnSelection() {
   }
 }
 
+/* ---------- a phone: one row on top, the sections at the bottom (v0.8.6) ----------
+
+   At 720 px and narrower — the width at which the list used to stand
+   over the map — the header is the name and the status button, and the
+   rest moved to a bar at the bottom, under the thumb: Map, Search,
+   Alarms, Journal, More. The header took four rows and 184 px on a
+   Pixel 10, a fifth of the screen, all of it out of the thumb's reach.
+
+   What is open is a stack, bottom to top: a section of the bar, the
+   panels opened from it, the card of a node. × and Esc close the top
+   one, and so does Android's Back — every view or panel opened on a
+   phone is one entry of the browser's history. Closing a panel shows
+   again what it was opened from: More, the alarms (the ports panel is
+   opened from there), the card, the map. Wider than 720 px none of
+   this runs and nothing of it is shown. */
+const PHONE_MEDIA = "(max-width: 720px)";
+const PHONE_TABS = ["map", "search", "alarms", "journal", "more"];
+
+function isPhone() {
+  return window.matchMedia(PHONE_MEDIA).matches;
+}
+
+let phoneStack = [];     // what is open, bottom to top
+let historyDepth = 0;    // how many entries of ours the browser's history holds
+let historyGoing = false; // a history.go() of ours is on its way
+let phoneAsked = false;  // a panel was asked for and has not shown yet
+
+// The panels that count as views on a phone; the order is the one a
+// panel found open is put on the stack in
+const PHONE_PANELS = [
+  els.details, els.alarms, els.journal, els.ports, els.stp, els.notesPanel,
+  els.account, els.users, els.settings, els.about, els.actions,
+];
+
+/* The views that are not panels: the list, More, the status card */
+const phoneViews = {
+  search: {
+    key: "search", tab: "search",
+    visible: () => els.main.classList.contains("show-search"),
+    show: () => els.main.classList.add("show-search"),
+    hide: () => els.main.classList.remove("show-search"),
+  },
+  more: {
+    key: "more", tab: "more",
+    visible: () => !els.moreView.classList.contains("hidden"),
+    show: () => {
+      renderMoreView();
+      els.moreView.classList.remove("hidden");
+    },
+    hide: () => els.moreView.classList.add("hidden"),
+  },
+  status: {
+    key: "status",
+    visible: () => !els.statusCard.classList.contains("hidden"),
+    show: () => {
+      renderStatusCard();
+      const header = document.querySelector("header").getBoundingClientRect();
+      els.statusCard.style.top = Math.round(header.bottom + 6) + "px";
+      els.statusCard.classList.remove("hidden");
+      els.statusBtn.setAttribute("aria-expanded", "true");
+    },
+    hide: () => {
+      els.statusCard.classList.add("hidden");
+      els.statusBtn.setAttribute("aria-expanded", "false");
+    },
+  },
+};
+
+/* A panel as an entry of the stack: closed by its own ×, so whatever
+   that does on the way (the ports' timer, a draft in Settings) is done;
+   shown again the way it was opened */
+function panelEntry(panel) {
+  const entry = {
+    key: panel.id,
+    el: panel,
+    tab: panel === els.alarms ? "alarms" : panel === els.journal ? "journal" : undefined,
+    visible: () => !panel.classList.contains("hidden"),
+    hide: () => {
+      const close = panel.querySelector(".panel-head [data-close]");
+      if (close) close.click();
+      else panel.classList.add("hidden");
+    },
+    show: () => {
+      if (panel === els.details && entry.detail) {
+        if (entry.detail.type === "link") showLinkDetails(entry.detail.id);
+        else showDetails(entry.detail.id);
+      } else if (panel === els.ports && entry.ip) {
+        openPorts(entry.ip);
+      } else {
+        panel.classList.remove("hidden");
+      }
+    },
+  };
+  return entry;
+}
+
+/* What the panels are now, taken into the stack: one that has just
+   shown goes on top; one the page hid while something else covers it
+   stays under it; one hidden at the top is closed, and what it was
+   opened from comes back. The panels' own code opens and closes them;
+   this follows (a MutationObserver calls it, and so does whatever the
+   phone itself opens). */
+function phoneSync() {
+  if (!isPhone()) return;
+  for (const panel of PHONE_PANELS) {
+    if (panel.classList.contains("hidden")) continue;
+    let entry = phoneStack.find((e) => e.el === panel);
+    if (!entry) {
+      entry = panelEntry(panel);
+      phoneStack.push(entry);
+      phoneAsked = false;
+    }
+    // how to show it again, should something be opened over it
+    if (panel === els.details && shownDetails) entry.detail = { ...shownDetails };
+    if (panel === els.ports && portsIp) entry.ip = portsIp;
+  }
+  settlePhoneStack();
+}
+
+function settlePhoneStack() {
+  const closed = phoneStack[phoneStack.length - 1];
+  if (closed && !phoneAsked && !closed.visible()) {
+    // the top one was closed; the one under it was covered, not
+    // closed, and comes back
+    phoneStack.pop();
+    const top = phoneStack[phoneStack.length - 1];
+    if (top && !top.visible()) top.show();
+  }
+  syncHistory();
+  renderTabbar();
+}
+
+/* Opens a view of the phone's own on top of what is open */
+function phonePush(view) {
+  if (!phoneStack.includes(view)) phoneStack.push(view);
+  view.show();
+  syncHistory();
+  renderTabbar();
+}
+
+/* Closes what is above `depth`, top first, and shows again the one
+   left on top if it had been hidden under them */
+function phoneCloseTo(depth) {
+  phoneAsked = false;
+  const closing = phoneStack.splice(depth);
+  for (const entry of closing.reverse()) {
+    if (entry.visible()) entry.hide();
+  }
+  const top = phoneStack[phoneStack.length - 1];
+  if (top && !top.visible()) top.show();
+  syncHistory();
+  renderTabbar();
+}
+
+/* A row of the search was picked: the map, under the card that opens */
+function phoneLeaveSearch() {
+  if (isPhone() && phoneStack.some((entry) => entry.tab === "search")) phoneCloseTo(0);
+}
+
+/* Back, Esc and ×: the top view */
+function phoneBack() {
+  if (phoneStack.length) phoneCloseTo(phoneStack.length - 1);
+}
+
+/* The browser's history holds one entry per open view, and no more:
+   Back closes the top one, and a closed view takes its entry with it.
+   Entries carry only their depth; what they stand for is the stack. */
+function syncHistory() {
+  if (historyGoing) return; // carried on by the popstate it waits for
+  const want = isPhone() ? phoneStack.length : 0;
+  if (want < historyDepth) {
+    historyGoing = true;
+    history.go(want - historyDepth);
+    return;
+  }
+  while (historyDepth < want) {
+    historyDepth++;
+    history.pushState({ moonlanDepth: historyDepth }, "");
+  }
+}
+
+function phonePopState(event) {
+  const depth = (event.state && event.state.moonlanDepth) || 0;
+  historyDepth = depth;
+  if (historyGoing) {
+    historyGoing = false;
+    syncHistory();
+    return;
+  }
+  // Back: what is above the entry it came back to closes
+  if (depth < phoneStack.length) phoneCloseTo(depth);
+  else syncHistory();
+}
+
+/* A section of the bar: it closes everything else and opens its own
+   view. Map opens nothing — the map is what is under all of them. */
+async function phoneGoTab(tab) {
+  if (!PHONE_TABS.includes(tab)) return;
+  const base = phoneStack[0];
+  if (tab !== "map" && base && base.tab === tab) {
+    phoneCloseTo(1); // the section stays, what was opened over it goes
+    return;
+  }
+  phoneCloseTo(0);
+  if (tab === "search") {
+    phonePush(phoneViews.search);
+  } else if (tab === "more") {
+    phonePush(phoneViews.more);
+  } else if (tab === "alarms") {
+    await toggleAlarms();
+    phoneSync();
+  } else if (tab === "journal") {
+    await toggleJournal();
+    phoneSync();
+  }
+}
+
+/* The active section: the one at the bottom of the stack, the map when
+   there is none (a card is a sheet over the map) */
+function phoneTab() {
+  const base = phoneStack.find((entry) => entry.tab);
+  return base ? base.tab : "map";
+}
+
+function renderTabbar() {
+  const active = phoneTab();
+  for (const button of els.tabbar.querySelectorAll(".tab")) {
+    if (button.dataset.tab === active) button.setAttribute("aria-current", "page");
+    else button.removeAttribute("aria-current");
+  }
+}
+
+/* ---------- More ----------
+
+   The account and the language, the STP tree, arranging, and then the
+   items of the Actions menu with their groups and lines — moreItems(),
+   the same data as the menu: an item added there is here too. What a
+   role may not do is grey with the reason, not left out (v0.7.5). */
+function renderMoreView() {
+  const parts = [];
+  const signedIn = me && me.sign_in && me.name;
+  const account = h("div", { class: "more-account" });
+  if (signedIn) {
+    account.append(h("button", {
+      type: "button", class: "more-account-btn", "data-key": "account",
+      onclick: () => {
+        toggleAccount();
+        phoneSync();
+      },
+    },
+    h("span", { class: "more-avatar", "aria-hidden": "true",
+      text: me.name.slice(0, 1).toLocaleUpperCase(lang) }),
+    h("span", { class: "more-who" },
+      h("span", { class: "more-name", text: me.name }),
+      h("span", { class: "more-role", text: t("role_" + me.role) }))));
+  } else {
+    // sign-in is not set up: what the header used to say
+    account.append(h("p", { class: "more-open", text: me && me.sign_in === false ? t("noticeOpen") : "" }));
+  }
+  const langs = h("span", { class: "lang-switch more-lang", role: "group", "aria-label": t("langSwitch") });
+  for (const code of ["ru", "en"]) {
+    langs.append(h("button", {
+      type: "button", class: lang === code ? "active" : "", "aria-pressed": String(lang === code),
+      text: code.toUpperCase(), onclick: () => setLang(code),
+    }));
+  }
+  account.append(langs);
+  parts.push(account);
+  parts.push(moreRow({ key: "stp", label: t("moreStp") }, async () => {
+    await toggleStp();
+    phoneSync();
+  }));
+  const arrangeWhy = needRole("user");
+  const arrange = moreRow(
+    { key: "arrange", label: t("arrangeBtn"), disabled: arrangeWhy },
+    () => toggleArrangeMode()
+  );
+  arrange.setAttribute("role", "switch");
+  arrange.setAttribute("aria-checked", String(arrangeMode));
+  arrange.append(h("span", { class: "more-switch" + (arrangeMode ? " on" : ""), "aria-hidden": "true" }));
+  parts.push(arrange);
+  parts.push(h("div", { class: "more-sep", role: "separator" }));
+  parts.push(...moreViewItems(moreItems(), MORE_GROUPS));
+  if (signedIn) {
+    parts.push(h("div", { class: "more-sep", role: "separator" }));
+    parts.push(moreRow({ key: "logout", label: t("logoutBtn") }, signOut));
+  }
+  els.moreBody.replaceChildren(...parts);
+}
+
+/* One row of More: a button the width of the screen, greyed out with
+   the reason when the role may not use it */
+function moreRow(item, run) {
+  const button = h("button", { type: "button", class: "more-row", "data-key": item.key });
+  button.append(h("span", { class: "more-label", text: item.label }));
+  if (item.danger) button.classList.add("danger");
+  if (item.disabled) {
+    button.classList.add("off");
+    button.setAttribute("aria-disabled", "true");
+    button.append(h("span", { class: "why", text: item.disabled }));
+  }
+  button.addEventListener("click", async () => {
+    if (item.disabled) return;
+    await run();
+    // a panel it opened goes on top of More; × comes back here
+    phoneSync();
+  });
+  return button;
+}
+
+/* The Actions menu's items as rows, by group, a line between groups */
+function moreViewItems(items, groups) {
+  const parts = [];
+  let drawn = 0;
+  for (const group of groups) {
+    const members = items.filter((item) => item.group === group);
+    if (!members.length) continue;
+    if (drawn++) parts.push(h("div", { class: "more-sep", role: "separator" }));
+    for (const item of members) parts.push(moreRow(item, item.run));
+  }
+  return parts;
+}
+
+/* ---------- the map's tools and the card as a sheet ---------- */
+
+function fitMap() {
+  if (network) network.fit({ animation: { duration: 400, easingFunction: "easeInOutQuad" } });
+}
+
+/* The tools stand over the card's sheet, not under it */
+function placeMapTools() {
+  const sheet = isPhone() && !els.details.classList.contains("hidden")
+    ? els.details.offsetHeight : 0;
+  els.mapPanel.style.setProperty("--sheet", sheet + "px");
+}
+
+/* From phone to computer and back: a computer has no stack, and a
+   phone starts from the map */
+function phoneModeChanged() {
+  if (!isPhone()) {
+    for (const view of Object.values(phoneViews)) {
+      if (view.visible()) view.hide();
+    }
+    phoneStack = [];
+    syncHistory();
+  } else {
+    phoneSync();
+  }
+  placeMapTools();
+  fitHeader();
+}
+
+for (const button of els.tabbar.querySelectorAll(".tab")) {
+  button.addEventListener("click", () => phoneGoTab(button.dataset.tab));
+}
+els.statusBtn.addEventListener("click", toggleStatusCard);
+els.notice.addEventListener("click", (event) => {
+  // the whole notice on a phone; a link in it stays a link
+  if (!isPhone() || (event.target.closest && event.target.closest("a"))) return;
+  els.notice.classList.toggle("expanded");
+});
+els.toolFreeze.addEventListener("click", toggleFreeze);
+els.toolPorts.addEventListener("click", () => {
+  if (els.portLabelsMenu.classList.contains("hidden")) openPortLabelsMenu();
+  else closePortLabelsMenu(true);
+});
+els.toolFit.addEventListener("click", fitMap);
+els.arrangeBannerOff.addEventListener("click", () => {
+  if (arrangeMode) toggleArrangeMode();
+});
+window.addEventListener("popstate", phonePopState);
+window.matchMedia(PHONE_MEDIA).addEventListener("change", phoneModeChanged);
+if (typeof MutationObserver === "function") {
+  const watch = new MutationObserver(() => {
+    phoneSync();
+    placeMapTools();
+  });
+  for (const panel of PHONE_PANELS) {
+    watch.observe(panel, { attributes: true, attributeFilter: ["class"] });
+  }
+}
+if (typeof ResizeObserver === "function") {
+  new ResizeObserver(placeMapTools).observe(els.details);
+}
+// A reload opens the map: entries of ours left in the history by the
+// page before it are walked back over, not reopened
+if (typeof history !== "undefined" && history.state && history.state.moonlanDepth) {
+  historyDepth = history.state.moonlanDepth;
+  syncHistory();
+}
+
 redrawOnLanguage(els.details, () => {
   if (!shownDetails) return;
   if (shownDetails.type === "link") showLinkDetails(shownDetails.id);
@@ -9370,6 +9867,8 @@ redrawOnLanguage(els.users, refreshUsers);
 redrawOnLanguage(els.about, renderAbout);
 redrawOnLanguage(els.settings, renderSettings);
 redrawOnLanguage(els.exportDialog, redrawExportDialog);
+redrawOnLanguage(els.moreView, renderMoreView);
+redrawOnLanguage(els.statusCard, renderStatusCard);
 // the sign-in form is redrawn, with the name typed so far; a form half
 // way through a code or a password is left alone
 redrawOnLanguage(els.gate, () => {
