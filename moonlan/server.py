@@ -1881,8 +1881,19 @@ async def run_counters() -> None:
         await alarm_engine.on_loop_detection(
             ip, sw.sys_name or ip, loop,
             {i: p.name or str(i) for i, p in sw.ports.items()},
+            _stp_operating(sw),
         )
     await alarm_engine.janitor(_observed_subjects())
+
+
+def _stp_operating(sw: SwitchData) -> bool | None:
+    """Whether spanning tree runs on this switch, as the last scan judged
+    it — judge_network() included, which is what confirms a root by its
+    neighbours. None when its STP is not visible over SNMP at all."""
+    stp = sw.stp
+    if stp is None or not getattr(stp, "supported", False):
+        return None
+    return bool(stp.operating)
 
 
 # What each switch's loop detection last said, so the same line is not

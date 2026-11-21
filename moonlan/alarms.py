@@ -77,9 +77,11 @@ Rules:
   time. A port with LBD switched off, and a port whose status did not
   arrive, raise nothing in either direction.
 - loop_detection_disabled (info): a switch that answers the loop
-  detection branch reports it switched off globally. With no spanning
-  tree running, LBD is the only thing between this network and a
-  broadcast storm, so its absence is worth a line in syslog.
+  detection branch reports it switched off globally, and spanning tree
+  is not running on it (or is not visible). With no spanning tree, LBD
+  is the only thing between this network and a broadcast storm, so its
+  absence is worth a line in syslog; with one running, it is not
+  (v0.8.6), and the alarm is cleared.
 """
 
 from __future__ import annotations
@@ -872,7 +874,8 @@ class AlarmEngine:
             )
 
     async def on_loop_detection(
-        self, ip: str, name: str, data, port_names: dict[int, str]
+        self, ip: str, name: str, data, port_names: dict[int, str],
+        stp_operating: bool | None = None,
     ) -> None:
         """One switch's loop-detection state, once per counters cycle.
 
@@ -880,8 +883,13 @@ class AlarmEngine:
         the feature exists at all:
 
         - a switch that answers the branch and reports LBD switched off
-          globally raises loop_detection_disabled (info, syslog). With
-          spanning tree off, this is the only loop protection running;
+          globally raises loop_detection_disabled (info, syslog) — unless
+          spanning tree is running on it (v0.8.6). `stp_operating` is
+          this switch's verdict after judge_network(), None when its STP
+          is not visible at all. The alarm used to say "this network
+          runs no spanning tree" without checking, and on mb0 it went
+          on saying so for two months after RSTP had been switched on
+          and its root confirmed by the neighbours;
         - a port whose status is not the known-normal value raises
           loop_detected, with the raw value in the message. The value a
           real loop produces has never been observed on this hardware
@@ -897,12 +905,21 @@ class AlarmEngine:
         if data is None or not data.supported:
             return  # the model does not report it; see loopdetect.py
         now = time.time()
-        if data.enabled is False:
+        if data.enabled is False and stp_operating is True:
+            await self._clear(
+                "loop_detection_disabled", ip,
+                "spanning tree is running on this switch",
+            )
+        elif data.enabled is False:
+            stp = (
+                "spanning tree on this switch is not visible over SNMP"
+                if stp_operating is None
+                else "spanning tree is not running on this switch"
+            )
             await self._raise(
                 "loop_detection_disabled", ip,
-                f"{name}: Loop Detection is switched off globally, and "
-                f"this network runs no spanning tree — nothing is "
-                f"watching for loops on this switch",
+                f"{name}: Loop Detection is switched off globally and "
+                f"{stp} — nothing is watching for loops on it",
             )
         else:
             await self._clear(
