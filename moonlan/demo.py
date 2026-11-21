@@ -150,6 +150,7 @@ from .snmp_collector import (
     SwitchData,
     aggregate_port,
     infer_lag_groups,
+    lag_port_name,
     parse_fdb_entry,
     sane_lag_members,
 )
@@ -421,12 +422,15 @@ def _synthetic_trunk(sw: SwitchData, bridge_port: int, members: tuple[int, ...])
     The members are derived with the same inference the collector uses.
     """
     if_index = -bridge_port
-    sw.ports[if_index] = PortInfo(
-        if_index=if_index, name=f"bridge-port {bridge_port}", is_physical=False
-    )
     physical = {p.if_index for p in sw.ports.values() if p.is_physical}
     sw.lag_groups.update(
         infer_lag_groups(physical, physical - set(members), {bridge_port})
+    )
+    # named by its members, as the collector names it (v0.8.6)
+    sw.ports[if_index] = PortInfo(
+        if_index=if_index,
+        name=lag_port_name(sw, sw.lag_groups.get(bridge_port, members)),
+        is_physical=False,
     )
     for m in members:
         sw.ports[m].oper_up = True
@@ -452,7 +456,10 @@ DEMO_NOTES = [
 DEMO_GONE_NOTE = ("pseudo:10.0.0.24:Gi0/12", "Room 109",
                   "Moved to another port in the summer?")
 # a name given before v0.8.1 to a group behind a trunk, which takes none
-# now: kept, and listed under "Notes without a node" with why
+# now: kept, and listed under "Notes without a node" with why. Its key
+# still has the trunk's name from before v0.8.6, "bridge-port 3": the
+# first scan renames it to "LAG Gi0/3+Gi0/4", the way an upgraded
+# server renames a real one, and it stays a note without a node.
 DEMO_RETIRED_NOTE = ("trunk:10.0.0.10:bridge-port 3", "Test", "")
 
 

@@ -3190,9 +3190,12 @@ function linkLabel(link, withLoad = true) {
   return label;
 }
 
-/* Port name in the link card; synthetic trunk ports get a "(LAG)" mark */
+/* Port name in the link card. An inferred aggregate is named by its
+   members since v0.8.6 ("LAG 1/25+1/26") and says what it is by
+   itself; the "(LAG)" mark is for the "bridge-port N" of an older
+   server. */
 function linkPortLabel(link, port) {
-  if (link.lag && link.lag.trunk && port.startsWith("bridge-port")) {
+  if (link.lag && link.lag.trunk && /^bridge-port \d+$/.test(port)) {
     return port + " (LAG)";
   }
   return port;
@@ -4362,10 +4365,10 @@ const PORT_TAG_HEIGHT = 15;
 
 /* A port's name as it fits on a tag. A number or a short name as it
    is; a long one by the number it ends with ("GigabitEthernet1/0/3" →
-   "1/0/3", "… Port 3" → "3"); a LAG trunk's synthetic "bridge-port N"
-   as "LAG"; an aggregate by the members of this side, up to two in
-   full ("3,4"), more as the first and how many others ("25+3") — and
-   past 8 characters without the prefix they share ("Gi0/3,Gi0/4" →
+   "1/0/3", "… Port 3" → "3"); a LAG trunk's synthetic port ("LAG
+   1/25+1/26", an older server's "bridge-port N") as "LAG"; an
+   aggregate by the members of this side, up to two in full ("3,4"),
+   more as the first and how many others ("25+3") — and past 8 characters without the prefix they share ("Gi0/3,Gi0/4" →
    "3,4"); no port at all as "?". */
 function portShort(port, members) {
   if (members && members.length) {
@@ -4387,7 +4390,7 @@ function portShort(port, members) {
   }
   const name = port == null ? "" : String(port).trim();
   if (!name) return "?";
-  if (/^bridge-port \d+$/.test(name)) return "LAG";
+  if (/^LAG\s/.test(name) || /^bridge-port \d+$/.test(name)) return "LAG";
   if (name.length <= 8) return name;
   const tail = name.match(/(\d+(?:[/.:]\d+)*)(?!.*\d)/);
   return tail ? tail[1] : name.slice(0, 7) + "…";
@@ -4397,7 +4400,7 @@ function portShort(port, members) {
    a switch whose physical ports all share one beginning (`prefix`,
    from the server), the number after it — "Slot0/25" → "25", an
    aggregate's members the same way, "23,24". A name without that
-   beginning — an aggregate's own, a LAG trunk's bridge-port — is as
+   beginning — an aggregate's own, a LAG trunk's "LAG …" — is as
    portShort() has it; so is every port of a switch with no prefix. */
 function portTagText(port, members, prefix, numbersOnly) {
   const number = (name) => {

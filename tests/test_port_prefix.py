@@ -49,7 +49,7 @@ class PortPrefixTest(unittest.TestCase):
 
     def test_what_is_not_physical_does_not_count(self):
         sw = switch(*[f"ether{n}" for n in range(1, 6)],
-                    others=((100, "Po1"), (200, "Vlan1"), (-3, "bridge-port 3"),
+                    others=((100, "Po1"), (200, "Vlan1"), (-3, "LAG ether3+ether4"),
                             (300, "bridge")))
         self.assertEqual(port_prefix(sw), "ether")
 

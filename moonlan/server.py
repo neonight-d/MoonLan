@@ -426,6 +426,10 @@ async def run_scan() -> None:
         # called it the root. One order of operations, three wrong
         # fields.
         _judge_stp(collected)
+        # Port names from before v0.8.6 in the database, renamed or
+        # reset by what this poll knows — before anything below reads
+        # the database by port name
+        await _retire_port_names(collected)
         # A MAC has to be seen more than once before it counts as a
         # device (unless ARP vouches for it); the verdict is needed
         # before the topology so that unconfirmed addresses stay out of
@@ -784,6 +788,34 @@ async def run_scan() -> None:
             await _reconcile_notes()
     finally:
         state.scan_ended(over_budget)
+
+
+async def _retire_port_names(collected: list[SwitchData]) -> None:
+    """The old names of synthetic ports, after each full poll (v0.8.6).
+
+    Only a switch read in full this scan: a saved reading is not news
+    about which aggregates exist. "bridge-port N" of an aggregate takes
+    its new name ("LAG 1/25+1/26"); any other "bridge-port N" and every
+    "-N" is reset — see Database.retire_port_names.
+    """
+    for sw in collected:
+        if not sw.reachable or sw.over_budget:
+            continue
+        renames = {
+            f"bridge-port {bridge_port}": sw.ports[-bridge_port].name
+            for bridge_port in sw.lag_groups
+            if -bridge_port in sw.ports and sw.ports[-bridge_port].name
+        }
+        counts = await asyncio.to_thread(
+            db.retire_port_names, sw.ip, renames
+        )
+        if any(counts.values()):
+            log.info(
+                "%s: port names from before v0.8.6 — %d device(s) moved to "
+                "the aggregate's new name, %d reset to no port (listed off "
+                "the map until seen again), %d layout/note key(s) renamed",
+                sw.ip, counts["renamed"], counts["reset"], counts["keys"],
+            )
 
 
 async def _reconcile_notes() -> None:
@@ -1398,7 +1430,9 @@ def _assemble_hosts(
             host["port"] = ""
             unlocated.append(host)
             continue
-        located = row["switch_ip"] in switch_ips
+        # a record with a switch and no port has no place on that switch
+        # (v0.8.6: the ports a poll has no name for are reset to '')
+        located = row["switch_ip"] in switch_ips and bool(row["port"])
         if located and grace > 0 and now - row["last_seen"] < grace:
             via = pseudo_by_port.get((row["switch_ip"], row["port"]))
             if via:

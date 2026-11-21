@@ -233,7 +233,8 @@ class FdbStability:
         self._cache: dict[str, dict[str, list[int]]] = {}
 
     def merge(
-        self, sw_ip: str, fresh: dict[str, int], confirm: bool = True
+        self, sw_ip: str, fresh: dict[str, int], confirm: bool = True,
+        ports: set[int] | None = None,
     ) -> dict[str, int]:
         """Merges this poll's table with the smoothed one.
 
@@ -248,11 +249,19 @@ class FdbStability:
         reading: it is returned alongside the cache. Smoothing the
         aging of a table and drawing what the table said are two
         different things, and only the first must not be fed a copy.
+
+        `ports` are the switch's ports in this poll. A remembered entry
+        on any other index is dropped (v0.8.6): a synthetic port can be
+        gone from the next poll — an aggregate that came apart, or a
+        bridge-port that was never one — and an entry still pointing at
+        it is how "-402792706" came to be a port name.
         """
         cache = self._cache.setdefault(sw_ip, {})
         for mac in list(cache):
             cache[mac][1] -= 1
             if cache[mac][1] < 0:  # survived ttl unconfirmed polls
+                del cache[mac]
+            elif ports is not None and cache[mac][0] not in ports:
                 del cache[mac]
         if not confirm:
             merged = {mac: entry[0] for mac, entry in cache.items()}
@@ -263,9 +272,32 @@ class FdbStability:
         return {mac: entry[0] for mac, entry in cache.items()}
 
 
+# (switch, ifIndex) pairs already reported as having no port — once each
+_nameless_ports: set[tuple[str, int]] = set()
+
+
 def port_name(sw: SwitchData, if_index: int) -> str:
+    """The port's name; its ifIndex when the interface has none.
+
+    Never a negative number (v0.8.6). A negative index is a synthetic
+    port, and one that is not in this poll's port table has no name to
+    give: "" — the caller places nothing on it and draws a link end as
+    "?". It used to come back as str(if_index), and that is how
+    "-402792706" became the port of three devices in the database.
+    """
     port = sw.ports.get(if_index)
-    return port.name if port and port.name else str(if_index)
+    if port and port.name:
+        return port.name
+    if if_index < 0:
+        key = (sw.ip, if_index)
+        if key not in _nameless_ports:
+            _nameless_ports.add(key)
+            log.warning(
+                "%s: synthetic port %d is not in this poll's port table — "
+                "nothing is placed on it", sw.ip, if_index,
+            )
+        return ""
+    return str(if_index)
 
 
 def _lag_info(sw: SwitchData, port: int) -> tuple[list[str], list[bool], int]:
@@ -305,8 +337,8 @@ def _make_link(
     link = {
         "a": a.ip,
         "b": b.ip,
-        "a_port": port_name(a, pa) if pa is not None else "?",
-        "b_port": port_name(b, pb) if pb is not None else "?",
+        "a_port": (port_name(a, pa) or "?") if pa is not None else "?",
+        "b_port": (port_name(b, pb) or "?") if pb is not None else "?",
         "speed_mbps": 0,
         "lag": None,
         "source": source,
@@ -1482,8 +1514,8 @@ def parallel_links(
                 cables.add((pa, pb))
         drawn = (link["a_port"], link["b_port"])
         for pa, pb in sorted(cables, key=lambda c: (c[0] or 0, c[1] or 0)):
-            names = (port_name(a, pa) if pa is not None else "?",
-                     port_name(b, pb) if pb is not None else "?")
+            names = ((port_name(a, pa) or "?") if pa is not None else "?",
+                     (port_name(b, pb) or "?") if pb is not None else "?")
             # the cable already drawn, seen from either end
             if names[0] == drawn[0] or names[1] == drawn[1]:
                 continue
@@ -1824,7 +1856,9 @@ def build_topology(
     if fdb_stability is not None:
         link_fdb = {
             sw.ip: fdb_stability.merge(
-                sw.ip, fdb[sw.ip], confirm=not getattr(sw, "over_budget", False)
+                sw.ip, fdb[sw.ip],
+                confirm=not getattr(sw, "over_budget", False),
+                ports=set(sw.ports),
             )
             for sw in switches
         }
@@ -2037,10 +2071,15 @@ def build_topology(
     hosts_per_port: dict[tuple[str, str], list[dict]] = {}
     for mac, (_, sw_ip, if_index) in sorted(best_location.items()):
         sw = switch_by_ip[sw_ip]
+        port = port_name(sw, if_index)
+        if not port:
+            # a synthetic port this poll does not have: no place to
+            # draw it at, so it is a device without one (v0.8.6)
+            continue
         host = {
             "mac": mac,
             "switch": sw_ip,
-            "port": port_name(sw, if_index),
+            "port": port,
             "vlan": sw.port_pvid.get(if_index, 0),
             "name": "",  # names and IPs are added from the DB (ARP/DNS)
         }

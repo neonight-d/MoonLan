@@ -697,6 +697,73 @@ class Database:
 
     # ---------- map layout ----------
 
+    def retire_port_names(
+        self, switch_ip: str, renames: dict[str, str]
+    ) -> dict[str, int]:
+        """Port names one switch's full poll no longer has (v0.8.6).
+
+        Before v0.8.6 a synthetic port was called "bridge-port N", and a
+        port the poll had no name for came out as its negative ifIndex.
+        On this switch:
+
+        - `hosts.port` named "bridge-port N" where `renames` has it (an
+          aggregate of this poll) takes the new name; any other
+          "bridge-port N", and any "-N", is reset to '' — a device
+          without a place, listed off the map until it is seen again;
+        - the layout and notes keys of this switch's `trunk:`,
+          `offline:` and `pseudo:` nodes are renamed where `renames`
+          knows the new name, anchors included. The others are left: a
+          note goes to "Notes without a node", a position ages out.
+          A key whose new name is already taken is left as it is.
+
+        Returns the counts: renamed and reset hosts, renamed keys.
+        """
+        counts = {"renamed": 0, "reset": 0, "keys": 0}
+        with self._lock, self._conn:
+            rows = self._conn.execute(
+                "SELECT mac, port FROM hosts WHERE switch_ip = ? AND "
+                "(port LIKE 'bridge-port %' OR port GLOB '-[0-9]*')",
+                (switch_ip,),
+            ).fetchall()
+            for row in rows:
+                port = row["port"]
+                stale = (port.startswith("-") and port[1:].isdigit()) or (
+                    port.startswith("bridge-port ")
+                    and port[len("bridge-port "):].isdigit()
+                )
+                if not stale:
+                    continue
+                new = renames.get(port, "")
+                self._conn.execute(
+                    "UPDATE hosts SET port = ? WHERE mac = ?",
+                    (new, row["mac"]),
+                )
+                counts["renamed" if new else "reset"] += 1
+            for old, new in renames.items():
+                if not new or new == old:
+                    continue
+                for kind in ("trunk", "offline", "pseudo"):
+                    old_id = f"{kind}:{switch_ip}:{old}"
+                    new_id = f"{kind}:{switch_ip}:{new}"
+                    for table in ("layout", "notes"):
+                        taken = self._conn.execute(
+                            f"SELECT 1 FROM {table} WHERE node_id = ?",
+                            (new_id,),
+                        ).fetchone()
+                        if taken:
+                            continue
+                        cur = self._conn.execute(
+                            f"UPDATE {table} SET node_id = ? "
+                            f"WHERE node_id = ?",
+                            (new_id, old_id),
+                        )
+                        counts["keys"] += cur.rowcount
+                    self._conn.execute(
+                        "UPDATE layout SET anchor = ? WHERE anchor = ?",
+                        (new_id, old_id),
+                    )
+        return counts
+
     def layout(self) -> dict[str, dict]:
         """node id -> {x, y, pinned, updated_at, anchor}.
 

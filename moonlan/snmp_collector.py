@@ -307,6 +307,82 @@ def port_display(data: "SwitchData", if_index: int) -> str:
     return port.name if port and port.name else str(if_index)
 
 
+# What an inferred aggregate's port is called (v0.8.6): its members.
+# The synthetic bridge-port number it used to be named by is what
+# D-Link renumbers when the members flap (v0.5.1); the members are
+# what the operator cabled, and what the other end calls it too.
+LAG_PREFIX = "LAG "
+
+
+def lag_port_name(data: "SwitchData", members) -> str:
+    """'LAG Slot0/1+Slot0/2' — the members by ascending ifIndex."""
+    return LAG_PREFIX + "+".join(
+        port_display(data, m) for m in sorted(members)
+    )
+
+
+def unknown_bridge_port_reason(bridge_port: int) -> str:
+    """Why a MAC-table row on an unmapped bridge-port is dropped — the
+    same words in the service's log and in diag --fdb."""
+    return (
+        f"bridge-port {bridge_port} is not in dot1dBasePortIfIndex, and it "
+        f"is not an aggregate"
+    )
+
+
+# (switch, bridge-port) pairs already reported as unknown: one WARNING
+# per pair for the life of the process, not one per poll
+_warned_bridge_ports: set[tuple[str, int]] = set()
+
+
+def settle_synthetic_ports(
+    data: "SwitchData", unmapped: dict[int, list[str]], host: str = ""
+) -> dict[int, list[str]]:
+    """Keeps a synthetic port only where it is an aggregate (v0.8.6).
+
+    Runs right after infer_lag_groups. A bridge-port missing from
+    dot1dBasePortIfIndex used to become a port the moment a MAC-table
+    row named it, aggregate or not — and an Edge-Core ES3528M once
+    answered with bridge-port 402792706 on a switch whose mapping has
+    no gaps at all. The port it got stayed in the database as
+    "-402792706", and three devices sat on it as "Offline · 3".
+
+    The v0.6.8 rule for phantom aggregates, applied to the MAC table:
+    without the signs of an aggregate, there is no synthetic port. Its
+    rows are dropped and returned (bridge-port -> MACs) for the count
+    and the log. The aggregates that remain are named by their members.
+    """
+    dropped: dict[int, list[str]] = {}
+    for bridge_port, macs in unmapped.items():
+        if bridge_port in data.lag_groups:
+            continue
+        data.ports.pop(-bridge_port, None)
+        dropped[bridge_port] = sorted(macs)
+    if dropped:
+        data.fdb = {
+            mac: if_index for mac, if_index in data.fdb.items()
+            if not (if_index < 0 and -if_index in dropped)
+        }
+    for bridge_port, members in data.lag_groups.items():
+        port = data.ports.get(-bridge_port)
+        if port is not None:
+            port.name = lag_port_name(data, members)
+    for bridge_port, macs in sorted(dropped.items()):
+        key = (host or data.ip, bridge_port)
+        if key in _warned_bridge_ports:
+            continue
+        _warned_bridge_ports.add(key)
+        log.warning(
+            "%s: %d MAC-table row(s) on bridge-port %d dropped — %s "
+            "(e.g. %s). Nothing is placed on a port the switch does not "
+            "map; `python -m moonlan.diag --fdb %s` lists the rows",
+            key[0], len(macs), bridge_port,
+            unknown_bridge_port_reason(bridge_port),
+            ", ".join(macs[:3]), key[0],
+        )
+    return dropped
+
+
 # A MAC forwarding entry is indexed by the 6 address bytes (BRIDGE-MIB)
 # or by an fdbId plus those 6 bytes (Q-BRIDGE-MIB). Anything else is a
 # row of another table the walk ran into, or an agent numbering its
@@ -876,9 +952,10 @@ class SnmpCollector:
         # MAC table: BRIDGE-MIB and Q-BRIDGE-MIB (Q-BRIDGE has an fdbId in
         # the suffix before the MAC, so we take the last 6 bytes).
         # Entries on bridge-ports missing from dot1dBasePortIfIndex (this is
-        # how LACP trunks look on some D-Link models) are not dropped:
-        # they get a synthetic port with ifIndex = -bridge_port.
-        unmapped: dict[int, int] = {}
+        # how LACP trunks look on some D-Link models) get a synthetic port
+        # with ifIndex = -bridge_port for now; the ones that do not turn
+        # out to be an aggregate are dropped below (v0.8.6).
+        unmapped: dict[int, list[str]] = {}
         bad_suffix = bad_mac = 0
         for fdb_oid, expected_len in (
             (OID_FDB_PORT, 6), (OID_Q_FDB_PORT, 7)
@@ -901,7 +978,7 @@ class SnmpCollector:
                 if_index = port_to_ifindex.get(bridge_port)
                 if if_index is None:
                     if_index = -bridge_port
-                    unmapped[bridge_port] = unmapped.get(bridge_port, 0) + 1
+                    unmapped.setdefault(bridge_port, []).append(mac)
                     if if_index not in data.ports:
                         data.ports[if_index] = PortInfo(
                             if_index=if_index,
@@ -909,18 +986,13 @@ class SnmpCollector:
                             is_physical=False,
                         )
                 data.fdb[mac] = if_index
-        rejected = bad_suffix + bad_mac
-        log.log(
-            logging.INFO if rejected else logging.DEBUG,
-            "%s FDB: %d entries rejected (bad suffix: %d, bad MAC: %d)",
-            host, rejected, bad_suffix, bad_mac,
-        )
         if unmapped:
             log.debug(
                 "%s: FDB entries on unmapped bridge-ports: %s",
                 host,
                 "; ".join(
-                    f"port {p}: {n} MACs" for p, n in sorted(unmapped.items())
+                    f"port {p}: {len(macs)} MACs"
+                    for p, macs in sorted(unmapped.items())
                 ),
             )
 
@@ -931,6 +1003,18 @@ class SnmpCollector:
              if p.is_physical and p.if_index > 0},
             set(port_to_ifindex),
             set(unmapped),
+        )
+        # …and a synthetic port that is not one of them is no port
+        unknown = sum(
+            len(macs)
+            for macs in settle_synthetic_ports(data, unmapped, host).values()
+        )
+        rejected = bad_suffix + bad_mac + unknown
+        log.log(
+            logging.INFO if rejected else logging.DEBUG,
+            "%s FDB: %d entries rejected (bad suffix: %d, bad MAC: %d, "
+            "unknown bridge-port: %d)",
+            host, rejected, bad_suffix, bad_mac, unknown,
         )
         if data.lag_groups:
             log.debug(

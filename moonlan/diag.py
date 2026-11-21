@@ -109,6 +109,7 @@ from .snmp_collector import (
     infer_lag_groups,
     is_random_mac,
     parse_fdb_entry,
+    unknown_bridge_port_reason,
 )
 
 MAX_IF_ROWS = 40
@@ -180,15 +181,23 @@ def _section(title: str) -> None:
     print(f"\n=== {title} ===")
 
 
-def _lag_group_line(bridge_port: int, members: list[int], speeds: dict[int, int]) -> str:
-    """'LAG on bridge-port 1: members 1, 2 (2×1000 Mbit/s)'."""
+def _lag_group_line(
+    bridge_port: int, members: list[int], speeds: dict[int, int],
+    name: str = "",
+) -> str:
+    """'LAG on bridge-port 1: members 1, 2 (2×1000 Mbit/s)', with the
+    port's name when the poll gave it one: '… — LAG Slot0/1+Slot0/2'."""
     member_speeds = [speeds.get(m, 0) for m in members]
     if member_speeds and len(set(member_speeds)) == 1 and member_speeds[0]:
         speed = f"{len(members)}×{member_speeds[0]} Mbit/s"
     else:
         speed = f"total {sum(member_speeds)} Mbit/s"
     member_list = ", ".join(str(m) for m in members)
-    return f"LAG on bridge-port {bridge_port}: members {member_list} ({speed})"
+    named = f" — {name}" if name else ""
+    return (
+        f"LAG on bridge-port {bridge_port}: members {member_list} "
+        f"({speed}){named}"
+    )
 
 
 async def _own_macs_light(
@@ -304,14 +313,21 @@ async def run_diag(
         print(f"{label}: {count} entries")
     print(f"unique MACs: {len(fdb)}")
     per_port = Counter(fdb.values())
+    # the service's rule (v0.8.6): an unmapped bridge-port is a port only
+    # when it is an inferred aggregate; its rows are dropped otherwise
+    physical = {i for i in indexes if if_types.get(i) in PHYSICAL_IF_TYPES}
+    synthetic = {bp for bp in per_port if bp != 0 and bp not in port_map}
+    groups = infer_lag_groups(physical, set(port_map), synthetic)
     for bridge_port in sorted(per_port):
         if bridge_port == 0:
             mapped = "port 0 (CPU / the switch itself)"
         elif bridge_port in port_map:
             mapped = f"ifIndex {port_map[bridge_port]}"
+        elif bridge_port in groups:
+            mapped = "NOT in dot1dBasePortIfIndex: an aggregate, "
+            mapped += f"synthetic ifIndex {-bridge_port}"
         else:
-            mapped = "NOT in dot1dBasePortIfIndex (synthetic ifIndex "
-            mapped += f"{-bridge_port})"
+            mapped = "DROPPED: " + unknown_bridge_port_reason(bridge_port)
         print(f"  bridge-port {bridge_port:>4}: {per_port[bridge_port]:>4} MACs, {mapped}")
 
     # 6. LAG-MIB
@@ -331,9 +347,6 @@ async def run_diag(
             )
             print(f"  ifIndex {member:>4} -> aggregate {lag[member]}{note}")
     # LAG composition inferred from the dot1dBasePortIfIndex gaps
-    physical = {i for i in indexes if if_types.get(i) in PHYSICAL_IF_TYPES}
-    synthetic = {bp for bp in per_port if bp != 0 and bp not in port_map}
-    groups = infer_lag_groups(physical, set(port_map), synthetic)
     print("inferred LAG groups (from missing bridge-ports):")
     if not groups:
         print("  none")
@@ -483,8 +496,11 @@ async def run_topology_view(community: str, timeout: int, cfg) -> None:
         speeds = {p.if_index: p.speed_mbps for p in sw.ports.values()}
         for bridge_port, members in sorted(sw.lag_groups.items()):
             any_groups = True
-            print(f"  {label(sw.ip)}: "
-                  f"{_lag_group_line(bridge_port, members, speeds)}")
+            trunk = sw.ports.get(-bridge_port)
+            line = _lag_group_line(
+                bridge_port, members, speeds, trunk.name if trunk else ""
+            )
+            print(f"  {label(sw.ip)}: {line}")
     if not any_groups:
         print("  none")
     # Every line the map would draw, with what is known about it: a
@@ -1568,6 +1584,44 @@ async def _fdb_rows(collector: SnmpCollector, host: str) -> list[dict]:
     return rows
 
 
+async def _physical_ports(collector: SnmpCollector, host: str) -> set[int]:
+    """ifIndexes of the physical ports (ifType), for the LAG inference."""
+    physical: set[int] = set()
+    async for suffix, value in collector._walk(host, OID_IF_TYPE):
+        try:
+            if int(value) in PHYSICAL_IF_TYPES and suffix[0] > 0:
+                physical.add(suffix[0])
+        except (TypeError, ValueError):
+            continue
+    return physical
+
+
+def _reject_unknown_bridge_ports(
+    rows: list[dict], port_to_ifindex: dict[int, int], physical: set[int]
+) -> dict[int, list[int]]:
+    """Marks the rows the service drops for their bridge-port (v0.8.6).
+
+    The same rule as the collector: a bridge-port missing from
+    dot1dBasePortIfIndex is a port only when it is an inferred
+    aggregate. Returns the aggregates, synthetic bridge-port ->
+    members.
+    """
+    synthetic = {
+        row["bridge_port"] for row in rows
+        if not row["reason"] and row["bridge_port"] != 0
+        and row["bridge_port"] not in port_to_ifindex
+    }
+    groups = infer_lag_groups(physical, set(port_to_ifindex), synthetic)
+    for row in rows:
+        bridge_port = row["bridge_port"]
+        if (row["reason"] or bridge_port == 0
+                or bridge_port in port_to_ifindex or bridge_port in groups):
+            continue
+        row["reason"] = unknown_bridge_port_reason(bridge_port)
+        row["unknown_bridge_port"] = True
+    return groups
+
+
 async def _port_maps(
     collector: SnmpCollector, host: str
 ) -> tuple[dict[int, int], dict[int, str], dict[int, int]]:
@@ -1655,16 +1709,26 @@ async def run_fdb_dump(
     if not rows:
         print("the MAC table is empty")
         return
+    groups = _reject_unknown_bridge_ports(
+        rows, port_to_ifindex, await _physical_ports(collector, host)
+    )
 
     accepted = rejected = local_admin = 0
-    bad_suffix = 0
+    bad_suffix = unknown = 0
     shown = 0
     for row in rows:
         if_index = port_to_ifindex.get(row["bridge_port"])
         name = names.get(if_index, "")
+        if row["bridge_port"] in groups:
+            members = "+".join(
+                names.get(m, str(m)) for m in sorted(groups[row["bridge_port"]])
+            )
+            name = f"LAG {members}"
         if row["reason"]:
             rejected += 1
-            if "suffix" in row["reason"]:
+            if row.get("unknown_bridge_port"):
+                unknown += 1
+            elif "suffix" in row["reason"]:
                 bad_suffix += 1
         else:
             accepted += 1
@@ -1702,7 +1766,8 @@ async def run_fdb_dump(
     print(
         f"\nsummary: {len(rows)} rows, accepted {accepted}, "
         f"rejected {rejected} (bad suffix: {bad_suffix}, "
-        f"bad MAC: {rejected - bad_suffix})"
+        f"bad MAC: {rejected - bad_suffix - unknown}, "
+        f"unknown bridge-port: {unknown})"
     )
     print(f"locally administered (randomized) MACs among accepted: {local_admin}")
     _corruption_section(host, rows, names, port_to_ifindex, cfg)

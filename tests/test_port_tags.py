@@ -27,6 +27,10 @@ EXAMPLES = [
     (("MoonLan demo switch, 26 ports Port 3", None), "3"),
     (("Slot0/Port 3 Gigabit - Level", None), "3"),
     (("TenGigabitEthernet1/0/1", None), "1/0/1"),
+    # an inferred aggregate, by its members since v0.8.6…
+    (("LAG 1/25+1/26", None), "LAG"),
+    (("LAG Slot0/1+Slot0/2", None), "LAG"),
+    # …and as an older server named it
     (("bridge-port 12", None), "LAG"),
     (("uplink-to-core", None), "uplink-…"),     # no number in it at all
     ((None, None), "?"),
@@ -37,7 +41,7 @@ EXAMPLES = [
     (("Po1", ["Gi0/1", "Gi0/25"]), "1,25"),
     (("Po1", ["Gi0/25", "Gi0/26", "Gi0/27"]), "Gi0/25+2"),
     (("Po1", []), "Po1"),                       # members unknown: the port
-    (("bridge-port 3", ["Gi0/3", "Gi0/4"]), "3,4"),
+    (("LAG Gi0/3+Gi0/4", ["Gi0/3", "Gi0/4"]), "3,4"),
 ]
 
 
@@ -67,6 +71,27 @@ class PortShortTest(unittest.TestCase):
         for outside in (r"\bt\(", r"\bfmt\(", r"\bnetwork\b", r"\btopology\b",
                         r"\bels\.", r"\blang\b", r"\bportLabelMode\b"):
             self.assertIsNone(re.search(outside, source), outside)
+
+
+class LinkPortLabelTest(unittest.TestCase):
+    """An inferred aggregate says what it is by its name (v0.8.6)."""
+
+    @unittest.skipUnless(NODE, "needs node to run the page's JavaScript")
+    def test_the_name_is_enough(self):
+        script = (
+            function("linkPortLabel")
+            + "\nconst link = { lag: { trunk: true } };"
+            + "\nconsole.log(JSON.stringify(["
+            + "linkPortLabel(link, 'LAG 1/25+1/26'),"
+            + "linkPortLabel(link, 'bridge-port 25'),"
+            + "linkPortLabel({ lag: null }, '1/3')]));"
+        )
+        done = subprocess.run([NODE, "-e", script], capture_output=True,
+                              text=True, timeout=30, check=True)
+        self.assertEqual(
+            json.loads(done.stdout),
+            ["LAG 1/25+1/26", "bridge-port 25 (LAG)", "1/3"],
+        )
 
 
 class ModesTest(unittest.TestCase):
