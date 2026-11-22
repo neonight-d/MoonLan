@@ -10,6 +10,10 @@ const els = {
   unlocatedSection: document.getElementById("unlocated-section"),
   unlocatedList: document.getElementById("unlocated-list"),
   unlocatedCount: document.getElementById("unlocated-count"),
+  goneSection: document.getElementById("gone-section"),
+  goneToggle: document.getElementById("gone-toggle"),
+  goneList: document.getElementById("gone-list"),
+  goneCount: document.getElementById("gone-count"),
   switchCount: document.getElementById("switch-count"),
   hostCount: document.getElementById("host-count"),
   search: document.getElementById("search"),
@@ -3220,6 +3224,13 @@ function fmtDate(ts) {
   return ts ? new Date(ts * 1000).toLocaleDateString(locale()) : "—";
 }
 
+/* "22.11": the day a record was last seen (v0.8.7) */
+function fmtDay(ts) {
+  return ts
+    ? new Date(ts * 1000).toLocaleDateString(locale(), { day: "2-digit", month: "2-digit" })
+    : "—";
+}
+
 /* "22.11 14:20": a moment a card names in passing (v0.8.7) */
 function fmtDayTime(ts) {
   return ts
@@ -3867,9 +3878,15 @@ function renderSidebar() {
       )
     )
   );
-  // devices nothing draws on the map: known from ARP or seen on a port
-  // too long ago — searchable inventory, not graph nodes
-  const unlocated = topology.unlocated || [];
+  // devices nothing draws on the map, there now without a place: seen
+  // on uplinks only, known from ARP, a port reset — searchable
+  // inventory, not graph nodes. What nobody has seen for
+  // host_grace_hours is the folded list under it (v0.8.7).
+  const offMap = topology.unlocated || [];
+  const unlocated = offMap.filter((h) => h.recent !== false);
+  const gone = offMap
+    .filter((h) => h.recent === false)
+    .sort((a, b) => (b.seen_at || 0) - (a.seen_at || 0));
   els.unlocatedList.replaceChildren(
     ...unlocated.map((h) =>
       li(
@@ -3890,6 +3907,27 @@ function renderSidebar() {
     )
   );
   els.unlocatedSection.classList.toggle("hidden", unlocated.length === 0);
+  els.goneList.replaceChildren(
+    ...gone.map((h) =>
+      li(
+        (nameOf(h) || hostLabel(h)) + (h.monitored ? " ★" : ""),
+        [nameOf(h) ? hostLabel(h) : "", h.ip, h.mac, h.vendor,
+         [fmt("goneSeen", { date: fmtDay(h.seen_at) }),
+          h.switch ? (switchName(h.switch) + " " + (h.port || "")).trim() : ""]
+           .filter(Boolean).join(" · ")]
+          .filter((part, i, all) => part && all.indexOf(part) === i)
+          .join(" · "),
+        statusClass(h),
+        () => {
+          phoneLeaveSearch();
+          showDetails("unloc:" + h.mac);
+        },
+        [hostLabel(h), h.ip, h.mac, h.vendor, noteSearchText(h)].filter(Boolean).join(" "),
+        "stale", "", "unloc:" + h.mac
+      )
+    )
+  );
+  els.goneSection.classList.toggle("hidden", gone.length === 0);
   applySearchFilter();
   const row = kept && [...kept.list.children].find((item) => item.dataset.key === kept.key);
   if (row) {
@@ -8084,8 +8122,19 @@ function showDetails(nodeId) {
     const offMap = host.unlocated;
     // A device seen only on uplinks is a third case: it was seen this
     // very scan, and every sighting was of the cable it is NOT behind.
+    // nobody has seen it for host_grace_hours: when, and when the
+    // record goes (v0.8.7)
+    const gone = offMap && host.recent === false;
+    const goneParams = {
+      seen: fmtDayTime(host.seen_at), forget: fmtDay(host.forget_at),
+    };
     const hint = host.uplink_only
       ? hintKey("uplinkOnlyHint")
+      : gone
+      ? hintBlock(
+          fmt(host.forget_at ? "goneHintShort" : "goneKeptHintShort", goneParams),
+          fmt(host.forget_at ? "goneHint" : "goneKeptHint", goneParams)
+        )
       : offMap
       ? host.ip
         ? hintKey("unlocatedHint")
@@ -9430,7 +9479,34 @@ function searchedLists() {
     [els.switchList, els.switchCount],
     [els.hostList, els.hostCount],
     [els.unlocatedList, els.unlocatedCount],
+    [els.goneList, els.goneCount],
   ];
+}
+
+/* "Not seen for a while" (v0.8.7): folded unless somebody opened it —
+   which this browser remembers — or the search found something in it,
+   which opens it for as long as the query lasts */
+const GONE_OPEN_KEY = "moonlan-gone-open";
+
+function goneOpenSaved() {
+  try {
+    return localStorage.getItem(GONE_OPEN_KEY) === "1";
+  } catch (e) {
+    return false;
+  }
+}
+
+function showGone(open) {
+  els.goneToggle.setAttribute("aria-expanded", open ? "true" : "false");
+  els.goneList.classList.toggle("hidden", !open);
+}
+
+function toggleGone() {
+  const open = els.goneToggle.getAttribute("aria-expanded") !== "true";
+  try {
+    localStorage.setItem(GONE_OPEN_KEY, open ? "1" : "0");
+  } catch (e) { /* remembered for this page only */ }
+  showGone(open);
 }
 
 /* Hides what the query does not match. With a query, a header counts
@@ -9448,6 +9524,8 @@ function applySearchFilter() {
     count.textContent = q
       ? fmt("searchCount", { n: shown, total: items.length })
       : String(items.length);
+    // a match in the folded list opens it while the query lasts
+    if (list === els.goneList) showGone(goneOpenSaved() || (q !== "" && shown > 0));
     // Tab from the search goes to the first row it found
     listTabStop(list);
   }
@@ -9461,6 +9539,7 @@ async function rescan() {
 }
 
 els.search.addEventListener("input", applySearchFilter);
+els.goneToggle.addEventListener("click", toggleGone);
 els.sidebar.addEventListener("keydown", listKeys);
 
 els.detailsClose.addEventListener("click", hideDetails);

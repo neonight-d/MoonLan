@@ -91,6 +91,14 @@
         <h2><span data-i18n="unlocatedHeader"></span> <span id="unlocated-count" class="count"></span></h2>
         <ul id="unlocated-list" class="device-list"></ul>
       </section>
+      <!-- Records nobody has seen for host_grace_hours (v0.8.7): an
+           archive, folded away until somebody opens it or searches -->
+      <section id="gone-section" class="hidden">
+        <h2><button type="button" id="gone-toggle" class="section-toggle" aria-expanded="false"
+                aria-controls="gone-list"><span class="caret" aria-hidden="true"></span><span
+                data-i18n="goneHeader"></span> · <span id="gone-count" class="count"></span></button></h2>
+        <ul id="gone-list" class="device-list hidden"></ul>
+      </section>
     </aside>
 
     <section id="map-panel">

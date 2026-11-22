@@ -838,8 +838,10 @@ async def _build_map(
     fdb_macs = {h["mac"] for h in hosts}
     if observe:
         await _release_unconfirmed_ips(db_rows)
+    # a record on an empty node has no port to be drawn at
     hosts, offline_groups, unlocated, trunk_groups = _assemble_hosts(
-        hosts, db_rows, pseudo_switches, {sw["ip"] for sw in switches},
+        hosts, db_rows, pseudo_switches,
+        {sw.ip for sw in collected if sw.reachable},
         unconfirmed,
         {h["mac"]: h["merged_into"] for h in hosts if h.get("merged_into")},
         _nodes_on_port(bridges, pseudo_switches),
@@ -1608,6 +1610,39 @@ def _known_hosts_per_port(
     return dict(counts)
 
 
+def _mark_recent(
+    unlocated: list[dict], db_rows: dict[str, dict], now: float
+) -> None:
+    """`recent` on every record off the map (v0.8.7): seen by anybody —
+    a switch, ARP, a ping — inside host_grace_hours. "Not on map" is
+    the recent ones, devices that are there now without a place; the
+    rest is "Not seen for a while", an archive of addresses that left.
+    Before, the two were one list of 480, and the two devices that
+    mattered were lost in it.
+
+    `seen_at` is that moment, and `forget_at` when purge_old_hosts
+    deletes the record (None while host_retention_days is 0) — the
+    page words both. Called again on every /api/topology: pings move
+    `last_ping_ok` between scans."""
+    grace = config.host_grace_hours * 3600
+    days = config.host_retention_days
+    for host in unlocated:
+        row = db_rows.get(host["mac"], {})
+        seen = max(
+            row.get("last_seen", 0) or 0, row.get("last_arp", 0) or 0,
+            row.get("last_ping_ok", 0) or 0,
+        )
+        host["seen_at"] = seen
+        # seen this very scan, on an uplink: recent by definition
+        host["recent"] = bool(host.get("uplink_only")) or (
+            grace > 0 and now - seen < grace
+        )
+        kept_since = max(
+            row.get("last_seen", 0) or 0, row.get("last_arp", 0) or 0
+        )
+        host["forget_at"] = kept_since + days * 86400 if days > 0 else None
+
+
 def _assemble_hosts(
     fresh: list[dict],
     db_rows: dict[str, dict],
@@ -1677,6 +1712,7 @@ def _assemble_hosts(
             ]
             host["switch"] = ""
             host["port"] = ""
+            host["off_map"] = "uplink_only"
             unlocated.append(host)
             continue
         # a record with a switch and no port has no place on that switch
@@ -1689,7 +1725,12 @@ def _assemble_hosts(
             on_map.append(host)
         else:
             host["unlocated"] = True
+            # why it is not on the map: a place it had, until the grace
+            # window ran out — or no place at all (ARP only, a port
+            # reset, a switch that is not drawn from a reading)
+            host["off_map"] = "expired" if located else "no_port"
             unlocated.append(host)
+    _mark_recent(unlocated, db_rows, now)
     # devices ARP still knows first, then by how recently anything saw them
     unlocated.sort(
         key=lambda h: (
@@ -3152,6 +3193,7 @@ async def api_topology() -> JSONResponse:
     topo["hosts"] = hosts
     unlocated = [dict(h) for h in topo.get("unlocated", [])]
     _merge_db_fields(unlocated, db_hosts)
+    _mark_recent(unlocated, db_hosts, time.time())
     topo["unlocated"] = unlocated
     # a bridge node answers "is it up?" like any other device
     bridges = []
@@ -4548,7 +4590,15 @@ async def api_status() -> dict:
         "demo": config.demo,
         "switch_count": len(state.switches),
         "host_count": len(state.hosts),
+        # every record off the map, as before; and the two lists of
+        # the page (v0.8.7): there now without a place, and long gone
         "unlocated_count": len(state.unlocated),
+        "unlocated_recent": sum(
+            1 for h in state.unlocated if h.get("recent")
+        ),
+        "unlocated_gone": sum(
+            1 for h in state.unlocated if not h.get("recent")
+        ),
         "last_scan": state.last_scan,
         "last_scan_ok": state.last_scan_ok,
         "last_error": state.last_error,

@@ -237,6 +237,31 @@ main { flex: 1; display: flex; min-height: 0; position: relative; }
   margin: 14px 0 6px;
 }
 .count { color: var(--moon); }
+/* a heading that folds its list away (v0.8.7): dressed as the heading */
+.section-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-transform: inherit;
+  letter-spacing: inherit;
+  cursor: pointer;
+}
+.section-toggle:hover { color: var(--text); }
+.section-toggle:focus-visible { outline: 2px solid var(--link); outline-offset: 2px; }
+.section-toggle .caret {
+  width: 0;
+  height: 0;
+  border-left: 5px solid currentColor;
+  border-top: 4px solid transparent;
+  border-bottom: 4px solid transparent;
+  transition: transform 0.15s;
+}
+.section-toggle[aria-expanded="true"] .caret { transform: rotate(90deg); }
 
 .device-list { list-style: none; margin: 0; padding: 0; }
 /* a row is a button (v0.8.2), dressed as the row it was */

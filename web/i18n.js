@@ -806,6 +806,21 @@ const I18N = {
       "The MAC address is missing from the current switch tables — " +
       "the device is shown at the port where it was seen last.",
     unlocatedHeader: "Not on map",
+    goneHeader: "Not seen for a while",
+    goneSeen: "seen {date}",
+    goneHint:
+      "Nothing has seen this device \u2014 no switch table, no ARP, no "
+      + "ping \u2014 since {seen}, longer than host_grace_hours. It is an "
+      + "inventory record, not a node of the map, and it is deleted on "
+      + "{forget}, host_retention_days after it was last seen. A device "
+      + "that turns up again is on the map with its history.",
+    goneHintShort: "Not seen since {seen}. The record is deleted on {forget} (host_retention_days)",
+    goneKeptHint:
+      "Nothing has seen this device \u2014 no switch table, no ARP, no "
+      + "ping \u2014 since {seen}, longer than host_grace_hours. It is an "
+      + "inventory record, not a node of the map; host_retention_days is "
+      + "0, so it is kept for good.",
+    goneKeptHintShort: "Not seen since {seen}. The record is kept for good (host_retention_days = 0)",
     namedHeader: "Named",
     kindLine_pseudo: "switch without SNMP",
     kindLine_bridge: "bridge",
@@ -2065,6 +2080,22 @@ const I18N = {
       "MAC-адреса нет в текущих таблицах коммутаторов — устройство " +
       "показано на порту, где оно было замечено в последний раз.",
     unlocatedHeader: "Вне карты",
+    goneHeader: "Давно не видны",
+    goneSeen: "был {date}",
+    goneHint:
+      "Это устройство никто не видел \u2014 ни таблицы коммутаторов, ни "
+      + "ARP, ни пинг \u2014 с {seen}, дольше host_grace_hours. Это "
+      + "запись инвентаря, а не узел карты, и она удалится {forget}, "
+      + "через host_retention_days после того, как её видели в последний "
+      + "раз. Если устройство появится снова, оно будет на карте со своей "
+      + "историей.",
+    goneHintShort: "Не видели с {seen}. Запись удалится {forget} (host_retention_days)",
+    goneKeptHint:
+      "Это устройство никто не видел \u2014 ни таблицы коммутаторов, ни "
+      + "ARP, ни пинг \u2014 с {seen}, дольше host_grace_hours. Это "
+      + "запись инвентаря, а не узел карты; host_retention_days равен 0, "
+      + "поэтому она хранится бессрочно.",
+    goneKeptHintShort: "Не видели с {seen}. Запись хранится бессрочно (host_retention_days = 0)",
     namedHeader: "Подписанные",
     kindLine_pseudo: "коммутатор без SNMP",
     kindLine_bridge: "мост",
