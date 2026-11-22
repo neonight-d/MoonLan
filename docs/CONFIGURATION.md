@@ -229,6 +229,8 @@ and by `PUT /api/settings` ([API.md](API.md#settings-v084)).
 | `trunk_group_threshold` | `3` | 0…1000 | next scan | Devices seen only through a trunk are drawn as one "Beyond the trunk · N" node (0 — never). |
 | `host_grace_hours` | `24` | 0…8760 | next scan | How long a host stays on the map after its MAC left the switch tables. |
 | `host_retention_days` | `30` | 0…3650 | next cleanup (at the start, then daily) | Then it is deleted from the database. |
+| `journal_keep_days` | `365` | 0…3650 | next cleanup (at the start, then daily) | Journal events older than this are deleted (0 — kept for good). Since v0.8.7. |
+| `journal_ping_keep_days` | `30` | 0…3650 | next cleanup (at the start, then daily) | The same for the ping group (`host_down`, `host_up`), nine events in ten (0 — as `journal_keep_days`). Since v0.8.7. |
 | `layout_keep_days` | `90` | 1…3650 | next cleanup (at the start, then daily) | A saved position is forgotten only when it is both older than this and has no node on the map. |
 | `ip_confirm_hours` | `6` | 0…720 | next scan | A stale host whose IP ARP has not confirmed for this long gives the address up. |
 | `new_host_confirm_scans` | `2` | 1…20 | next scan | Polls a new MAC must appear in before it becomes a device (an IP from ARP is enough). |

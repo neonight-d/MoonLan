@@ -2296,6 +2296,7 @@ async def periodic_cleanup() -> None:
         await asyncio.sleep(CLEANUP_SECONDS)
         try:
             await purge_old_hosts()
+            await purge_journal()
             await purge_copies()
             await alarm_engine.clear_missing_hosts(
                 set(await asyncio.to_thread(db.hosts_by_mac))
@@ -2793,6 +2794,40 @@ async def purge_old_hosts() -> None:
         )
 
 
+async def purge_journal() -> None:
+    """The journal past its terms (v0.8.7), at the start and once a day.
+
+    It was never cleaned: two thousand events a day, nine in ten of them
+    pings. The ping group goes after journal_ping_keep_days, the rest
+    after journal_keep_days; 0 keeps everything, and a ping term of 0
+    is the general one. Batches of 10 000 rows, a transaction each.
+    One INFO line; the cleanup is not written to the journal itself,
+    and the file is not vacuumed — SQLite reuses the pages.
+    """
+    days = config.journal_keep_days
+    ping_days = config.journal_ping_keep_days or days
+    now = time.time()
+    ping_events = list(JOURNAL_GROUPS["ping"])
+    pings = others = 0
+    if ping_days > 0:
+        pings, _ = await asyncio.to_thread(
+            db.purge_journal, ping_events, now - ping_days * 86400
+        )
+    if days > 0:
+        others, _ = await asyncio.to_thread(
+            db.purge_journal, ping_events, now - days * 86400, True
+        )
+    rows, oldest = await asyncio.to_thread(db.journal_extent)
+    log.info(
+        "Journal cleanup: %d ping event(s) older than %s and %d other(s) "
+        "older than %s removed; %d left, the oldest from %s",
+        pings, f"{ping_days:g} days" if ping_days > 0 else "ever",
+        others, f"{days:g} days" if days > 0 else "ever", rows,
+        time.strftime("%Y-%m-%d %H:%M", time.localtime(oldest))
+        if oldest else "nothing",
+    )
+
+
 def _marked_copies(db_rows: dict[str, dict]) -> set[str]:
     """Records marked as damaged copies (v0.8.5)."""
     return {mac for mac, row in db_rows.items() if row.get("corrupt_of")}
@@ -2876,6 +2911,7 @@ async def lifespan(app: FastAPI):
     )
     await purge_invalid_macs()
     await purge_old_hosts()
+    await purge_journal()
     await purge_copies()
     await hide_confirmed_copies()
     await drop_unpinned_positions()
@@ -3702,9 +3738,12 @@ async def api_clear_alarm(alarm_id: int):
 JOURNAL_GROUPS: dict[str, tuple[str, ...]] = {
     "alarms": ("alarm_raised", "alarm_cleared"),
     "ping": ("host_down", "host_up"),
+    # an address taken off a record ARP no longer confirms (v0.8.7):
+    # two in three device events, and they buried the new devices
+    "addresses": ("ip_released",),
     "devices": (
         "new_mac", "hosts_purged", "copies_removed", "monitor_on",
-        "monitor_off", "ip_released",
+        "monitor_off",
     ),
     "map": (
         "layout_pinned", "layout_released", "layout_saved",

@@ -1575,6 +1575,49 @@ class Database:
 
     # ---------- journal ----------
 
+    def purge_journal(
+        self, events: list[str], cutoff: float, keep: bool = False,
+        batch: int = 10_000,
+    ) -> tuple[int, int]:
+        """Deletes journal rows older than `cutoff` whose event is in
+        `events` — or, with `keep`, is NOT in them. A batch at a time,
+        each in a transaction of its own, so the service writing its
+        scan never waits behind one long delete. Returns (rows deleted,
+        batches that deleted any)."""
+        if not events:
+            return 0, 0
+        marks = ", ".join("?" * len(events))
+        where = f"ts < ? AND event {'NOT IN' if keep else 'IN'} ({marks})"
+        # counted first, so that the last batch is the last transaction:
+        # nothing newer than the cutoff can join while this runs
+        with self._lock:
+            due = self._conn.execute(
+                f"SELECT COUNT(*) FROM journal WHERE {where}",
+                (cutoff, *events),
+            ).fetchone()[0]
+        total = batches = 0
+        while total < due:
+            with self._lock, self._conn:
+                done = self._conn.execute(
+                    "DELETE FROM journal WHERE id IN ("
+                    f" SELECT id FROM journal WHERE {where}"
+                    " ORDER BY id LIMIT ?)",
+                    (cutoff, *events, batch),
+                ).rowcount
+            if not done:
+                break
+            total += done
+            batches += 1
+        return total, batches
+
+    def journal_extent(self) -> tuple[int, float]:
+        """(rows in the journal, ts of the oldest; 0 when empty)"""
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT COUNT(*), MIN(ts) FROM journal"
+            ).fetchone()
+        return row[0], row[1] or 0.0
+
     def add_event(
         self, ts: float, event: str, mac: str, details: str = "",
         user: str = "",

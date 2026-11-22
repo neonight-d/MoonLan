@@ -9156,7 +9156,7 @@ async function toggleStp() {
    below the last id shown, for as long as the server says there is
    one. */
 const JOURNAL_GROUP_KEY = "moonlan-journal-group";
-const JOURNAL_FILTERS = ["all", "alarms", "devices", "ping", "map", "users", "settings"];
+const JOURNAL_FILTERS = ["all", "alarms", "devices", "ping", "addresses", "map", "users", "settings"];
 const JOURNAL_PAGE = 100;
 let journalGroup = (() => {
   let kept = null;

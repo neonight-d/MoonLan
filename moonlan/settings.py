@@ -111,6 +111,10 @@ SETTINGS: tuple[Setting, ...] = (
     _float("host_grace_hours", "map", "next_scan", 0, 8760, "hours"),
     # 0 — never deleted (purge_old_hosts)
     _float("host_retention_days", "map", "next_cleanup", 0, 3650, "days"),
+    # 0 — the journal is kept for good; the ping group's 0 — as the rest
+    # (purge_journal, v0.8.7)
+    _float("journal_keep_days", "map", "next_cleanup", 0, 3650, "days"),
+    _float("journal_ping_keep_days", "map", "next_cleanup", 0, 3650, "days"),
     # a day at least: 0 would forget every position off the map at once
     _float("layout_keep_days", "map", "next_cleanup", 1, 3650, "days"),
     # 0 — an address is never released (_release_unconfirmed_ips)

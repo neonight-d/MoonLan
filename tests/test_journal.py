@@ -362,7 +362,9 @@ class SourceTest(unittest.TestCase):
         self.assertIn('id="journal-filters" class="journal-filters" role="group"', INDEX)
         self.assertIn('id="journal-more"', INDEX)
         self.assertIn(
-            'const JOURNAL_FILTERS = ["all", "alarms", "devices", "ping", "map", "users", "settings"];',
+            # "Addresses" after "Ping" (v0.8.7)
+            'const JOURNAL_FILTERS = ["all", "alarms", "devices", "ping", "addresses", "map", '
+            '"users", "settings"];',
             APP,
         )
         self.assertIn("overflow-x: auto;", STYLE[STYLE.index(".journal-filters {"):])
@@ -372,7 +374,8 @@ class SourceTest(unittest.TestCase):
     def test_every_filter_has_words_in_both_languages(self):
         for lang in ("en", "ru"):
             table = strings(lang)
-            for group in ("all", "alarms", "devices", "ping", "map", "users", "settings"):
+            for group in ("all", "alarms", "devices", "ping", "addresses", "map",
+                          "users", "settings"):
                 self.assertTrue(table.get("journalGroup_" + group), (lang, group))
             for key in ("journalMore", "journalFilters", "journalNoneInGroup"):
                 self.assertTrue(table.get(key), (lang, key))
@@ -380,7 +383,8 @@ class SourceTest(unittest.TestCase):
     def test_the_groups_on_the_page_are_the_servers(self):
         self.assertEqual(
             set(server.JOURNAL_GROUPS) | {"all"},
-            {"all", "alarms", "devices", "ping", "map", "users", "settings"},
+            {"all", "alarms", "devices", "ping", "addresses", "map", "users",
+             "settings"},
         )
 
 

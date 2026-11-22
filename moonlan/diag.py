@@ -1034,6 +1034,7 @@ def run_config_audit(cfg, settings_rows: dict | None = None) -> None:
             print(f"  {problem}")
 
     _print_settings(cfg, settings_rows or {})
+    _print_journal(cfg)
     _print_node_menu(cfg)
     _print_oui(cfg)
     _print_https(cfg)
@@ -1112,6 +1113,34 @@ def _print_settings(cfg, rows: dict) -> None:
     })
     print("\nkeys in config.yaml that are Settings now (not read — remove them):")
     print("  " + (", ".join(unused) if unused else "none"))
+
+
+def _print_journal(cfg) -> None:
+    """Part of `--config` (v0.8.7): how long the journal is kept, and
+    how big it is — read from the database file, read-only."""
+    keep = cfg.journal_keep_days
+    ping = cfg.journal_ping_keep_days
+    print("\njournal:")
+    print(f"  journal_keep_days      = {keep:g}"
+          + ("  (kept for good)" if keep <= 0 else ""))
+    print(f"  journal_ping_keep_days = {ping:g}"
+          + ("  (as journal_keep_days)" if ping <= 0 else ""))
+    try:
+        conn = sqlite3.connect(f"file:{cfg.db_path}?mode=ro", uri=True)
+        try:
+            rows, oldest = conn.execute(
+                "SELECT COUNT(*), MIN(ts) FROM journal"
+            ).fetchone()
+        finally:
+            conn.close()
+    except sqlite3.Error:
+        print(f"  {cfg.db_path}: no journal to read")
+        return
+    when = (time.strftime("%Y-%m-%d %H:%M", time.localtime(oldest))
+            if oldest else "—")
+    print(f"  {rows} event(s), the oldest from {when}")
+    print("  ^ cleaned at the start and once a day; the file is not "
+          "vacuumed —\n    SQLite reuses the freed pages")
 
 
 def _print_node_menu(cfg) -> None:

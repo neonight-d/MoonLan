@@ -252,6 +252,12 @@ class Config:
     # (FDB entries age out in minutes; quiet devices must not blink)
     host_grace_hours: float = 24.0
     host_retention_days: float = 30.0  # then it is deleted from the DB
+    # The journal is kept this long (v0.8.7); 0 — for good. The ping
+    # group (host_down, host_up) has its own, shorter term: nine events
+    # in ten are pings, and a month-old one is worth the least; 0 —
+    # the same as everything else.
+    journal_keep_days: float = 365.0
+    journal_ping_keep_days: float = 30.0
     # Offline devices on one port are drawn as a single group node
     # instead of a cloud of grey dots around the switch
     offline_group_threshold: int = 2   # 0 disables the grouping
@@ -731,6 +737,12 @@ def load_config(path: Path | None = None) -> Config:
     cfg.host_grace_hours = r.get("host_grace_hours", d.host_grace_hours, float)
     cfg.host_retention_days = r.get(
         "host_retention_days", d.host_retention_days, float
+    )
+    cfg.journal_keep_days = r.get(
+        "journal_keep_days", d.journal_keep_days, float
+    )
+    cfg.journal_ping_keep_days = r.get(
+        "journal_ping_keep_days", d.journal_ping_keep_days, float
     )
     cfg.offline_group_threshold = r.get(
         "offline_group_threshold", d.offline_group_threshold, int
