@@ -29,7 +29,7 @@ EXAMPLES = [
     (("TenGigabitEthernet1/0/1", None), "1/0/1"),
     # an inferred aggregate, by its members since v0.8.6…
     (("LAG 1/25+1/26", None), "LAG"),
-    (("LAG Slot0/1+Slot0/2", None), "LAG"),
+    (("LAG 1/1+1/2", None), "LAG"),
     # …and as an older server named it
     (("bridge-port 12", None), "LAG"),
     (("uplink-to-core", None), "uplink-…"),     # no number in it at all

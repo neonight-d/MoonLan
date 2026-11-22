@@ -315,7 +315,7 @@ LAG_PREFIX = "LAG "
 
 
 def lag_port_name(data: "SwitchData", members) -> str:
-    """'LAG Slot0/1+Slot0/2' — the members by ascending ifIndex."""
+    """'LAG 1/1+1/2' — the members by ascending ifIndex."""
     return LAG_PREFIX + "+".join(
         port_display(data, m) for m in sorted(members)
     )
@@ -342,9 +342,9 @@ def settle_synthetic_ports(
 
     Runs right after infer_lag_groups. A bridge-port missing from
     dot1dBasePortIfIndex used to become a port the moment a MAC-table
-    row named it, aggregate or not — and an Edge-Core ES3528M once
-    answered with bridge-port 402792706 on a switch whose mapping has
-    no gaps at all. The port it got stayed in the database as
+    row named it, aggregate or not — and a real access switch, whose
+    mapping has no gaps at all, once answered with bridge-port
+    402792706. The port it got stayed in the database as
     "-402792706", and three devices sat on it as "Offline · 3".
 
     The v0.6.8 rule for phantom aggregates, applied to the MAC table:

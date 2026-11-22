@@ -307,9 +307,9 @@ direction. A port with LBD switched off on the switch shows a dash.
   tree running raises nothing, and an active alarm is cleared in the
   next counters cycle, "spanning tree is running on this switch".
   Before, the words "this network runs no spanning tree" were written
-  into the alarm and checked by nothing: on mb0 it went on saying so
-  for two months after RSTP had been switched on and the neighbours
-  had confirmed mb0 as its root.
+  into the alarm and checked by nothing: on a core switch it went on
+  saying so for two months after RSTP had been switched on and the
+  neighbours had confirmed that switch as their root.
 
 On the map a port with a loop gets a red edge labelled LOOP and its
 switch is outlined in red, the way an unreachable switch is.
@@ -367,7 +367,7 @@ ifIndex `-<bridge-port>`.
 
 **Named by its members (v0.8.6).** The synthetic port is called
 `LAG <members>`, the members' names by ascending ifIndex:
-`LAG Slot0/1+Slot0/2`, `LAG 1/25+1/26`. The name is set once, right
+`LAG 1/1+1/2`, `LAG 1/25+1/26`. The name is set once, right
 after the inference, and everything that names a port takes it: both
 ends of a link, a group behind a trunk, an offline group, the devices,
 the STP table, the export. It used to be `bridge-port 1` and
@@ -386,8 +386,8 @@ down.
 
 **Only an aggregate.** A synthetic port used to be made for any
 bridge-port the mapping does not have, the moment a MAC-table row named
-it — before anyone asked whether it was an aggregate. An Edge-Core
-ES3528M (10.3.6.5), whose mapping has no gaps, once answered a row with
+it — before anyone asked whether it was an aggregate. An access
+switch whose mapping has no gaps once answered a row with
 bridge-port 402792706: the port it got stayed in the database as
 `-402792706`, three devices sat on it as "Offline · 3", and nothing ever
 removed it. Now the rule v0.6.8 set for phantom aggregates applies to

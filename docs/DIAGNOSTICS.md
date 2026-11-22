@@ -44,7 +44,7 @@ Since v0.8.6 a row on a bridge-port missing from `dot1dBasePortIfIndex`
 is accepted only when that bridge-port is an inferred aggregate — the
 service's rule, decided the same way (see
 [Aggregates without LAG-MIB](NETWORK.md#aggregates-without-lag-mib)).
-An aggregate's rows show its name, `(LAG Slot0/1+Slot0/2)`. Any other
+An aggregate's rows show its name, `(LAG 1/1+1/2)`. Any other
 is rejected with the reason and counted apart in the summary:
 
 ```

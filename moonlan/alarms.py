@@ -887,9 +887,9 @@ class AlarmEngine:
           spanning tree is running on it (v0.8.6). `stp_operating` is
           this switch's verdict after judge_network(), None when its STP
           is not visible at all. The alarm used to say "this network
-          runs no spanning tree" without checking, and on mb0 it went
-          on saying so for two months after RSTP had been switched on
-          and its root confirmed by the neighbours;
+          runs no spanning tree" without checking, and on a core switch it
+          went on saying so for two months after RSTP had been switched
+          on and its root confirmed by the neighbours;
         - a port whose status is not the known-normal value raises
           loop_detected, with the raw value in the message. The value a
           real loop produces has never been observed on this hardware

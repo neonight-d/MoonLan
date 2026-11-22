@@ -36,17 +36,17 @@ entry, so Android's Back steps back one at a time, as Esc does; a
 reload opens the map. The "List and search" bar and its stored state
 are gone. Wider than 720 px nothing changes.
 
-**Aggregates by their members.** The LACP link between mb0 and mb1 was
-right, and its ends were called "bridge-port 1" and "bridge-port 25" —
-numbers D-Link changes when the members flap. An aggregate inferred
-from the `dot1dBasePortIfIndex` gaps is now "LAG Slot0/1+Slot0/2",
+**Aggregates by their members.** An LACP link between two core
+switches was right, and its ends were called "bridge-port 1" and
+"bridge-port 25" — numbers D-Link changes when the members flap. An aggregate inferred
+from the `dot1dBasePortIfIndex` gaps is now "LAG 1/1+1/2",
 "LAG 1/25+1/26", on both ends of the link, the group behind the trunk,
 the devices, the STP table and the export. In the ports panel its row
 was "no link, 0, —" beside its live members; it is now made of them —
 up when one is, the speed of those that are up, traffic, errors and
 discards summed, `aggregate` and `members` in the API.
 
-**A synthetic port only for an aggregate.** An Edge-Core ES3528M once
+**A synthetic port only for an aggregate.** An access switch once
 answered a MAC-table row with bridge-port 402792706, on a mapping with
 no gaps. The collector made it a port before asking whether it was an
 aggregate, and "-402792706" stayed in the database as the port of
@@ -61,9 +61,9 @@ of an aggregate takes its new name, any other "bridge-port N" and every
 "-N" is reset (the device goes off the map until it is seen again), and
 the layout and notes keys are renamed where the aggregate is known.
 
-**Loop Detection and spanning tree.** `loop_detection_disabled` on mb0
-said "this network runs no spanning tree" for two months after RSTP had
-been switched on and its root confirmed by the neighbours: the words
+**Loop Detection and spanning tree.** `loop_detection_disabled` on a
+core switch said "this network runs no spanning tree" for two months
+after RSTP had been switched on and its root confirmed by the neighbours: the words
 were in the text and nowhere in the check. It now looks at the switch's
 STP verdict: off with a tree running raises nothing and clears the
 active alarm in the next counters cycle; off without one, or with STP

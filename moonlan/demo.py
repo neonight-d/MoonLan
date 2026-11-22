@@ -99,15 +99,14 @@ v0.8.6 scenarios:
   its members' sums. The note given to the group behind the core's
   trunk still has its old key ("bridge-port 3"): the first scan
   renames it, the way an upgraded server renames a real one;
-- access-sw-4, the Edge-Core-like one, answers a MAC-table row on
-  bridge-port 402792706 every scan, on a switch whose mapping has no
-  gaps. It is no aggregate, so the row is dropped — one WARNING in the
-  log for the life of the process, "unknown bridge-port: 1" in the FDB
-  line. (Devices an older version left on such a port are not seeded:
+- access-sw-4 answers a MAC-table row on bridge-port 402792706 every
+  scan, on a switch whose mapping has no gaps. It is no aggregate, so
+  the row is dropped — one WARNING in the log for the life of the
+  process, "unknown bridge-port: 1" in the FDB line. (Devices an older version left on such a port are not seeded:
   any record at start would end the demo's first scan being its
   initial inventory — tests/test_lag_ports.py has them instead);
 - the core has Loop Detection switched off globally and spanning tree
-  running, its root confirmed by the neighbours — as mb0 does: no
+  running, its root confirmed by the neighbours: no
   loop_detection_disabled. access-sw-3 has it off with no tree, and
   keeps the alarm;
 - the journal starts with an event of every group: alarms, pings,
@@ -1019,8 +1018,9 @@ def _report_rejected_lag(sw: SwitchData) -> None:
         )
 
 
-# What 10.3.6.5 once answered a MAC-table row with: a bridge-port that
-# is in no mapping, on a switch whose mapping has no gaps (v0.8.6)
+# What a real access switch once answered a MAC-table row with: a
+# bridge-port that is in no mapping, on a switch whose mapping has no
+# gaps (v0.8.6)
 PHANTOM_BRIDGE_PORT = 402792706
 PHANTOM_FDB_MAC = "00:1b:2c:3d:4e:5f"
 

@@ -276,7 +276,7 @@ out.viewer = {
   menu: moreItems().map((item) => [item.key, item.group]),
   account: els.moreBody.children[0].children.map((c) => c.className),
 };
-me = { sign_in: true, name: "neonight", role: "admin" };
+me = { sign_in: true, name: "admin", role: "admin" };
 renderMoreView();
 out.admin = { off: rowsOf().filter((row) => row.classList.contains("off")).map((row) => row.dataset.key) };
 me = { sign_in: false, create_admin: "python -m moonlan.users add" };

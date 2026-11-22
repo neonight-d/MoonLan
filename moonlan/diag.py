@@ -186,7 +186,7 @@ def _lag_group_line(
     name: str = "",
 ) -> str:
     """'LAG on bridge-port 1: members 1, 2 (2×1000 Mbit/s)', with the
-    port's name when the poll gave it one: '… — LAG Slot0/1+Slot0/2'."""
+    port's name when the poll gave it one: '… — LAG 1/1+1/2'."""
     member_speeds = [speeds.get(m, 0) for m in members]
     if member_speeds and len(set(member_speeds)) == 1 and member_speeds[0]:
         speed = f"{len(members)}×{member_speeds[0]} Mbit/s"

@@ -16,7 +16,7 @@ Everything MoonLan does, as of v0.8.4 — the list the README used to carry. The
 - MAC address tables (BRIDGE-MIB and Q-BRIDGE-MIB) from every switch,
   including entries on trunk bridge-ports missing from
   `dot1dBasePortIfIndex` (e.g. D-Link LACP trunks). Such a trunk is
-  named by its members, `LAG Slot0/1+Slot0/2`, everywhere a port name
+  named by its members, `LAG 1/1+1/2`, everywhere a port name
   appears, and its row in the ports panel is the sum of its members;
   a bridge-port missing from the mapping that is not an aggregate is
   no port at all, and its rows are dropped and counted (v0.8.6).
