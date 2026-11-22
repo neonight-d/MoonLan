@@ -185,6 +185,67 @@ class PortInfo:
     mac: str = ""             # ifPhysAddress: some agents use it as an LLDP port id
     last_change: int = 0      # ifLastChange, TimeTicks since sysUpTime epoch
 
+    def to_dict(self) -> dict:
+        return {
+            "if_index": self.if_index, "name": self.name,
+            "oper_up": self.oper_up, "speed_mbps": self.speed_mbps,
+            "is_physical": self.is_physical, "mac": self.mac,
+            "last_change": self.last_change,
+        }
+
+    @classmethod
+    def from_dict(cls, raw: dict) -> "PortInfo":
+        return cls(
+            if_index=int(raw["if_index"]), name=str(raw.get("name", "")),
+            oper_up=bool(raw.get("oper_up", False)),
+            speed_mbps=int(raw.get("speed_mbps", 0)),
+            is_physical=bool(raw.get("is_physical", True)),
+            mac=str(raw.get("mac", "")),
+            last_change=int(raw.get("last_change", 0)),
+        )
+
+
+# Where the data of a switch on the map comes from (v0.8.7). One of
+# five, and the map, the card and /api/polling say which:
+#   fresh        a full poll in this scan
+#   over_budget  answered, did not finish inside its budget: the last
+#                full reading, dated
+#   unreachable  did not answer in this scan: the last full reading
+#   restored     not polled since the start yet: the reading saved in
+#                the database before the restart
+#   never        no full reading anywhere: a node with nothing on it
+STATE_FRESH = "fresh"
+STATE_OVER_BUDGET = "over_budget"
+STATE_UNREACHABLE = "unreachable"
+STATE_RESTORED = "restored"
+STATE_NEVER = "never"
+# A reading somebody took earlier, not this scan's observation: drawn,
+# never recorded as a sighting (v0.6.15)
+READING_STATES = frozenset({STATE_OVER_BUDGET, STATE_UNREACHABLE, STATE_RESTORED})
+
+# The shape of a reading saved in switch_readings. A reading in another
+# format is ignored at the start rather than read wrong: one more
+# reading after the next scan costs less than a map built from fields
+# that meant something else.
+READING_FORMAT = 1
+
+
+class OverBudget:
+    """A poll that ran past its budget, and whether the switch answered
+    before it did (v0.8.7): True when its first answer came in time,
+    None when the budget ran out before anything came back. An agent
+    that does not answer at all is cut off inside collect() long before
+    any budget — but "long before" is a matter of settings, so it is
+    asked, not assumed."""
+
+    def __init__(self, answered: bool | None = None):
+        self.answered = answered
+
+
+def _int_keys(raw: dict, value=lambda v: v) -> dict:
+    """JSON keeps object keys as strings; the reading's are ints"""
+    return {int(k): value(v) for k, v in (raw or {}).items()}
+
 
 @dataclass
 class SwitchData:
@@ -239,6 +300,102 @@ class SwitchData:
     # own numbers to be said out loud.
     poll_seconds: float = 0.0
     over_budget_scans: int = 0
+    # Where the data comes from (STATE_*), set by the scan. Empty on a
+    # SwitchData nobody has judged yet — a poll's own result, a test's
+    # network: `map_state` reads it from the other fields then.
+    state: str = ""
+    # Did it answer in this scan: True, False, or None when that is not
+    # known — restored before the first scan, or a budget that ran out
+    # before the first answer came. The alarms go by this, never by
+    # what is drawn: a switch drawn from a reading may be silent now.
+    answered: bool | None = None
+    # When it stopped answering: "not answering since 14:20"
+    down_since: float = 0.0
+
+    @property
+    def map_state(self) -> str:
+        if self.state:
+            return self.state
+        if self.over_budget:
+            return STATE_OVER_BUDGET
+        return STATE_FRESH if self.reachable else STATE_NEVER
+
+    @property
+    def from_reading(self) -> bool:
+        """Drawn from an earlier reading, not from this scan"""
+        return self.map_state in READING_STATES
+
+    def to_dict(self) -> dict:
+        """The reading, for switch_readings (v0.8.7).
+
+        Everything the map is built from. Not loop detection — the
+        counters cycle refreshes it — and nothing that describes the
+        current scan (state, answered, over_budget and its streak):
+        those are facts about now, and a reading is a fact about then.
+        """
+        return {
+            "format": READING_FORMAT,
+            "ip": self.ip,
+            "sys_name": self.sys_name,
+            "sys_descr": self.sys_descr,
+            "bridge_mac": self.bridge_mac,
+            "own_macs": sorted(self.own_macs),
+            "ports": [p.to_dict() for _, p in sorted(self.ports.items())],
+            "fdb": dict(sorted(self.fdb.items())),
+            "lag_members": {str(k): v for k, v in self.lag_members.items()},
+            "lag_groups": {
+                str(k): list(v) for k, v in self.lag_groups.items()
+            },
+            "port_pvid": {str(k): v for k, v in self.port_pvid.items()},
+            "vlan_names": {str(k): v for k, v in self.vlan_names.items()},
+            "lldp_neighbors": [n.to_dict() for n in self.lldp_neighbors],
+            "lldp_forwarded": sorted(self.lldp_forwarded),
+            "lldp_crowded": sorted(self.lldp_crowded),
+            "port_labels": {str(k): v for k, v in self.port_labels.items()},
+            "stp": self.stp.to_dict() if self.stp is not None else None,
+            "sys_uptime": self.sys_uptime,
+            "sys_object_id": self.sys_object_id,
+            "polled_at": self.polled_at,
+            "poll_seconds": self.poll_seconds,
+        }
+
+    @classmethod
+    def from_dict(cls, raw: dict) -> "SwitchData":
+        """A reading back from switch_readings; the caller has checked
+        its format. It is a reading of a switch that answered in full,
+        so `reachable` is True — what it says about now is `state`."""
+        if raw.get("format") != READING_FORMAT:
+            raise ValueError(f"reading format {raw.get('format')!r}")
+        ports = (PortInfo.from_dict(p) for p in raw.get("ports") or [])
+        stp = raw.get("stp")
+        return cls(
+            ip=str(raw["ip"]),
+            reachable=True,
+            sys_name=str(raw.get("sys_name", "")),
+            sys_descr=str(raw.get("sys_descr", "")),
+            bridge_mac=str(raw.get("bridge_mac", "")),
+            own_macs=set(raw.get("own_macs") or ()),
+            ports={p.if_index: p for p in ports},
+            fdb={str(k): int(v) for k, v in (raw.get("fdb") or {}).items()},
+            lag_members=_int_keys(raw.get("lag_members"), int),
+            lag_groups=_int_keys(
+                raw.get("lag_groups"), lambda v: [int(i) for i in v]
+            ),
+            port_pvid=_int_keys(raw.get("port_pvid"), int),
+            vlan_names=_int_keys(raw.get("vlan_names"), str),
+            lldp_neighbors=[
+                lldp_mod.LldpNeighbor.from_dict(n)
+                for n in raw.get("lldp_neighbors") or ()
+            ],
+            lldp_forwarded={int(i) for i in raw.get("lldp_forwarded") or ()},
+            lldp_crowded={int(i) for i in raw.get("lldp_crowded") or ()},
+            port_labels=_int_keys(raw.get("port_labels"), str),
+            stp=stp_mod.StpData.from_dict(stp) if stp is not None else None,
+            sys_uptime=int(raw.get("sys_uptime", 0)),
+            sys_object_id=str(raw.get("sys_object_id", "")),
+            polled_at=float(raw.get("polled_at", 0.0)),
+            poll_seconds=float(raw.get("poll_seconds", 0.0)),
+        )
 
 
 def _fmt_mac(raw: bytes) -> str:
@@ -567,6 +724,10 @@ class SnmpCollector:
         # 0 disables the rule: every OID is asked for every time
         self._dead_oid_strikes = dead_oid_strikes
         self._dead_oid_cooldown = dead_oid_cooldown_scans
+        # host -> when it last answered sysName, the first request of a
+        # full poll (v0.8.7). A poll that then runs out of budget has
+        # had an answer, and "over budget" is not "not answering".
+        self.answered_at: dict[str, float] = {}
 
     def begin_scan_cycle(self) -> None:
         """One more scan has started; the cooldown is counted in these."""
@@ -857,6 +1018,7 @@ class SnmpCollector:
             return data
 
         data.reachable = True
+        self.answered_at[host] = time.time()
         data.sys_name = str(sys_name)
         sys_descr = await self._get(host, OID_SYS_DESCR)
         data.sys_descr = str(sys_descr) if sys_descr is not None else ""

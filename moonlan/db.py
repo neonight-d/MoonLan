@@ -371,6 +371,25 @@ class Database:
                 "CREATE INDEX journal_event_id ON journal (event, id)"
             )
             log.info("DB migration: added the journal (event, id) index")
+        # The last full reading of every switch (v0.8.7): one row each,
+        # replaced after every full poll. A restart used to start from
+        # nothing, and a switch that then never finished a poll was
+        # simply gone from the map.
+        tables = {
+            row[0] for row in self._conn.execute(
+                "SELECT name FROM sqlite_master WHERE type = 'table'"
+            )
+        }
+        if "switch_readings" not in tables:
+            self._conn.execute(
+                "CREATE TABLE switch_readings ("
+                " ip        TEXT PRIMARY KEY,"
+                " polled_at REAL,"
+                " format    INTEGER,"
+                " version   TEXT,"
+                " data      TEXT)"
+            )
+            log.info("DB migration: added the switch_readings table")
         user_columns = {
             row[1] for row in self._conn.execute("PRAGMA table_info(users)")
         }
@@ -1147,6 +1166,37 @@ class Database:
                         (scans, ts, node_id),
                     )
         return {"back": back, "lost": lost}
+
+    def save_switch_reading(
+        self, ip: str, polled_at: float, fmt: int, version: str, data: str
+    ) -> None:
+        """The last full reading of a switch, in place of the one before"""
+        with self._lock, self._conn:
+            self._conn.execute(
+                "INSERT OR REPLACE INTO switch_readings "
+                "(ip, polled_at, format, version, data) "
+                "VALUES (?, ?, ?, ?, ?)",
+                (ip, polled_at, fmt, version, data),
+            )
+
+    def switch_readings(self) -> dict[str, dict]:
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT ip, polled_at, format, version, data "
+                "FROM switch_readings"
+            ).fetchall()
+        return {row["ip"]: dict(row) for row in rows}
+
+    def delete_switch_readings(self, ips) -> int:
+        ips = list(ips)
+        if not ips:
+            return 0
+        with self._lock, self._conn:
+            cur = self._conn.executemany(
+                "DELETE FROM switch_readings WHERE ip = ?",
+                [(ip,) for ip in ips],
+            )
+            return cur.rowcount
 
     def hosts_by_mac(self) -> dict[str, dict]:
         with self._lock:

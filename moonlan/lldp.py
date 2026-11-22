@@ -112,6 +112,47 @@ class LldpNeighbor:
     def label(self) -> str:
         return self.sys_name or self.chassis_id or f"port {self.local_port_num}"
 
+    def to_dict(self) -> dict:
+        """For a saved reading (v0.8.7): the sets as sorted lists"""
+        return {
+            "local_ifindex": self.local_ifindex,
+            "local_port_num": self.local_port_num,
+            "port_matched_by": self.port_matched_by,
+            "chassis_id": self.chassis_id,
+            "chassis_subtype": self.chassis_subtype,
+            "port_id": self.port_id,
+            "port_subtype": self.port_subtype,
+            "port_desc": self.port_desc,
+            "sys_name": self.sys_name,
+            "sys_desc": self.sys_desc,
+            "cap_enabled": sorted(self.cap_enabled),
+            "cap_known": self.cap_known,
+            "mgmt_ip": self.mgmt_ip,
+            "mgmt_ips": list(self.mgmt_ips),
+            "rows": self.rows,
+        }
+
+    @classmethod
+    def from_dict(cls, raw: dict) -> "LldpNeighbor":
+        local = raw.get("local_ifindex")
+        return cls(
+            local_ifindex=int(local) if local is not None else None,
+            local_port_num=int(raw.get("local_port_num", 0)),
+            port_matched_by=str(raw.get("port_matched_by", "")),
+            chassis_id=str(raw.get("chassis_id", "")),
+            chassis_subtype=int(raw.get("chassis_subtype", 0)),
+            port_id=str(raw.get("port_id", "")),
+            port_subtype=int(raw.get("port_subtype", 0)),
+            port_desc=str(raw.get("port_desc", "")),
+            sys_name=str(raw.get("sys_name", "")),
+            sys_desc=str(raw.get("sys_desc", "")),
+            cap_enabled=set(raw.get("cap_enabled") or ()),
+            cap_known=bool(raw.get("cap_known", False)),
+            mgmt_ip=str(raw.get("mgmt_ip", "")),
+            mgmt_ips=[str(ip) for ip in raw.get("mgmt_ips") or ()],
+            rows=int(raw.get("rows", 1)),
+        )
+
 
 def _fmt_mac(raw: bytes) -> str:
     return ":".join(f"{b:02x}" for b in raw)

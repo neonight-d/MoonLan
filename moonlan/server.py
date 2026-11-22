@@ -29,6 +29,13 @@ from .config import Config, load_config, parse_uplink_ports
 from .db import Database
 from .notify import Notifier
 from .snmp_collector import (
+    READING_FORMAT,
+    OverBudget,
+    STATE_FRESH,
+    STATE_NEVER,
+    STATE_OVER_BUDGET,
+    STATE_RESTORED,
+    STATE_UNREACHABLE,
     SnmpCollector,
     SwitchData,
     is_random_mac,
@@ -241,8 +248,8 @@ async def _collect_locked(collector: SnmpCollector, ip: str) -> SwitchData:
 
 async def _collect_within_budget(
     collector: SnmpCollector, ip: str, budget: float
-) -> SwitchData | None:
-    """A full poll, or None when it ran past its budget.
+) -> SwitchData | OverBudget:
+    """A full poll, or OverBudget when it ran past its budget.
 
     `snmp.timeout` bounds one request. A poll is a dozen walks of a
     dozen requests each, so an agent that answers everything slowly
@@ -252,6 +259,7 @@ async def _collect_within_budget(
     network gets its map.
     """
     started = time.monotonic()
+    started_at = time.time()
     try:
         data = await asyncio.wait_for(
             _collect_locked(collector, ip), budget
@@ -267,7 +275,8 @@ async def _collect_within_budget(
             "same as not answering: see snmp.host_budget_seconds",
             ip, budget, time.monotonic() - started,
         )
-        return None
+        answered_at = getattr(collector, "answered_at", {}).get(ip, 0.0)
+        return OverBudget(True if answered_at >= started_at else None)
     finally:
         state.host_polled()
 
@@ -335,31 +344,92 @@ async def _counters_locked(collector: SnmpCollector, ip: str):
         lock.release()
 
 
+def configured_switches() -> list[str]:
+    """The switches the map is about: `switches:` in config.yaml, or the
+    demo's own network. Each of them is on the map whatever it answers
+    (v0.8.7) — from this scan, from a reading, or as an empty node."""
+    return list(demo.SWITCH_IPS) if config.demo else list(config.switches)
+
+
+def _settle(ip: str, result, now: float) -> SwitchData:
+    """This scan's outcome for one switch, as what the map is drawn from.
+
+    A full poll is fresh. Anything else keeps the last full reading
+    there is — this process's, or the one restored from the database —
+    marked with why: over budget, or not answering. With no reading
+    anywhere it is `never`: a node with nothing on it, still a node.
+    The reading object is the same one every time, so a switch that
+    goes from late to silent keeps its data and its loop detection.
+    """
+    previous = switch_data.get(ip)
+    # a full reading of some age: fresh, over budget, silent or restored
+    reading = previous if previous is not None and previous.reachable else None
+    if isinstance(result, SwitchData) and result.reachable:
+        result.state = STATE_FRESH
+        result.answered = True
+        result.over_budget = False
+        result.over_budget_scans = 0
+        result.down_since = 0.0
+        return result
+    if isinstance(result, OverBudget) or result is None:
+        # Not an answer, and not a silence either: the last reading that
+        # did arrive is kept and dated, so the branch behind this switch
+        # stays on the map instead of vanishing every cycle. A switch
+        # that has never been read in full still counts its streak: it
+        # is further from fine than one whose data is merely old.
+        answered = result.answered if isinstance(result, OverBudget) else None
+        streak = previous.over_budget_scans + 1 if previous else 1
+        target = reading or SwitchData(ip=ip, state=STATE_NEVER)
+        if reading is None:
+            target.state = STATE_NEVER
+        else:
+            target.state = STATE_OVER_BUDGET
+        target.over_budget = True
+        target.over_budget_scans = streak
+        target.answered = answered
+        target.down_since = 0.0
+        return target
+    # It did not answer — or the poll raised, which is not an answer
+    # either. The reading stays on the map, marked; switch_down goes by
+    # `answered`, not by what is drawn.
+    since = previous.down_since if previous and previous.down_since else now
+    target = reading or SwitchData(ip=ip)
+    target.state = STATE_UNREACHABLE if reading is not None else STATE_NEVER
+    target.answered = False
+    target.over_budget = False
+    target.over_budget_scans = 0
+    target.down_since = since
+    return target
+
+
 async def run_scan() -> None:
     """One cycle of polling all switches and rebuilding the topology."""
-    global first_scan_done, fdb_macs, prev_pseudo_ports
     if state.scanning:
         return
-    state.scan_started(len(config.switches))
+    ips = configured_switches()
+    state.scan_started(len(ips))
     over_budget: list[str] = []
     try:
         arp: dict[str, str] = {}
+        now = time.time()
         if config.demo:
-            collected = demo.demo_network()
+            results = demo.demo_poll()
+            for _ in results:
+                state.host_polled()
         else:
             collector = get_collector()
             collector.begin_scan_cycle()
-            results = await asyncio.gather(
+            polled = await asyncio.gather(
                 *(
                     _collect_within_budget(
                         collector, ip, config.host_budget(ip)
                     )
-                    for ip in config.switches
+                    for ip in ips
                 ),
                 return_exceptions=True,
             )
-            collected = []
-            for ip, result in zip(config.switches, results):
+            results = []
+            for ip, result in zip(ips, polled):
                 if isinstance(result, BaseException):
                     # unreachable is already handled inside collect();
                     # this is a poll that raised, and the rest of the
@@ -368,228 +438,378 @@ async def run_scan() -> None:
                         "Poll of %s raised — it is left out of this scan",
                         ip, exc_info=result,
                     )
-                    collected.append(SwitchData(ip=ip))
-                    continue
-                if result is None:
-                    # Over budget. Not an answer, and not a silence
-                    # either: the last reading that did arrive is kept
-                    # and dated, so the branch behind this switch stays
-                    # on the map instead of vanishing every cycle.
-                    previous = switch_data.get(ip)
-                    streak = (
-                        previous.over_budget_scans + 1 if previous else 1
-                    )
-                    if previous is not None and previous.reachable:
-                        previous.over_budget = True
-                        previous.over_budget_scans = streak
-                        collected.append(previous)
-                    else:
-                        # Nothing to keep — this one has never been read
-                        # in full. The streak still counts: a switch
-                        # that has never finished a poll is further from
-                        # fine than one whose data is merely old.
-                        collected.append(
-                            SwitchData(ip=ip, over_budget=True,
-                                       over_budget_scans=streak)
-                        )
-                    continue
-                collected.append(result)
+                    result = SwitchData(ip=ip)
+                results.append((ip, result))
+        collected = [_settle(ip, result, now) for ip, result in results]
+        if config.demo:
+            ip_to_mac = {ip: mac for mac, ip in demo.SWITCH_ARP.items()}
+        else:
             if config.routers:
                 arp = await collect_arp(collector)
-            # The MAC of the switch's management IP is also its MAC:
-            # neighbors see the switch under it in their FDB tables
             ip_to_mac = {ip: mac for mac, ip in arp.items()}
-            for sw in collected:
-                mac = ip_to_mac.get(sw.ip)
-                if mac:
-                    sw.own_macs.add(mac)
-        # Demo mode marks a switch over budget too, so the list comes
-        # from the data rather than from the polling loop
-        over_budget = [sw.ip for sw in collected if sw.over_budget]
+        # The MAC of the switch's management IP is also its MAC:
+        # neighbors see the switch under it in their FDB tables
         for sw in collected:
-            previous = switch_data.get(sw.ip)
-            if previous is not None and sw.loop_detection is None:
-                # Loop detection is refreshed by the counters cycle,
-                # not by the scan. A fresh SwitchData carries none, and
-                # dropping the last one made every switch report "the
-                # model does not say" for up to a minute after every
-                # scan — a claim about hardware, made because of our
-                # own bookkeeping.
-                sw.loop_detection = previous.loop_detection
-            switch_data[sw.ip] = sw
-        # The cross-switch spanning-tree test comes BEFORE the map is
-        # built, because the map reads its results. A root recognised
-        # only because its neighbours follow its address (v0.6.11) has
-        # `operating` and `confirmed_root` set by judge_network — and
-        # judge_network used to run after build_topology, so the node
-        # was drawn with a plain border, no root caption and its
-        # blocking ports ignored, while the STP panel two panels away
-        # called it the root. One order of operations, three wrong
-        # fields.
-        _judge_stp(collected)
-        # Port names from before v0.8.6 in the database, renamed or
-        # reset by what this poll knows — before anything below reads
-        # the database by port name
+            mac = ip_to_mac.get(sw.ip)
+            if mac:
+                sw.own_macs.add(mac)
+        over_budget = [sw.ip for sw in collected if sw.over_budget]
+        await _build_map(collected, arp, observe=True)
+    finally:
+        state.scan_ended(over_budget)
+
+
+async def restore_readings() -> None:
+    """At the start: the saved readings, and the map drawn from them.
+
+    Each switch of `switches:` gets its last full reading back from the
+    database as `restored`, unless the reading is in another format or
+    older than host_retention_days. Readings of switches no longer in
+    `switches:` are deleted. The map is drawn from what came back at
+    once — the first scan of a slow network takes minutes, and a map
+    that is empty until then says the network is gone — and none of it
+    is recorded as a sighting: the first full poll of each switch
+    replaces its reading.
+    """
+    ips = configured_switches()
+    rows = await asyncio.to_thread(db.switch_readings)
+    gone = sorted(ip for ip in rows if ip not in set(ips))
+    if gone:
+        await asyncio.to_thread(db.delete_switch_readings, gone)
+        log.info(
+            "Saved readings of %d switch(es) no longer in switches: "
+            "deleted: %s", len(gone), ", ".join(gone),
+        )
+    days = config.host_retention_days
+    cutoff = time.time() - days * 86400 if days > 0 else 0.0
+    restored = []
+    for ip in ips:
+        row = rows.get(ip)
+        if row is None:
+            continue
+        if row["format"] != READING_FORMAT:
+            log.info(
+                "saved reading of %s is in an older format — ignored "
+                "(format %s, this version reads %d); the first full poll "
+                "writes a new one", ip, row["format"], READING_FORMAT,
+            )
+            continue
+        if cutoff and (row["polled_at"] or 0) < cutoff:
+            log.info(
+                "saved reading of %s is from %s, older than "
+                "host_retention_days (%g) — ignored", ip,
+                time.strftime(
+                    "%Y-%m-%d %H:%M", time.localtime(row["polled_at"] or 0)
+                ), days,
+            )
+            continue
+        try:
+            sw = SwitchData.from_dict(json.loads(row["data"]))
+        except (ValueError, KeyError, TypeError) as exc:
+            log.warning(
+                "saved reading of %s could not be read (%s) — ignored",
+                ip, exc,
+            )
+            continue
+        sw.state = STATE_RESTORED
+        sw.answered = None
+        switch_data[ip] = sw
+        restored.append(sw)
+    if not restored:
+        return
+    log.info(
+        "Restored the saved readings of %d of %d switch(es) — on the map "
+        "as \"data from before the restart\" until each one's first full "
+        "poll", len(restored), len(ips),
+    )
+    collected = [
+        switch_data.get(ip) or SwitchData(ip=ip, state=STATE_NEVER)
+        for ip in ips
+    ]
+    await _build_map(collected, {}, observe=False)
+
+
+def _stub_switches(
+    collected: list[SwitchData], hosts: list[dict]
+) -> list[dict]:
+    """A node for every switch with no full reading anywhere (v0.8.7).
+
+    It used to vanish: no reading, nothing drawn, and its name went to
+    "Notes without a node". It is drawn now with what is known — its
+    address, the note on it — and nothing that is not. Where the MAC
+    of its management address is in another switch's table, it stands
+    on that port, the way a device would.
+    """
+    drawn = {sw.ip for sw in collected if sw.reachable}
+    by_ip = {sw.ip: sw for sw in collected}
+    where = {
+        h["mac"]: h for h in hosts if h.get("switch") and h.get("port")
+    }
+    stubs = []
+    for ip in configured_switches():
+        if ip in drawn:
+            continue
+        sw = by_ip.get(ip) or SwitchData(ip=ip, state=STATE_NEVER)
+        attached = None
+        for mac in sorted(sw.own_macs):
+            host = where.get(mac)
+            if host:
+                attached = {
+                    "switch": host["switch"], "port": host["port"],
+                    "mac": mac,
+                }
+                break
+        stubs.append({
+            "ip": ip,
+            "name": ip,
+            "named": False,
+            "model": "",
+            "mac": "",
+            "descr": "",
+            "stp_operating": False,
+            "stp_root": False,
+            "state": STATE_NEVER,
+            "answered": sw.answered,
+            "down_since": sw.down_since,
+            "over_budget": bool(sw.over_budget),
+            "polled_at": 0.0,
+            "over_budget_scans": sw.over_budget_scans,
+            "ports_total": 0,
+            "ports_up": 0,
+            "port_prefix": "",
+            "attached": attached,
+            # for the card: since when, and against which budget
+            "started_at": STARTED_AT,
+            "budget_seconds": config.host_budget(ip),
+        })
+    return stubs
+
+
+async def _build_map(
+    collected: list[SwitchData], arp: dict[str, str], observe: bool
+) -> None:
+    """The map from what `collected` holds, and — when `observe` — the
+    inventory, the journal and the alarms from what this scan saw.
+
+    `observe=False` is the start, drawing the saved readings: the map
+    is built the same way, so it is the same map, and nothing is
+    written down — no sighting, no event, no alarm raised or cleared.
+    """
+    global first_scan_done, fdb_macs, prev_pseudo_ports
+    over_budget = [sw.ip for sw in collected if sw.over_budget]
+    for sw in collected:
+        previous = switch_data.get(sw.ip)
+        if previous is not None and sw.loop_detection is None:
+            # Loop detection is refreshed by the counters cycle,
+            # not by the scan. A fresh SwitchData carries none, and
+            # dropping the last one made every switch report "the
+            # model does not say" for up to a minute after every
+            # scan — a claim about hardware, made because of our
+            # own bookkeeping.
+            sw.loop_detection = previous.loop_detection
+        switch_data[sw.ip] = sw
+    # The last full reading of each switch read in full, for the next
+    # start (v0.8.7). Taken here, before the spanning-tree test and the
+    # map write their conclusions into the objects: a reading is what
+    # the switch said, and the restored one is judged again.
+    readings = [
+        (sw.ip, sw.polled_at, json.dumps(sw.to_dict(), separators=(",", ":")))
+        for sw in collected if observe and sw.map_state == STATE_FRESH
+    ]
+    # The cross-switch spanning-tree test comes BEFORE the map is
+    # built, because the map reads its results. A root recognised
+    # only because its neighbours follow its address (v0.6.11) has
+    # `operating` and `confirmed_root` set by judge_network — and
+    # judge_network used to run after build_topology, so the node
+    # was drawn with a plain border, no root caption and its
+    # blocking ports ignored, while the STP panel two panels away
+    # called it the root. One order of operations, three wrong
+    # fields.
+    _judge_stp(collected)
+    # Port names from before v0.8.6 in the database, renamed or
+    # reset by what this poll knows — before anything below reads
+    # the database by port name
+    if observe:
         await _retire_port_names(collected)
-        # A MAC has to be seen more than once before it counts as a
-        # device (unless ARP vouches for it); the verdict is needed
-        # before the topology so that unconfirmed addresses stay out of
-        # the per-port device counts as well as off the map
-        db_rows = await asyncio.to_thread(db.hosts_by_mac)
-        # An empty database is the initial inventory — there is no map
-        # yet for a phantom to pollute, and waiting would only show the
-        # operator an empty screen on the first poll
-        confirm_scans = config.new_host_confirm_scans if db_rows else 1
-        # Only switches actually read this cycle. A switch that ran out
-        # of budget contributes the table it produced last time, and
-        # counting a MAC again out of a copy of one reading is how an
-        # address gets "seen in three polls" without anyone looking for
-        # it twice.
-        unconfirmed = await asyncio.to_thread(
-            db.projected_unconfirmed,
-            {
-                mac for sw in collected
-                if sw.reachable and not sw.over_budget
-                for mac in sw.fdb
-            },
-            confirm_scans,
-        )
-        # Damaged copies of a MAC are looked for among the addresses the
-        # database has not accepted, and measured against the ones it
-        # had accepted BEFORE this poll (v0.8.5). The projection above
-        # will not do for that: a copy seen for the second time is not
-        # in it — it is about to be confirmed — and it used to be taken
-        # for a sample and confirmed. An empty database is the initial
-        # inventory, as above: nothing in it to be a copy of.
-        with_ip = set(arp)
-        grace = config.host_grace_hours * 3600
-        copy_candidates = corruption.candidates(
-            {mac for sw in collected if sw.reachable for mac in sw.fdb},
-            db_rows, with_ip,
-        ) if db_rows else set()
-        # …and the ones that will be found to be copies keep out of the
-        # per-port device counts already, or a few of them seen twice
-        # would make the port behind one real device a switch without
-        # SNMP. Neither do the records marked as copies (v0.8.5).
-        voting_out = unconfirmed
-        if config.filter_suspect_macs:
-            voting_out = unconfirmed | _marked_copies(db_rows)
-            voting_out |= corruption.likely_copies(
-                {sw.ip: set(sw.fdb) for sw in collected if sw.reachable},
-                copy_candidates,
-                corruption.samples_by_switch(
-                    [], db_rows, with_ip, grace, time.time()
-                ),
-                config.thresholds.corruption_hamming_bits,
-            )
-        # What the database already knows about each port feeds the
-        # unmanaged-switch threshold, so groups survive FDB aging
-        (
-            switches, links, hosts, pseudo_switches, vlan_names, bridges,
-            topo_info,
-        ) = build_topology(
-            collected,
-            config.unmanaged_threshold,
-            fdb_stability=None if config.demo else fdb_stability,
-            known_hosts_per_port=_known_hosts_per_port(
-                db_rows, {sw.ip for sw in collected if sw.reachable}
-            ),
-            sticky_pseudo_ports=prev_pseudo_ports,
-            unconfirmed_macs=voting_out,
-            place_trunk_only=config.place_trunk_only_hosts,
-            uplink_ports=_uplink_ports(),
-            remembered_locations=_remembered_locations(db_rows),
-        )
-        # Links the inference removed, and rings it could not resolve.
-        # The syslog line is for the moment it happens; the journal is
-        # so the history of these decisions can be read from the
-        # interface, where the map they changed is.
-        for dropped in topo_info.get("dropped_links", []):
-            await asyncio.to_thread(
-                db.add_event, time.time(), "link_dropped", "",
-                _dropped_link_details(dropped),
-            )
-        prev_pseudo_ports = {
-            (p["switch"], p["port"]) for p in pseudo_switches
-        }
-        # Addresses a bit or two away from a real one on the same
-        # switch: damaged frames, not new devices. They are held back
-        # from confirmation for as long as they look like copies —
-        # otherwise a permanently damaged port would simply confirm its
-        # phantoms. A sample counts on any port of the switch and for
-        # the grace window after it was last seen: a device switched
-        # off or moved to the next port leaves its copies behind.
-        suspects = corruption.find_suspects(
-            hosts, copy_candidates,
+    # A MAC has to be seen more than once before it counts as a
+    # device (unless ARP vouches for it); the verdict is needed
+    # before the topology so that unconfirmed addresses stay out of
+    # the per-port device counts as well as off the map
+    db_rows = await asyncio.to_thread(db.hosts_by_mac)
+    # An empty database is the initial inventory — there is no map
+    # yet for a phantom to pollute, and waiting would only show the
+    # operator an empty screen on the first poll
+    confirm_scans = config.new_host_confirm_scans if db_rows else 1
+    # Only switches actually read this cycle. A switch that ran out
+    # of budget contributes the table it produced last time, and
+    # counting a MAC again out of a copy of one reading is how an
+    # address gets "seen in three polls" without anyone looking for
+    # it twice.
+    unconfirmed = await asyncio.to_thread(
+        db.projected_unconfirmed,
+        {
+            mac for sw in collected
+            if sw.reachable and not sw.from_reading
+            for mac in sw.fdb
+        },
+        confirm_scans,
+    )
+    # Damaged copies of a MAC are looked for among the addresses the
+    # database has not accepted, and measured against the ones it
+    # had accepted BEFORE this poll (v0.8.5). The projection above
+    # will not do for that: a copy seen for the second time is not
+    # in it — it is about to be confirmed — and it used to be taken
+    # for a sample and confirmed. An empty database is the initial
+    # inventory, as above: nothing in it to be a copy of.
+    with_ip = set(arp)
+    grace = config.host_grace_hours * 3600
+    copy_candidates = corruption.candidates(
+        {mac for sw in collected if sw.reachable for mac in sw.fdb},
+        db_rows, with_ip,
+    ) if db_rows else set()
+    # …and the ones that will be found to be copies keep out of the
+    # per-port device counts already, or a few of them seen twice
+    # would make the port behind one real device a switch without
+    # SNMP. Neither do the records marked as copies (v0.8.5).
+    voting_out = unconfirmed
+    if config.filter_suspect_macs:
+        voting_out = unconfirmed | _marked_copies(db_rows)
+        voting_out |= corruption.likely_copies(
+            {sw.ip: set(sw.fdb) for sw in collected if sw.reachable},
+            copy_candidates,
             corruption.samples_by_switch(
-                hosts, db_rows, with_ip, grace, time.time()
+                [], db_rows, with_ip, grace, time.time()
             ),
             config.thresholds.corruption_hamming_bits,
         )
-        _apply_suspects(hosts, suspects)
-        suspect_macs = {
-            s["mac"] for found in suspects.values() for s in found
-        }
-        # Devices seen only on uplinks are not on the map, but they
-        # were seen: the sighting is recorded with no location at all,
-        # so the inventory keeps them without anyone claiming a port.
-        # `approximate` is what stops the empty location from
-        # overwriting whatever the database already holds.
-        uplink_only = topo_info.get("uplink_only", {})
-        stale_switches = {
-            sw.ip for sw in collected if sw.reachable and sw.over_budget
-        }
-        seen_nowhere = [
-            {"mac": mac, "switch": "", "port": "", "vlan": 0,
-             "approximate": True}
-            for mac, sightings in uplink_only.items()
-            # every sighting of it came out of a saved table: nobody
-            # saw this address either
-            if any(ip not in stale_switches for ip, _port in sightings)
-        ]
-        # A device behind a switch that ran out of budget is drawn from
-        # the reading that did arrive, and that is right — the map must
-        # not lose a whole branch every cycle. Recording it as a
-        # sighting is a different matter: "last seen" is a moment in
-        # time, seen_count counts polls a MAC was found in, and a
-        # confirmation is the claim that several polls agree. None of
-        # the three survives being fed the same reading twice.
-        observed = [h for h in hosts if not h.get("from_saved")]
-        copied = len(hosts) - len(observed)
-        if copied:
-            log.info(
-                "%d device(s) behind %d switch(es) that ran out of budget "
-                "are drawn from saved readings: they stay on the map, and "
-                "none of it is recorded as a sighting",
-                copied, len(stale_switches),
-            )
+    # What the database already knows about each port feeds the
+    # unmanaged-switch threshold, so groups survive FDB aging
+    (
+        switches, links, hosts, pseudo_switches, vlan_names, bridges,
+        topo_info,
+    ) = build_topology(
+        collected,
+        config.unmanaged_threshold,
+        # a reading drawn at the start does not touch the smoothing
+        fdb_stability=None if config.demo or not observe else fdb_stability,
+        known_hosts_per_port=_known_hosts_per_port(
+            db_rows, {sw.ip for sw in collected if sw.reachable}
+        ),
+        sticky_pseudo_ports=prev_pseudo_ports,
+        unconfirmed_macs=voting_out,
+        place_trunk_only=config.place_trunk_only_hosts,
+        uplink_ports=_uplink_ports(),
+        remembered_locations=_remembered_locations(db_rows),
+    )
+    # Links the inference removed, and rings it could not resolve.
+    # The syslog line is for the moment it happens; the journal is
+    # so the history of these decisions can be read from the
+    # interface, where the map they changed is.
+    for dropped in topo_info.get("dropped_links", []) if observe else ():
+        await asyncio.to_thread(
+            db.add_event, time.time(), "link_dropped", "",
+            _dropped_link_details(dropped),
+        )
+    # The switches with no reading anywhere (v0.8.7): an empty node
+    # each, standing on the port its management MAC is seen on — and
+    # that MAC is the switch, not a device beside it
+    stubs = _stub_switches(collected, hosts)
+    stub_macs = {
+        mac for sw in collected
+        if not sw.reachable for mac in sw.own_macs
+    }
+    hosts = [h for h in hosts if h["mac"] not in stub_macs]
+    switches = switches + stubs
+    prev_pseudo_ports = {
+        (p["switch"], p["port"]) for p in pseudo_switches
+    }
+    # Addresses a bit or two away from a real one on the same
+    # switch: damaged frames, not new devices. They are held back
+    # from confirmation for as long as they look like copies —
+    # otherwise a permanently damaged port would simply confirm its
+    # phantoms. A sample counts on any port of the switch and for
+    # the grace window after it was last seen: a device switched
+    # off or moved to the next port leaves its copies behind.
+    suspects = corruption.find_suspects(
+        hosts, copy_candidates,
+        corruption.samples_by_switch(
+            hosts, db_rows, with_ip, grace, time.time()
+        ),
+        config.thresholds.corruption_hamming_bits,
+    )
+    _apply_suspects(hosts, suspects)
+    suspect_macs = {
+        s["mac"] for found in suspects.values() for s in found
+    }
+    # Devices seen only on uplinks are not on the map, but they
+    # were seen: the sighting is recorded with no location at all,
+    # so the inventory keeps them without anyone claiming a port.
+    # `approximate` is what stops the empty location from
+    # overwriting whatever the database already holds.
+    uplink_only = topo_info.get("uplink_only", {})
+    stale_switches = {
+        sw.ip for sw in collected if sw.reachable and sw.from_reading
+    }
+    seen_nowhere = [
+        {"mac": mac, "switch": "", "port": "", "vlan": 0,
+         "approximate": True}
+        for mac, sightings in uplink_only.items()
+        # every sighting of it came out of a saved table: nobody
+        # saw this address either
+        if any(ip not in stale_switches for ip, _port in sightings)
+    ]
+    # A device behind a switch that ran out of budget is drawn from
+    # the reading that did arrive, and that is right — the map must
+    # not lose a whole branch every cycle. Recording it as a
+    # sighting is a different matter: "last seen" is a moment in
+    # time, seen_count counts polls a MAC was found in, and a
+    # confirmation is the claim that several polls agree. None of
+    # the three survives being fed the same reading twice.
+    observed = [h for h in hosts if not h.get("from_saved")]
+    copied = len(hosts) - len(observed)
+    if copied and observe:
+        log.info(
+            "%d device(s) behind %d switch(es) without a full poll in "
+            "this scan (over budget or not answering) are drawn from "
+            "their last readings: they stay on the map, and none of it "
+            "is recorded as a sighting",
+            copied, len(stale_switches),
+        )
+    new_macs = []
+    if not observe:
+        pass
+    elif config.demo:
         new_macs = await asyncio.to_thread(
             db.upsert_hosts, observed + seen_nowhere, confirm_scans,
             suspect_macs if config.filter_suspect_macs else set(),
         )
-        if config.demo:
-            await asyncio.to_thread(demo.enrich_db, db, hosts)
-        else:
-            if arp:
-                # ARP knows devices no switch port ever showed (behind a
-                # router or an unpolled switch): keep them as inventory
-                # with an empty switch_ip. Switches and routers
-                # themselves are map nodes, not hosts.
-                infra_ips = set(config.switches) | set(config.routers)
-                own_macs = _switch_macs()
-                arp_hosts = {
-                    mac: ip for mac, ip in arp.items()
-                    if mac not in own_macs and ip not in infra_ips
-                }
-                created = await asyncio.to_thread(
-                    db.set_ips, arp_hosts, True
+        await asyncio.to_thread(demo.enrich_db, db, hosts)
+    else:
+        new_macs = await asyncio.to_thread(
+            db.upsert_hosts, observed + seen_nowhere, confirm_scans,
+            suspect_macs if config.filter_suspect_macs else set(),
+        )
+        if arp:
+            # ARP knows devices no switch port ever showed (behind a
+            # router or an unpolled switch): keep them as inventory
+            # with an empty switch_ip. Switches and routers
+            # themselves are map nodes, not hosts.
+            infra_ips = set(config.switches) | set(config.routers)
+            own_macs = _switch_macs()
+            arp_hosts = {
+                mac: ip for mac, ip in arp.items()
+                if mac not in own_macs and ip not in infra_ips
+            }
+            created = await asyncio.to_thread(
+                db.set_ips, arp_hosts, True
+            )
+            if created:
+                log.info(
+                    "ARP: %d devices known but not seen on any switch "
+                    "port", created,
                 )
-                if created:
-                    log.info(
-                        "ARP: %d devices known but not seen on any switch "
-                        "port", created,
-                    )
-            await resolve_names()
+        await resolve_names()
+    if observe:
         # ARP vouches for an address, so a newcomer it knows joins the
         # map in the same poll it first appeared in
         new_macs += await asyncio.to_thread(db.confirm_hosts_with_ip)
@@ -598,47 +818,54 @@ async def run_scan() -> None:
         # copies confirmed before v0.8.5 held them back, now that this
         # poll's sightings and addresses are written
         await hide_confirmed_copies()
-        unconfirmed = await asyncio.to_thread(db.unconfirmed_macs)
-        if unconfirmed:
-            log.info(
-                "MACs awaiting confirmation (%d poll(s) each): %d",
-                confirm_scans, len(unconfirmed),
-            )
-        db_rows = await asyncio.to_thread(db.hosts_by_mac)
-        if config.filter_suspect_macs:
-            # off the map whatever the database holds: a switch past its
-            # budget is drawn from a reading nobody wrote down, and its
-            # copies are in no table of unconfirmed addresses. Nor in
-            # an offline group, behind a trunk or in the list beside
-            # the map: _assemble_hosts leaves out what is in this set.
-            unconfirmed |= suspect_macs | _marked_copies(db_rows)
-        else:
-            unconfirmed -= suspect_macs  # draw the damage instead
-        hosts = [h for h in hosts if h["mac"] not in unconfirmed]
-        fdb_macs = {h["mac"] for h in hosts}
-        await _release_unconfirmed_ips(db_rows)
-        hosts, offline_groups, unlocated, trunk_groups = _assemble_hosts(
-            hosts, db_rows, pseudo_switches, {sw["ip"] for sw in switches},
-            unconfirmed,
-            {h["mac"]: h["merged_into"] for h in hosts if h.get("merged_into")},
-            _nodes_on_port(bridges, pseudo_switches),
-            uplink_only,
-            topo_info.get("trunk_names", {}),
+    unconfirmed = await asyncio.to_thread(db.unconfirmed_macs)
+    if unconfirmed and observe:
+        log.info(
+            "MACs awaiting confirmation (%d poll(s) each): %d",
+            confirm_scans, len(unconfirmed),
         )
-        # A group that sits on a trunk was never seen there as devices:
-        # its location is inherited guesswork, and the card should not
-        # claim otherwise
-        trunk_names = topo_info.get("trunk_names", {})
-        for group in offline_groups:
-            group["approximate"] = group["port"] in trunk_names.get(
-                group["switch"], []
-            )
-        _merge_db_fields(hosts, db_rows)
-        _merge_db_fields(unlocated, db_rows)
-        # LLDP: remember the neighbours and the bridges nobody polls, so
-        # a card can say since when a device has been behind that port
-        now = time.time()
-        await asyncio.to_thread(db.upsert_lldp, _lldp_rows(collected), now)
+    db_rows = await asyncio.to_thread(db.hosts_by_mac)
+    if config.filter_suspect_macs:
+        # off the map whatever the database holds: a switch past its
+        # budget is drawn from a reading nobody wrote down, and its
+        # copies are in no table of unconfirmed addresses. Nor in
+        # an offline group, behind a trunk or in the list beside
+        # the map: _assemble_hosts leaves out what is in this set.
+        unconfirmed |= suspect_macs | _marked_copies(db_rows)
+    else:
+        unconfirmed -= suspect_macs  # draw the damage instead
+    hosts = [h for h in hosts if h["mac"] not in unconfirmed]
+    fdb_macs = {h["mac"] for h in hosts}
+    if observe:
+        await _release_unconfirmed_ips(db_rows)
+    hosts, offline_groups, unlocated, trunk_groups = _assemble_hosts(
+        hosts, db_rows, pseudo_switches, {sw["ip"] for sw in switches},
+        unconfirmed,
+        {h["mac"]: h["merged_into"] for h in hosts if h.get("merged_into")},
+        _nodes_on_port(bridges, pseudo_switches),
+        uplink_only,
+        topo_info.get("trunk_names", {}),
+    )
+    # A group that sits on a trunk was never seen there as devices:
+    # its location is inherited guesswork, and the card should not
+    # claim otherwise
+    trunk_names = topo_info.get("trunk_names", {})
+    for group in offline_groups:
+        group["approximate"] = group["port"] in trunk_names.get(
+            group["switch"], []
+        )
+    _merge_db_fields(hosts, db_rows)
+    _merge_db_fields(unlocated, db_rows)
+    # LLDP: remember the neighbours and the bridges nobody polls, so
+    # a card can say since when a device has been behind that port.
+    # Only what a switch read in full this scan said: "last seen" of a
+    # neighbour out of a reading is the same copy-as-sighting as a
+    # device's would be.
+    now = time.time()
+    fresh = [sw for sw in collected if sw.map_state == STATE_FRESH]
+    fresh_ips = {sw.ip for sw in fresh}
+    if observe:
+        await asyncio.to_thread(db.upsert_lldp, _lldp_rows(fresh), now)
         await asyncio.to_thread(
             db.upsert_bridges,
             [
@@ -651,144 +878,165 @@ async def run_scan() -> None:
                     "port": b["port"],
                     "capabilities": ",".join(b["capabilities"]),
                 }
-                for b in bridges
+                for b in bridges if b["switch"] in fresh_ips
             ],
             now,
         )
-        bridge_rows = await asyncio.to_thread(db.bridges)
-        for bridge in bridges:
-            row = bridge_rows.get(bridge["chassis_id"], {})
-            bridge["first_seen"] = row.get("first_seen", now)
-            bridge["last_seen"] = row.get("last_seen", now)
-            bridge["known"] = _is_known_bridge(bridge)
-        _merge_bridge_identity(bridges, hosts, db_rows)
-        # the address the operator reaches a router at, for the caption
-        router_ips = _router_addresses(arp)
-        for host in hosts:
-            if host["mac"] in router_ips:
-                host["router_ip"] = router_ips[host["mac"]]
-        for bridge in bridges:
-            if bridge["chassis_id"] in router_ips:
-                bridge["router_ip"] = router_ips[bridge["chassis_id"]]
-        # Ports that look like a way out but are not configured as one.
-        # Addresses are only known once the DB has been merged in, so
-        # this happens here rather than inside build_topology.
-        uplink_suspects.clear()
-        uplink_suspects.update(
-            suspect_uplink_ports(
-                [sw for sw in collected if sw.reachable],
-                [
-                    (h["switch"], h["port"], h.get("ip", ""))
-                    for h in hosts if h.get("switch") and h.get("port")
-                ],
-                _uplink_ports(),
-                infrastructure=_infrastructure(),
-                infrastructure_macs=set(router_ips) | {
-                    mac for mac, ip in arp.items() if ip in _infrastructure()
-                },
+        for ip, polled_at, data in readings:
+            await asyncio.to_thread(
+                db.save_switch_reading, ip, polled_at, READING_FORMAT,
+                __version__, data,
             )
+    bridge_rows = await asyncio.to_thread(db.bridges)
+    for bridge in bridges:
+        row = bridge_rows.get(bridge["chassis_id"], {})
+        bridge["first_seen"] = row.get("first_seen", now)
+        bridge["last_seen"] = row.get("last_seen", now)
+        bridge["known"] = _is_known_bridge(bridge)
+    _merge_bridge_identity(bridges, hosts, db_rows)
+    # the address the operator reaches a router at, for the caption
+    router_ips = _router_addresses(arp)
+    for host in hosts:
+        if host["mac"] in router_ips:
+            host["router_ip"] = router_ips[host["mac"]]
+    for bridge in bridges:
+        if bridge["chassis_id"] in router_ips:
+            bridge["router_ip"] = router_ips[bridge["chassis_id"]]
+    # Ports that look like a way out but are not configured as one.
+    # Addresses are only known once the DB has been merged in, so
+    # this happens here rather than inside build_topology.
+    uplink_suspects.clear()
+    uplink_suspects.update(
+        suspect_uplink_ports(
+            [sw for sw in collected if sw.reachable],
+            [
+                (h["switch"], h["port"], h.get("ip", ""))
+                for h in hosts if h.get("switch") and h.get("port")
+            ],
+            _uplink_ports(),
+            infrastructure=_infrastructure(),
+            infrastructure_macs=set(router_ips) | {
+                mac for mac, ip in arp.items() if ip in _infrastructure()
+            },
         )
-        for (sw_ip, port), why in sorted(uplink_suspects.items()):
-            log.info(
-                "%s port %s looks like a way out of the network (%s). Add "
-                "\"%s:%s\" to uplink_ports and what is behind it becomes "
-                "one \"External network\" node instead of a crowd of "
-                "devices, and raises no bridge alarms.",
-                sw_ip, port, why["text"], sw_ip, port,
-            )
-        stp_report = _stp_report(collected, topo_info.get("trunk_names", {}))
-        state.update(
-            switches, links, hosts, pseudo_switches, vlan_names, unlocated,
-            offline_groups, bridges, stp_report,
-            topo_info.get("external_networks", []),
-            trunk_groups,
-        )
-        if config.demo:
-            await run_ping()  # set the switches' ping state right away
-
-        # A switch that ran out of budget is not reported either way.
-        # "Missed an SNMP poll" is a statement about the switch; this
-        # one is a statement about us, and switch_down must not be
-        # raised on the strength of it — nor cleared, which would be
-        # just as much of an invention.
-        await alarm_engine.on_scan(
-            {sw.ip: sw.reachable for sw in collected if not sw.over_budget},
-            {sw.ip: sw.sys_name or sw.ip for sw in collected},
-        )
-        # Every single switch silent at once is not ten faults, it is
-        # one. The day `community: public` went back into the config,
-        # the map emptied and the log said "does not respond to SNMP"
-        # ten times over — true, unhelpful, and identical to what a
-        # power cut would have printed.
-        answered = [sw for sw in collected if sw.reachable]
-        if collected and not answered and not over_budget:
-            log.error(
-                "All %d configured switch(es) are unreachable at once. One "
-                "common cause is likelier than %d simultaneous faults: "
-                "snmp.community (SNMPv2c does not answer a wrong one at "
-                "all — silence is what a mismatch looks like), or the "
-                "network of this machine. `python -m moonlan.diag --walk "
-                "<switch> 1.3.6.1.2.1.1.5` says which.",
-                len(collected), len(collected),
-            )
-        # A switch that keeps answering and keeps not finishing. It is
-        # on the map, from a reading that may be hours old, and until
-        # now the only way to learn that was to read the journal.
-        stale_switches = {
-            sw.ip: {
-                "scans": sw.over_budget_scans,
-                "polled_at": sw.polled_at,
-            }
-            for sw in collected
-            if sw.over_budget
-            and sw.over_budget_scans >= max(config.stale_switch_scans, 1)
-        }
-        await alarm_engine.on_stale_switches(
-            stale_switches,
-            {sw.ip: sw.sys_name or sw.ip for sw in collected},
-        )
-        if over_budget:
-            log.warning(
-                "Scan finished without %d of %d switch(es): %s did not "
-                "answer in full inside the budget. The map below is "
-                "everything else, and their last readings are kept as "
-                "they were.",
-                len(over_budget), len(config.switches),
-                ", ".join(over_budget),
-            )
-        await alarm_engine.clear_suppressed(
-            _suppressed_bridges(bridges, bridge_rows)
-        )
-        await alarm_engine.on_bridges(bridges, _known_bridge_ids())
-        await alarm_engine.on_stp(stp_report)
-        await alarm_engine.on_corruption(
-            {f"{sw_ip}:{port}": found
-             for (sw_ip, port), found in suspects.items()},
-            inbound_errors=_subject_inbound_errors,
-            window_minutes=_copies_window() / 60,
-            maker=lambda mac: vendors.lookup(mac).name or "",
-        )
-        if new_macs and first_scan_done:
-            rows = await asyncio.to_thread(db.hosts_by_mac)
-            await alarm_engine.on_new_macs(
-                new_macs,
-                {mac: _new_device_text(mac, rows[mac])
-                 for mac in new_macs if mac in rows},
-            )
-        first_scan_done = True
+    )
+    for (sw_ip, port), why in (
+        sorted(uplink_suspects.items()) if observe else ()
+    ):
         log.info(
-            "Scan finished: %d switches, %d links, %d hosts",
+            "%s port %s looks like a way out of the network (%s). Add "
+            "\"%s:%s\" to uplink_ports and what is behind it becomes "
+            "one \"External network\" node instead of a crowd of "
+            "devices, and raises no bridge alarms.",
+            sw_ip, port, why["text"], sw_ip, port,
+        )
+    stp_report = _stp_report(collected, topo_info.get("trunk_names", {}))
+    state.update(
+        switches, links, hosts, pseudo_switches, vlan_names, unlocated,
+        offline_groups, bridges, stp_report,
+        topo_info.get("external_networks", []),
+        trunk_groups,
+        scanned_at=None if observe else max(
+            (sw.polled_at for sw in collected if sw.reachable), default=None
+        ),
+    )
+    if not observe:
+        log.info(
+            "Map drawn from the saved readings: %d switches, %d links, %d "
+            "hosts — nothing of it recorded until the first scan",
             len(switches), len(links), len(hosts),
         )
-        await _purge_layout_once()
-        # A scan where no switch answered says nothing about where the
-        # nodes are: it would count every note as one scan without its
-        # node, and an outage of half an hour would empty the map of
-        # them
-        if answered:
-            await _reconcile_notes()
-    finally:
-        state.scan_ended(over_budget)
+        return
+    if config.demo:
+        await run_ping()  # set the switches' ping state right away
+
+    # A switch that ran out of budget is not reported either way.
+    # "Missed an SNMP poll" is a statement about the switch; this
+    # one is a statement about us, and switch_down must not be
+    # raised on the strength of it — nor cleared, which would be
+    # just as much of an invention.
+    # And it goes by the answer in this scan, never by what is drawn:
+    # a switch on the map from its last reading may be silent now.
+    await alarm_engine.on_scan(
+        {
+            sw.ip: bool(sw.answered) for sw in collected
+            if not sw.over_budget and sw.answered is not None
+        },
+        {sw.ip: sw.sys_name or sw.ip for sw in collected},
+    )
+    # Every single switch silent at once is not ten faults, it is
+    # one. The day `community: public` went back into the config,
+    # the map emptied and the log said "does not respond to SNMP"
+    # ten times over — true, unhelpful, and identical to what a
+    # power cut would have printed.
+    answered = [sw for sw in collected if sw.answered]
+    if collected and not answered and not over_budget:
+        log.error(
+            "All %d configured switch(es) are unreachable at once. One "
+            "common cause is likelier than %d simultaneous faults: "
+            "snmp.community (SNMPv2c does not answer a wrong one at "
+            "all — silence is what a mismatch looks like), or the "
+            "network of this machine. `python -m moonlan.diag --walk "
+            "<switch> 1.3.6.1.2.1.1.5` says which.",
+            len(collected), len(collected),
+        )
+    # A switch that keeps answering and keeps not finishing. It is
+    # on the map, from a reading that may be hours old, and until
+    # now the only way to learn that was to read the journal.
+    stale_switches = {
+        sw.ip: {
+            "scans": sw.over_budget_scans,
+            "polled_at": sw.polled_at,
+            "answered": sw.answered,
+        }
+        for sw in collected
+        if sw.over_budget
+        and sw.over_budget_scans >= max(config.stale_switch_scans, 1)
+    }
+    await alarm_engine.on_stale_switches(
+        stale_switches,
+        {sw.ip: sw.sys_name or sw.ip for sw in collected},
+    )
+    if over_budget:
+        log.warning(
+            "Scan finished without %d of %d switch(es): %s did not "
+            "answer in full inside the budget. The map below is "
+            "everything else, and their last readings are kept as "
+            "they were.",
+            len(over_budget), len(collected),
+            ", ".join(over_budget),
+        )
+    await alarm_engine.clear_suppressed(
+        _suppressed_bridges(bridges, bridge_rows)
+    )
+    await alarm_engine.on_bridges(bridges, _known_bridge_ids())
+    await alarm_engine.on_stp(stp_report)
+    await alarm_engine.on_corruption(
+        {f"{sw_ip}:{port}": found
+         for (sw_ip, port), found in suspects.items()},
+        inbound_errors=_subject_inbound_errors,
+        window_minutes=_copies_window() / 60,
+        maker=lambda mac: vendors.lookup(mac).name or "",
+    )
+    if new_macs and first_scan_done:
+        rows = await asyncio.to_thread(db.hosts_by_mac)
+        await alarm_engine.on_new_macs(
+            new_macs,
+            {mac: _new_device_text(mac, rows[mac])
+             for mac in new_macs if mac in rows},
+        )
+    first_scan_done = True
+    log.info(
+        "Scan finished: %d switches, %d links, %d hosts",
+        len(switches), len(links), len(hosts),
+    )
+    await _purge_layout_once()
+    # A scan where no switch answered says nothing about where the
+    # nodes are: it would count every note as one scan without its
+    # node, and an outage of half an hour would empty the map of
+    # them
+    if answered:
+        await _reconcile_notes()
 
 
 async def _retire_port_names(collected: list[SwitchData]) -> None:
@@ -800,7 +1048,7 @@ async def _retire_port_names(collected: list[SwitchData]) -> None:
     "-N" is reset — see Database.retire_port_names.
     """
     for sw in collected:
-        if not sw.reachable or sw.over_budget:
+        if sw.map_state != STATE_FRESH:
             continue
         renames = {
             f"bridge-port {bridge_port}": sw.ports[-bridge_port].name
@@ -2594,6 +2842,11 @@ async def lifespan(app: FastAPI):
     await alarm_engine.clear_missing_hosts(
         set(await asyncio.to_thread(db.hosts_by_mac))
     )
+    # the map from the readings saved before the restart, at once
+    try:
+        await restore_readings()
+    except Exception:
+        log.exception("Restoring the saved switch readings failed")
     _log_certificate()
     await check_certificate_end()
     # a Telegram link made just before a restart still works
@@ -4268,10 +4521,17 @@ async def api_polling() -> dict:
                 "polled_at": sw.polled_at if sw else 0.0,
                 "poll_seconds": round(sw.poll_seconds, 1) if sw else 0.0,
                 "over_budget_scans": sw.over_budget_scans if sw else 0,
-                "reachable": bool(sw and sw.reachable),
+                # Where the map's data on it comes from, and whether it
+                # answered in this scan: true, false or null — not
+                # known (v0.8.7). `reachable` was the default of an
+                # empty reading, false for a switch that answered and
+                # ran out of time; it is kept, and now means `answered`.
+                "state": sw.map_state if sw else STATE_NEVER,
+                "answered": sw.answered if sw else None,
+                "reachable": bool(sw and sw.answered),
             }
             for ip, sw in (
-                (ip, switch_data.get(ip)) for ip in config.switches
+                (ip, switch_data.get(ip)) for ip in configured_switches()
             )
         ],
     }

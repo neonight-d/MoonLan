@@ -600,7 +600,7 @@ const I18N = {
       + "timeout of its own so the requests it never answers are given "
       + "up on sooner. See switches: and snmp.host_budget_seconds in "
       + "config.yaml.",
-    staleSwitchHintShort: "Data from {time}: a full poll has not finished for {n} scans running",
+    staleSwitchHintShort: "Did not fit its budget {n} scans running, data from {time}",
     al_switch_stale: "Switch data not refreshing",
     ageUnderMinute: "less than a minute ago",
     ageMinutes: "{n} min ago",
@@ -639,7 +639,61 @@ const I18N = {
       + "\u201cswitch down\u201d alarm is raised for it. Give it more "
       + "time or a shorter SNMP timeout of its own: see "
       + "snmp.host_budget_seconds in config.yaml.",
-    overBudgetHintShort: "Data from {time}: the switch did not fit its poll budget",
+    overBudgetHintShort: "Did not fit its poll budget, data from {time}",
+    overBudgetUnknownHint:
+      "This switch did not finish its poll inside the budget, and the "
+      + "budget ran out before its first answer came back: whether it is "
+      + "reachable is not known. Everything on this card is the last "
+      + "reading that did arrive, taken at {time}. No \u201cswitch "
+      + "down\u201d alarm is raised or cleared on it either way. Give it "
+      + "more time: host_budget_seconds in its entry under switches: in "
+      + "config.yaml.",
+    swDownMark: "not answering since {time}",
+    swRestoredMark: "data from before the restart",
+    swNeverMark: "no reading",
+    swUnreachableHint:
+      "The switch has not answered SNMP since {since}. Everything on "
+      + "this card, its links and the devices behind it are its last full "
+      + "reading, taken at {time} \u2014 kept on the map, muted, rather "
+      + "than dropped with its whole branch. Nothing behind it is "
+      + "recorded as seen while this lasts. The \u201cswitch "
+      + "down\u201d alarm goes by the answer, not by the map.",
+    swUnreachableHintShort: "Not answering since {since}, data from {time}",
+    swRestoredHint:
+      "MoonLan was restarted and has not polled this switch in full "
+      + "since. The card, its links and the devices behind it are the "
+      + "reading saved in the database, taken at {time}. The first full "
+      + "poll replaces it; until then nothing of it is recorded as seen, "
+      + "and no alarm rises or clears on it.",
+    swRestoredHintShort: "Data from before the restart, from {time}",
+    swNeverHint:
+      "Since the service started ({started}) not one full poll of this "
+      + "switch has finished: {scans} in {budget} s. {answer} There is no "
+      + "reading of it in memory or in the database, so it is an empty "
+      + "node \u2014 its address and its note, no ports and no links: "
+      + "nothing to draw them from. Give it more time: "
+      + "host_budget_seconds in its entry under switches: in "
+      + "config.yaml; the \u201ctook\u201d column of diag --config "
+      + "shows how long full polls really take.",
+    swNeverHintShort: "Since the service started ({started}) a full poll has not finished once: {scans} in {budget} s",
+    swNeverScans_one: "{n} scan did not fit",
+    swNeverScans_other: "{n} scans did not fit",
+    swAnsweredYes: "It answers \u2014 its first requests came back \u2014 it only does not finish.",
+    swAnsweredUnknown: "Whether it answers at all is not known: the budget ran out before its first answer.",
+    swNeverDownHint:
+      "The switch has not answered SNMP since {since}, and there is no "
+      + "full reading of it in memory or in the database, so it is drawn "
+      + "empty: its address and its note, nothing else. The "
+      + "\u201cswitch down\u201d alarm goes by the answer.",
+    swNeverDownHintShort: "Not answering since {since}; no full reading anywhere",
+    swNeverPendingHint:
+      "No reading of this switch was saved before the restart "
+      + "({started}), and the first scan has not reached it yet. It is an "
+      + "empty node until then.",
+    swNeverPendingHintShort: "Not polled yet since the start ({started})",
+    swPollBudget: "Poll budget",
+    swSeenOn: "Seen on",
+    byReadingFrom: "from the reading of {time}",
     portFlapping: "flapping",
     portFlappingHint:
       "The port has changed link state {n} time(s) inside the window; "
@@ -1806,7 +1860,7 @@ const I18N = {
       + "дайте ему больше времени или свой, более короткий таймаут SNMP, "
       + "чтобы запросы, на которые он не ответит, бросали раньше. См. "
       + "switches: и snmp.host_budget_seconds в config.yaml.",
-    staleSwitchHintShort: "Данные от {time}: полный опрос не завершается {n} сканов подряд",
+    staleSwitchHintShort: "Не уложился в бюджет {n} сканов подряд, данные от {time}",
     al_switch_stale: "Данные коммутатора не обновляются",
     ageUnderMinute: "меньше минуты назад",
     ageMinutes: "{n} мин назад",
@@ -1843,7 +1897,61 @@ const I18N = {
       + "слишком медленно, и тревога «коммутатор недоступен» по нему не "
       + "поднимается. Дайте ему больше времени или свой, более короткий "
       + "таймаут SNMP \u2014 см. snmp.host_budget_seconds в config.yaml.",
-    overBudgetHintShort: "Данные от {time}: коммутатор не уложился в бюджет опроса",
+    overBudgetHintShort: "Не уложился в бюджет опроса, данные от {time}",
+    overBudgetUnknownHint:
+      "Коммутатор не уложился в бюджет опроса, и бюджет кончился раньше, "
+      + "чем пришёл его первый ответ: доступен ли он, неизвестно. Всё на "
+      + "этой карточке \u2014 последнее полученное показание, снятое "
+      + "{time}. Тревога «коммутатор недоступен» по нему не поднимается и "
+      + "не снимается. Дайте ему больше времени: host_budget_seconds в его "
+      + "записи switches: в config.yaml.",
+    swDownMark: "не отвечает с {time}",
+    swRestoredMark: "данные до перезапуска",
+    swNeverMark: "нет показания",
+    swUnreachableHint:
+      "Коммутатор не отвечает по SNMP с {since}. Всё на карточке, его "
+      + "связи и устройства за ним \u2014 последнее полное показание, "
+      + "снятое {time}: оно остаётся на карте, приглушённое, а не "
+      + "пропадает вместе со всей веткой. Пока так, ничто за ним не "
+      + "считается увиденным. Тревога «коммутатор недоступен» идёт по "
+      + "ответу, а не по карте.",
+    swUnreachableHintShort: "Не отвечает с {since}, данные от {time}",
+    swRestoredHint:
+      "MoonLan перезапускался и с тех пор ещё не опросил этот коммутатор "
+      + "полностью. Карточка, его связи и устройства за ним \u2014 "
+      + "показание, сохранённое в базе, снятое {time}. Первый полный "
+      + "опрос заменит его; до тех пор ничто из него не считается "
+      + "увиденным, и тревоги по нему не поднимаются и не снимаются.",
+    swRestoredHintShort: "Данные до перезапуска, от {time}",
+    swNeverHint:
+      "С запуска сервиса ({started}) ни один полный опрос этого "
+      + "коммутатора не завершился: {scans} в {budget} с. {answer} "
+      + "Показания нет ни в памяти, ни в базе, поэтому узел пустой "
+      + "\u2014 адрес и заметка, без портов и связей: их не из чего "
+      + "взять. Дайте ему больше времени: host_budget_seconds в его "
+      + "записи switches: в config.yaml; столбец «took» в diag --config "
+      + "показывает, сколько на самом деле длится полный опрос.",
+    swNeverHintShort: "С запуска сервиса ({started}) полный опрос не завершился ни разу: {scans} в {budget} с",
+    swNeverScans_one: "{n} скан не уложился",
+    swNeverScans_few: "{n} скана не уложились",
+    swNeverScans_many: "{n} сканов не уложились",
+    swNeverScans_other: "{n} скана не уложились",
+    swAnsweredYes: "Он отвечает \u2014 первые запросы прошли, \u2014 просто не успевает закончить.",
+    swAnsweredUnknown: "Отвечает ли он вообще, неизвестно: бюджет кончился раньше первого ответа.",
+    swNeverDownHint:
+      "Коммутатор не отвечает по SNMP с {since}, а полного показания нет "
+      + "ни в памяти, ни в базе, поэтому он нарисован пустым: адрес и "
+      + "заметка, больше ничего. Тревога «коммутатор недоступен» идёт по "
+      + "ответу.",
+    swNeverDownHintShort: "Не отвечает с {since}; полного показания нет нигде",
+    swNeverPendingHint:
+      "Показание этого коммутатора до перезапуска ({started}) не "
+      + "сохранилось, а первый скан до него ещё не дошёл. До тех пор узел "
+      + "пустой.",
+    swNeverPendingHintShort: "Ещё не опрошен с запуска ({started})",
+    swPollBudget: "Бюджет опроса",
+    swSeenOn: "Виден на",
+    byReadingFrom: "по показанию от {time}",
     portFlapping: "флаппинг",
     portFlappingHint:
       "Порт менял состояние линка {n} раз(а) за окно; последний переход "

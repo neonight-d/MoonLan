@@ -147,7 +147,11 @@ class TopologyState:
         stp: dict | None = None,
         external_networks: list[dict] | None = None,
         trunk_groups: list[dict] | None = None,
+        scanned_at: float | None = None,
     ) -> None:
+        """`scanned_at` is when the map's data is from, if not now: the
+        map drawn at the start from saved readings is as old as the
+        newest of them (v0.8.7), not as new as the start."""
         with self._lock:
             self.switches = switches
             self.links = links
@@ -160,7 +164,7 @@ class TopologyState:
             self.bridges = bridges or []
             self.external_networks = external_networks or []
             self.stp = stp or {}
-            self.last_scan = time.time()
+            self.last_scan = scanned_at or time.time()
             self.last_scan_ok = self.last_scan
             self.last_error = ""
             self.last_error_ts = 0.0
@@ -1857,7 +1861,7 @@ def build_topology(
         link_fdb = {
             sw.ip: fdb_stability.merge(
                 sw.ip, fdb[sw.ip],
-                confirm=not getattr(sw, "over_budget", False),
+                confirm=not getattr(sw, "from_reading", False),
                 ports=set(sw.ports),
             )
             for sw in switches
@@ -2083,12 +2087,13 @@ def build_topology(
             "vlan": sw.port_pvid.get(if_index, 0),
             "name": "",  # names and IPs are added from the DB (ARP/DNS)
         }
-        if getattr(sw, "over_budget", False):
-            # This switch ran out of its poll budget, so its table is
-            # the last one that did arrive rather than this poll's. The
-            # device is drawn where that table put it — cables do not
-            # move every ten minutes — but nobody looked for it just
-            # now, and the caller must not record a sighting.
+        if getattr(sw, "from_reading", False):
+            # This switch ran out of its poll budget, or did not answer,
+            # or has not been polled since the start (v0.8.7), so its
+            # table is the last one that did arrive rather than this
+            # poll's. The device is drawn where that table put it —
+            # cables do not move every ten minutes — but nobody looked
+            # for it just now, and the caller must not record a sighting.
             host["from_saved"] = True
             host["reading_at"] = float(getattr(sw, "polled_at", 0.0))
         if mac in approximate:
@@ -2364,6 +2369,13 @@ def build_topology(
         # and they get different fixes.
         "over_budget": bool(getattr(sw, "over_budget", False)),
         "polled_at": float(getattr(sw, "polled_at", 0.0)),
+        # Where all of the above comes from (v0.8.7): this scan, or a
+        # reading — over budget, not answering, from before the restart.
+        # `answered` is this scan's fact, true / false / null (unknown),
+        # and `down_since` when it stopped answering.
+        "state": sw.map_state,
+        "answered": sw.answered,
+        "down_since": float(sw.down_since),
         # Scans in a row that ended without a complete reading of this
         # switch. One is a slow moment; thirty in a row, which is what
         # 10.1.7.10 managed, is a switch whose numbers stopped moving

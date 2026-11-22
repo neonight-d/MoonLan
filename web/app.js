@@ -3220,6 +3220,81 @@ function fmtDate(ts) {
   return ts ? new Date(ts * 1000).toLocaleDateString(locale()) : "—";
 }
 
+/* "22.11 14:20": a moment a card names in passing (v0.8.7) */
+function fmtDayTime(ts) {
+  return ts
+    ? new Date(ts * 1000).toLocaleString(locale(), {
+        day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit",
+      })
+    : "—";
+}
+
+/* "14:20" */
+function fmtClock(ts) {
+  return ts
+    ? new Date(ts * 1000).toLocaleTimeString(locale(), { hour: "2-digit", minute: "2-digit" })
+    : "—";
+}
+
+/* ---------- where a switch's data comes from (v0.8.7) ----------
+
+   Every switch of switches: is on the map. "fresh" is this scan;
+   "over_budget", "unreachable" and "restored" are its last full
+   reading — late, silent, from before the restart; "never" is a node
+   with nothing to draw on it. The silent and the restored ones are
+   drawn muted with the branch behind them: what they show is a
+   reading, and nobody is looking right now. */
+const MUTED_STATES = new Set(["unreachable", "restored"]);
+
+function switchState(sw) {
+  if (!sw) return "fresh";
+  return sw.state || (sw.over_budget ? "over_budget" : "fresh");
+}
+
+/* The IPs of the switches whose branch is muted */
+function mutedSwitches() {
+  return new Set(
+    (topology.switches || []).filter((sw) => MUTED_STATES.has(switchState(sw))).map((sw) => sw.ip)
+  );
+}
+
+/* The one line under a switch's caption that says it is not this scan */
+function switchStateMark(sw) {
+  const state = switchState(sw);
+  if (state === "unreachable") return fmt("swDownMark", { time: fmtClock(sw.down_since) });
+  if (state === "restored") return t("swRestoredMark");
+  if (state === "never") {
+    return sw.answered === false ? fmt("swDownMark", { time: fmtClock(sw.down_since) }) : t("swNeverMark");
+  }
+  return "";
+}
+
+/* What the card says about where its data comes from: one line, the
+   rest behind ⓘ (the v0.7.9 rule) */
+function switchStateHint(sw) {
+  const state = switchState(sw);
+  const n = sw.over_budget_scans || 0;
+  const params = {
+    time: fmtDayTime(sw.polled_at), n, since: fmtClock(sw.down_since),
+    started: fmtDayTime(sw.started_at), budget: sw.budget_seconds,
+    scans: plural("swNeverScans", n),
+    answer: t(sw.answered ? "swAnsweredYes" : "swAnsweredUnknown"),
+  };
+  if (state === "over_budget") {
+    const short = n >= 2 ? "staleSwitchHint" : "overBudgetHint";
+    const full = sw.answered === null ? "overBudgetUnknownHint" : short;
+    return hintBlock(fmt(short + "Short", params), fmt(full, params));
+  }
+  if (state === "unreachable") return hintKey("swUnreachableHint", params);
+  if (state === "restored") return hintKey("swRestoredHint", params);
+  if (state === "never") {
+    if (sw.answered === false) return hintKey("swNeverDownHint", params);
+    if (!n) return hintKey("swNeverPendingHint", params);
+    return hintKey("swNeverHint", params);
+  }
+  return "";
+}
+
 /* "4 min", "2 h 10 min" — how long ago something was measured. */
 function fmtAge(seconds) {
   if (seconds == null) return "—";
@@ -3762,12 +3837,15 @@ function renderSidebar() {
         [sw.name, sw.ip, sw.mac, sw.vendor, sw.model, sw.descr, noteSearchText(sw)]
           .filter(Boolean).join(" "),
         // greyed the way an old host record is: the switch is there,
-        // its numbers are from the last poll that finished
-        sw.over_budget ? "stale" : "",
-        sw.over_budget_scans >= 2
-          ? fmt("staleSwitchScans", { n: sw.over_budget_scans }) +
-            " · " + t("dataFrom") + " " + fmtTime(sw.polled_at)
-          : "",
+        // its numbers are from the last poll that finished — or there
+        // are none at all (v0.8.7)
+        switchState(sw) !== "fresh" ? "stale" : "",
+        switchState(sw) === "over_budget"
+          ? sw.over_budget_scans >= 2
+            ? fmt("staleSwitchScans", { n: sw.over_budget_scans }) +
+              " · " + t("dataFrom") + " " + fmtTime(sw.polled_at)
+            : ""
+          : switchStateMark(sw),
         "sw:" + sw.ip
       )
     )
@@ -3951,16 +4029,23 @@ function buildGraphData() {
   // a line out of a switch's port: the loop mark and the port's tag
   const fromPort = (edge, ip, port) => markPort(markLoop(edge, ip, port), ip, port);
 
+  // the switches drawn from a reading, and the branch behind them
+  const muted = mutedSwitches();
+  const swPolledAt = new Map(topology.switches.map((sw) => [sw.ip, sw.polled_at]));
   for (const sw of topology.switches) {
     // a switch_down alarm paints the node border red; so does a loop,
     // which is the one thing on this map that is taking a segment down
     // right now. The root bridge of a working tree gets a thicker
     // outline instead.
     const looping = !!(sw.loop && sw.loop.status === "loop");
+    const swState = switchState(sw);
+    const empty = swState === "never";
     const border = switchHasAlarm(sw.ip) || looping
       ? colors.alarm
       : sw.stp_root
       ? colors.ok
+      : empty || muted.has(sw.ip)
+      ? colors.dim
       : colors.moon;
     // A switch with an empty sysName is captioned by its address, and
     // repeating the address underneath tells nobody anything. The
@@ -3968,14 +4053,15 @@ function buildGraphData() {
     const second = sw.named === false ? sw.model || "" : sw.ip;
     const swLines = [
       sw.name, second, sw.stp_root ? t("stpRootMark") : "",
-      looping ? t("loopMark") : "",
+      looping ? t("loopMark") : "", switchStateMark(sw),
     ].filter(Boolean);
     const swName = named("sw:" + sw.ip, sw);
     nodes.push(applyLayout({
       id: "sw:" + sw.ip,
       // what it is, for a picture with other colours than these (export)
-      semantic: ["switch", ...(sw.stp_root ? ["root"] : []), ...(looping ? ["loop"] : [])],
-      label: swName ? namedCaption(swName, swLines) : swLines.join("\n"),
+      semantic: ["switch", ...(sw.stp_root ? ["root"] : []), ...(looping ? ["loop"] : []),
+                 ...(empty ? ["stub"] : []), ...(muted.has(sw.ip) ? ["reading"] : [])],
+      label: swName ? namedCaption(swName, empty ? [sw.ip, switchStateMark(sw)] : swLines) : swLines.join("\n"),
       shape: "box",
       color: {
         background: colors.panel,
@@ -3985,10 +4071,24 @@ function buildGraphData() {
         // nothing on the map said which.
         highlight: { background: "#1c2739", border: colors.link },
       },
+      // an empty node: nothing was ever read off it (v0.8.7)
+      ...(empty ? { shapeProperties: { borderDashes: [5, 4] } } : {}),
       font: nodeFont("sw:" + sw.ip),
       borderWidth: switchHasAlarm(sw.ip) || sw.stp_root || looping ? 3 : 2,
       margin: 10,
     }));
+    // …standing on the port its management MAC is seen on, like a device
+    if (empty && sw.attached) {
+      edges.push(fromPort({
+        id: "stubedge:" + sw.ip,
+        semantic: ["fdb", "stub"],
+        from: "sw:" + sw.attached.switch,
+        to: "sw:" + sw.ip,
+        color: { color: colors.moon, opacity: 0.5 },
+        width: 2,
+        dashes: [5, 4],
+      }, sw.attached.switch, sw.attached.port));
+    }
   }
 
   for (const link of topology.links) {
@@ -4033,6 +4133,16 @@ function buildGraphData() {
       edge.dashes = [2, 4];
       edge.color = { color: colors.dim, opacity: 0.7 };
       edge.title = t("linkCycleUnresolved");
+    }
+    // a link to a switch drawn from its reading: as the reading says,
+    // muted (v0.8.7)
+    const fromReading = [link.a, link.b].filter((ip) => muted.has(ip));
+    if (fromReading.length) {
+      edge.color = { ...edge.color, opacity: Math.min(edge.color.opacity, 0.35) };
+      edge.semantic.push("reading");
+      edge.title = fmt("byReadingFrom", {
+        time: fmtDayTime(Math.min(...fromReading.map((ip) => swPolledAt.get(ip) || 0))),
+      });
     }
     // a port STP is holding in discarding carries no traffic at all
     if (link.stp_blocking) {
@@ -4242,7 +4352,8 @@ function buildGraphData() {
         : caption + second,
       shape: isRouter ? "diamond" : "dot",
       size: isRouter ? 14 : 9,
-      opacity: host.stale ? 0.4 : 1,
+      // behind a switch drawn from its reading: muted with its branch
+      opacity: host.stale ? 0.4 : muted.has(host.switch) ? 0.6 : 1,
       color: {
         background: c,
         border: isRouter ? colors.moon : c,
@@ -4257,7 +4368,7 @@ function buildGraphData() {
                  ...(host.approximate ? ["approximate"] : [])],
       from: host.via || "sw:" + host.switch,
       to: "host:" + host.mac,
-      color: { color: colors.link, opacity: host.stale ? 0.15 : 0.35 },
+      color: { color: colors.link, opacity: host.stale || muted.has(host.switch) ? 0.15 : 0.35 },
       width: 1,
       // approximate = seen only through a trunk: the device is real,
       // the port it hangs on is a guess
@@ -7811,33 +7922,39 @@ function showDetails(nodeId) {
     const sw = topology.switches.find((s) => "sw:" + s.ip === nodeId);
     if (!sw) return;
     const loop = sw.loop || {};
-    card = html`<h3>${sw.name}</h3>
-      ${sw.over_budget
-        ? hintKey(
-            sw.over_budget_scans >= 2 ? "staleSwitchHint" : "overBudgetHint",
-            { time: fmtTime(sw.polled_at), n: sw.over_budget_scans }
-          )
-        : ""}${loop.supported === false
-        ? hintKey("loopUnsupportedHint", { oid: loop.sys_object_id || "—" })
-        : ""}<dl>
-      <dt>${t("ipAddr")}</dt><dd>${sw.ip}</dd>
-      <dt>${t("bridgeMac")}</dt><dd>${sw.mac || "—"}</dd>
-      ${vendorRow(sw)}
-      <dt>${t("portsUpTotal")}</dt><dd>${sw.ports_up} / ${sw.ports_total}</dd>
-      <dt>${t("lastReply")}</dt><dd>${fmtTime(sw.last_ping_ok)}</dd>
-      ${sw.over_budget
-        ? html`<dt>${t("dataFrom")}</dt><dd>${fmtTime(sw.polled_at)}${
-            sw.over_budget_scans >= 2
-              ? " · " + fmt("staleSwitchScans", { n: sw.over_budget_scans })
-              : ""
-          }</dd>`
-        : ""}
-      <dt>${t("loopDetection")}</dt><dd${
-        loop.status === "loop" ? raw(' class="loop-alarm"') : ""
-      } title="${loopCardTitle(loop)}">${loopCardLine(loop)}</dd>
-      <dt>${t("descr")}</dt><dd>${sw.descr || "—"}</dd></dl>
-      ${switchLinksHtml(sw.ip)}
-      <button type="button" id="ports-btn" class="panel-btn">${t("portsBtn")}</button>`;
+    if (switchState(sw) === "never") {
+      // nothing was ever read off it: what is known, and nothing else
+      const at = sw.attached;
+      card = html`<h3>${sw.name}</h3>
+        ${switchStateHint(sw)}<dl>
+        <dt>${t("ipAddr")}</dt><dd>${sw.ip}</dd>
+        <dt>${t("swPollBudget")}</dt><dd>${sw.budget_seconds} ${t("durS")}</dd>
+        ${at ? html`<dt>${t("swSeenOn")}</dt><dd>${switchName(at.switch)} ${at.port}</dd>` : ""}
+        <dt>${t("lastReply")}</dt><dd>${fmtTime(sw.last_ping_ok)}</dd></dl>`;
+    } else {
+      card = html`<h3>${sw.name}</h3>
+        ${switchStateHint(sw)}${loop.supported === false
+          ? hintKey("loopUnsupportedHint", { oid: loop.sys_object_id || "—" })
+          : ""}<dl>
+        <dt>${t("ipAddr")}</dt><dd>${sw.ip}</dd>
+        <dt>${t("bridgeMac")}</dt><dd>${sw.mac || "—"}</dd>
+        ${vendorRow(sw)}
+        <dt>${t("portsUpTotal")}</dt><dd>${sw.ports_up} / ${sw.ports_total}</dd>
+        <dt>${t("lastReply")}</dt><dd>${fmtTime(sw.last_ping_ok)}</dd>
+        ${switchState(sw) !== "fresh"
+          ? html`<dt>${t("dataFrom")}</dt><dd>${fmtTime(sw.polled_at)}${
+              sw.over_budget_scans >= 2
+                ? " · " + fmt("staleSwitchScans", { n: sw.over_budget_scans })
+                : ""
+            }</dd>`
+          : ""}
+        <dt>${t("loopDetection")}</dt><dd${
+          loop.status === "loop" ? raw(' class="loop-alarm"') : ""
+        } title="${loopCardTitle(loop)}">${loopCardLine(loop)}</dd>
+        <dt>${t("descr")}</dt><dd>${sw.descr || "—"}</dd></dl>
+        ${switchLinksHtml(sw.ip)}
+        <button type="button" id="ports-btn" class="panel-btn">${t("portsBtn")}</button>`;
+    }
   } else if (nodeId.startsWith("offline:")) {
     const group = (topology.offline_groups || []).find((g) => g.id === nodeId);
     if (!group) return;
@@ -8578,7 +8695,14 @@ function showLinkDetails(edgeId) {
   const sourceLabel =
     source === "both" ? t("srcBoth") : source === "lldp" ? t("srcLldp") : t("srcFdb");
   const sourceHint = source === "fdb" ? t("srcHintFdb") : t("srcHintLldp");
-  rows.push(html`<dt>${t("linkSource")}</dt><dd title="${sourceHint}">${sourceLabel}</dd>`);
+  // a link to a switch drawn from its reading says so (v0.8.7)
+  const fromReading = (topology.switches || []).filter(
+    (sw) => (sw.ip === link.a || sw.ip === link.b) && MUTED_STATES.has(switchState(sw))
+  );
+  const readingAt = fromReading.length
+    ? " · " + fmt("byReadingFrom", { time: fmtDayTime(Math.min(...fromReading.map((sw) => sw.polled_at || 0))) })
+    : "";
+  rows.push(html`<dt>${t("linkSource")}</dt><dd title="${sourceHint}">${sourceLabel}${readingAt}</dd>`);
   const hints = [];
   if (link.stp_blocking) hints.push(hintKey("stpBlockingHint"));
   // What is uncertain about this line, said in the card and not only

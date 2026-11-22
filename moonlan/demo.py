@@ -167,6 +167,7 @@ from .loopdetect import (
 )
 from .stp import StpData, StpPort
 from .snmp_collector import (
+    OverBudget,
     PortInfo,
     SwitchData,
     aggregate_port,
@@ -654,15 +655,6 @@ def demo_network() -> list[SwitchData]:
     _add_lldp(core, ray1, ray2, ray3, ray4, core_port_to_ray)
     _add_stp(core, ray1, ray2, ray3, ray4, edge)
 
-    # From the second scan on, one ray answers too slowly to finish
-    # inside its budget. Its node and its branch stay on the map with
-    # the reading they last produced; the header counts it as late and
-    # its card dates the data. Nothing about it is alarmed on, because
-    # nothing about it is known to be wrong — it answers, slowly.
-    if _scan_count >= 2:
-        ray2.over_budget = True
-        ray2.over_budget_scans = _scan_count - 1
-        ray2.polled_at = time.time() - 640
     # every scan: a MAC-table row on a bridge-port the switch does not
     # map, and no aggregate behind it (v0.8.6)
     unknown = _drop_unknown_bridge_port(ray4)
@@ -681,6 +673,38 @@ def demo_network() -> list[SwitchData]:
             core.fdb[mac] = core_port_to_ray[ray1.ip]
 
     return switches
+
+
+# The demo's `switches:` — what the map is about, whatever answers
+SWITCH_IPS = [
+    "10.0.0.10", "10.0.0.21", "10.0.0.22", "10.0.0.23", "10.0.0.24",
+    UPLINK_ONLY_SWITCH,
+]
+# management IP -> MAC as a router's ARP table would give it, for the
+# switches whose MAC the map needs to know without a poll
+SWITCH_ARP: dict[str, str] = {}
+SLOW_SWITCH = "10.0.0.22"  # access-sw-2
+
+
+def demo_poll() -> list[tuple[str, object]]:
+    """One scan of the demo network, the way the polling loop sees it:
+    per switch a full poll, or OverBudget, or a SwitchData that did not
+    answer. The scan makes of them what it makes of a real one.
+
+    From the second scan on, one ray answers too slowly to finish
+    inside its budget. Its node and its branch stay on the map with the
+    reading they last produced; the header counts it as late and its
+    card dates the data. Nothing about it is alarmed on, because nothing
+    about it is known to be wrong — it answers, slowly.
+    """
+    network = {sw.ip: sw for sw in demo_network()}
+    results: list[tuple[str, object]] = []
+    for ip in SWITCH_IPS:
+        if ip == SLOW_SWITCH and _scan_count >= 2:
+            results.append((ip, OverBudget(answered=True)))
+            continue
+        results.append((ip, network[ip]))
+    return results
 
 
 def _neighbor(

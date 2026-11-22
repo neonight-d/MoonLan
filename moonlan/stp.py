@@ -107,6 +107,36 @@ class StpPort:
         """
         return self.state == STATE_BLOCKING and self.link_up is not False
 
+    def to_dict(self) -> dict:
+        return {
+            "bridge_port": self.bridge_port, "if_index": self.if_index,
+            "name": self.name, "state": self.state, "enabled": self.enabled,
+            "path_cost": self.path_cost,
+            "designated_root": self.designated_root,
+            "designated_cost": self.designated_cost,
+            "designated_bridge": self.designated_bridge,
+            "admin_edge": self.admin_edge, "oper_edge": self.oper_edge,
+            "link_up": self.link_up,
+        }
+
+    @classmethod
+    def from_dict(cls, raw: dict) -> "StpPort":
+        if_index = raw.get("if_index")
+        return cls(
+            bridge_port=int(raw["bridge_port"]),
+            if_index=int(if_index) if if_index is not None else None,
+            name=str(raw.get("name", "")),
+            state=int(raw.get("state", 0)),
+            enabled=bool(raw.get("enabled", False)),
+            path_cost=int(raw.get("path_cost", 0)),
+            designated_root=str(raw.get("designated_root", "")),
+            designated_cost=int(raw.get("designated_cost", 0)),
+            designated_bridge=str(raw.get("designated_bridge", "")),
+            admin_edge=raw.get("admin_edge"),
+            oper_edge=raw.get("oper_edge"),
+            link_up=raw.get("link_up"),
+        )
+
 
 @dataclass
 class StpData:
@@ -186,6 +216,57 @@ class StpData:
 
     def blocking_ports(self) -> list[StpPort]:
         return [p for p in self.ports.values() if p.blocking]
+
+    def to_dict(self) -> dict:
+        """For a saved reading (v0.8.7), the verdict included: a reading
+        drawn in place of a poll is drawn the way it was judged."""
+        return {
+            "supported": self.supported,
+            "protocol_spec": self.protocol_spec,
+            "priority": self.priority,
+            "time_since_change": self.time_since_change,
+            "top_changes": self.top_changes,
+            "designated_root": self.designated_root,
+            "root_nonstandard": self.root_nonstandard,
+            "root_cost": self.root_cost,
+            "root_port": self.root_port,
+            "version": self.version,
+            "sys_uptime": self.sys_uptime,
+            "own_macs": sorted(self.own_macs),
+            "ports": [p.to_dict() for _, p in sorted(self.ports.items())],
+            "operating": self.operating,
+            "confirmed_root": self.confirmed_root,
+            "confirmed_root_mac": self.confirmed_root_mac,
+            "reason": self.reason,
+            "reason_code": self.reason_code,
+            "reason_params": dict(self.reason_params),
+        }
+
+    @classmethod
+    def from_dict(cls, raw: dict) -> "StpData":
+        version = raw.get("version")
+        ports = (StpPort.from_dict(p) for p in raw.get("ports") or ())
+        return cls(
+            supported=bool(raw.get("supported", False)),
+            protocol_spec=int(raw.get("protocol_spec", 0)),
+            priority=int(raw.get("priority", 0)),
+            time_since_change=int(raw.get("time_since_change", 0)),
+            top_changes=int(raw.get("top_changes", 0)),
+            designated_root=str(raw.get("designated_root", "")),
+            root_nonstandard=bool(raw.get("root_nonstandard", False)),
+            root_cost=int(raw.get("root_cost", 0)),
+            root_port=int(raw.get("root_port", 0)),
+            version=int(version) if version is not None else None,
+            sys_uptime=int(raw.get("sys_uptime", 0)),
+            own_macs=set(raw.get("own_macs") or ()),
+            ports={p.bridge_port: p for p in ports},
+            operating=bool(raw.get("operating", False)),
+            confirmed_root=bool(raw.get("confirmed_root", False)),
+            confirmed_root_mac=str(raw.get("confirmed_root_mac", "")),
+            reason=str(raw.get("reason", "")),
+            reason_code=str(raw.get("reason_code", "")),
+            reason_params=dict(raw.get("reason_params") or {}),
+        )
 
 
 # A Bridge ID is 8 bytes: two of identifier, six of MAC. The two are

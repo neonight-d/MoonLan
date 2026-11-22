@@ -164,7 +164,9 @@ class SelectionTest(unittest.TestCase):
         # an end that is not the switch itself gets no tag
         self.assertIn("if (edge.from !== end && edge.to !== end) return edge;", build)
         self.assertIn("isLacp && link.lag.a_members", build)
-        self.assertEqual(build.count("edges.push(fromPort({"), 6)
+        # …and since v0.8.7 the line of an empty node to the port its
+        # management MAC is seen on
+        self.assertEqual(build.count("edges.push(fromPort({"), 7)
 
 
 class DemoTest(unittest.TestCase):

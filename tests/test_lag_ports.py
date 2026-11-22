@@ -107,6 +107,7 @@ class StubAgent(SnmpCollector):
         self._cycle = 0
         self._dead_oid_strikes = 0
         self._dead_oid_cooldown = 30
+        self.answered_at = {}
         self._communities = {}
         self.phantom = phantom
 

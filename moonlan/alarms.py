@@ -472,13 +472,25 @@ class AlarmEngine:
                 if since
                 else "it has never been read in full"
             )
-            await self._raise(
-                "switch_stale", ip,
-                f"{names.get(ip, ip)} has answered but not finished a full "
-                f"poll in {info['scans']} scans running; {age}. It is "
-                f"reachable — this is a poll budget too small for it, not "
-                f"a switch that is down",
-            )
+            # Whether it answered at all (v0.8.7): a budget that ran out
+            # before the first answer came back proves nothing either
+            # way, and saying "it is reachable" then would be a guess
+            if info.get("answered") is None and "answered" in info:
+                message = (
+                    f"{names.get(ip, ip)} has not finished a full poll in "
+                    f"{info['scans']} scans running; {age}. The budget "
+                    f"ran out before its first answer came back, so "
+                    f"whether it is reachable is not known — give it more "
+                    f"time to tell"
+                )
+            else:
+                message = (
+                    f"{names.get(ip, ip)} has answered but not finished a "
+                    f"full poll in {info['scans']} scans running; {age}. "
+                    f"It is reachable — this is a poll budget too small "
+                    f"for it, not a switch that is down"
+                )
+            await self._raise("switch_stale", ip, message)
 
     async def on_counters(self, ip: str, metrics: list[dict]) -> None:
         """One counters cycle. Each metric describes one logical port:

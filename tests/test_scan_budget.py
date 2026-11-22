@@ -80,9 +80,17 @@ class ScanBudgetTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(sorted(self.collector.finished), [
             f"10.0.0.{n}" for n in (1, 2, 4, 5, 6, 8)
         ])
-        # six switches on the map, and it is a fresh map
-        drawn = {sw["ip"] for sw in server.state.as_dict()["switches"]}
-        self.assertEqual(drawn, {f"10.0.0.{n}" for n in (1, 2, 4, 5, 6, 8)})
+        # six switches on the map from this scan; the slow two have no
+        # reading anywhere and are empty nodes, not missing (v0.8.7)
+        drawn = {
+            sw["ip"]: sw["state"] for sw in server.state.as_dict()["switches"]
+        }
+        self.assertEqual(
+            {ip for ip, state in drawn.items() if state == "fresh"},
+            {f"10.0.0.{n}" for n in (1, 2, 4, 5, 6, 8)},
+        )
+        self.assertEqual(drawn["10.0.0.3"], "never")
+        self.assertEqual(drawn["10.0.0.7"], "never")
         # one line per switch that ran out of budget, naming it
         over = [
             line for line in logged.output
