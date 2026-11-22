@@ -80,7 +80,7 @@ class StubCollector(SnmpCollector):
         return _Closeable(rows())
 
 
-def _walk(collector, host="10.3.6.2", oid=BASE):
+def _walk(collector, host="10.1.6.2", oid=BASE):
     async def run():
         return [pair async for pair in collector._walk(host, oid)]
 
@@ -109,7 +109,7 @@ class DeadOidTest(unittest.TestCase):
         self.assertEqual(len(self.collector.asked), STRIKES)
 
         # …and the caller is told "no answer", not "an empty table"
-        status = self.collector.last_walk_status("10.3.6.2", BASE)
+        status = self.collector.last_walk_status("10.1.6.2", BASE)
         self.assertFalse(status.complete)
         self.assertIn("not asked", status.error)
 
@@ -131,7 +131,7 @@ class DeadOidTest(unittest.TestCase):
                 _walk(self.collector)
         paused = self.collector.paused_oids()
         self.assertEqual(len(paused), 1)
-        self.assertEqual(paused[0]["host"], "10.3.6.2")
+        self.assertEqual(paused[0]["host"], "10.1.6.2")
         self.assertEqual(paused[0]["oid"], BASE)
         self.assertEqual(paused[0]["cycles_left"], COOLDOWN)
         self.collector.begin_scan_cycle()

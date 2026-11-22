@@ -10,7 +10,7 @@ the neighbouring case, because nothing said what the other cases were:
   core's trunks;
 - v0.6.6 fixed how `downlink` was computed and, in passing, moved
   depth in front of it. The pendulum swung the other way: the deepest
-  switch won every claim it could make, and an Edge-Core whose only
+  switch won every claim it could make, and an access switch whose only
   live port was its own uplink collected twenty devices belonging to
   the rest of the network;
 - v0.6.9 puts direction first and depth second, and refuses to place a

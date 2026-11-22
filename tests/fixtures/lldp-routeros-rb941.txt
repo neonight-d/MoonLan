@@ -1,5 +1,5 @@
 # LLDP as a MikroTik RB941-2nD (RouterOS) answers it, captured from
-# 10.3.6.2 on 2026-09-17. Addresses are rewritten into the RFC 7042
+# a live one on 2026-09-17. Addresses are rewritten into the RFC 7042
 # documentation range, exactly as `diag --anonymize` would; nothing
 # else about the answer is changed.
 #

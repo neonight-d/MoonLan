@@ -1028,7 +1028,7 @@ def _router_addresses(arp: dict[str, str]) -> dict[str, str]:
     """MAC -> the address config.routers actually reaches it at.
 
     A router announces a management address per VLAN interface — the
-    MikroTik behind mb0 Slot0/21 sends 38 — and the first one the walk
+    MikroTik behind sw0 Slot0/21 sends 38 — and the first one the walk
     returns is as likely to be a segment gateway as the address anyone
     uses. The one in `routers:` is the one the operator types, so that
     is what goes under the node's name.
@@ -1143,7 +1143,7 @@ def _polled_identities() -> dict[str, str]:
 
     A switch listed in `switches:` is polled by definition, and so a
     neighbour reporting it is not "a switch nobody polls". It used to
-    be: the ES3528M sat in `switches:`, answered every scan, and still
+    be: an access switch sat in `switches:`, answered every scan, and still
     carried an unmanaged_bridge_detected alarm for 91 hours, because
     only `known_bridges` counted as known. Making the operator copy
     their own switch addresses into a second list to silence that is
@@ -1482,10 +1482,10 @@ def _group_offline(
 
     `nodes_on_port` is what build_topology put on each port — a named
     bridge, or an anonymous pseudo-switch. The group hangs off that
-    node rather than off the switch. Behind mb1 1/27 there were three
-    neighbours of the switch at once: RouterOS-Sport with 22 live
+    node rather than off the switch. Behind sw1 1/27 there were three
+    neighbours of the switch at once: RouterOS-C with 22 live
     devices, a "switch without SNMP", and an "Offline · 19" of
-    10.3.5.x addresses standing beside them — one segment drawn as
+    10.1.5.x addresses standing beside them — one segment drawn as
     three places, with the quiet half apparently somewhere else
     entirely.
     """
@@ -1828,7 +1828,7 @@ async def run_counters() -> None:
         collector = get_collector()
         ips = list(config.switches)
         # One switch failing must not cost the others their counters:
-        # a single malformed OID on mb1 emptied every column on all
+        # a single malformed OID on sw1 emptied every column on all
         # five for as long as the service ran.
         collected = await asyncio.gather(
             *(_counters_locked(collector, ip) for ip in ips),
@@ -3251,7 +3251,7 @@ def _column_report(ip: str) -> dict:
     """Per table column: did the agent answer, and for which OIDs not.
 
     "no answer" and "all zeros" produce the same empty column and mean
-    opposite things — mb0 reported honest zeros for errors while its
+    opposite things — sw0 reported honest zeros for errors while its
     outbound octets were simply never returned.
     """
     columns = counter_columns.get(ip) or {}

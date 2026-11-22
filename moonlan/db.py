@@ -424,8 +424,8 @@ class Database:
         A host marked `approximate` was placed on a trunk by guesswork
         because nothing better was available. Its sighting is recorded,
         but it does NOT overwrite a location the database already
-        holds: doing so replaced "mb2 port 1/3", which was true, with
-        "mb0 Slot0/3", which was a guess — and the guess then became
+        holds: doing so replaced "sw2 port 1/3", which was true, with
+        "sw0 Slot0/3", which was a guess — and the guess then became
         what the next scan remembered.
         """
         now = time.time()

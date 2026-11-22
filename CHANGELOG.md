@@ -115,7 +115,7 @@ note, near an address with an IP on the same switch, and at least
 machines of one batch never make a crowd like that. The first start or
 scan takes them off the map, out of the offline groups and the list
 beside it, with one journal entry: "Damaged MAC copies removed ·
-20:7b:d5:1a:31:8d: 104 addresses on … 1/5", the addresses in its data.
+20:7b:d5:46:92:8d: 104 addresses on … 1/5", the addresses in its data.
 The next daily cleanup deletes them. A new column, `hosts.corrupt_of`,
 is added at the start.
 
@@ -1117,9 +1117,9 @@ for the return instead of one every thirty seconds.
 LLDP builds the tree, it does not decorate it. And one branch of the
 live network turned out to need something else entirely.
 
-Behind port 1/28 of mb1 hang three boxes: two RouterOS bridges and an
-Edge-Core. LanTopoLog draws them as a garland. MoonLan drew all three
-straight onto mb1 and laid the one LLDP edge it had on top, closing a
+Behind port 1/28 of sw1 hang three boxes: two RouterOS bridges and an
+access switch. LanTopoLog draws them as a garland. MoonLan drew all three
+straight onto sw1 and laid the one LLDP edge it had on top, closing a
 ring that does not exist.
 
 The order of the two passes was wrong. A MAC table says a device is
@@ -1150,7 +1150,7 @@ Then the live network said the diagnosis was half right. LLDP in that
 branch is unusable: those RouterOS bridges forward LLDP frames, so
 every port of theirs carries extra talkers and yields no link — and
 mutual agreement does not rescue it, since forwarding is symmetric and
-mb1 and the Edge-Core two hops apart name each other as confidently as
+sw1 and the access switch two hops apart name each other as confidently as
 two devices sharing a cable. What was actually missing was direction.
 `uplink_of` finds the way out of a branch by looking for switches
 outside it, and this branch sees nothing outside itself, so all three
@@ -1196,7 +1196,7 @@ four permanently ageing switches. It now waits up to
 min(counters_interval / 2, 20) seconds, and a budget at or above twice
 the interval is reported at startup and in `diag --config`, per device.
 
-`10.3.7.10` was not polled in full once in six hours: thirty scans,
+`10.1.7.10` was not polled in full once in six hours: thirty scans,
 thirty budget failures, while the map showed it alive from its last
 complete reading. That is a third state beside "answering" and "down".
 After `stale_switch_scans` (5) consecutive scans the card counts them
@@ -1206,7 +1206,7 @@ to look for a dead device that is answering wastes the trip. Each poll
 now records how long it took, and `diag --config` prints it — a budget
 set by eye is a budget set wrong.
 
-The STP panel called mb0 the root while the map drew it as an ordinary
+The STP panel called sw0 the root while the map drew it as an ordinary
 switch. Both read the same fields off the same objects, at different
 moments: `judge_network`, which is the only test that can recognise a
 root reporting zeros about itself, ran after `build_topology` had
@@ -1353,7 +1353,7 @@ A device seen on an uplink is not behind it. The switch that reports a
 MAC address on the cable it came in on is telling you where the device
 is **not**, and the placement rule had been reading it the other way:
 the deepest switch in the tree won every claim it could make, so an
-Edge-Core whose only live port was its own uplink collected twenty
+access switch whose only live port was its own uplink collected twenty
 devices belonging to the rest of the network. Direction now decides
 first and depth second, the root's trunks count as pointing down
 (nothing is above the root), and a device whose every sighting was on

@@ -180,7 +180,7 @@ installation — there is a CSV, imported by MAC address.
 
 ```
 mac;label;note
-10:FF:E0:44:02:5E;Accounting;Desk 105
+10:FF:E0:18:A1:5E;Accounting;Desk 105
 088AF15E3910;;Wi-Fi in the library
 ```
 

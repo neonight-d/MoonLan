@@ -201,9 +201,9 @@ LATECOMERS = {"00:ee:00:00:00:01": 9, "b2:1a:7c:44:55:66": 10}  # mac -> ray1 po
 # having a threshold.
 CORRUPT_SWITCH = "10.0.0.21"  # access-sw-1, polled in full every scan
 CORRUPT_PORT = 11             # Gi0/11
-CORRUPT_REAL = "20:7b:d5:1a:31:8d"
+CORRUPT_REAL = "20:7b:d5:46:92:8d"
 CORRUPT_IP = "10.0.99.57"
-CORRUPT_NEIGHBOR = "20:77:b5:7c:37:87"
+CORRUPT_NEIGHBOR = "20:77:b5:20:94:87"
 CORRUPT_NEIGHBOR_IP = "10.0.99.58"
 CORRUPT_PER_SCAN = 3        # invented addresses per poll
 
@@ -212,28 +212,28 @@ CORRUPT_PER_SCAN = 3        # invented addresses per poll
 # anonymous "switch without SNMP"; LLDP gives it a name, a model and a
 # management address, and raises unmanaged_bridge_detected.
 BRIDGE_PORT = 5
-BRIDGE_CHASSIS = "18:fd:74:fd:b5:cf"
-BRIDGE_NAME = "RouterOS-Sport"
+BRIDGE_CHASSIS = "18:fd:74:a1:16:cf"
+BRIDGE_NAME = "RouterOS-C"
 BRIDGE_DESC = "RouterOS RB941-2nD 6.49.19"
-BRIDGE_MGMT_IP = "10.3.5.6"
+BRIDGE_MGMT_IP = "10.1.5.6"
 
 # The chain behind access-sw-1 Gi0/14: an unmanaged box on the cable
 # with TWO MikroTik bridges behind it, plus four ordinary devices.
-# This is mb1 port 28 (Garage -> Workshop -> 10.3.6.124) and the shape
+# This is sw1 port 28 (RouterOS-A -> RouterOS-B -> 10.1.6.124) and the shape
 # that crashed build_topology in v0.6.0: one port, one pseudo-switch
 # and several bridges.
 CHAIN_PORT = 14
 CHAIN_HOSTS = 4
 CHAIN_BRIDGES = (
-    ("18:fd:74:fd:e3:7f", "RouterOS-Garage", "RouterOS RB941-2nD 6.49.19",
-     "10.3.6.4"),
-    ("18:fd:74:fd:b3:af", "RouterOS-Workshop", "RouterOS hAP lite 6.49.10",
-     "10.3.6.2"),
+    ("18:fd:74:a1:40:7f", "RouterOS-A", "RouterOS RB941-2nD 6.49.19",
+     "10.1.6.4"),
+    ("18:fd:74:a1:10:af", "RouterOS-B", "RouterOS hAP lite 6.49.10",
+     "10.1.6.2"),
 )
 
 # Ten IP cameras behind an unmanaged switch on access-sw-3 Gi0/9.
 # They speak LLDP but send no optional TLVs — a bare chassis MAC, no
-# name, no capabilities. This is mb2 1/6 and mb4 1/2 on the real
+# name, no capabilities. This is sw2 1/6 and sw4 1/2 on the real
 # network, where v0.6.0 would have drawn ten bridge nodes and fired ten
 # alarms. They must produce neither: the LLDP data belongs on each
 # camera's own host card.
@@ -246,8 +246,8 @@ CAMERA_DESC = "IPC-B140 v2.800.0000000.16.R"
 # address — 38 rows for one device on one cable. The card must show one
 # device and all of its addresses.
 ROUTER_PORT = 21
-ROUTER_CHASSIS = "4c:5e:0c:b7:79:ab"  # a MikroTik (Routerboard.com) block
-ROUTER_IPS = ["10.0.0.1", "10.0.1.1"] + [f"10.3.{n}.1" for n in range(1, 9)]
+ROUTER_CHASSIS = "4c:5e:0c:eb:da:ab"  # a MikroTik (Routerboard.com) block
+ROUTER_IPS = ["10.0.0.1", "10.0.1.1"] + [f"10.1.{n}.1" for n in range(1, 9)]
 
 # An edge router behind core-sw Gi0/22: it announces `router` and a
 # name over LLDP, but no ARP table of ours gives it an address and
@@ -264,7 +264,7 @@ EDGE_ROUTER_IPS = ["10.9.0.1", "10.9.1.1"]
 # draw one by one, and it must raise no "someone plugged a switch in"
 # alarm — it is the edge of the network.
 UPLINK_PORT = 26
-UPLINK_CHASSIS = "10:c1:72:bd:44:e1"
+UPLINK_CHASSIS = "10:c1:72:e1:e7:e1"
 UPLINK_NAME = "CE6851-48S6Q-HI"
 UPLINK_MGMT_IP = "172.16.0.3"
 # Addresses past the handover, from the documentation range of
@@ -291,12 +291,12 @@ ROUTERS = [ROUTER_IPS[0]]
 # that evidence alone — worth recording, not worth waking anyone, so
 # its alarm is info rather than warning.
 ASSUMED_PORT = 7
-ASSUMED_CHASSIS = "18:fd:74:fd:b5:c5"
-ASSUMED_NAME = "RouterOS-Old_building"
-ASSUMED_MGMT_IP = "10.3.7.15"
+ASSUMED_CHASSIS = "18:fd:74:a1:16:c5"
+ASSUMED_NAME = "RouterOS-D"
+ASSUMED_MGMT_IP = "10.1.7.15"
 
 # A port whose link goes up and down on every counters cycle ->
-# port_flapping. Modelled on 2b0 port 21, which managed four cycles in
+# port_flapping. Modelled on sw5 port 21, which managed four cycles in
 # thirty seconds.
 FLAP_SWITCH = "10.0.0.22"
 FLAP_PORT = 7
@@ -318,7 +318,7 @@ SECOND_CABLE_NAME = "TenGigabitEthernet1/0/1"
 # A device behind an unmanaged switch on the core—access-sw-3 trunk: no
 # switch has it on a host port, both ends of the trunk see it. Before
 # v0.5.8 it fell off the map into "not on map" although it answers ping.
-TRUNK_ONLY_MAC = "74:56:3c:9a:97:9f"
+TRUNK_ONLY_MAC = "74:56:3c:c6:34:9f"
 TRUNK_ONLY_IP = "10.0.99.51"
 
 # The same situation, except that this one HAS been seen on a real port
@@ -327,7 +327,7 @@ TRUNK_ONLY_IP = "10.0.99.51"
 # is what happens to a quiet device — and it must stay on the port it
 # lives on instead of migrating to the core's trunk and taking the
 # offline group with it.
-REMEMBERED_MAC = "74:56:3c:9a:97:a0"
+REMEMBERED_MAC = "74:56:3c:c6:34:a0"
 REMEMBERED_IP = "10.0.99.52"
 REMEMBERED_SWITCH = "10.0.0.23"   # access-sw-3
 REMEMBERED_PORT = "Gi0/11"
@@ -337,9 +337,9 @@ REMEMBERED_PORT = "Gi0/11"
 # Every one of these is seen on both ends of that trunk and on no host
 # port anywhere, so they are placed on the trunk and drawn as one node
 # past it — with the real switch on the same port, beside it rather
-# than above it. The layout of mb1 1/28 on the production network.
+# than above it. The layout of sw1 1/28 on the production network.
 BEYOND_TRUNK_MACS = [f"9c:95:6e:be:{n:02x}:40" for n in range(1, 6)]
-BEYOND_TRUNK_IPS = [f"10.3.6.{200 + n}" for n in range(1, 6)]
+BEYOND_TRUNK_IPS = [f"10.1.6.{200 + n}" for n in range(1, 6)]
 # one of them is not answering: the group counts it, it does not get a
 # node of its own beside the group
 BEYOND_TRUNK_SILENT = 3
@@ -355,7 +355,7 @@ UPLINK_ONLY_PORT = 25          # its uplink, the only live port it has
 UPLINK_ONLY_CORE_PORT = 8      # where the core sees it
 # Devices no switch sees anywhere but on that uplink: nobody knows
 # where they are, so they belong in "Not on map" rather than on it
-UPLINK_ONLY_MACS = ["74:56:3c:9a:97:b1", "74:56:3c:9a:97:b2"]
+UPLINK_ONLY_MACS = ["74:56:3c:c6:34:b1", "74:56:3c:c6:34:b2"]
 UPLINK_ONLY_IPS = ["10.0.99.201", "10.0.99.202"]
 
 # v0.6.7 — Loop Detection from the vendors' private MIBs. The demo
@@ -721,7 +721,7 @@ def _add_lldp(core, ray1, ray2, ray3, ray4, core_port_to_ray) -> None:
         # Both members of the LACP bundle to ray1 see the neighbour.
         # That is one logical port, not a neighbour on two ports, and
         # v0.6.0 read it as forwarded LLDP — which cost the real
-        # network its mb0—mb1 uplink source.
+        # network its sw0—sw1 uplink source.
         *(
             _neighbor(
                 member, ray1.bridge_mac, remote, sys_name=ray1.sys_name,
@@ -730,7 +730,7 @@ def _add_lldp(core, ray1, ray2, ray3, ray4, core_port_to_ray) -> None:
             for member, remote in ((1, "Gi0/25"), (25, "Gi0/26"))
         ),
         # One device sending one row per VLAN interface, each with its
-        # own management address — the shape mb0 Slot0/21 really has.
+        # own management address — the shape sw0 Slot0/21 really has.
         # merge_rows below turns them back into one device.
         *(
             _neighbor(
@@ -833,7 +833,7 @@ def _add_lldp(core, ray1, ray2, ray3, ray4, core_port_to_ray) -> None:
     # absence of the bridge flag proves nothing, so it is drawn as an
     # unidentified LLDP device and raises no alarm.
     ray3.lldp_neighbors = [
-        _neighbor(8, "00:1e:58:a9:00:63", "8", cap_known=False),
+        _neighbor(8, "00:1e:58:f5:a3:63", "8", cap_known=False),
         # Ten cameras on one port, all of them bare MACs. Neither a
         # node nor an alarm: their LLDP data goes on their host cards.
         *(

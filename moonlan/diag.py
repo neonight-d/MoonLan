@@ -2013,7 +2013,7 @@ def _print_columns(columns: dict[str, counters.ColumnStatus]) -> None:
     """Which counter columns the agent answered for, and with what.
 
     This is the line that separates "no errors" from "we never got an
-    answer" — the distinction mb0 turned on.
+    answer" — the distinction sw0 turned on.
     """
     print("counter columns:")
     for name in sorted(columns):

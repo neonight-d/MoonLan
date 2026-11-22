@@ -1,6 +1,6 @@
 """Four neighbours out of four, placed on no port at all.
 
-    10.3.6.2 LLDP: 4 of 4 neighbours sit on a local port that could not
+    10.1.6.2 LLDP: 4 of 4 neighbours sit on a local port that could not
     be matched to an interface — not used for links
 
 Both RouterOS boxes said this every scan. `match_local_port` tries the
@@ -42,7 +42,7 @@ FIXTURE = (
     Path(__file__).resolve().parent
     / "fixtures" / "lldp-routeros-rb941.txt"
 )
-HOST = "10.3.6.2"
+HOST = "10.1.6.2"
 OID_FDB = "1.3.6.1.2.1.17.4.3.1.2"
 OID_BRIDGE_PORTS = "1.3.6.1.2.1.17.1.4.1.2"
 

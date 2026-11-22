@@ -331,7 +331,7 @@ class ProbeHonestyTest(unittest.TestCase):
         rows = {f"{DGS1210}.17.1.0": 1}
         collector = ReplayCollector(rows)
         data = asyncio.run(collect_loop_detection(
-            collector, "10.3.6.5", ports(28), list(BUILTIN_PROFILES),
+            collector, "10.1.6.5", ports(28), list(BUILTIN_PROFILES),
             sys_object_id=OID_EDGECORE,
         ))
         self.assertFalse(data.supported)
@@ -379,7 +379,7 @@ class SysObjectIdTableTest(unittest.TestCase):
                 self.assertTrue(collector.gets[0].startswith(root))
 
     def test_the_des3526_is_read_by_its_own_profile(self):
-        """mb4: the model that fell through to a foreign branch.
+        """sw4: the model that fell through to a foreign branch.
 
         It matched `dlink-1210` by probe in v0.6.7, took the DGS root,
         found nothing and was reported as "LBD disabled". Its real

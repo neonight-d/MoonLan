@@ -20,27 +20,27 @@ import unittest
 from moonlan.anonymize import Anonymizer, AnonymizingWriter
 
 REPORT = """=== 3. MAC forwarding table ===
-switch comm.mb1.example.local (10.0.0.21), bridge MAC 18:fd:74:fd:b5:cf
-  1.3.6.1.2.1.17.4.3.1.2.24.253.116.253.181.207  -> 18:fd:74:fd:b5:cf  port 3
-  1.3.6.1.2.1.4.22.1.2.5.10.3.5.6 = 00:0e:04:b7:79:ab
-  pc-07.office.example.local  10.0.99.18  20:7b:d5:1a:31:8d  Slot0/21
-  neighbour RouterOS-Sport at 10.3.5.6, uptime 4000000 ticks
+switch sw1.example.local (10.0.0.21), bridge MAC 18:fd:74:a1:16:cf
+  1.3.6.1.2.1.17.4.3.1.2.24.253.116.161.22.207  -> 18:fd:74:a1:16:cf  port 3
+  1.3.6.1.2.1.4.22.1.2.5.10.1.5.6 = 00:0e:04:eb:da:ab
+  pc-07.office.example.local  10.0.99.18  20:7b:d5:46:92:8d  Slot0/21
+  neighbour RouterOS-C at 10.1.5.6, uptime 4000000 ticks
   speed 1000 Mbit/s, 62.9 in / 17.4 out, errors 0.01
 """
 
 ORIGINALS = (
-    "10.0.0.21", "10.3.5.6", "10.0.99.18",
-    "18:fd:74:fd:b5:cf", "00:0e:04:b7:79:ab", "20:7b:d5:1a:31:8d",
-    "comm.mb1.example.local", "pc-07.office.example.local", "RouterOS-Sport",
+    "10.0.0.21", "10.1.5.6", "10.0.99.18",
+    "18:fd:74:a1:16:cf", "00:0e:04:eb:da:ab", "20:7b:d5:46:92:8d",
+    "sw1.example.local", "pc-07.office.example.local", "RouterOS-C",
     # the same MAC as an OID suffix, which is where diag --fdb prints it
-    "24.253.116.253.181.207",
+    "24.253.116.161.22.207",
 )
 
 
 def anonymize(report: str = REPORT) -> str:
     anon = Anonymizer()
-    anon.register_switch("comm.mb1.example.local")
-    anon.register_names(["pc-07.office.example.local", "RouterOS-Sport"])
+    anon.register_switch("sw1.example.local")
+    anon.register_names(["pc-07.office.example.local", "RouterOS-C"])
     return anon.text(report)
 
 
@@ -62,7 +62,7 @@ class StabilityTest(unittest.TestCase):
 
     def test_one_address_is_one_replacement_throughout(self):
         out = anonymize()
-        # 10.3.5.6 appears twice in the report, once inside an OID
+        # 10.1.5.6 appears twice in the report, once inside an OID
         self.assertEqual(out.count("198.51.100."), out.count("198.51.100."))
         replacements = {
             line.split()[-1] for line in out.splitlines() if "->" in line

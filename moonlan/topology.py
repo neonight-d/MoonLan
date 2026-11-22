@@ -555,8 +555,8 @@ def lldp_link_candidates(
 
     Being named by both ends does NOT rescue such a port, tempting as
     it looks. On the network this was written for, the RouterOS bridges
-    of one segment forward LLDP frames in both directions, so mb1 and
-    an Edge-Core two hops apart name each other, each on a port of its
+    of one segment forward LLDP frames in both directions, so sw1 and
+    an access switch two hops apart name each other, each on a port of its
     own, as confidently as two devices sharing a cable. Forwarding is
     symmetric; mutual agreement is therefore not evidence of adjacency,
     and reading it as such drew the link straight back.
@@ -773,7 +773,7 @@ def suspect_uplink_ports(
     known_subnets.discard("")
 
     # A port with devices of ours behind it leads inward, whatever the
-    # box on the cable is managed at: a MikroTik reachable at 10.3.5.6
+    # box on the cable is managed at: a MikroTik reachable at 10.1.5.6
     # with four of our own hosts behind it is a remote segment, not a
     # way out. Only the address of the neighbour itself is left to
     # judge by when nothing of ours answers there.
@@ -783,7 +783,7 @@ def suspect_uplink_ports(
             leads_inward.add((sw_ip, port))
     # A port with our own kit behind it leads inward whatever addresses
     # that kit announces. Routers are deliberately kept out of the host
-    # inventory, so mb0 Slot0/21 — the port to the main router — had no
+    # inventory, so sw0 Slot0/21 — the port to the main router — had no
     # host to speak for it and was flagged as a way OUT of the network,
     # which is the exact opposite of what it is.
     for sw in switches:
@@ -880,7 +880,7 @@ def detect_bridges(
     both a system name and a management address — a managed box, not a
     bare camera MAC — is taken as a bridge and marked `cap_assumed`.
     On the production network that is exactly one device,
-    RouterOS-Old_building behind 2b0, and no cameras: every one of them
+    RouterOS-D behind sw5, and no cameras: every one of them
     is a bare MAC with neither name nor address.
 
     One node per chassis id: a switch that forwards foreign LLDP frames
@@ -1130,8 +1130,8 @@ def infer_tree(
 
         `uplinks` is computed from sightings of switches outside the
         branch, and a whole branch can fail that test: the three
-        RouterOS boxes behind mb1 1/28 see nothing but each other and
-        mb1, all of which are inside their own branch, so every one of
+        RouterOS boxes behind sw1 1/28 see nothing but each other and
+        sw1, all of which are inside their own branch, so every one of
         them came back with an unknown uplink — and "unknown uplink"
         disarms every rule that needs to know which way the root is.
 
@@ -1965,7 +1965,7 @@ def build_topology(
     # v0.6.4 the heuristic put it on the core's trunk, wrote that
     # location into the database and then drew the offline group there
     # — which is how the devices of one subnet ended up split between
-    # mb2 1/3 and mb0 Slot0/3, with the card claiming they were "shown
+    # sw2 1/3 and sw0 Slot0/3, with the card claiming they were "shown
     # where they were last seen".
     approximate: set[str] = set()
     remembered_at: set[str] = set()
@@ -1985,8 +1985,8 @@ def build_topology(
         # is in the same branch, and comes back None — and None here
         # would mean "no uplink", so every one of its trunks would
         # count as pointing away from the root. That is exactly the
-        # switch this version is about: an Edge-Core behind mb1, whose
-        # one live port is the cable to mb1.
+        # switch this version is about: an access switch behind sw1, whose
+        # one live port is the cable to sw1.
         #
         # The tree that was just inferred knows the answer: on every
         # link the deeper end is the child, and the port at that end is
@@ -2014,7 +2014,7 @@ def build_topology(
                 # A MAC on an uplink says the device is on the far side
                 # of that cable — the opposite of "behind this switch".
                 # With depth first, the deepest leaf won every claim it
-                # could make, and an Edge-Core whose only live port was
+                # could make, and an access switch whose only live port was
                 # its own uplink collected twenty devices belonging to
                 # the rest of the network.
                 #
@@ -2156,7 +2156,7 @@ def build_topology(
             (host["switch"], host["port"]), []
         ).append(host)
 
-    # 4b. Ports that leave the network. Behind mb0 Slot0/25 sits the
+    # 4b. Ports that leave the network. Behind sw0 Slot0/25 sits the
     #     provider's equipment and, past it, the internet: those devices
     #     are not ours to place on an L2 map one dot at a time, and the
     #     switch there is a boundary rather than something someone
@@ -2209,8 +2209,8 @@ def build_topology(
     #    devices — one node with a name beats two without.
     #
     #    Several bridges behind one port: an unmanaged box sits on the
-    #    cable and the bridges hang off it (mb1 port 28 is a chain of
-    #    Garage -> Workshop -> 10.3.6.124). The pseudo-switch keeps its
+    #    cable and the bridges hang off it (sw1 port 28 is a chain of
+    #    RouterOS-A -> RouterOS-B -> 10.1.6.124). The pseudo-switch keeps its
     #    devices and the bridges are drawn as separate nodes on the same
     #    port. Replacing it with one of them would claim the other
     #    bridges' devices belong to whichever bridge happened to sort
@@ -2252,7 +2252,7 @@ def build_topology(
         (h["switch"], h["port"], h["mac"]): h for h in hosts
     }
     # One device, one node. A bridge that also sources frames — the
-    # provider's CE6851 behind mb0 Slot0/25 does — is in the MAC table
+    # provider's CE6851 behind sw0 Slot0/25 does — is in the MAC table
     # of the very port LLDP found it on, so it was drawn twice: once as
     # a named bridge and once as a bare MAC beside it. The host record
     # stays (it is what keeps last_seen and the ping going); what goes
@@ -2302,7 +2302,7 @@ def build_topology(
     # A neighbour that is not a bridge gets no node of its own — it is
     # already on the map as a host. What it does get is its name: the
     # main router used to be drawn as a pale dot labelled
-    # 00:0e:04:b7:79:ab while LLDP knew it as "MikroTik" with 38
+    # 00:0e:04:eb:da:ab while LLDP knew it as "MikroTik" with 38
     # addresses. The data goes onto the host it belongs to, and the UI
     # falls back to it when neither DNS nor ARP has anything.
     attached = 0
@@ -2366,7 +2366,7 @@ def build_topology(
         "polled_at": float(getattr(sw, "polled_at", 0.0)),
         # Scans in a row that ended without a complete reading of this
         # switch. One is a slow moment; thirty in a row, which is what
-        # 10.3.7.10 managed, is a switch whose numbers stopped moving
+        # 10.1.7.10 managed, is a switch whose numbers stopped moving
         # six hours ago while it went on looking alive.
         "over_budget_scans": int(getattr(sw, "over_budget_scans", 0)),
         # Physical ports only (ifType 6/62/69/117): aggregates, CPU and
@@ -2415,7 +2415,7 @@ def group_beyond_trunk(
     approximate — the port is right, the place behind it is unknown.
     Drawn one dot at a time, twenty of them make a trunk port look like
     twenty computers plugged into a switch, mixed in with that port's
-    real neighbours. On mb1 1/28 that is a cable into a segment, and
+    real neighbours. On sw1 1/28 that is a cable into a segment, and
     the devices are somewhere past it.
 
     So they get a container. It is deliberately NOT a "switch without

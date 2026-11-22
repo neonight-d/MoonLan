@@ -2,8 +2,8 @@
 
 A port with a failing cable, patch cord or transmitter delivers frames
 with flipped bits. The switch believes the damaged source address and
-learns it: next to the real 20:7b:d5:1a:31:8d the MAC table grows
-20:7b:d5:1a:31:9d (one bit away), 20:7b:d5:7a:34:07, 20:77:b5:7c:37:87.
+learns it: next to the real 20:7b:d5:46:92:8d the MAC table grows
+20:7b:d5:46:92:9d (one bit away), 20:7b:d5:26:97:07, 20:77:b5:20:94:87.
 Such an address never gets an IP, and used to settle in the database
 as a device for the whole grace window.
 

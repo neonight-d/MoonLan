@@ -24,7 +24,7 @@ from pysnmp.proto.rfc1902 import (
 
 from moonlan.snmpval import as_octets, is_octets
 
-# The value that killed the process, straight off ifOutOctets.1 of mb0
+# The value that killed the process, straight off ifOutOctets.1 of sw0
 HUGE_COUNTER = 1486971185
 
 
@@ -65,8 +65,8 @@ class AsOctetsTest(unittest.TestCase):
 
     def test_octet_strings_pass_through(self):
         self.assertEqual(
-            as_octets(OctetString(hexValue="445bed5b3942")),
-            b"\x44\x5b\xed\x5b\x39\x42",
+            as_octets(OctetString(hexValue="445bed079a42")),
+            b"\x44\x5b\xed\x07\x9a\x42",
         )
         self.assertEqual(as_octets(OctetString("Library")), b"Library")
         self.assertTrue(is_octets(OctetString("Library")))

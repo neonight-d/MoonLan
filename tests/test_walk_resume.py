@@ -1,6 +1,6 @@
 """Regression: a walk that stops answering mid-table is picked back up.
 
-On mb1 the ifHCInOctets walk answered the first rows and then went
+On sw1 the ifHCInOctets walk answered the first rows and then went
 quiet, so the ports at the end of ifTable — 1/25…1/28, the gigabit
 uplinks — came back empty in three polls running. `_walk` used to
 `return` on the first error and lose everything past that point.

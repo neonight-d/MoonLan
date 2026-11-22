@@ -122,11 +122,11 @@ snmp:
 # switches:
 #   - 10.0.0.10                    # as before: everything from snmp:
 #                                  # как раньше: всё из snmp:
-#   - ip: 10.3.6.2                 # a slow box: better to give up fast
+#   - ip: 10.1.6.2                 # a slow box: better to give up fast
 #     timeout: 2                   # медленная коробка: лучше быстро сдаться
 #     retries: 1
 #     host_budget_seconds: 90
-#   - ip: 10.3.7.15
+#   - ip: 10.1.7.15
 #     community: OtherString       # its own community
 #                                  # своя строка сообщества
 #     web_scheme: https            # its web interface is https only
@@ -258,8 +258,8 @@ db_path: moonlan.db
 # карта показывает по имени, но тревога unmanaged_bridge_detected по
 # ним не поднимается. Указывайте chassis id (MAC) или управляющий IP.
 known_bridges: []
-#  - 18:fd:74:fd:b5:cf
-#  - 10.3.5.6
+#  - 18:fd:74:a1:16:cf
+#  - 10.1.5.6
 
 # Ports that leave the network: a provider handover, an uplink to
 # someone else's equipment. Written as "<switch ip>:<port name>", the

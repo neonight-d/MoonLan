@@ -86,7 +86,7 @@ class PhantomAggregateTest(unittest.TestCase):
     def test_a_whole_switch_in_one_aggregate_is_dropped(self):
         agent = StubAgent({i: PHANTOM for i in range(1, PORTS + 1)})
         with self.assertLogs("moonlan.snmp_collector", "WARNING") as logged:
-            data = asyncio.run(agent.collect("10.3.6.5"))
+            data = asyncio.run(agent.collect("10.1.6.5"))
         self.assertEqual(data.lag_members, {})
         self.assertEqual(data.lag_groups, {})
         self.assertEqual(len(data.ports), PORTS)

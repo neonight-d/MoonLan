@@ -127,7 +127,7 @@ def _printable(raw: bytes) -> str:
 
 
 def mac_from_text(text: str) -> str:
-    """"18:FD:74:FD:E3:80" -> "18:fd:74:fd:e3:80"; "" for anything else.
+    """"18:FD:74:A1:40:80" -> "18:fd:74:a1:40:80"; "" for anything else.
 
     RouterOS answers lldpRemChassisId with subtype macAddress and then
     puts seventeen bytes of ASCII in the value instead of the six bytes
@@ -464,7 +464,7 @@ def useful_port_labels(
 def merge_rows(neighbors: list[LldpNeighbor]) -> list[LldpNeighbor]:
     """One entry per device per port, however many rows it sent.
 
-    The MikroTik x86 behind mb0 Slot0/21 fills lldpRemTable with one
+    The MikroTik x86 behind sw0 Slot0/21 fills lldpRemTable with one
     row per VLAN interface — 38 of them, each announcing its own
     management address. They are one device on one cable. Merging them
     here rather than in each consumer also means a bridge node carries
@@ -530,8 +530,8 @@ def analyse_ports(
     the cable?), but the devices are real and are shown as such.
 
     v0.6.0 flagged both cases as forwarding, which cost the network its
-    LACP uplink source (mb0—mb1 fell back to `fdb`) and suppressed the
-    very ports the version was written for: mb1 27 and 28 and 2b0 20,
+    LACP uplink source (sw0—sw1 fell back to `fdb`) and suppressed the
+    very ports the version was written for: sw1 27 and 28 and sw5 20,
     where the MikroTik bridges live.
     """
     by_logical: dict[int, set[str]] = {}

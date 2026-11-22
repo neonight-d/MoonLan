@@ -52,14 +52,14 @@ class OverridesTest(unittest.TestCase):
         _, settings, problems = parse_switches(
             [
                 "10.0.0.10",
-                {"ip": "10.3.6.2", "timeout": 2, "retries": 1,
+                {"ip": "10.1.6.2", "timeout": 2, "retries": 1,
                  "host_budget_seconds": 90},
-                {"ip": "10.3.7.15", "community": "OtherString"},
+                {"ip": "10.1.7.15", "community": "OtherString"},
             ],
             self.defaults,
         )
         self.assertEqual(problems, [])
-        slow = settings["10.3.6.2"]
+        slow = settings["10.1.6.2"]
         self.assertEqual((slow.timeout, slow.retries), (2, 1))
         self.assertEqual(slow.host_budget_seconds, 90)
         # not named for this switch, so it comes from snmp:
@@ -69,8 +69,8 @@ class OverridesTest(unittest.TestCase):
             slow.explicit,
             {"timeout", "retries", "host_budget_seconds"},
         )
-        self.assertEqual(settings["10.3.7.15"].community, "OtherString")
-        self.assertEqual(settings["10.3.7.15"].timeout, 8)
+        self.assertEqual(settings["10.1.7.15"].community, "OtherString")
+        self.assertEqual(settings["10.1.7.15"].timeout, 8)
         # and the plain address next to them is untouched
         self.assertEqual(settings["10.0.0.10"].explicit, frozenset())
 

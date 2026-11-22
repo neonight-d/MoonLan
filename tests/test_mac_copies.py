@@ -31,10 +31,10 @@ from moonlan import corruption, server  # noqa: E402
 from moonlan.snmp_collector import PortInfo, SwitchData  # noqa: E402
 
 CORE, ACCESS = SWITCHES[0], SWITCHES[1]
-SAMPLE = "20:7b:d5:1a:31:8d"
-COPY = "20:7b:d5:1a:31:87"           # two bits away
-COPIES = ["20:7b:d5:1a:31:87", "20:7b:d5:1a:31:8f", "20:7b:d5:1a:31:9d"]
-FAR = "20:77:b5:7c:37:87"            # twelve bits away: a neighbour
+SAMPLE = "20:7b:d5:46:92:8d"
+COPY = "20:7b:d5:46:92:87"           # two bits away
+COPIES = ["20:7b:d5:46:92:87", "20:7b:d5:46:92:8f", "20:7b:d5:46:92:9d"]
+FAR = "20:77:b5:20:94:87"            # twelve bits away: a neighbour
 
 
 class CandidateTest(unittest.TestCase):
@@ -538,12 +538,12 @@ topology = { switches: [{ ip: "10.0.0.2", name: "access-sw" }] };
 for (const l of ["en", "ru"]) {
   lang = l;
   out[l] = [104, 1, 2, 5, 21].map((n) => copiesEventText({
-    event: "copies_removed", mac: "20:7b:d5:1a:31:8d",
+    event: "copies_removed", mac: "20:7b:d5:46:92:8d",
     details: JSON.stringify({ switch: "10.0.0.2", ports: ["Gi0/5", "Gi0/3"], n: n,
-                              macs: ["20:7b:d5:1a:31:87"] }),
+                              macs: ["20:7b:d5:46:92:87"] }),
   }));
 }
-out.other = copiesEventText({ event: "new_mac", mac: "20:7b:d5:1a:31:8d", details: "" });
+out.other = copiesEventText({ event: "new_mac", mac: "20:7b:d5:46:92:8d", details: "" });
 __done(out);
 """
 
@@ -568,9 +568,9 @@ class JournalWordsTest(unittest.TestCase):
             self.skipTest("needs node to run the page's JavaScript")
         out = run_page(JOURNAL_PAGE)
         self.assertEqual(out["en"][0],
-                         "20:7b:d5:1a:31:8d: 104 addresses on access-sw Gi0/5, Gi0/3")
+                         "20:7b:d5:46:92:8d: 104 addresses on access-sw Gi0/5, Gi0/3")
         self.assertEqual(out["en"][1],
-                         "20:7b:d5:1a:31:8d: 1 address on access-sw Gi0/5, Gi0/3")
+                         "20:7b:d5:46:92:8d: 1 address on access-sw Gi0/5, Gi0/3")
         self.assertEqual(
             [text.split(": ", 1)[1].split(" на ")[0] for text in out["ru"]],
             ["104 адреса", "1 адрес", "2 адреса", "5 адресов", "21 адрес"],
@@ -687,9 +687,9 @@ class HintScanTest(ScanCase):
 
 HINT_PAGE = r"""
 const out = {};
-const one = [{ mac: "20:7b:d5:1a:31:8d", vendor: "Realtek", n: 104 }];
-const nameless = [{ mac: "20:7b:d5:1a:31:8d", vendor: "", n: 104 }];
-const several = [{ mac: "20:7b:d5:1a:31:8d", vendor: "", n: 3 }, { mac: "00:1e:67:aa:bb:01", vendor: "", n: 2 }];
+const one = [{ mac: "20:7b:d5:46:92:8d", vendor: "Realtek", n: 104 }];
+const nameless = [{ mac: "20:7b:d5:46:92:8d", vendor: "", n: 104 }];
+const several = [{ mac: "20:7b:d5:46:92:8d", vendor: "", n: 3 }, { mac: "00:1e:67:aa:bb:01", vendor: "", n: 2 }];
 for (const l of ["en", "ru"]) {
   lang = l;
   out[l] = {
@@ -729,23 +729,23 @@ class HintWordsTest(unittest.TestCase):
         ru, en = out["ru"], out["en"]
         self.assertEqual(
             ru["one"],
-            "Копии одного адреса 20:7b:d5:1a:31:8d (Realtek) — вероятнее всего, "
+            "Копии одного адреса 20:7b:d5:46:92:8d (Realtek) — вероятнее всего, "
             "неисправен его сетевой адаптер. Проверьте подключение этого "
             "устройства через другой адаптер.",
         )
-        self.assertIn("20:7b:d5:1a:31:8d —", ru["nameless"])
+        self.assertIn("20:7b:d5:46:92:8d —", ru["nameless"])
         self.assertIn("кабель, патч-корд, порт или неуправляемый коммутатор", ru["several"])
         self.assertEqual(ru["none"], "")
         self.assertEqual(
             ru["alarm"],
-            "Копии одного адреса 20:7b:d5:1a:31:8d (Realtek) — вероятнее всего, "
+            "Копии одного адреса 20:7b:d5:46:92:8d (Realtek) — вероятнее всего, "
             "неисправен его сетевой адаптер · входящих ошибок за 10 мин: 340",
         )
         self.assertNotIn("ошибок", ru["alarmSeveral"])
         self.assertEqual(ru["old"], "")
         # nothing English in the Russian ones but the address and the maker
         for text in (v for v in ru.values() if isinstance(v, str)):
-            self.assertNotRegex(text.replace("20:7b:d5:1a:31:8d", "")
+            self.assertNotRegex(text.replace("20:7b:d5:46:92:8d", "")
                                 .replace("Realtek", ""), "[A-Za-z]", text)
         # the number agrees with its word: not "3 адресов"
         self.assertEqual([c.rsplit(": ", 1)[1] for c in ru["count"]],

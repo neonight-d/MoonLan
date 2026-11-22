@@ -90,7 +90,7 @@ class StpPort:
 
     @property
     def state_name(self) -> str:
-        # 2b0 answers dot1dStpPortState with 0, which is outside the
+        # sw5 answers dot1dStpPortState with 0, which is outside the
         # enum. Printing the raw number invites it to be read as a
         # state; it is the absence of one.
         return PORT_STATES.get(self.state, "n/a")
@@ -117,7 +117,7 @@ class StpData:
     priority: int = 0
     time_since_change: int = 0   # TimeTicks
     top_changes: int = 0
-    designated_root: str = ""    # "32768/34:0a:33:bc:ca:f0"
+    designated_root: str = ""    # "32768/34:0a:33:e0:69:f0"
     # the agent put the priority in the low byte and MoonLan corrected
     # it — a property of the hardware, kept so the panel can say so
     root_nonstandard: bool = False
@@ -227,8 +227,8 @@ def parse_bridge_id(raw: bytes) -> BridgeId | None:
     """Eight bytes of Bridge ID, read the way the standard writes them.
 
     With one allowance. An Edge-Core ES3528M answers
-    `00 10 34 0a 33 bc ca f0` where an HPE 1820 on the same network,
-    for the same root, answers `10 00 34 0a 33 bc ca f0`: the priority
+    `00 10 34 0a 33 e0 69 f0` where an HPE 1820 on the same network,
+    for the same root, answers `10 00 34 0a 33 e0 69 f0`: the priority
     is in the wrong byte. Read honestly that is 16, and 16 and 4096 are
     two different roots as far as any comparison is concerned.
 

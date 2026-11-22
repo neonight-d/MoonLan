@@ -195,8 +195,8 @@ next person adding a switch does not find them again.
 ID is eight bytes: two of identifier, six of MAC. 802.1t splits the
 first two into a 4-bit priority (hence always a multiple of 4096) and
 a 12-bit system id extension. An Edge-Core ES3528M answers
-`00 10 34 0a 33 bc ca f0` where an HPE 1820 answers
-`10 00 34 0a 33 bc ca f0` for the same root — the priority is in the
+`00 10 34 0a 33 e0 69 f0` where an HPE 1820 answers
+`10 00 34 0a 33 e0 69 f0` for the same root — the priority is in the
 low byte, and read honestly that is 16 rather than 4096. MoonLan
 detects the shifted encoding, corrects it, logs a warning naming the
 host, and marks the value in the panel. It does not correct it
@@ -322,13 +322,13 @@ switch is outlined in red, the way an unreachable switch is.
 ```
 Switches with no loop-detection profile — each line is what a
 new profile in config.yaml needs to be keyed by:
-  10.3.6.5        ES3528M                      sysObjectID 1.3.6.1.4.1.259.6.10.94
+  10.1.6.5        ES3528M                      sysObjectID 1.3.6.1.4.1.259.6.10.94
 ```
 
 Walk the vendor's branch to find the objects:
 
 ```bash
-python -m moonlan.diag --walk 10.3.6.5 1.3.6.1.4.1.259 --limit 800
+python -m moonlan.diag --walk 10.1.6.5 1.3.6.1.4.1.259 --limit 800
 ```
 
 then describe what you found in `loop_detection.profiles` in
@@ -415,8 +415,8 @@ were renamed and how many reset.
 A switch learns the source address of every frame that reaches a port.
 A frame damaged on its way in can still carry a readable source
 address — with a bit or two flipped — and the switch learns that one
-too: `20:7b:d5:1a:31:87` and `80:7b:d5:1a:31:8d` beside the real
-`20:7b:d5:1a:31:8d`. So copies come together with **inbound** errors on
+too: `20:7b:d5:46:92:87` and `80:7b:d5:46:92:8d` beside the real
+`20:7b:d5:46:92:8d`. So copies come together with **inbound** errors on
 the same port (`diag --port <switch> --iface <port>`): the damage
 travels from the device to the switch. Outbound errors at zero mean the
 switch's own frames reach the device intact.

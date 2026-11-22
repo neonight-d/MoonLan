@@ -3109,7 +3109,7 @@ function toggleFreeze() {
 /* Host caption: DNS name, else IP, else what LLDP called the device,
    else the MAC. The main router has no IP of ours (routers are kept out
    of the ARP inventory) and no reverse DNS, so before v0.6.2 it was a
-   pale dot labelled 00:0e:04:b7:79:ab — while LLDP had been calling it
+   pale dot labelled 00:0e:04:eb:da:ab — while LLDP had been calling it
    "MikroTik" the whole time. */
 function hostLabel(h) {
   return h.name || h.ip || lldpLabel(h) || h.mac;
@@ -4144,7 +4144,7 @@ function buildGraphData() {
       id: "extedge:" + external.id,
       semantic: ["external"],
       // the provider's switch is on the cable and everything else is
-      // behind IT: mb0 -> CE6851 -> external network
+      // behind IT: sw0 -> CE6851 -> external network
       from: external.via || "sw:" + external.switch,
       to: external.id,
       color: { color: colors.warn || "#d9a86b", opacity: 0.7 },
@@ -7264,7 +7264,7 @@ function noteDraft(nodeId) {
   return { label: label.value, note: text.value, error: error ? error.textContent : "" };
 }
 
-/* "Changed: neonight, 22.10.2026 11:30", or "Import, 22.10.2026" */
+/* "Changed: admin, 22.10.2026 11:30", or "Import, 22.10.2026" */
 function noteMeta(note) {
   if (note.source === "import") return fmt("noteImported", { date: fmtDate(note.updated_at) });
   return note.updated_by
@@ -9237,7 +9237,7 @@ function linkDroppedText(ev) {
   return why ? link + ": " + why : link;
 }
 
-/* Damaged copies of a MAC taken off the map (v0.8.5): "20:7b:d5:1a:31:8d:
+/* Damaged copies of a MAC taken off the map (v0.8.5): "20:7b:d5:46:92:8d:
    104 addresses on access-sw-4 1/5". One entry for the batch; the
    addresses are in its data, not a line each. */
 function copiesEventText(ev) {

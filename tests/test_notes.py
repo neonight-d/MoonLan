@@ -18,7 +18,7 @@ from moonlan.db import Database
 HOST = "00:4d:4c:0b:ec:b5"
 OFF_MAP = "00:4d:4c:0b:ec:b6"
 CORE_MAC = "02:4d:4c:00:00:01"
-CHASSIS = "18:fd:74:fd:b5:cf"
+CHASSIS = "18:fd:74:a1:16:cf"
 PSEUDO = "pseudo:10.0.0.2:Gi0/9"
 OFFLINE = "offline:10.0.0.2:Gi0/5"
 BRIDGE = "bridge:" + CHASSIS
@@ -38,7 +38,7 @@ class MapTest(unittest.TestCase):
         ]
         server.state.hosts = [{"mac": HOST, "switch": "10.0.0.2", "port": "Gi0/3"}]
         server.state.unlocated = [{"mac": OFF_MAP}]
-        server.state.bridges = [{"id": BRIDGE, "chassis_id": CHASSIS, "name": "Sport"}]
+        server.state.bridges = [{"id": BRIDGE, "chassis_id": CHASSIS, "name": "RouterOS-C"}]
         server.state.pseudo_switches = [{"id": PSEUDO, "switch": "10.0.0.2", "port": "Gi0/9"}]
         server.state.offline_groups = [{"id": OFFLINE, "switch": "10.0.0.2", "port": "Gi0/5"}]
         server.state.external_networks = []
@@ -125,7 +125,7 @@ class ApiTest(MapTest):
 
     def test_move(self):
         self.put(PSEUDO, "Room 214")
-        self.put(BRIDGE, "Sports hall")
+        self.put(BRIDGE, "Assembly hall")
         move = lambda to, replace=False: call(
             server.app, "POST", f"/api/notes/{PSEUDO}/move",
             json_body={"to": to, "replace": replace})
@@ -309,7 +309,7 @@ CSV = (
     "mac;label;note\r\n"
     f"{HOST};Accounting;Desk 105\r\n"                       # a device
     "02-4D-4C-00-00-01;Server room;\r\n"                    # a switch's bridge MAC
-    "18fd.74fd.b5cf;Sports hall;\"Two\r\nlines\"\r\n"       # an LLDP bridge
+    "18fd.74a1.16cf;Assembly hall;\"Two\r\nlines\"\r\n"       # an LLDP bridge
     "02005E100001;Printer;\r\n"                             # nobody's
 )
 

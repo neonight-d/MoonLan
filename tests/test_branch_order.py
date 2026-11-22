@@ -1,9 +1,9 @@
 """A branch is a chain, and LLDP is what says so.
 
-Behind port 1/28 of mb1 hang three boxes: RouterOS-Garage,
-RouterOS-Workshop and an Edge-Core. LanTopoLog draws them as a garland
-— Garage → Workshop → Edge-Core. MoonLan drew all three straight onto
-mb1 and then laid the one LLDP edge it had (Workshop ↔ Edge-Core) on
+Behind port 1/28 of sw1 hang three boxes: RouterOS-A, RouterOS-B and
+an access switch. LanTopoLog draws them as a garland — RouterOS-A →
+RouterOS-B → access switch. MoonLan drew all three straight onto sw1
+and then laid the one LLDP edge it had (RouterOS-B ↔ access switch) on
 top, which closed a ring that does not exist.
 
 Neither half was a bug on its own. `attach()` gives up on ordering a
@@ -31,10 +31,10 @@ from moonlan.topology import (
     resolve_cycles,
 )
 
-MB1 = "10.0.0.21"
-GARAGE = "10.3.6.4"
-WORKSHOP = "10.3.6.2"
-EDGE = "10.3.6.5"
+SW1 = "10.0.0.21"
+BRIDGE_A = "10.1.6.4"
+BRIDGE_B = "10.1.6.2"
+ACCESS = "10.1.6.5"
 CORE = "10.0.0.10"
 
 
@@ -60,41 +60,41 @@ def neighbor(local: int, chassis: str, matched_by: str = "fdb"):
 
 
 def segment(with_lldp: bool = True) -> list[SwitchData]:
-    """The Workshop segment as the live network reports it.
+    """The RouterOS-B segment as the live network reports it.
 
-    mb1 holds all three boxes in the FDB of one port, which is true —
+    sw1 holds all three boxes in the FDB of one port, which is true —
     they are all reachable through it. The three of them barely fill
     their own tables, which is why the order cannot be read out of
-    them. Only Workshop and Edge-Core see each other over LLDP.
+    them. Only RouterOS-B and the access switch see each other over LLDP.
     """
-    core = switch(CORE, "comm-mb0", 1, {i: f"Gi0/{i}" for i in range(1, 27)})
-    mb1 = switch(MB1, "comm.mb1", 2, {i: f"1/{i}" for i in range(1, 29)})
-    garage = switch(GARAGE, "RouterOS-Garage", 3,
-                    {1: "ether1", 2: "ether2", 3: "ether3"})
-    workshop = switch(WORKSHOP, "RouterOS-Workshop", 4,
+    core = switch(CORE, "sw0", 1, {i: f"Gi0/{i}" for i in range(1, 27)})
+    sw1 = switch(SW1, "sw1", 2, {i: f"1/{i}" for i in range(1, 29)})
+    bridge_a = switch(BRIDGE_A, "RouterOS-A", 3,
                       {1: "ether1", 2: "ether2", 3: "ether3"})
-    edge = switch(EDGE, "ES3528M", 5,
-                  {2: "Port2", 25: "Port25", 26: "Port26"})
+    bridge_b = switch(BRIDGE_B, "RouterOS-B", 4,
+                      {1: "ether1", 2: "ether2", 3: "ether3"})
+    access = switch(ACCESS, "access-sw", 5,
+                    {2: "Port2", 25: "Port25", 26: "Port26"})
 
-    # The core is the root: it sees everybody, on port 1 toward mb1
-    for sw in (mb1, garage, workshop, edge):
+    # The core is the root: it sees everybody, on port 1 toward sw1
+    for sw in (sw1, bridge_a, bridge_b, access):
         core.fdb[sw.bridge_mac] = 1
-    mb1.fdb[core.bridge_mac] = 25
-    # …and mb1 holds all three of them on 1/28. True, and not an order.
-    for sw in (garage, workshop, edge):
-        mb1.fdb[sw.bridge_mac] = 28
+    sw1.fdb[core.bridge_mac] = 25
+    # …and sw1 holds all three of them on 1/28. True, and not an order.
+    for sw in (bridge_a, bridge_b, access):
+        sw1.fdb[sw.bridge_mac] = 28
     # The three boxes know almost nothing: each has only the way out.
-    garage.fdb[core.bridge_mac] = 1
-    workshop.fdb[core.bridge_mac] = 1
-    edge.fdb[core.bridge_mac] = 25
+    bridge_a.fdb[core.bridge_mac] = 1
+    bridge_b.fdb[core.bridge_mac] = 1
+    access.fdb[core.bridge_mac] = 25
 
     if with_lldp:
-        # Workshop names Edge-Core on ether2. Its uplink is ether1 —
-        # that is the port the rest of the network is behind — so
-        # Edge-Core is further out than Workshop is.
-        workshop.lldp_neighbors = [neighbor(2, edge.bridge_mac)]
-        edge.lldp_neighbors = [neighbor(25, workshop.bridge_mac)]
-    return [core, mb1, garage, workshop, edge]
+        # RouterOS-B names the access switch on ether2. Its uplink is
+        # ether1 — that is the port the rest of the network is behind —
+        # so the access switch is further out than RouterOS-B is.
+        bridge_b.lldp_neighbors = [neighbor(2, access.bridge_mac)]
+        access.lldp_neighbors = [neighbor(25, bridge_b.bridge_mac)]
+    return [core, sw1, bridge_a, bridge_b, access]
 
 
 def live_segment() -> list[SwitchData]:
@@ -106,38 +106,38 @@ def live_segment() -> list[SwitchData]:
     usable LLDP in this branch at all, and the order has to come out of
     the MAC tables, which do hold it:
 
-        mb1  1/28 -> Garage, Workshop, Edge-Core   (all three)
-        Garage   ether1 -> mb1        ether2 -> Workshop, Edge-Core
-        Workshop ether1 -> mb1, Garage  ether2 -> Edge-Core
-        Edge-Core Port25 -> mb1, Garage, Workshop
+        sw1  1/28 -> RouterOS-A, RouterOS-B, access         (all three)
+        RouterOS-A   ether1 -> sw1        ether2 -> RouterOS-B, access
+        RouterOS-B ether1 -> sw1, RouterOS-A  ether2 -> access
+        access    Port25 -> sw1, RouterOS-A, RouterOS-B
 
-    Only Garage sees both of the others away from the way out. That is
+    Only RouterOS-A sees both of the others away from the way out. That is
     the garland, stated plainly, and MoonLan drew a three-way star over
     it for want of knowing which of their ports faced the root.
     """
-    core = switch(CORE, "comm-mb0", 1, {i: f"Gi0/{i}" for i in range(1, 27)})
-    mb1 = switch(MB1, "comm.mb1", 2, {i: f"1/{i}" for i in range(1, 29)})
-    garage = switch(GARAGE, "RouterOS-Garage", 3,
-                    {1: "ether1", 2: "ether2", 3: "ether3"})
-    workshop = switch(WORKSHOP, "RouterOS-Workshop", 4,
+    core = switch(CORE, "sw0", 1, {i: f"Gi0/{i}" for i in range(1, 27)})
+    sw1 = switch(SW1, "sw1", 2, {i: f"1/{i}" for i in range(1, 29)})
+    bridge_a = switch(BRIDGE_A, "RouterOS-A", 3,
                       {1: "ether1", 2: "ether2", 3: "ether3"})
-    edge = switch(EDGE, "ES3528M", 5,
-                  {2: "Port2", 25: "Port25", 26: "Port26"})
-    for sw in (mb1, garage, workshop, edge):
+    bridge_b = switch(BRIDGE_B, "RouterOS-B", 4,
+                      {1: "ether1", 2: "ether2", 3: "ether3"})
+    access = switch(ACCESS, "access-sw", 5,
+                    {2: "Port2", 25: "Port25", 26: "Port26"})
+    for sw in (sw1, bridge_a, bridge_b, access):
         core.fdb[sw.bridge_mac] = 1
-    mb1.fdb[core.bridge_mac] = 25
-    for sw in (garage, workshop, edge):
-        mb1.fdb[sw.bridge_mac] = 28
-    garage.fdb[mb1.bridge_mac] = 1
-    garage.fdb[workshop.bridge_mac] = 2
-    garage.fdb[edge.bridge_mac] = 2
-    workshop.fdb[mb1.bridge_mac] = 1
-    workshop.fdb[garage.bridge_mac] = 1
-    workshop.fdb[edge.bridge_mac] = 2
-    edge.fdb[mb1.bridge_mac] = 25
-    edge.fdb[garage.bridge_mac] = 25
-    edge.fdb[workshop.bridge_mac] = 25
-    return [core, mb1, garage, workshop, edge]
+    sw1.fdb[core.bridge_mac] = 25
+    for sw in (bridge_a, bridge_b, access):
+        sw1.fdb[sw.bridge_mac] = 28
+    bridge_a.fdb[sw1.bridge_mac] = 1
+    bridge_a.fdb[bridge_b.bridge_mac] = 2
+    bridge_a.fdb[access.bridge_mac] = 2
+    bridge_b.fdb[sw1.bridge_mac] = 1
+    bridge_b.fdb[bridge_a.bridge_mac] = 1
+    bridge_b.fdb[access.bridge_mac] = 2
+    access.fdb[sw1.bridge_mac] = 25
+    access.fdb[bridge_a.bridge_mac] = 25
+    access.fdb[bridge_b.bridge_mac] = 25
+    return [core, sw1, bridge_a, bridge_b, access]
 
 
 def build(switches):
@@ -159,20 +159,20 @@ class BehindNotBesideTest(unittest.TestCase):
 
     def _links(self):
         return [
-            {"a": MB1, "b": WORKSHOP, "a_port": "1/28", "b_port": "ether1",
+            {"a": SW1, "b": BRIDGE_B, "a_port": "1/28", "b_port": "ether1",
              "source": "fdb"},
-            {"a": MB1, "b": EDGE, "a_port": "1/28", "b_port": "Port25",
+            {"a": SW1, "b": ACCESS, "a_port": "1/28", "b_port": "Port25",
              "source": "fdb"},
-            {"a": WORKSHOP, "b": EDGE, "a_port": "ether2", "b_port": "Port25",
+            {"a": BRIDGE_B, "b": ACCESS, "a_port": "ether2", "b_port": "Port25",
              "source": "lldp"},
         ]
 
     def _pairs(self):
         return {
-            frozenset({WORKSHOP, EDGE}): {
-                WORKSHOP: {"if_index": 2, "name": "ether2",
+            frozenset({BRIDGE_B, ACCESS}): {
+                BRIDGE_B: {"if_index": 2, "name": "ether2",
                            "matched_by": "fdb"},
-                EDGE: {"if_index": 25, "name": "Port25",
+                ACCESS: {"if_index": 25, "name": "Port25",
                        "matched_by": "fdb"},
             }
         }
@@ -181,13 +181,13 @@ class BehindNotBesideTest(unittest.TestCase):
         links = self._links()
         with self.assertLogs("moonlan.topology", "WARNING") as logged:
             removed = drop_impossible_links(
-                links, self._pairs(), {WORKSHOP: 1, EDGE: 25}
+                links, self._pairs(), {BRIDGE_B: 1, ACCESS: 25}
             )
         self.assertEqual(len(removed), 1)
-        self.assertEqual((removed[0]["a"], removed[0]["b"]), (MB1, EDGE))
-        self.assertEqual(removed[0]["behind"], WORKSHOP)
+        self.assertEqual((removed[0]["a"], removed[0]["b"]), (SW1, ACCESS))
+        self.assertEqual(removed[0]["behind"], BRIDGE_B)
         self.assertEqual(pairs(links), {
-            frozenset({MB1, WORKSHOP}), frozenset({WORKSHOP, EDGE}),
+            frozenset({SW1, BRIDGE_B}), frozenset({BRIDGE_B, ACCESS}),
         })
         self.assertTrue(
             any("Dropping the link" in line for line in logged.output)
@@ -197,7 +197,7 @@ class BehindNotBesideTest(unittest.TestCase):
         """Removing the one without having the other orphans a switch."""
         links = [link for link in self._links() if link["source"] == "fdb"]
         self.assertEqual(
-            drop_impossible_links(links, self._pairs(), {WORKSHOP: 1}), []
+            drop_impossible_links(links, self._pairs(), {BRIDGE_B: 1}), []
         )
         self.assertEqual(len(links), 2)
 
@@ -205,50 +205,51 @@ class BehindNotBesideTest(unittest.TestCase):
         links = self._links()
         links[1]["source"] = "both"
         self.assertEqual(
-            drop_impossible_links(links, self._pairs(), {WORKSHOP: 1}), []
+            drop_impossible_links(links, self._pairs(), {BRIDGE_B: 1}), []
         )
 
     def test_a_downlink_of_the_switch_itself_is_left_alone(self):
         """Y being behind X says nothing about what is behind Y."""
         links = self._links()
         links.append({
-            "a": EDGE, "b": "10.3.6.9", "a_port": "Port2",
+            "a": ACCESS, "b": "10.1.6.9", "a_port": "Port2",
             "b_port": "Gi1", "source": "fdb",
         })
-        drop_impossible_links(links, self._pairs(), {WORKSHOP: 1, EDGE: 25})
-        self.assertIn(frozenset({EDGE, "10.3.6.9"}), pairs(links))
+        drop_impossible_links(links, self._pairs(), {BRIDGE_B: 1, ACCESS: 25})
+        self.assertIn(frozenset({ACCESS, "10.1.6.9"}), pairs(links))
 
     def test_an_unknown_uplink_makes_no_claim(self):
         """Without knowing which way is up, "behind" is a guess."""
         links = self._links()
         self.assertEqual(
-            drop_impossible_links(links, self._pairs(), {WORKSHOP: None}), []
+            drop_impossible_links(links, self._pairs(), {BRIDGE_B: None}), []
         )
 
     def test_the_port_that_is_the_uplink_proves_nothing(self):
         """A neighbour on my uplink is in front of me, not behind."""
         links = self._links()
         self.assertEqual(
-            drop_impossible_links(links, self._pairs(), {WORKSHOP: 2}), []
+            drop_impossible_links(links, self._pairs(), {BRIDGE_B: 2}), []
         )
 
 
-class WorkshopSegmentTest(unittest.TestCase):
-    def test_edge_core_is_behind_workshop_not_beside_it(self):
+class BridgeSegmentTest(unittest.TestCase):
+    def test_the_access_switch_is_behind_bridge_b_not_beside_it(self):
         with self.assertLogs("moonlan.topology", "INFO") as logged:
             _sw, links, *_rest = build(segment())
         drawn = pairs(links)
-        self.assertIn(frozenset({WORKSHOP, EDGE}), drawn)
-        # the ring's third side: mb1 never gets a cable to the Edge-Core
-        self.assertNotIn(frozenset({MB1, EDGE}), drawn)
+        self.assertIn(frozenset({BRIDGE_B, ACCESS}), drawn)
+        # the ring's third side: sw1 never gets a cable to the access switch
+        self.assertNotIn(frozenset({SW1, ACCESS}), drawn)
         self.assertTrue(
-            any("is behind" in line and EDGE in line for line in logged.output),
+            any("is behind" in line and ACCESS in line
+                for line in logged.output),
             logged.output,
         )
 
     def test_there_is_no_ring(self):
         _sw, links, *_rest = build(segment())
-        switches = {CORE, MB1, GARAGE, WORKSHOP, EDGE}
+        switches = {CORE, SW1, BRIDGE_A, BRIDGE_B, ACCESS}
         among = [
             link for link in links
             if link["a"] in switches and link["b"] in switches
@@ -259,15 +260,15 @@ class WorkshopSegmentTest(unittest.TestCase):
     def test_without_lldp_it_is_the_old_star_and_says_so(self):
         """No LLDP, no order — but nothing worse than before either.
 
-        The three still hang off mb1, the log still says the order is
+        The three still hang off sw1, the log still says the order is
         undetermined, and the links are marked so the map can draw
         them as the guess they are.
         """
         with self.assertLogs("moonlan.topology", "WARNING") as logged:
             _sw, links, *_rest = build(segment(with_lldp=False))
         drawn = pairs(links)
-        self.assertIn(frozenset({MB1, EDGE}), drawn)
-        self.assertIn(frozenset({MB1, WORKSHOP}), drawn)
+        self.assertIn(frozenset({SW1, ACCESS}), drawn)
+        self.assertIn(frozenset({SW1, BRIDGE_B}), drawn)
         self.assertTrue(
             any("undetermined" in line for line in logged.output),
             logged.output,
@@ -275,39 +276,39 @@ class WorkshopSegmentTest(unittest.TestCase):
         guessed = [link for link in links if link.get("order_unknown")]
         self.assertEqual(
             {frozenset({link["a"], link["b"]}) for link in guessed},
-            {frozenset({MB1, ip}) for ip in (GARAGE, WORKSHOP, EDGE)},
+            {frozenset({SW1, ip}) for ip in (BRIDGE_A, BRIDGE_B, ACCESS)},
         )
 
     def test_the_whole_garland_when_lldp_covers_both_hops(self):
-        """What LanTopoLog draws: mb1 → Garage → Workshop → Edge-Core.
+        """What LanTopoLog draws: sw1 → RouterOS-A → RouterOS-B → access.
 
         One more LLDP pair is all it takes. No MAC table on any of the
         three boxes has to know anything about the others.
         """
         switches = segment()
         by_ip = {sw.ip: sw for sw in switches}
-        garage, workshop = by_ip[GARAGE], by_ip[WORKSHOP]
-        garage.lldp_neighbors = [neighbor(2, workshop.bridge_mac)]
-        workshop.lldp_neighbors.append(neighbor(1, garage.bridge_mac))
+        bridge_a, bridge_b = by_ip[BRIDGE_A], by_ip[BRIDGE_B]
+        bridge_a.lldp_neighbors = [neighbor(2, bridge_b.bridge_mac)]
+        bridge_b.lldp_neighbors.append(neighbor(1, bridge_a.bridge_mac))
         _sw, links, *_rest = build(switches)
         drawn = pairs(links)
         self.assertEqual(
             drawn & {
-                frozenset({MB1, GARAGE}), frozenset({GARAGE, WORKSHOP}),
-                frozenset({WORKSHOP, EDGE}),
+                frozenset({SW1, BRIDGE_A}), frozenset({BRIDGE_A, BRIDGE_B}),
+                frozenset({BRIDGE_B, ACCESS}),
             },
             {
-                frozenset({MB1, GARAGE}), frozenset({GARAGE, WORKSHOP}),
-                frozenset({WORKSHOP, EDGE}),
+                frozenset({SW1, BRIDGE_A}), frozenset({BRIDGE_A, BRIDGE_B}),
+                frozenset({BRIDGE_B, ACCESS}),
             },
         )
-        self.assertNotIn(frozenset({MB1, WORKSHOP}), drawn)
-        self.assertNotIn(frozenset({MB1, EDGE}), drawn)
+        self.assertNotIn(frozenset({SW1, BRIDGE_B}), drawn)
+        self.assertNotIn(frozenset({SW1, ACCESS}), drawn)
         self.assertFalse([link for link in links if link.get("order_unknown")])
 
     def test_the_rest_of_the_network_is_untouched(self):
         _sw, links, *_rest = build(segment())
-        self.assertIn(frozenset({CORE, MB1}), pairs(links))
+        self.assertIn(frozenset({CORE, SW1}), pairs(links))
 
 
 def link(a, b, source="fdb", a_port="1", b_port="1", **extra):
@@ -337,12 +338,12 @@ class BranchUplinkTest(unittest.TestCase):
         _sw, links, *_rest = build(live_segment())
         drawn = pairs(links)
         self.assertEqual(
-            {p for p in drawn if MB1 in p or GARAGE in p or WORKSHOP in p},
+            {p for p in drawn if SW1 in p or BRIDGE_A in p or BRIDGE_B in p},
             {
-                frozenset({CORE, MB1}),
-                frozenset({MB1, GARAGE}),
-                frozenset({GARAGE, WORKSHOP}),
-                frozenset({WORKSHOP, EDGE}),
+                frozenset({CORE, SW1}),
+                frozenset({SW1, BRIDGE_A}),
+                frozenset({BRIDGE_A, BRIDGE_B}),
+                frozenset({BRIDGE_B, ACCESS}),
             },
         )
 
@@ -360,12 +361,14 @@ class BranchUplinkTest(unittest.TestCase):
             frozenset({link["a"], link["b"]}): (link["a_port"], link["b_port"])
             for link in links
         }
-        self.assertEqual(by_pair[frozenset({MB1, GARAGE})], ("1/28", "ether1"))
         self.assertEqual(
-            by_pair[frozenset({GARAGE, WORKSHOP})], ("ether2", "ether1")
+            by_pair[frozenset({SW1, BRIDGE_A})], ("1/28", "ether1")
         )
         self.assertEqual(
-            by_pair[frozenset({WORKSHOP, EDGE})], ("ether2", "Port25")
+            by_pair[frozenset({BRIDGE_A, BRIDGE_B})], ("ether2", "ether1")
+        )
+        self.assertEqual(
+            by_pair[frozenset({BRIDGE_B, ACCESS})], ("ether2", "Port25")
         )
 
 
@@ -406,33 +409,33 @@ class RingTest(unittest.TestCase):
         self.assertEqual(len(links), 2)
 
     def test_two_equally_weak_edges_and_one_of_them_is_impossible(self):
-        """mb1 — Workshop — Edge-Core, and mb1 — Edge-Core on top.
+        """sw1 — RouterOS-B — access, and sw1 — access on top.
 
-        Both MAC-table edges are equally weak. LLDP says the Edge-Core
-        is behind Workshop, so the edge that puts it beside Workshop is
+        Both MAC-table edges are equally weak. LLDP says the access switch
+        is behind RouterOS-B, so the edge that puts it beside RouterOS-B is
         the one that cannot be.
         """
         links = [
-            link(MB1, WORKSHOP, "fdb", "1/28", "ether1"),
-            link(MB1, EDGE, "fdb", "1/28", "Port25"),
-            link(WORKSHOP, EDGE, "lldp", "ether2", "Port25"),
+            link(SW1, BRIDGE_B, "fdb", "1/28", "ether1"),
+            link(SW1, ACCESS, "fdb", "1/28", "Port25"),
+            link(BRIDGE_B, ACCESS, "lldp", "ether2", "Port25"),
         ]
         lldp_pairs = {
-            frozenset({WORKSHOP, EDGE}): {
-                WORKSHOP: {"if_index": 2, "name": "ether2",
+            frozenset({BRIDGE_B, ACCESS}): {
+                BRIDGE_B: {"if_index": 2, "name": "ether2",
                            "matched_by": "fdb"},
-                EDGE: {"if_index": 25, "name": "Port25",
+                ACCESS: {"if_index": 25, "name": "Port25",
                        "matched_by": "fdb"},
             }
         }
         with self.assertLogs("moonlan.topology", "WARNING"):
             removed = resolve_cycles(
-                links, lldp_pairs, {WORKSHOP: 1, EDGE: 25, MB1: 25}
+                links, lldp_pairs, {BRIDGE_B: 1, ACCESS: 25, SW1: 25}
             )
         self.assertEqual(len(removed), 1)
-        self.assertEqual((removed[0]["a"], removed[0]["b"]), (MB1, EDGE))
+        self.assertEqual((removed[0]["a"], removed[0]["b"]), (SW1, ACCESS))
         self.assertEqual(pairs(links), {
-            frozenset({MB1, WORKSHOP}), frozenset({WORKSHOP, EDGE}),
+            frozenset({SW1, BRIDGE_B}), frozenset({BRIDGE_B, ACCESS}),
         })
 
     def test_a_ring_nothing_can_account_for_keeps_all_its_edges(self):

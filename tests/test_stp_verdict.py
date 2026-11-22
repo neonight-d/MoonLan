@@ -4,8 +4,8 @@ Three things are pinned here, all of them found on one production
 network the day RSTP was switched on:
 
 - one root reported two ways. An Edge-Core answers
-  `00 10 34 0a 33 bc ca f0` where an HPE answers
-  `10 00 34 0a 33 bc ca f0` for the same root: the priority is in the
+  `00 10 34 0a 33 e0 69 f0` where an HPE answers
+  `10 00 34 0a 33 e0 69 f0` for the same root: the priority is in the
   wrong byte. Read honestly that is 16 against 4096, and the network
   was reported as having two spanning trees and raised
   stp_fragmented on a network with one;
@@ -34,10 +34,10 @@ from moonlan.stp import (
     rootless,
 )
 
-ROOT_MAC = "34:0a:33:bc:ca:f0"
+ROOT_MAC = "34:0a:33:e0:69:f0"
 # the three encodings seen on the wire, all naming the same bridge
-STANDARD = bytes.fromhex("100034 0a33bcca f0".replace(" ", ""))
-SHIFTED = bytes.fromhex("001034 0a33bcca f0".replace(" ", ""))
+STANDARD = bytes.fromhex("100034 0a33e069 f0".replace(" ", ""))
+SHIFTED = bytes.fromhex("001034 0a33e069 f0".replace(" ", ""))
 
 
 def raw_id(prefix: str, mac: str) -> bytes:
@@ -164,7 +164,7 @@ class RootlessBridgeTest(unittest.TestCase):
     """
 
     def test_no_root_means_not_operating(self):
-        data = rootless_bridge("18:fd:74:fd:b3:af")
+        data = rootless_bridge("18:fd:74:a1:10:af")
         self.assertFalse(data.operating)
         self.assertIn("names no root", data.reason)
 
@@ -178,9 +178,9 @@ class RootlessBridgeTest(unittest.TestCase):
         per_switch = {
             "10.0.0.10": silent_root(ROOT_MAC),
             "10.0.0.21": member("aa:00:00:00:00:01", f"4096/{ROOT_MAC}", 20000),
-            "10.3.6.2": rootless_bridge("18:fd:74:fd:b3:af"),
-            "10.3.6.4": rootless_bridge("18:fd:74:fd:e3:80"),
-            "10.3.7.10": rootless_bridge("18:fd:74:fd:b5:c5"),
+            "10.1.6.2": rootless_bridge("18:fd:74:a1:10:af"),
+            "10.1.6.4": rootless_bridge("18:fd:74:a1:40:80"),
+            "10.1.7.10": rootless_bridge("18:fd:74:a1:16:c5"),
         }
         judge_network(per_switch)
         verdict = network_verdict(per_switch)
@@ -189,7 +189,7 @@ class RootlessBridgeTest(unittest.TestCase):
         self.assertNotIn("unknown", verdict["roots"])
         # …and they are listed rather than dropped out of sight
         self.assertEqual(
-            verdict["rootless"], ["10.3.6.2", "10.3.6.4", "10.3.7.10"]
+            verdict["rootless"], ["10.1.6.2", "10.1.6.4", "10.1.7.10"]
         )
 
     def test_two_real_roots_are_still_two(self):
@@ -200,13 +200,13 @@ class RootlessBridgeTest(unittest.TestCase):
             "10.0.0.21": member("aa:00:00:00:00:01", f"4096/{ROOT_MAC}", 20000),
             "10.9.0.1": silent_root(other),
             "10.9.0.2": member("bb:00:00:00:00:02", f"4096/{other}", 20000),
-            "10.3.6.2": rootless_bridge("18:fd:74:fd:b3:af"),
+            "10.1.6.2": rootless_bridge("18:fd:74:a1:10:af"),
         }
         judge_network(per_switch)
         verdict = network_verdict(per_switch)
         self.assertEqual(verdict["verdict"], "fragmented")
         self.assertEqual(len(verdict["roots"]), 2)
-        self.assertEqual(verdict["rootless"], ["10.3.6.2"])
+        self.assertEqual(verdict["rootless"], ["10.1.6.2"])
 
     def test_a_switch_reporting_nothing_at_all_is_not_in_that_list(self):
         """`reports_nothing` is a different finding with its own words.
@@ -245,8 +245,8 @@ class OperatingTest(unittest.TestCase):
     def test_neighbours_confirm_the_root(self):
         network = {
             "10.0.0.10": silent_root(ROOT_MAC),
-            "10.0.0.17": member("44:5b:ed:5b:39:40", f"4096/{ROOT_MAC}", 20000),
-            "10.3.6.5": member("70:72:cf:63:22:2d", f"4096/{ROOT_MAC}", 420000),
+            "10.0.0.17": member("44:5b:ed:07:9a:40", f"4096/{ROOT_MAC}", 20000),
+            "10.1.6.5": member("70:72:cf:3f:81:2d", f"4096/{ROOT_MAC}", 420000),
         }
         judge_network(network)
         root = network["10.0.0.10"]
@@ -285,10 +285,10 @@ class NetworkVerdictTest(unittest.TestCase):
         """The false stp_fragmented, stated as a test."""
         network = {
             "10.0.0.17": member(
-                "44:5b:ed:5b:39:40", format_bridge_id(STANDARD), 20000
+                "44:5b:ed:07:9a:40", format_bridge_id(STANDARD), 20000
             ),
-            "10.3.6.5": member(
-                "70:72:cf:63:22:2d", format_bridge_id(SHIFTED), 420000,
+            "10.1.6.5": member(
+                "70:72:cf:3f:81:2d", format_bridge_id(SHIFTED), 420000,
                 root_nonstandard=True,
             ),
         }
@@ -299,7 +299,7 @@ class NetworkVerdictTest(unittest.TestCase):
     def test_the_confirmed_root_joins_its_own_tree(self):
         network = {
             "10.0.0.10": silent_root(ROOT_MAC),
-            "10.0.0.17": member("44:5b:ed:5b:39:40", f"4096/{ROOT_MAC}", 20000),
+            "10.0.0.17": member("44:5b:ed:07:9a:40", f"4096/{ROOT_MAC}", 20000),
         }
         judge_network(network)
         verdict = network_verdict(network)
@@ -310,9 +310,9 @@ class NetworkVerdictTest(unittest.TestCase):
 
     def test_two_real_roots_are_still_two(self):
         network = {
-            "10.0.0.17": member("44:5b:ed:5b:39:40", f"4096/{ROOT_MAC}", 20000),
-            "10.3.6.5": member(
-                "70:72:cf:63:22:2d", "32768/18:fd:74:fd:b5:ca", 200000
+            "10.0.0.17": member("44:5b:ed:07:9a:40", f"4096/{ROOT_MAC}", 20000),
+            "10.1.6.5": member(
+                "70:72:cf:3f:81:2d", "32768/18:fd:74:a1:16:ca", 200000
             ),
         }
         verdict = network_verdict(network)
@@ -323,9 +323,9 @@ class NetworkVerdictTest(unittest.TestCase):
 class BlockingPortTest(unittest.TestCase):
     """RouterOS reports blocking on sockets with nothing in them."""
 
-    def workshop(self) -> StpData:
+    def bridge_b(self) -> StpData:
         return StpData(
-            supported=True, own_macs={"18:fd:74:fd:b3:af"},
+            supported=True, own_macs={"18:fd:74:a1:10:af"},
             ports={
                 1: StpPort(bridge_port=1, if_index=1, state=STATE_FORWARDING,
                            enabled=True, link_up=True, name="ether1"),
@@ -339,7 +339,7 @@ class BlockingPortTest(unittest.TestCase):
         )
 
     def test_only_a_port_with_a_cable_counts_as_blocking(self):
-        blocking = [p.name for p in self.workshop().blocking_ports()]
+        blocking = [p.name for p in self.bridge_b().blocking_ports()]
         self.assertEqual(blocking, ["ether2"])
 
     def test_an_unknown_link_state_is_not_held_against_the_port(self):

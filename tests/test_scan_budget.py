@@ -159,7 +159,7 @@ class ScanBudgetTest(unittest.IsolatedAsyncioTestCase):
 class StaleSwitchTest(unittest.IsolatedAsyncioTestCase):
     """A switch that answers and never finishes answering.
 
-    10.3.7.10 was not polled in full once in six hours: thirty scans,
+    10.1.7.10 was not polled in full once in six hours: thirty scans,
     thirty budget failures. On the map it looked alive — from its last
     complete reading — and the only way to learn otherwise was the
     journal. That is a third state beside "answering" and "down", and
@@ -315,19 +315,19 @@ class CountersStarvationTest(unittest.IsolatedAsyncioTestCase):
     def test_a_budget_that_outlasts_two_cycles_is_reported(self):
         cfg = Config()
         cfg.counters_interval_seconds = 60
-        cfg.switches = ["10.0.0.10", "10.3.6.2"]
+        cfg.switches = ["10.0.0.10", "10.1.6.2"]
         cfg.switch_snmp = {
             "10.0.0.10": HostSnmp(
                 community="c", timeout=5, retries=2, retries_on_break=2,
                 host_budget_seconds=90,
             ),
-            "10.3.6.2": HostSnmp(
+            "10.1.6.2": HostSnmp(
                 community="c", timeout=2, retries=1, retries_on_break=2,
                 host_budget_seconds=180,
                 explicit=frozenset({"host_budget_seconds"}),
             ),
         }
-        self.assertEqual(cfg.starved_counters(), [("10.3.6.2", 180)])
+        self.assertEqual(cfg.starved_counters(), [("10.1.6.2", 180)])
         cfg.counters_interval_seconds = 0  # counters cycle switched off
         self.assertEqual(cfg.starved_counters(), [])
 

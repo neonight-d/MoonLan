@@ -241,7 +241,7 @@ link speed).
 
 ```
 WARNING port_frame_corruption: 10.0.0.44:1/5 — 7 distorted copies of
-20:7b:d5:1a:31:8d in the MAC table (20:7b:d5:1a:31:87, 20:7b:d5:1a:31:8f,
+20:7b:d5:46:92:8d in the MAC table (20:7b:d5:46:92:87, 20:7b:d5:46:92:8f,
 …) — all of one address: its network adapter is the likelier fault; try
 the device through another adapter; inbound errors in 10 min: 340
 ```
@@ -250,8 +250,8 @@ A switch learns the source address of every frame it forwards. When the
 frames themselves arrive damaged — a failing transmitter, cable or patch
 cord, a dying transceiver, interference on a long run — the switch
 faithfully learns the damaged addresses too. Next to the real
-`20:7b:d5:1a:31:8d` the MAC table grows `20:7b:d5:1a:31:9d` (one bit
-away), `20:7b:d5:1a:31:87`, `80:7b:d5:1a:31:8d`. Each of them lives for
+`20:7b:d5:46:92:8d` the MAC table grows `20:7b:d5:46:92:9d` (one bit
+away), `20:7b:d5:46:92:87`, `80:7b:d5:46:92:8d`. Each of them lives for
 a poll or two and never answers ARP.
 
 MoonLan reads the pattern for what it is: an address the database has
@@ -284,7 +284,7 @@ most ten sightings, nobody watching them or labelling them, near an
 address with an IP on the same switch, and at least
 `corruption_macs_threshold` of them around that one address — and
 taken off the map at the first start, with one journal entry for the
-batch ("Damaged MAC copies removed · 20:7b:d5:1a:31:8d: 104 addresses on
+batch ("Damaged MAC copies removed · 20:7b:d5:46:92:8d: 104 addresses on
 … 1/5"). The next daily cleanup deletes them.
 
 To see the evidence:

@@ -738,9 +738,9 @@ class SnmpCollector:
 
         It matters because the loss is not random. The agent answers
         the first rows and runs out of breath, so the ports that
-        disappear are the ones at the end of ifTable — on mb1 that was
+        disappear are the ones at the end of ifTable — on sw1 that was
         1/25…1/28, the gigabit uplinks, in three polls running. Raising
-        the timeout cured mb0 and mb2 and did not cure mb1: a switch
+        the timeout cured sw0 and sw2 and did not cure sw1: a switch
         with 36 interfaces needs the table read in more than one bite.
 
         Resuming forces lexicographicMode=True — a walk restarted at a

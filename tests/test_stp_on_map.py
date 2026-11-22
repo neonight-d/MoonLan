@@ -1,6 +1,6 @@
 """What the STP panel says and what the map draws must be one answer.
 
-The panel called mb0 the root. The map drew it as an ordinary switch:
+The panel called sw0 the root. The map drew it as an ordinary switch:
 white border, no caption. Both read the same field, `stp.operating` and
 `stp.is_root`, off the same objects — but at different moments.
 

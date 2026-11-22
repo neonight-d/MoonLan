@@ -708,7 +708,7 @@ class AlarmEngine:
         """Closes alarms the configuration has just made pointless.
 
         A change to the config should close what it makes moot. The
-        CE6851 alarm was raised before mb0 Slot0/25 went into
+        CE6851 alarm was raised before sw0 Slot0/25 went into
         uplink_ports and then sat in the active list for a day: the
         only clear condition was the neighbour disappearing from LLDP,
         which a provider handover never does. The subject is now

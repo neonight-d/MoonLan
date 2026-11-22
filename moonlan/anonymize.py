@@ -50,7 +50,7 @@ MAC_PREFIX = "00:00:5e:00:53"
 
 
 def _decimal_mac(mac: str) -> str:
-    """"18:fd:74:fd:b5:cf" as the six decimal octets of an OID suffix.
+    """"18:fd:74:a1:16:cf" as the six decimal octets of an OID suffix.
 
     A MAC forwarding entry is indexed by its address, so `diag --fdb`
     prints every one of them twice: once as an address and once as the

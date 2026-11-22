@@ -486,7 +486,7 @@ with the reason. In demo mode nothing is sent to the network.
   refused with a reason instead of waiting in a queue without end.
 - `web_scheme` (`http`): how a switch's web interface is opened. A
   switch that serves https only says so in its own `switches:` entry:
-  `- ip: 10.3.7.15` / `web_scheme: https`.
+  `- ip: 10.1.7.15` / `web_scheme: https`.
 - `allowed_schemes` (`[]`): link schemes beyond `http`, `https`, `ssh`
   and `telnet` — `winbox`, say. `javascript:` and `data:` are refused
   even if listed: a link with either would run code in the browser of

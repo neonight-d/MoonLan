@@ -9,7 +9,7 @@ Three behaviours the ports panel depends on:
 - a packet column that answers for every port with zero while the
   octet counters are in the terabytes is firmware that implements the
   column without filling it, and the 32-bit column is read instead.
-  That rule is for packets only: on mb0 a column of zeros for errors
+  That rule is for packets only: on sw0 a column of zeros for errors
   is the honest answer.
 
 Run with:  python -m unittest discover -s tests
@@ -152,10 +152,10 @@ class GapFillTest(unittest.TestCase):
 
 
 class UnfilledPacketColumnTest(unittest.TestCase):
-    """mb0 answers ifHCInUcastPkts for 26 ports, every value zero."""
+    """sw0 answers ifHCInUcastPkts for 26 ports, every value zero."""
 
     def _poll(self, packets, octets=None):
-        # the real numbers from mb0 Slot0/21: terabytes of octets next
+        # the real numbers from sw0 Slot0/21: terabytes of octets next
         # to a packet counter that never moved
         busy = {1: 9_137_720_039_106}
         collector = FakeCollector(tables={

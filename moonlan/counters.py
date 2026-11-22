@@ -188,13 +188,13 @@ async def collect_samples(
     - the column returns some rows and then the agent stops answering:
       the walk resumes itself (see SnmpCollector._walk), and whatever
       ports are still missing afterwards are fetched one GET at a time
-      from the 32-bit column. On mb1 the ports lost this way were the
+      from the 32-bit column. On sw1 the ports lost this way were the
       gigabit uplinks at the end of ifTable, three polls running;
     - the column answers for every port and every value is zero while
       the octets are in the terabytes: the firmware implements the
       column and does not fill it. That one applies to packet counters
       only — for errors and discards a column of zeros is a legitimate
-      answer, and on mb0 it is the true one.
+      answer, and on sw0 it is the true one.
 
     `expected` is the ifIndexes the interface table knows about; without
     it the per-port gap filling has nothing to compare against.
@@ -330,7 +330,7 @@ async def collect_samples(
 def _column_unfilled(samples: dict[int, Sample], column: str) -> bool:
     """A packet column answered for every port, and every answer is zero.
 
-    On mb0 ifHCInUcastPkts returns 26 rows of zero next to octet
+    On sw0 ifHCInUcastPkts returns 26 rows of zero next to octet
     counters in the terabytes. The column exists and is never written
     to, which is not the same as a quiet switch — and it cost the error
     ratio, which needs a frame count to be a ratio of anything.

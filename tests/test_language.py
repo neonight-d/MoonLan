@@ -17,7 +17,7 @@ from moonlan import server, topology
 from moonlan.stp import STATE_FORWARDING, StpData, StpPort, judge, judge_network
 from web_source import APP, INDEX, NODE, function, run_page, strings
 
-ROOT = "34:0a:33:bc:ca:f0"
+ROOT = "34:0a:33:e0:69:f0"
 OWN = "aa:00:00:00:00:01"
 
 
@@ -53,7 +53,7 @@ def verdicts():
             supported=True, designated_root="0/00:00:00:00:00:00", own_macs={ROOT},
             sys_uptime=400_000, ports=ports(state=1))),
         "10.0.0.17": cases["foreign_root"],
-        "10.3.6.5": judge(StpData(
+        "10.1.6.5": judge(StpData(
             supported=True, designated_root=f"4096/{ROOT}", root_cost=40000,
             own_macs={"bb:00:00:00:00:02"}, sys_uptime=400_000, ports=ports())),
     }
@@ -84,7 +84,7 @@ class StpReasonTest(unittest.TestCase):
                          {"changes": 3, "since": 10.0, "uptime": 4000.0})
         self.assertEqual(cases["never_converged"].reason_params["changes"], 0)
         self.assertEqual(cases["root_confirmed"].reason_params,
-                         {"count": 2, "neighbours": ["10.0.0.17", "10.3.6.5"]})
+                         {"count": 2, "neighbours": ["10.0.0.17", "10.1.6.5"]})
 
     def test_words_for_every_code_in_both_languages(self):
         en, ru = strings("en"), strings("ru")
