@@ -167,6 +167,7 @@ from .loopdetect import (
 )
 from .stp import StpData, StpPort
 from .snmp_collector import (
+    READING_FORMAT,
     OverBudget,
     PortInfo,
     SwitchData,
@@ -498,12 +499,18 @@ def seed_notes(db) -> None:
     db.mark_note_missing(node_id, now - 2 * 3600)
     node_id, label, note = DEMO_RETIRED_NOTE
     db.set_note(node_id, label, note, "manual", "", now - 3 * 86400)
+    node_id, label, note = NEVER_NOTE
+    db.set_note(node_id, label, note, "manual", "", now - 2 * 86400)
 
 
-def demo_network() -> list[SwitchData]:
-    """A star: core + four rays, LACP, a LAG trunk, a pseudo-switch, VLANs."""
+def demo_network(advance: bool = True) -> list[SwitchData]:
+    """A star: core + four rays, LACP, a LAG trunk, a pseudo-switch, VLANs.
+
+    `advance=False` builds the network as it is without counting a scan
+    — for the reading seeded into a fresh demo database (v0.8.7)."""
     global _scan_count
-    _scan_count += 1
+    if advance:
+        _scan_count += 1
     _rng.seed(7)  # identical base network on every scan
     core = _switch("10.0.0.10", "core-sw", 1)
     ray1 = _switch("10.0.0.21", "access-sw-1", 2)
@@ -644,6 +651,10 @@ def demo_network() -> list[SwitchData]:
     core.fdb[edge.bridge_mac] = UPLINK_ONLY_CORE_PORT
     edge.fdb[_iface_mac(core)] = UPLINK_ONLY_PORT
     edge.fdb[core.bridge_mac] = UPLINK_ONLY_PORT
+    # The switch that never finishes a poll (v0.8.7): its management MAC
+    # is in the core's table, which is where its empty node stands
+    core.ports[NEVER_CORE_PORT].oper_up = True
+    core.fdb[NEVER_MAC] = NEVER_CORE_PORT
     # …including a device that really is behind the core's trunk to
     # ray3. The deeper switch must not win it just by being deeper:
     # it saw the device on the cable it came in on.
@@ -675,15 +686,35 @@ def demo_network() -> list[SwitchData]:
     return switches
 
 
+# A switch in switches: that answers and never finishes its poll, not
+# once (v0.8.7): an empty node with the name somebody gave it, standing
+# on the core's port its management MAC is seen on
+NEVER_SWITCH = "10.0.0.26"
+NEVER_MAC = "00:1e:58:a0:00:26"   # a D-Link block
+NEVER_CORE_PORT = 16
+NEVER_NOTE = ("sw:" + NEVER_SWITCH, "Annex", "Polls take longer than its budget.")
+# …one that stops answering for two scans and comes back: drawn from
+# its reading, muted, while switch_down rises and clears
+DOWN_SWITCH = UPLINK_ONLY_SWITCH  # access-sw-5
+DOWN_SCANS = (3, 4)
+# …and the one whose reading a fresh demo database already holds:
+# restored until the first scan
+RESTORED_SWITCH = "10.0.0.23"     # access-sw-3
+
 # The demo's `switches:` — what the map is about, whatever answers
 SWITCH_IPS = [
     "10.0.0.10", "10.0.0.21", "10.0.0.22", "10.0.0.23", "10.0.0.24",
-    UPLINK_ONLY_SWITCH,
+    UPLINK_ONLY_SWITCH, NEVER_SWITCH,
 ]
-# management IP -> MAC as a router's ARP table would give it, for the
+# MAC -> management IP as a router's ARP table would give it, for the
 # switches whose MAC the map needs to know without a poll
-SWITCH_ARP: dict[str, str] = {}
+SWITCH_ARP: dict[str, str] = {NEVER_MAC: NEVER_SWITCH}
 SLOW_SWITCH = "10.0.0.22"  # access-sw-2
+
+
+def switch_down_now(ip: str) -> bool:
+    """The demo switch that is not answering this scan"""
+    return ip == DOWN_SWITCH and _scan_count in DOWN_SCANS
 
 
 def demo_poll() -> list[tuple[str, object]]:
@@ -696,15 +727,35 @@ def demo_poll() -> list[tuple[str, object]]:
     reading they last produced; the header counts it as late and its
     card dates the data. Nothing about it is alarmed on, because nothing
     about it is known to be wrong — it answers, slowly.
+
+    NEVER_SWITCH runs out of its budget every scan and has never been
+    read in full; DOWN_SWITCH does not answer on DOWN_SCANS.
     """
     network = {sw.ip: sw for sw in demo_network()}
     results: list[tuple[str, object]] = []
     for ip in SWITCH_IPS:
-        if ip == SLOW_SWITCH and _scan_count >= 2:
+        if ip == NEVER_SWITCH or (ip == SLOW_SWITCH and _scan_count >= 2):
             results.append((ip, OverBudget(answered=True)))
-            continue
-        results.append((ip, network[ip]))
+        elif switch_down_now(ip):
+            results.append((ip, SwitchData(ip=ip)))
+        else:
+            results.append((ip, network[ip]))
     return results
+
+
+def seed_reading(db: Database) -> None:
+    """A fresh demo database with one switch's reading in it, as if the
+    service had been running before: RESTORED_SWITCH is on the map from
+    it, "data from before the restart", until the first scan. Only a
+    reading — no host record, so the first scan is still the initial
+    inventory (v0.8.6 turned that off for any record in the database)."""
+    if RESTORED_SWITCH in db.switch_readings():
+        return
+    sw = next(s for s in demo_network(advance=False) if s.ip == RESTORED_SWITCH)
+    sw.polled_at = time.time() - 15 * 60
+    db.save_switch_reading(
+        sw.ip, sw.polled_at, READING_FORMAT, "demo", json.dumps(sw.to_dict())
+    )
 
 
 def _neighbor(
@@ -1225,6 +1276,11 @@ def _seed_journal_groups(db: Database, now: float) -> None:
                  json.dumps({"label": DEMO_NOTES[0][1]}))
     db.add_event(now - 24 * 3600, "layout_pinned", "",
                  json.dumps({"ids": ["sw:10.0.0.10"], "n": 1}))
+    # addresses ARP stopped confirming, taken off their records: the
+    # "Addresses" group (v0.8.7)
+    for n, (mac, _name, _switch, _port, days) in enumerate(GONE_HOSTS[:3]):
+        db.add_event(now - (days - 0.75) * 86400, "ip_released", mac,
+                     f"10.0.99.{120 + n} not confirmed by ARP for 6 h")
 
 
 # Devices whose MAC is no longer in any FDB: still drawn at the port
@@ -1252,6 +1308,18 @@ STALE_HOSTS = [
     ("00:ee:00:00:0a:21", "10.0.99.91", "tv-lobby.demo.lan", ACCESS_2, "Gi0/5", 4.0),
     ("08:8a:f1:00:0a:22", "10.0.99.92", "ap-lobby.demo.lan", ACCESS_2, "Gi0/5", 8.0),
     ("08:8a:f1:00:0a:23", "10.0.99.93", "ap-hall.demo.lan", ACCESS_2, "Gi0/5", 6.0),
+]
+
+# Devices nobody has seen for longer than host_grace_hours (v0.8.7): an
+# archive the list keeps folded, newest first. (mac, name, switch, port,
+# days since anything saw it) — under host_retention_days, or the start
+# would delete them.
+GONE_HOSTS = [
+    ("00:ee:00:00:0c:01", "nb-guest.demo.lan", ACCESS_4, "Gi0/9", 2.5),
+    ("00:ee:00:00:0c:02", "", ACCESS_4, "Gi0/10", 4.0),
+    ("08:8a:f1:00:0c:03", "ap-old-wing.demo.lan", ACCESS_2, "Gi0/8", 6.0),
+    ("00:ee:00:00:0c:04", "", "10.0.0.21", "Gi0/12", 9.0),
+    ("b2:1a:7c:00:0c:05", "", "10.0.0.21", "Gi0/13", 13.0),
 ]
 
 # Devices ARP knows but no switch port ever showed — a subnet behind a
@@ -1296,6 +1364,13 @@ def _seed_offmap_hosts(db: Database, now: float) -> None:
         db.set_ips({mac: ip}, create_missing=True)
         db.set_name(mac, name)
         db.set_ping_state(mac, up=True, last_ok=now)
+    # nobody has seen these for days: "Not seen for a while" (v0.8.7)
+    for mac, name, switch, port, days in GONE_HOSTS:
+        seen = now - days * 86400
+        db.seed_host(mac, switch, port, 8, first_seen=now - 40 * 86400,
+                     last_seen=seen, seen_count=30)
+        if name:
+            db.set_name(mac, name)
 
 
 _ping_cycle = 0

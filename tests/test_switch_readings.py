@@ -581,8 +581,11 @@ class RestartTest(unittest.TestCase):
             config.write_text(
                 f"db_path: {Path(tmp) / 'moonlan.db'}\n"
                 "scan_interval_minutes: 0\n"
+                # the switches the demo network has data for: not the
+                # one it keeps over budget
                 "switches:\n" + "".join(
                     f"  - {ip}\n" for ip in demo.SWITCH_IPS
+                    if ip != demo.NEVER_SWITCH
                 ),
                 encoding="utf-8",
             )

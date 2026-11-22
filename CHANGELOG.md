@@ -6,6 +6,81 @@ for before the next one started.
 
 Русская версия — [CHANGELOG_RU.md](CHANGELOG_RU.md).
 
+## v0.8.7 — 2026-11-23
+
+A switch stays on the map without a fresh poll, "Not on map" in two, a
+journal without the noise, icons in More. From the acceptance of v0.8.6
+on the production network.
+
+**A switch stays on the map.** A switch that never finished its poll
+inside the budget lived on the map only as long as the process held its
+reading. After a restart it was gone: no node, its name under "Notes
+without a node", and `/api/polling` said `reachable: false` — the
+default of an empty reading, not a fact. A switch that stopped
+answering vanished the same way. Every switch of `switches:` is now on
+the map in one of five states, `state` in `/api/topology` and
+`/api/polling`: fresh; over budget, from its last reading, as before;
+not answering, from its last reading, the node marked "not answering
+since HH:MM" and its branch muted; restored, the reading saved in the
+database, "data from before the restart"; and never read in full, an
+empty dashed node with its address and its name, standing on the port
+its management MAC is seen on. The card says which in one line, the
+rest behind the ⓘ; for one never read in full, how many scans did not
+fit how long a budget, and that `host_budget_seconds` in its entry
+under `switches:` is where that changes. A link to a muted switch says
+"from the reading of …".
+
+The last full reading of each switch is in a new table,
+`switch_readings`, replaced after every full poll: explicit
+`to_dict()` / `from_dict()` with a `format`, no pickle, nothing about
+the current scan and no loop detection. At the start each switch gets
+its reading back unless the format differs or it is older than
+`host_retention_days`; readings of switches no longer configured are
+deleted. The map is drawn from them at once, dated by the newest one,
+through the code of a scan with every write turned off. What a reading
+shows is never a sighting: no `last_seen`, no `seen_count`, no
+confirmation, no `new_mac`, no FDB smoothing, no LLDP or bridge "last
+seen". `switch_down` goes by `answered`, this scan's answer — true,
+false, or null when unknown — never by what is drawn; a budget that ran
+out after the first answer is `answered: true`, and `switch_stale` says
+"whether it is reachable is not known" only when it is not.
+
+**"Not on map" in two.** The list had become an archive: 480 records,
+478 of them unseen for longer than `host_grace_hours`, and the two
+devices that are there now without a place were lost in it. Each record
+off the map carries `recent` — seen by a switch table, ARP or a ping
+inside `host_grace_hours` — and `off_map`: `uplink_only`, `no_port` or
+`expired`. "Not on map" is the recent ones; "Not seen for a while · N"
+under it is the rest, folded until opened (the browser remembers),
+newest first with "seen DD.MM · switch port"; the search goes through
+both and opens it when it finds something there. The card of such a
+record says since when nobody has seen it and on which day
+`host_retention_days` deletes it. `/api/status` adds
+`unlocated_recent` and `unlocated_gone`; `unlocated_count` is all of
+them, as before.
+
+**The journal.** 2810 of 4315 "Devices" events were `ip_released`; they
+have a group of their own, "Addresses", after "Ping". The journal was
+never cleaned — about two thousand events a day, nine in ten of them
+pings. Two new settings beside `host_retention_days`:
+`journal_keep_days` (365, 0 — for good) and `journal_ping_keep_days`
+(30, 0 — as the rest). The cleanup runs at the start and once a day,
+10 000 rows per transaction, one INFO line, nothing in the journal
+about itself and no `VACUUM`. `diag --config` prints both terms, the
+journal's size and its oldest event.
+
+**Icons in More.** Each row of More on a phone has its icon on the
+left, as the v0.8.6 mockup had them: an inline SVG from one table
+beside `moreItems()`; a row without one fails a test. The Actions menu
+on a computer has none, as before.
+
+**The demo** has a switch that never finishes its poll (an empty node
+named "Annex" on the core's Gi0/16), one that stops answering on scans
+3 and 4 and comes back (`switch_down` rises and clears), a fresh
+database with one switch's reading in it (restored until the first
+scan, which is still the initial inventory), records "Not seen for a
+while" and `ip_released` events.
+
 ## v0.8.6 — 2026-11-22
 
 A phone with the sections at the bottom, aggregates named by their

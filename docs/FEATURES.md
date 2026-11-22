@@ -1,6 +1,6 @@
 # What MoonLan does
 
-Everything MoonLan does, as of v0.8.4 — the list the README used to carry. The README keeps the summary; each item here links to the page that explains it.
+Everything MoonLan does, as of v0.8.7 — the list the README used to carry. The README keeps the summary; each item here links to the page that explains it.
 
 ![Alarms panel](img/alarms.png)
 
@@ -13,6 +13,18 @@ Everything MoonLan does, as of v0.8.4 — the list the README used to carry. The
   and is marked as late rather than reported as unreachable, which
   it is not. An OID that answers nothing but timeouts is left alone
   for a while and then tried again, out loud in the log both times.
+- Every switch of `switches:` stays on the map whatever it answers
+  (v0.8.7), in one of five states, which its card says in one line:
+  polled in this scan; over budget — the last full reading, dated;
+  not answering — the last full reading, the node marked "not
+  answering since HH:MM" and its branch muted, while `switch_down`
+  goes by the answer; data from before the restart — the reading
+  saved in the database, so the map is there the moment the service
+  starts; and never read in full — an empty dashed node with its
+  address and its name, standing on the port its management MAC is
+  seen on, its card saying how many scans did not fit the budget and
+  that `host_budget_seconds` is where that is changed. Its name stays
+  on the map, not under "Notes without a node".
 - MAC address tables (BRIDGE-MIB and Q-BRIDGE-MIB) from every switch,
   including entries on trunk bridge-ports missing from
   `dot1dBasePortIfIndex` (e.g. D-Link LACP trunks). Such a trunk is
@@ -82,7 +94,13 @@ Everything MoonLan does, as of v0.8.4 — the list the README used to carry. The
   greyed out and marked "last seen …", instead of blinking with every
   MAC-table timeout. Devices ARP knows but no switch port shows — a
   subnet behind a router, for instance — are listed under "Not on map",
-  searchable and pingable. `python -m moonlan.diag --hosts` reports how
+  searchable and pingable. Records nobody has seen — no switch table,
+  no ARP, no ping — for longer than `host_grace_hours` are under it in
+  "Not seen for a while · N" (v0.8.7): folded until opened (the browser
+  remembers) or until the search finds something there, newest first,
+  each with "seen DD.MM · switch port"; the card says since when and
+  on which day `host_retention_days` deletes the record.
+  `python -m moonlan.diag --hosts` reports how
   complete the inventory is and which subnets are missing from it.
   A device behind a switch that ran out of its poll budget keeps its
   place on the map, drawn from the last reading that did arrive and
@@ -435,9 +453,13 @@ Everything MoonLan does, as of v0.8.4 — the list the README used to carry. The
 - Event journal: new MAC addresses, hosts going down and coming back,
   alarm raises/clears, the map, accounts and settings. Data is stored in
   SQLite and survives restarts. A row of filters under its title — All,
-  Alarms, Devices, Ping, Map, Users, Settings, one at a time, kept in
-  the browser — and "Show more" at the bottom, page after page, back
-  past any number of events (v0.8.6).
+  Alarms, Devices, Ping, Addresses, Map, Users, Settings, one at a time,
+  kept in the browser — and "Show more" at the bottom, page after page,
+  back past any number of events (v0.8.6). Addresses released when ARP
+  stopped confirming them have a filter of their own (v0.8.7). The
+  journal is kept for `journal_keep_days` (365) and pings, nine events
+  in ten, for `journal_ping_keep_days` (30): the daily cleanup deletes
+  the rest in batches.
 - Two-panel web UI: device list with search on the left, interactive
   auto-refreshing network map on the right. The search finds a switch
   by its name, address, bridge MAC, maker, model and sysDescr, a device
@@ -463,7 +485,8 @@ Everything MoonLan does, as of v0.8.4 — the list the README used to carry. The
   **Alarms**, with the bell's count on it; **Journal**, with its
   filters; and **More** — the account and RU / EN, the STP tree,
   Arrange as a switch, the items of Actions with their groups (one
-  list feeds both: an item added to Actions is in More too), Sign out.
+  list feeds both: an item added to Actions is in More too), Sign out,
+  each row with its icon (v0.8.7).
   What a role may not do is grey with the reason, as everywhere. The
   map's tools stand at the bottom right: freeze, port numbers (their
   menu opens above the button) and "fit the map to the screen".

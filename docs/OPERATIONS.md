@@ -243,6 +243,23 @@ Set the configuration explicitly when needed:
 export MOONLAN_CONFIG=/absolute/path/to/config.yaml
 ~~~
 
+### What a restart does (v0.8.7)
+
+The map does not start empty. The last full reading of every switch is
+in the database (`switch_readings`), and at the start each switch of
+`switches:` gets its reading back: the map is drawn from them at once,
+every switch marked "data from before the restart", dated by the newest
+reading. One log line says how many came back. A reading in an older
+format, or older than `host_retention_days`, is ignored with a line of
+its own; the readings of switches no longer in `switches:` are deleted,
+in one line. Nothing drawn from them is recorded: no device's
+`last_seen` or `seen_count` moves and no `new_mac` is written. The first
+full poll of each switch replaces its reading; a switch that has none
+anywhere is an empty node until then.
+
+The journal is cleaned at the start too, and then once a day with the
+hosts — see "Journal size" below.
+
 ## Settings: from config.yaml to the page (v0.8.4)
 
 What the map shows and how alarms rise — grouping thresholds, how long
@@ -371,6 +388,19 @@ Use the per-device poll budget. A late switch should be marked over-budget, keep
 
 Inspect timing with /api/status and python -m moonlan.diag --config.
 
+A switch that has never finished a poll — after a restart with no saved
+reading, or since it was added — is an empty dashed node with its
+address and its name. Its card says since when ("Since the service
+started (DD.MM HH:MM) a full poll has not finished once: N scans did not
+fit in N s") and `/api/polling` says `state: "never"` and whether it
+answered at all (`answered`). That is a budget to raise:
+`host_budget_seconds` in its own entry under `switches:`, set from the
+"took" column of `diag --config` once one poll has finished.
+
+A switch that stops answering stays on the map from its last reading,
+"not answering since HH:MM", with its branch muted; `switch_down` rises
+after two silent scans and clears with the first answer.
+
 ## Incorrect topology
 
 Run:
@@ -419,4 +449,38 @@ python -m moonlan.diag --anonymize ...
 
 The SQLite database contains operational network information. Back it up before migrations or destructive maintenance.
 
-Do not delete the database as a first troubleshooting step: it removes inventory history, alarms, journal entries, and saved layout.
+Do not delete the database as a first troubleshooting step: it removes inventory history, alarms, journal entries, saved layout and the last readings of the switches.
+
+### switch_readings (v0.8.7)
+
+One row per switch of `switches:`: `ip`, `polled_at` (when the reading
+was taken), `format` (the shape of the data; another one is ignored at
+the start), `version` (of MoonLan that wrote it) and `data`, the reading
+as JSON — ports, MAC table, aggregates, PVIDs and VLANs, LLDP, port
+labels, spanning tree, how long the poll took. A row is replaced after
+every full poll of its switch. A core switch's reading is tens of
+kilobytes; the table never holds more rows than `switches:` has.
+
+To start a switch from nothing — after replacing it with another model,
+say — delete its row with the service stopped:
+
+~~~bash
+sqlite3 moonlan.db "DELETE FROM switch_readings WHERE ip = '10.1.0.2'"
+~~~
+
+### Journal size (v0.8.7)
+
+About two thousand events a day on a network of a few hundred devices,
+nine in ten of them pings. The journal keeps them for
+`journal_keep_days` (365) and pings for `journal_ping_keep_days` (30),
+both in Settings; 0 keeps everything (for pings: as the rest). The
+cleanup runs at the start and once a day, deletes 10 000 rows per
+transaction so the scan never waits behind it, and writes one INFO line:
+
+~~~
+Journal cleanup: 41230 ping event(s) older than 30 days and 0 other(s) older than 365 days removed; 85112 left, the oldest from 2026-10-24 03:12
+~~~
+
+The file does not shrink — SQLite reuses the freed pages, and the
+service does not run `VACUUM`. `diag --config` prints both terms, the
+size of the journal in rows and its oldest event.

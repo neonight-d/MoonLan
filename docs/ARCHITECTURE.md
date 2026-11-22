@@ -98,8 +98,9 @@ The web layer is static HTML/CSS/JavaScript. The browser refreshes API data and 
    announce override the inference, and neighbours with the `bridge`
    capability that belong to no polled switch become named nodes.
    BRIDGE-MIB `dot1dStp*` is read alongside and judged before use.
-9. Hosts, the event journal and alarms are stored in SQLite
-   (`moonlan.db`), so `first_seen` and history survive restarts.
+9. Hosts, the event journal, alarms and the last full reading of
+   every switch are stored in SQLite (`moonlan.db`), so `first_seen`,
+   history and the map itself survive restarts.
 10. The result is available through the REST API (`/api/topology`)
     and in the web UI.
 
@@ -121,6 +122,50 @@ Examples:
 - unsupported OID is not treated as zero;
 - ambiguous links can remain visible with an explanation rather than being silently deleted;
 - service/API failure keeps the last map and exposes the error state.
+
+### Five states of a switch (v0.8.7)
+
+Every switch of `switches:` is on the map whatever it answered. Where its
+data comes from is its `state` (in `/api/topology` and `/api/polling`):
+
+| `state` | When | On the map |
+|---|---|---|
+| `fresh` | a full poll in this scan | as polled |
+| `over_budget` | answered, did not finish inside its budget | the last full reading, dated (v0.6.12) |
+| `unreachable` | did not answer in this scan | the last full reading; the node says "not answering since HH:MM", its links and the devices behind it are muted |
+| `restored` | not polled since the start yet | the reading saved in the database, "data from before the restart" |
+| `never` | no full reading anywhere | an empty dashed node: its address and its note, no ports, no links; it stands on the port its management MAC is seen on, and that MAC is not drawn as a device |
+
+The last three readings are readings, not observations: the devices behind
+them are drawn (`from_saved`) but never recorded as seen — no `last_seen`,
+no `seen_count`, no confirmation, no `new_mac` — the FDB smoothing is not
+refreshed from them, and LLDP neighbours and bridges are remembered only
+from switches read in full in this scan.
+
+Alarms go by what happened in this scan, never by what is drawn: each
+SwitchData carries `answered` (true, false, or null when not known), and
+`switch_down` rises and clears by it. A budget that ran out after the
+switch's first answer (`sysName`) is `answered: true`; one that ran out
+before is `null`, and `switch_stale` does not claim the switch is
+reachable then.
+
+### Readings in the database
+
+The last full reading of each switch is in `switch_readings` (ip,
+polled_at, format, version, data), one row per switch, replaced after
+every full poll. The data is JSON from explicit `to_dict()` /
+`from_dict()` of SwitchData and the dataclasses inside it (ports, LLDP
+neighbours, STP) — no pickle, and `format` says which shape it is.
+Loop detection is not in it (the counters cycle refreshes it), nor
+anything about the current scan.
+
+At the start each configured switch gets its reading back as `restored`,
+unless its `format` is not the current one or it is older than
+`host_retention_days`; readings of switches no longer configured are
+deleted. The map is drawn from what came back at once, dated by the
+newest reading, through the same code as a scan with every write turned
+off: no sighting, no journal event, no alarm raised or cleared. The first
+full poll of each switch replaces `restored` with `fresh`.
 
 ## Extension rule
 

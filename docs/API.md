@@ -542,10 +542,30 @@ account id, never the address.
 Version, demo mode, device counts, scan progress, the last error,
 layout timestamps and process resource hints (`open_fds`, `rss_kb`).
 
+`unlocated_count` is every record off the map, as before;
+`unlocated_recent` and `unlocated_gone` (v0.8.7) are the two lists of
+the page: seen inside `host_grace_hours`, and not.
+
 ### GET /api/polling
 
 When each switch was last polled in full, how long it took, and its
 budget — what `diag --config` prints.
+
+```json
+{"counters_interval_seconds": 60,
+ "switches": [{"ip": "10.1.0.26", "name": "10.1.0.26", "budget_seconds": 120,
+               "polled_at": 0.0, "poll_seconds": 0.0, "over_budget_scans": 41,
+               "state": "never", "answered": true, "reachable": true}]}
+```
+
+`state` (v0.8.7) is where the map's data on the switch comes from —
+`fresh`, `over_budget`, `unreachable`, `restored` or `never`, see
+docs/ARCHITECTURE.md. `answered` is whether it answered in this scan:
+`true`, `false`, or `null` when that is not known (restored and not
+polled yet, or a budget that ran out before the first answer).
+`reachable` is kept for scripts that read it and is now `answered`
+being `true`: before, it was the default of an empty reading, `false`
+for a switch that answered and only ran out of time.
 
 ### GET /api/skipped-oids
 
@@ -558,6 +578,24 @@ The OIDs paused after answering nothing but timeouts — what
 
 Switches, links, hosts, unlocated devices, pseudo-switches,
 LLDP-discovered bridges, VLAN names, and current monitoring fields.
+
+Every switch of `switches:` is in `switches` (v0.8.7), with `state`,
+`answered` and `down_since` (when it stopped answering, 0 while it
+answers) as in `/api/polling`. One in `unreachable` or `restored` is
+drawn from its last reading, `polled_at` saying when that was, and so
+are its links and the devices behind it (`from_saved`, `reading_at`).
+One in `never` has no ports and no links: `ports_total` 0, `attached`
+— `{"switch", "port", "mac"}` where the MAC of its management address
+is seen, or `null` — `started_at` (the service's start) and
+`budget_seconds`.
+
+Every record in `unlocated` carries `recent` (v0.8.7) — whether
+anybody (a switch table, ARP, a ping) saw it inside `host_grace_hours`
+— and `off_map`, why it is not on the map: `uplink_only` (seen only on
+uplinks, this scan), `no_port` (ARP only, a port reset, a switch not
+drawn from a reading) or `expired` (it had a place; the grace window
+ran out). `seen_at` is that last sighting, and `forget_at` when
+`host_retention_days` deletes the record, `null` while it is 0.
 
 A link joins two switches (`a`, `b`) at `a_port` and `b_port`. Two
 cables between the same two switches without a LAG are two links: the
@@ -648,7 +686,7 @@ Journal events, newest first, a page at a time (v0.8.6):
 | Parameter | Meaning |
 |---|---|
 | `limit` | events per page, 1–1000 (100 by default) |
-| `group` | `alarms`, `ping`, `devices`, `map`, `users`, `settings` or `other`; may repeat (`group=alarms&group=devices`), none means every event |
+| `group` | `alarms`, `ping`, `addresses`, `devices`, `map`, `users`, `settings` or `other`; may repeat (`group=alarms&group=devices`), none means every event |
 | `before` | an event id: the page is the events below it |
 
 ```json
@@ -666,8 +704,9 @@ An unknown group is refused with 400, `{"error": "unknown_group",
 Every event carries its `group`. The groups are kept in one place on
 the server (`JOURNAL_GROUPS` in `moonlan/server.py`): `alarms` —
 `alarm_raised`, `alarm_cleared`; `ping` — `host_down`, `host_up`;
-`devices` — `new_mac`, `hosts_purged`, `copies_removed`, `monitor_on`,
-`monitor_off`, `ip_released`; `map` — `layout_pinned`,
+`addresses` — `ip_released` (v0.8.7; it was in `devices`); `devices` —
+`new_mac`, `hosts_purged`, `copies_removed`, `monitor_on`,
+`monitor_off`; `map` — `layout_pinned`,
 `layout_released`, `layout_saved`, `layout_cleared`, `note_changed`,
 `note_moved`, `notes_imported`, `link_dropped`; `users` — sign-ins,
 accounts, keys and one's own notifications; `settings` —

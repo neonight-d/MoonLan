@@ -1965,7 +1965,13 @@ async def run_ping() -> None:
         # (one host stays silent, another recovers after a while)
         results_by_mac = await asyncio.to_thread(demo.ping_results, db)
         for sw in state.as_dict()["switches"]:
-            switch_ping[sw["ip"]] = {"ping_up": True, "last_ping_ok": now}
+            # the switch the demo takes down does not ping either
+            up = not demo.switch_down_now(sw["ip"])
+            prev = switch_ping.get(sw["ip"], {})
+            switch_ping[sw["ip"]] = {
+                "ping_up": up,
+                "last_ping_ok": now if up else prev.get("last_ping_ok", 0),
+            }
     else:
         targets = await asyncio.to_thread(db.hosts_with_ip)
         # One ping per unique address, the result applied to every host
@@ -2900,6 +2906,7 @@ async def lifespan(app: FastAPI):
     if config.demo:
         log.info("MoonLan started in DEMO mode (virtual network)")
         await asyncio.to_thread(demo.seed_notes, db)
+        await asyncio.to_thread(demo.seed_reading, db)
     elif not config.switches:
         log.warning(
             "No switches are configured in config.yaml. Add addresses to "
