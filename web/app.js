@@ -2606,6 +2606,55 @@ function moreItems() {
   ];
 }
 
+/* The icons of More on a phone (v0.8.7), by the key of the row: the
+   STP tree and Arranging, every item of moreItems(), Sign out. The
+   paths of a 24×24 stroke icon drawn the way the header's are (a circle
+   is two arcs); the Actions menu on a computer has none. A row without
+   one here fails tests/test_more_icons.py. */
+const MORE_ICONS = {
+  // a tree of three nodes
+  stp: ["M10 4.5a2 2 0 1 0 4 0a2 2 0 1 0-4 0", "M3.5 19a2 2 0 1 0 4 0a2 2 0 1 0-4 0",
+        "M16.5 19a2 2 0 1 0 4 0a2 2 0 1 0-4 0", "M12 6.5v7M5.5 17v-3.5h13V17"],
+  // arrows every way: the header's Arrange button
+  arrange: ["M12 3v18M3 12h18M9 6l3-3 3 3M9 18l3 3 3-3M6 9l-3 3 3 3M18 9l3 3-3 3"],
+  // round and back to the start
+  rescan: ["M20 12a8 8 0 1 1-2.4-5.7", "M20 4v5h-5"],
+  // an arrow down into a tray
+  exportMap: ["M12 3v11", "M7.5 9.5L12 14l4.5-4.5", "M4 14v5a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-5"],
+  // two of them
+  users: ["M5.5 8a3.5 3.5 0 1 0 7 0a3.5 3.5 0 1 0-7 0", "M2.5 20c.8-3.6 3.4-5.5 6.5-5.5s5.7 1.9 6.5 5.5",
+          "M14.5 9a2.5 2.5 0 1 0 5 0a2.5 2.5 0 1 0-5 0", "M16.5 14.6c2.6.2 4.4 1.9 5 5.4"],
+  // a sheet of paper with writing on it
+  orphans: ["M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z", "M14 3v5h5", "M9 13h6M9 17h4"],
+  import: ["M12 20V5", "M6 11l6-6 6 6"],
+  export: ["M12 4v15", "M6 13l6 6 6-6"],
+  // back the other way round
+  reset: ["M4 12a8 8 0 1 0 2.4-5.7", "M4 4v5h5"],
+  // a gear
+  settings: ["M9 12a3 3 0 1 0 6 0a3 3 0 1 0-6 0",
+             "M12 2.5v3M12 18.5v3M2.5 12h3M18.5 12h3M5.3 5.3l2.1 2.1M16.6 16.6l2.1 2.1M5.3 18.7l2.1-2.1M16.6 7.4l2.1-2.1"],
+  // an i in a circle
+  about: ["M3 12a9 9 0 1 0 18 0a9 9 0 1 0-18 0", "M12 11v5", "M12 8v.5"],
+  // a door, and the way out of it
+  logout: ["M15 4h4a1 1 0 0 1 1 1v14a1 1 0 0 1-1 1h-4", "M10 16l-4-4 4-4", "M6 12h10"],
+};
+
+/* The icon of a row of More: an inline SVG, no font and no CDN */
+function moreIcon(key) {
+  const ns = "http://www.w3.org/2000/svg";
+  const icon = document.createElementNS(ns, "svg");
+  icon.setAttribute("class", "icon more-icon");
+  icon.setAttribute("viewBox", "0 0 24 24");
+  icon.setAttribute("aria-hidden", "true");
+  icon.setAttribute("focusable", "false");
+  for (const d of MORE_ICONS[key] || []) {
+    const path = document.createElementNS(ns, "path");
+    path.setAttribute("d", d);
+    icon.append(path);
+  }
+  return icon;
+}
+
 function openMoreMenu() {
   closeNodeMenu();
   closePortLabelsMenu(false);
@@ -9957,7 +10006,7 @@ function renderMoreView() {
    the reason when the role may not use it */
 function moreRow(item, run) {
   const button = h("button", { type: "button", class: "more-row", "data-key": item.key });
-  button.append(h("span", { class: "more-label", text: item.label }));
+  button.append(moreIcon(item.key), h("span", { class: "more-label", text: item.label }));
   if (item.danger) button.classList.add("danger");
   if (item.disabled) {
     button.classList.add("off");

@@ -1615,7 +1615,13 @@ body.gated .toolbar > button { display: none; }
   .more-row.danger { color: #e39a9a; }
   .more-row.off { color: var(--text-dim); cursor: default; }
   .more-row.off:hover { background: none; }
-  .more-row .why { flex: 1 0 100%; font-size: 0.78rem; color: var(--text-dim); }
+  /* under the label, past the icon */
+  .more-row .why { flex: 1 0 100%; padding-left: 32px; font-size: 0.78rem; color: var(--text-dim); }
+  /* the icon of a row (v0.8.7): dim beside its words; a grey row's and
+     the dangerous one's take the colour of their words */
+  .more-row .more-icon { flex: 0 0 auto; width: 20px; height: 20px; stroke-width: 2; color: var(--text-dim); }
+  .more-row.off .more-icon,
+  .more-row.danger .more-icon { color: inherit; }
   .more-switch {
     flex: 0 0 auto;
     width: 38px;
