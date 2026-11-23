@@ -282,11 +282,6 @@ See **[CONTRIBUTING.md](CONTRIBUTING.md)**.
 
 | Version | |
 |---|---|
-| v0.7.5 ✓ | One row of controls; documentation from the community |
-| v0.7.6 ✓ | HTTPS (TLS of its own or behind a reverse proxy) and signing in with a key |
-| v0.7.7 ✓ | "Without a password" means without a password |
-| v0.7.8 ✓ | Who made each device (IEEE register); one menu per account in Users |
-| v0.7.9 | Not released: went into v0.7.10 |
 | v0.7.10 ✓ | Port numbers on the lines (numbers only, if wished), short cards, the list folds away on a phone |
 | v0.8.0 ✓ | Names and notes on the map, import by MAC, switches found by maker |
 | v0.8.1 ✓ | The map on paper and in Draw.io, an offline room keeps its name, About |
