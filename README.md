@@ -282,7 +282,6 @@ See **[CONTRIBUTING.md](CONTRIBUTING.md)**.
 
 | Version | |
 |---|---|
-| v0.7.10 ✓ | Port numbers on the lines (numbers only, if wished), short cards, the list folds away on a phone |
 | v0.8.0 ✓ | Names and notes on the map, import by MAC, switches found by maker |
 | v0.8.1 ✓ | The map on paper and in Draw.io, an offline room keeps its name, About |
 | v0.8.2 ✓ | Russian without English in it, a page that stays put on a phone, the lists from the keyboard |
