@@ -1661,19 +1661,33 @@ def _mark_recent(
     `seen_at` is that moment, and `forget_at` when purge_old_hosts
     deletes the record (None while host_retention_days is 0) — the
     page words both. Called again on every /api/topology: pings move
-    `last_ping_ok` between scans."""
+    `last_ping_ok` between scans.
+
+    ARP is a sign of presence only while the record holds an address
+    (v0.8.8). `last_arp` stays when the address goes — to another MAC
+    (set_ips) or nowhere, unconfirmed (release_ip) — and kept 140 of
+    142 records without an IP "recent" for host_grace_hours after the
+    very ARP that showed the device was not there. `seen_at` is still
+    the last sighting of any kind, and `seen_by` says which: "fdb",
+    "arp" or "ping"."""
     grace = config.host_grace_hours * 3600
     days = config.host_retention_days
     for host in unlocated:
         row = db_rows.get(host["mac"], {})
-        seen = max(
-            row.get("last_seen", 0) or 0, row.get("last_arp", 0) or 0,
-            row.get("last_ping_ok", 0) or 0,
-        )
+        fdb = row.get("last_seen", 0) or 0
+        arp = row.get("last_arp", 0) or 0
+        ping = row.get("last_ping_ok", 0) or 0
+        seen = max(fdb, arp, ping)
         host["seen_at"] = seen
+        host["seen_by"] = (
+            "" if not seen else "fdb" if seen == fdb
+            else "arp" if seen == arp else "ping"
+        )
+        holds_address = bool(host.get("ip") or row.get("ip"))
+        present = max(fdb, arp if holds_address else 0, ping)
         # seen this very scan, on an uplink: recent by definition
         host["recent"] = bool(host.get("uplink_only")) or (
-            grace > 0 and now - seen < grace
+            grace > 0 and now - present < grace
         )
         kept_since = max(
             row.get("last_seen", 0) or 0, row.get("last_arp", 0) or 0

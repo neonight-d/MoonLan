@@ -3963,7 +3963,7 @@ function renderSidebar() {
       li(
         (nameOf(h) || hostLabel(h)) + (h.monitored ? " ★" : ""),
         [nameOf(h) ? hostLabel(h) : "", h.ip, h.mac, h.vendor,
-         [fmt("goneSeen", { date: fmtDay(h.seen_at) }),
+         [goneSeenText(h),
           h.switch ? (switchName(h.switch) + " " + (h.port || "")).trim() : ""]
            .filter(Boolean).join(" · ")]
           .filter((part, i, all) => part && all.indexOf(part) === i)
@@ -3985,6 +3985,15 @@ function renderSidebar() {
     listTabStop(kept.list, row);
     row.querySelector(".li-btn").focus({ preventScroll: true });
   }
+}
+
+/* When a long-gone record was seen last. Seen last by ARP and holding
+   no address now (v0.8.8): the date is fresh, and it is in this list
+   because the address went to another MAC or was not confirmed — said
+   so, or the date looks like a mistake. */
+function goneSeenText(h) {
+  if (h.seen_by === "arp" && !h.ip) return fmt("goneArpSeen", { time: fmtDayTime(h.seen_at) });
+  return fmt("goneSeen", { date: fmtDay(h.seen_at) });
 }
 
 /* Caption style of a node; the selected one is brighter than the rest.
