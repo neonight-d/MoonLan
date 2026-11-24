@@ -1049,6 +1049,12 @@ async def _build_map(
         stale_switches,
         {sw.ip: sw.sys_name or sw.ip for sw in collected},
         threshold=max(config.stale_switch_scans, 1),
+        # how each switch came out of this scan: the words a standing
+        # switch_stale clears with depend on it (v0.8.9)
+        states={
+            sw.ip: {"state": sw.map_state, "answered": sw.answered}
+            for sw in collected
+        },
     )
     if over_budget:
         log.warning(

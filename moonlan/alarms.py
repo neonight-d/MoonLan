@@ -243,6 +243,19 @@ def _mass_text(at: float, devices: int, silent: list[str]) -> str:
     )
 
 
+def stale_cleared_words(state: dict | None) -> str:
+    """Why switch_stale goes: what the switch did in this scan."""
+    if state is None:
+        return "no longer in switches:"
+    if state.get("answered") is False:
+        # unreachable from a reading, or never read and silent now
+        return (
+            "it stopped answering — switch_down follows it from the "
+            "second missed poll"
+        )
+    return "a full poll finished again"
+
+
 def stale_switch_message(name: str, info: dict) -> str:
     """The text of switch_stale: what is true for as long as it stands.
 
@@ -583,7 +596,7 @@ class AlarmEngine:
 
     async def on_stale_switches(
         self, stale: dict[str, dict], names: dict[str, str],
-        threshold: int = 1,
+        threshold: int = 1, states: dict[str, dict] | None = None,
     ) -> None:
         """Switches answering without ever finishing a poll.
 
@@ -601,14 +614,19 @@ class AlarmEngine:
         reading off the map. It is worked out again every scan and
         brought up to date in place — no notification, no journal
         entry: the journal keeps the raise as it was.
+
+        The words it clears with say what happened (v0.8.9), from
+        `states` — ip -> {"state", "answered"} of every switch in this
+        scan: a full poll, a switch that stopped answering, or one no
+        longer configured. "A full poll finished again" was said for
+        all three.
         """
+        states = states if states is not None else {}
         for ip in list(self._stale_switches):
             if ip in stale:
                 continue
             self._stale_switches.discard(ip)
-            await self._clear(
-                "switch_stale", ip, "a full poll finished again"
-            )
+            await self._clear("switch_stale", ip, stale_cleared_words(states.get(ip)))
         for ip, info in stale.items():
             message = stale_switch_message(names.get(ip, ip), info)
             if ("switch_stale", ip) in self._active:

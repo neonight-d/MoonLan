@@ -249,6 +249,8 @@ class StaleSwitchTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(
             sorted(r[1] for r in cleared), ["10.0.0.3", "10.0.0.7"]
         )
+        # the server says how each switch came out of the scan (v0.8.9)
+        self.assertEqual({r[2] for r in cleared}, {"a full poll finished again"})
         drawn = {sw["ip"]: sw for sw in server.state.as_dict()["switches"]}
         self.assertEqual(drawn["10.0.0.3"]["over_budget_scans"], 0)
         self.assertFalse(drawn["10.0.0.3"]["over_budget"])

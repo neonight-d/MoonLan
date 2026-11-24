@@ -164,6 +164,50 @@ class EngineTest(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(cleared and cleared[0]["ts_cleared"])
 
 
+class ClearWordsTest(unittest.IsolatedAsyncioTestCase):
+    """switch_stale goes with words that say what happened (v0.8.9)."""
+
+    def setUp(self):
+        cfg = Config()
+        self.db = Database(":memory:")
+        self.addCleanup(self.db.close)
+        self.notifier = Notifier()
+        self.engine = AlarmEngine(self.db, self.notifier, cfg.thresholds,
+                                  cfg.notifications)
+
+    async def clear_with(self, states):
+        with self.assertLogs("moonlan", logging.WARNING):
+            await self.engine.on_stale_switches({IP: info(5)}, {IP: NAME}, threshold=5)
+        with self.assertLogs("moonlan", logging.INFO):
+            await self.engine.on_stale_switches({}, {IP: NAME}, threshold=5, states=states)
+        self.assertEqual([a for a in self.db.alarms(True, 50) if a["type"] == "switch_stale"], [])
+        cleared = [e["details"] for e in self.db.journal(50) if e["event"] == "alarm_cleared"]
+        self.assertEqual(len(cleared), 1)
+        return cleared[0]
+
+    async def test_a_full_poll(self):
+        words = await self.clear_with({IP: {"state": "fresh", "answered": True}})
+        self.assertEqual(words, "warning switch_stale: a full poll finished again")
+
+    async def test_it_stopped_answering(self):
+        words = await self.clear_with({IP: {"state": "unreachable", "answered": False}})
+        self.assertEqual(
+            words,
+            "warning switch_stale: it stopped answering — switch_down follows "
+            "it from the second missed poll",
+        )
+
+    async def test_never_read_and_silent(self):
+        words = await self.clear_with({IP: {"state": "never", "answered": False}})
+        self.assertIn("it stopped answering", words)
+
+    async def test_no_longer_configured(self):
+        words = await self.clear_with({})
+        self.assertEqual(words, "warning switch_stale: no longer in switches:")
+        cleared = [n for n in self.notifier.sent if n[0] == "switch_stale"]
+        self.assertTrue(cleared)
+
+
 class ProvenanceTest(unittest.TestCase):
     def tearDown(self):
         server.readings_from_database.discard(IP)
