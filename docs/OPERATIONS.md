@@ -61,6 +61,25 @@ journalctl -u moonlan | grep "open fds"
 of a system service). The same numbers are exposed as `open_fds` and
 `rss_kb` in `/api/status`.
 
+### The log in UTF-8 (v0.8.9)
+
+The log has "—" and "§" in it. Python writes its streams in the
+locale's encoding, and a system whose locale is not UTF-8 — `LANG=en_US`
+is ISO-8859-1 — turned them into `\u2014` and `\xa7` in the journal
+(the second a raw byte journalctl cannot show). Python's own remedies,
+PEP 538 and the UTF-8 mode of PEP 540, act only on the C and POSIX
+locales, and a unit file without `Environment=` takes whatever locale
+the system manager has (`systemctl show-environment`). Since v0.8.9 the
+service and `diag` switch their streams to UTF-8 themselves before the
+first line, so nothing needs to be set. The example unit also carries
+
+```ini
+Environment=PYTHONUTF8=1
+```
+
+which does the same from outside, for anything else Python prints —
+add it to an existing unit, `systemctl daemon-reload` and restart.
+
 ## Demo mode (no real switches)
 
 ```bash

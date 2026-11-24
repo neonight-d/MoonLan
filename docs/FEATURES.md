@@ -1,6 +1,6 @@
 # What MoonLan does
 
-Everything MoonLan does, as of v0.8.8 — the list the README used to carry. The README keeps the summary; each item here links to the page that explains it.
+Everything MoonLan does, as of v0.8.9 — the list the README used to carry. The README keeps the summary; each item here links to the page that explains it.
 
 ![Alarms panel](img/alarms.png)
 
@@ -189,7 +189,8 @@ Everything MoonLan does, as of v0.8.8 — the list the README used to carry. The
 - Double-click a switch (or any group node) to select the devices on
   it, Ctrl+click to add and remove, drag the selection to move it all
   at once.
-- A right-click menu on every node, acting on the whole selection.
+- A right-click menu on every node, acting on the whole selection —
+  on a phone, a long press (v0.8.9).
   Ping and Traceroute run from the MoonLan machine, against the address
   MoonLan itself knows for that node, and the result opens in a panel
   beside what the continuous monitoring says; a selection or a group
@@ -418,6 +419,25 @@ Everything MoonLan does, as of v0.8.8 — the list the README used to carry. The
   "Alarms" panel lists active and recently cleared alarms; the header
   badge shows the active count. Every raise/clear is also written to
   the journal.
+- An alarm's text is true for as long as the alarm stands (v0.8.9;
+  switch_stale since v0.8.8). Where a number would grow or a count of
+  days shrink, the text says a moment instead: host_down "has not
+  answered ping since <its last answer>", switch_down "has not
+  answered SNMP since <the first missed poll>", port_util, port_errors
+  and port_discards the value "at <time> (threshold T)",
+  stp_topology_change "at <time>: N changes in one scan",
+  tls_cert_expiring "expires on <date>" — written once and never
+  rewritten. Where the facts themselves change while it stands, the
+  text follows them in place: port_hosts_down ("… went silent at once
+  at <time>; still silent: K of N: …"), lag_degraded (1 of 2 members,
+  then 0 of 2), port_flapping, unmanaged_bridge_detected (the bridge
+  moved), stp_root_changed ("now follows R2 (was P)"), stp_fragmented,
+  loop_detection_disabled, loop_detected. Bringing a text up to date
+  sends nothing and writes nothing in the journal, which keeps the
+  raise as it was; it is not a raise for flap damping either. The
+  words switch_stale clears with say what happened: a full poll, a
+  switch that stopped answering (switch_down takes it over), or one no
+  longer in `switches:`.
 - Errors and discards are told apart: damaged frames (a cable, duplex
   or transceiver fault) raise port_errors — a warning, and only when
   they are also a meaningful share of the port's frames — while
@@ -505,7 +525,14 @@ Everything MoonLan does, as of v0.8.8 — the list the README used to carry. The
   screen. In place of the page zoom, **Text size** in More — 100, 115
   or 130 % of the page's text, kept in the browser; the map has its
   own zoom, and the system's font size still applies. A computer and
-  a tablet wider than 720 px zoom as before.
+  a tablet wider than 720 px zoom as before. A finger held still on a
+  node for half a second opens its menu at the finger (v0.8.9), on
+  Android and on an iPhone alike, and it stays when the finger comes
+  up — the card does not open over it. A finger that moves on after
+  the menu opened is a drag: the menu closes and, in Arrange, the node
+  goes where it is dragged; a long press on a pinned node in Arrange
+  releases it, as the right button does. A short tap opens the card,
+  as before.
   What a role may not do is grey with the reason, as everywhere. The
   map's tools stand at the bottom right: freeze, port numbers (their
   menu opens above the button) and "fit the map to the screen".

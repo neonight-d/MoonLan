@@ -291,6 +291,7 @@ See **[CONTRIBUTING.md](CONTRIBUTING.md)**.
 | v0.8.6 ✓ | A phone with the sections at the bottom, aggregates named by their members, a journal filter |
 | v0.8.7 ✓ | Switches stay on the map without a fresh poll, "Not on map" in two, a journal term, icons in More |
 | v0.8.8 ✓ | A walk that cannot loop, where a poll's budget went, diag over HTTPS, the mobile version zooms only the map |
+| v0.8.9 ✓ | A long press keeps its menu in the mobile version, alarm texts that stay true, UTF-8 logs |
 | v0.9 | Windows computer inventory (WMI/WinRM) |
 
 Every version so far: [CHANGELOG.md](CHANGELOG.md).

@@ -1392,6 +1392,12 @@ ARP_GONE_HOSTS = [
     ("00:ee:00:00:0d:03", "", "10.0.0.21", "Gi0/14", 11.0, 26.0),
 ]
 
+# Answered ping hours ago, holding no address since (v0.8.9): the same
+# shape as ARP_GONE_HOSTS
+PING_GONE_HOSTS = [
+    ("00:ee:00:00:0e:01", "printer-old.demo.lan", ACCESS_4, "Gi0/12", 6.0, 2.0),
+]
+
 # Devices ARP knows but no switch port ever showed — a subnet behind a
 # router, exactly what hides real segments from an L2 map
 UNLOCATED_HOSTS = [
@@ -1453,11 +1459,21 @@ def _seed_offmap_hosts(db: Database, now: float) -> None:
         if n < 2:
             db.add_event(now - hours * 3600 + 600, "ip_released", mac,
                          f"10.0.99.{140 + n} not confirmed by ARP for 6 h")
+    # answered ping hours ago — at an address that is somebody else's
+    # now: not presence either (v0.8.9)
+    for mac, name, switch, port, days, hours in PING_GONE_HOSTS:
+        db.seed_host(mac, switch, port, 8, first_seen=now - 40 * 86400,
+                     last_seen=now - days * 86400, seen_count=30)
+        if name:
+            db.set_name(mac, name)
+        db.set_ping_state(mac, up=False, last_ok=now - hours * 3600)
 
 
 _ping_cycle = 0
 RECOVER_AFTER = 8    # ping cycles until the recovering host answers again
 MASS_DOWN_AT = 12    # all hosts behind the pseudo-switch port go silent
+MASS_PARTLY_AT = 16  # one of them answers again: the alarm's text says
+                     # who is still silent, in place (v0.8.9)
 MASS_RECOVER_AT = 20 # most of them answer again -> port_hosts_down clears
 MASS_PORT = ("10.0.0.22", "Gi0/5")  # the port with the unmanaged switch
 
@@ -1469,6 +1485,8 @@ def ping_results(db: Database) -> dict[str, bool]:
     recovers at cycle RECOVER_AFTER, demonstrating the CLEARED path.
     At MASS_DOWN_AT every host behind the pseudo-switch port stops
     answering at once -> a single port_hosts_down alarm; at
+    MASS_PARTLY_AT one of them answers again, not half yet -> the
+    alarm stands and its text says who is still silent; at
     MASS_RECOVER_AT most of them come back -> the alarm clears.
     """
     global _ping_cycle
@@ -1494,6 +1512,8 @@ def ping_results(db: Database) -> dict[str, bool]:
     if _ping_cycle == MASS_DOWN_AT:
         for mac in mass_macs:
             db.set_ping_state(mac, up=False, last_ok=now)
+    elif _ping_cycle == MASS_PARTLY_AT and mass_macs:
+        db.set_ping_state(mass_macs[0], up=True, last_ok=now)
     elif _ping_cycle == MASS_RECOVER_AT:
         for mac in mass_macs[: max(1, len(mass_macs) * 2 // 3)]:
             db.set_ping_state(mac, up=True, last_ok=now)

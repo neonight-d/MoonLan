@@ -6,6 +6,61 @@ for before the next one started.
 
 Русская версия — [CHANGELOG_RU.md](CHANGELOG_RU.md).
 
+## v0.8.9 — 2026-11-24
+
+A long press that keeps its menu, alarm texts that stay true, ping and
+"Not on map", UTF-8 logs. From the acceptance of v0.8.8 on the
+production network.
+
+**A long press on a phone.** On Android a long press sends
+contextmenu, and the node menu opened — then the finger came up, the
+release went on to vis as a click, and the click closed the menu and
+opened the card; it had been so since v0.8.4. Safari on an iPhone sends
+no contextmenu for a long press, so the menu never opened there. Now a
+finger held still for half a second opens the menu at the finger on
+both, contextmenu opens it if it comes first, one per press. A press
+that opened the menu ends without a click; a finger that moves on is a
+drag that closes the menu; in Arrange a long press on a pinned node
+releases it, as the right button does. A short tap opens the card. The
+press is told apart by a flag started over at the first input of every
+press, not by swallowing the next click. A mouse is as it was.
+
+**Alarm texts that stay true.** `_raise` leaves an active alarm alone,
+so a text put together at the raise kept its words after the facts had
+moved. Now each type is one of two kinds. Written to stay true and
+never rewritten: `host_down` "has not answered ping since <its last
+answer>", `switch_down` "has not answered SNMP since <the first missed
+poll>", `port_util`, `port_errors` and `port_discards` the value "at
+<time> (threshold T)", `stp_topology_change` "at <time>: N changes in
+one scan", `tls_cert_expiring` "expires on <date>". Brought up to date
+in place when the facts change — no notification, no journal entry, not
+a raise for flap damping: `port_hosts_down` ("still silent: K of N"),
+`lag_degraded`, `port_flapping`, `unmanaged_bridge_detected`,
+`stp_root_changed` ("now follows R2 (was P)"), `stp_fragmented`,
+`loop_detection_disabled`, `loop_detected`. A text an older version
+left is replaced on the next evaluation. **`switch_stale` clears with
+words that say what happened:** a full poll, "it stopped answering —
+switch_down follows it from the second missed poll", or "no longer in
+switches:".
+
+**"Not on map": a ping counts while the record holds an address.** A
+ping goes to the address, and once the address is another device's, so
+is the answer — the mistake v0.8.8 fixed for ARP. Such a row in "Not
+seen for a while" reads "answered ping at DD.MM HH:MM · no longer holds
+an address".
+
+**The log in UTF-8.** In the systemd journal "—" and "§" came out as
+`\u2014` and `\xa7`: under a non-UTF-8 locale (`LANG=en_US` is
+ISO-8859-1) Python cannot write the first and writes the second as a
+byte journalctl will not show, and PEP 538 / PEP 540 act only on the C
+and POSIX locales. The service and `diag` switch their streams to UTF-8
+before the first line; the example unit gets `Environment=PYTHONUTF8=1`.
+
+**The demo**: the devices behind access-sw-2 Gi0/5 go silent at once,
+one of them answers again four ping cycles later and the alarm's text
+says who is still silent, and a record that answered ping hours ago
+holds no address any more.
+
 ## v0.8.8 — 2026-11-24
 
 A walk that cannot loop, where a poll's budget went, diag over HTTPS,
