@@ -1,6 +1,6 @@
 # What MoonLan does
 
-Everything MoonLan does, as of v0.8.7 — the list the README used to carry. The README keeps the summary; each item here links to the page that explains it.
+Everything MoonLan does, as of v0.8.8 — the list the README used to carry. The README keeps the summary; each item here links to the page that explains it.
 
 ![Alarms panel](img/alarms.png)
 
@@ -13,6 +13,12 @@ Everything MoonLan does, as of v0.8.7 — the list the README used to carry. The
   and is marked as late rather than reported as unreachable, which
   it is not. An OID that answers nothing but timeouts is left alone
   for a while and then tried again, out loud in the log both times.
+  A poll that runs out of budget says where (v0.8.8): the walk it was
+  cut in, with its rows and seconds, in the log, in `diag --config`
+  and in `/api/polling`, beside the slowest walks of every poll. A walk
+  the agent itself sends round in circles — the same OID back, or a
+  long run of "no such object" — ends at once with one WARNING; the
+  rest of the poll goes on.
 - Every switch of `switches:` stays on the map whatever it answers
   (v0.8.7), in one of five states, which its card says in one line:
   polled in this scan; over budget — the last full reading, dated;
@@ -99,7 +105,13 @@ Everything MoonLan does, as of v0.8.7 — the list the README used to carry. The
   "Not seen for a while · N" (v0.8.7): folded until opened (the browser
   remembers) or until the search finds something there, newest first,
   each with "seen DD.MM · switch port"; the card says since when and
-  on which day `host_retention_days` deletes the record.
+  on which day `host_retention_days` deletes the record. ARP counts as
+  being there only while the record holds an address (v0.8.8): one
+  whose address went to another device or was not confirmed is in
+  "Not seen for a while", its row saying "in ARP at DD.MM HH:MM · no
+  longer holds an address". The second line of a row never repeats
+  the first: a device without a name or an address shows its MAC
+  once.
   `python -m moonlan.diag --hosts` reports how
   complete the inventory is and which subnets are missing from it.
   A device behind a switch that ran out of its poll budget keeps its
@@ -474,7 +486,7 @@ Everything MoonLan does, as of v0.8.7 — the list the README used to carry. The
   page; what a switch, a ping or the system said stays as it was said.
   A change of language redraws every open panel and dialog. The page
   itself never scrolls on a phone — a long card, a menu or the list
-  scrolls inside itself. Two fingers still zoom.
+  scrolls inside itself.
 - A phone (720 px and narrower, v0.8.6): the header is one row, the
   name and a status button — the time of the scan, with a mark and how
   many switches ran out of time when some did; a tap shows the whole
@@ -486,7 +498,13 @@ Everything MoonLan does, as of v0.8.7 — the list the README used to carry. The
   filters; and **More** — the account and RU / EN, the STP tree,
   Arrange as a switch, the items of Actions with their groups (one
   list feeds both: an item added to Actions is in More too), Sign out,
-  each row with its icon (v0.8.7).
+  each row with its icon (v0.8.7). Two fingers zoom the map and only
+  the map (v0.8.8): a pinch or a double tap anywhere else leaves the
+  page as it is, so the header, the tabs and the card stay on the
+  screen. In place of the page zoom, **Text size** in More — 100, 115
+  or 130 % of the page's text, kept in the browser; the map has its
+  own zoom, and the system's font size still applies. A computer and
+  a tablet wider than 720 px zoom as before.
   What a role may not do is grey with the reason, as everywhere. The
   map's tools stand at the bottom right: freeze, port numbers (their
   menu opens above the button) and "fit the map to the screen".

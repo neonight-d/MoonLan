@@ -28,6 +28,15 @@ SNMP / ARP / system probes
 
 moonlan/snmp_collector.py owns SNMP interaction and converts vendor-specific responses into structured switch data. The collector uses one SNMP engine per process and per-switch locks. Different switches can be polled concurrently while overlapping operations against the same switch are serialized.
 
+#### The rules of a walk
+
+A walk is a run of GETNEXT requests, and `_walk` holds the agent to RFC 3416 §4.2.2 rather than trusting it (v0.8.8):
+
+- **The OID grows.** Each answer must carry an OID strictly past the one before it — the start of the walk (or of a resumed pass) for the first row, then the previous row, no-such rows included. Tuples of integers compare the way OIDs are ordered. An answer that is not past it ends the walk at once, fault `non_increasing`: the next GETNEXT would ask for the same OID, and an agent that answered it once with itself answers it so forever. pysnmp's `walk_cmd` does not check this and stops only on its own `Null` or `endOfMibView`; an agent of RouterOS 6.x that answers `lldpRemManAddrIfSubtype` with itself and `noSuchObject` turned that into hundreds of requests a second until the poll budget ended the whole poll.
+- **A run of no-such is the end.** A row carrying `noSuchObject` / `noSuchInstance` is skipped, so one damaged row does not cost the table; `WALK_MAX_NO_SUCH` (100) in a row ends the walk, fault `no_such_run`. A row with a value resets the count. `endOfMibView` ends a walk as it always did.
+- **What came, stays.** The rows read before a fault are kept (`truncated` when there are any), the walk is not resumed — the agent would answer the same — and it is not a dead-OID strike: it costs one request now, not a timeout. One WARNING per host and OID in the life of the process, one INFO when it walks normally again; `/api/skipped-oids` lists the faults.
+- **The budget is the only clock.** There is no time limit per walk: a legitimately slow table — the MAC table of a big switch — would be cut short silently and its hosts would leave the map. Every walk of a full poll is timed instead, and a poll the budget cancels says which walk it was cut in (`cut_at` in `/api/polling`); the walk the cancellation lands in keeps its record "running" for the server to read. Only `collect()`'s own walks are timed, so a counters cycle that takes the host the moment a cancelled poll lets go of it cannot overwrite that record.
+
 ### Topology
 
 moonlan/topology.py converts observations into links, hosts, pseudo-switches, bridges, groups, and placement decisions. Evidence has different strength: explicit LLDP agreement, validated direct FDB relationship, one-way/FDB inference, and approximate/trunk placement. The UI keeps that distinction visible.

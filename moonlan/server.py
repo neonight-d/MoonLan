@@ -456,8 +456,11 @@ async def run_scan() -> None:
         now = time.time()
         if config.demo:
             results = demo.demo_poll()
-            for _ in results:
+            for ip, result in results:
                 state.host_polled()
+                times = demo.poll_times(ip, result)
+                if times is not None:
+                    poll_report[ip] = times
         else:
             collector = get_collector()
             collector.begin_scan_cycle()
@@ -2969,6 +2972,7 @@ async def lifespan(app: FastAPI):
         log.info("MoonLan started in DEMO mode (virtual network)")
         await asyncio.to_thread(demo.seed_notes, db)
         await asyncio.to_thread(demo.seed_reading, db)
+        await asyncio.to_thread(demo.seed_stale_alarm, db)
     elif not config.switches:
         log.warning(
             "No switches are configured in config.yaml. Add addresses to "

@@ -153,6 +153,7 @@ import time
 from .counters import ColumnStatus, Sample
 from .db import Database
 from .lldp import (
+    OID_LLDP_REM_SYS_NAME,
     LldpNeighbor,
     analyse_ports,
     merge_rows,
@@ -165,13 +166,17 @@ from .loopdetect import (
     judge_port,
     map_ports,
 )
-from .stp import StpData, StpPort
+from .stp import OID_STP_PORT_STATE, StpData, StpPort
 from .snmp_collector import (
+    OID_IF_DESCR,
+    OID_IF_NAME,
+    OID_Q_FDB_PORT,
     READING_FORMAT,
     OverBudget,
     PortInfo,
     SwitchData,
     aggregate_port,
+    oid_name,
     infer_lag_groups,
     lag_port_name,
     parse_fdb_entry,
@@ -741,6 +746,63 @@ def demo_poll() -> list[tuple[str, object]]:
         else:
             results.append((ip, network[ip]))
     return results
+
+
+def _walk(oid: str, rows: int, seconds: float, resumes: int | None = None) -> dict:
+    entry = {"oid": oid, "name": oid_name(oid), "rows": rows,
+             "seconds": round(seconds, 1)}
+    if resumes is not None:
+        entry["resumes"] = resumes
+    return entry
+
+
+# Where the time of a demo poll went (v0.8.8): made up, in the shape of
+# /api/polling — the two that run out of budget are cut in a walk, the
+# rest have their slowest walks. A switch that did not answer: nothing.
+DEMO_CUTS = {
+    NEVER_SWITCH: (OID_Q_FDB_PORT, 2140, 118.6, 1),
+    SLOW_SWITCH: (OID_STP_PORT_STATE, 12, 104.3, 0),
+}
+
+
+def poll_times(ip: str, result) -> dict | None:
+    """cut_at and slowest_walks for one switch of a demo scan"""
+    if isinstance(result, OverBudget):
+        oid, rows, seconds, resumes = DEMO_CUTS[ip]
+        cut = {**_walk(oid, rows, seconds, resumes), "in_walk": True}
+        walks = [_walk(oid, rows, seconds),
+                 _walk(OID_IF_NAME, 28, 2.4), _walk(OID_IF_DESCR, 28, 1.9)]
+        return {"cut_at": cut, "slowest_walks": walks}
+    if not isinstance(result, SwitchData) or not result.reachable:
+        return None
+    fdb, ports = len(result.fdb), len(result.ports)
+    walks = sorted([
+        _walk(OID_Q_FDB_PORT, fdb, 0.8 + fdb * 0.011),
+        _walk(OID_IF_NAME, ports, 0.3 + ports * 0.012),
+        _walk(OID_LLDP_REM_SYS_NAME, len(result.lldp_neighbors),
+              0.2 + len(result.lldp_neighbors) * 0.09),
+    ], key=lambda w: w["seconds"], reverse=True)
+    return {"cut_at": None, "slowest_walks": walks}
+
+
+def seed_stale_alarm(db: Database) -> None:
+    """switch_stale on NEVER_SWITCH as an older version left it before a
+    restart: raised a week ago, with words of the moment — a count of
+    scans and the date of a reading that is not on the map any more.
+    The first scan brings the text up to date in place (v0.8.8)."""
+    if any(a["type"] == "switch_stale" for a in db.alarms(True, 100)):
+        return
+    raised = time.time() - 7 * 86400
+    message = (
+        f"{NEVER_SWITCH} has answered but not finished a full poll in 5 "
+        "scans running; the data on the map is from "
+        + time.strftime("%Y-%m-%d %H:%M", time.localtime(raised - 3600))
+        + ". It is reachable — this is a poll budget too small for it, "
+        "not a switch that is down"
+    )
+    if db.raise_alarm("switch_stale", NEVER_SWITCH, "warning", message, raised):
+        db.add_event(raised, "alarm_raised", NEVER_SWITCH,
+                     f"warning switch_stale: {message}")
 
 
 def seed_reading(db: Database) -> None:
@@ -1322,6 +1384,14 @@ GONE_HOSTS = [
     ("b2:1a:7c:00:0c:05", "", "10.0.0.21", "Gi0/13", 13.0),
 ]
 
+# Seen in ARP hours ago, their address gone since (v0.8.8):
+# (mac, name, switch, port, days since a switch saw it, hours since ARP)
+ARP_GONE_HOSTS = [
+    ("00:ee:00:00:0d:01", "", ACCESS_4, "Gi0/11", 8.0, 3.0),
+    ("00:ee:00:00:0d:02", "lab-pc-7.demo.lan", ACCESS_2, "Gi0/9", 5.0, 7.0),
+    ("00:ee:00:00:0d:03", "", "10.0.0.21", "Gi0/14", 11.0, 26.0),
+]
+
 # Devices ARP knows but no switch port ever showed — a subnet behind a
 # router, exactly what hides real segments from an L2 map
 UNLOCATED_HOSTS = [
@@ -1371,6 +1441,18 @@ def _seed_offmap_hosts(db: Database, now: float) -> None:
                      last_seen=seen, seen_count=30)
         if name:
             db.set_name(mac, name)
+    # in ARP hours ago, and holding no address since: it went to another
+    # MAC or was not confirmed. Not presence (v0.8.8) — these are in
+    # "Not seen for a while" too, saying why their date is fresh
+    for n, (mac, name, switch, port, days, hours) in enumerate(ARP_GONE_HOSTS):
+        db.seed_host(mac, switch, port, 8, first_seen=now - 40 * 86400,
+                     last_seen=now - days * 86400, seen_count=30)
+        if name:
+            db.set_name(mac, name)
+        db.set_last_arp(mac, now - hours * 3600)
+        if n < 2:
+            db.add_event(now - hours * 3600 + 600, "ip_released", mac,
+                         f"10.0.99.{140 + n} not confirmed by ARP for 6 h")
 
 
 _ping_cycle = 0

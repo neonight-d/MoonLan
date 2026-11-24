@@ -6,6 +6,86 @@ for before the next one started.
 
 Русская версия — [CHANGELOG_RU.md](CHANGELOG_RU.md).
 
+## v0.8.8 — 2026-11-24
+
+A walk that cannot loop, where a poll's budget went, diag over HTTPS,
+no page zoom on a phone, ARP and "Not on map", alarm text that stays
+true. Fixes from the acceptance of v0.8.7 on the production network,
+and a bug from a phone.
+
+**A walk the agent sends round in circles ends.** An agent of RouterOS
+6.x answers GETNEXT on `lldpRemManAddrIfSubtype` with that very OID and
+`noSuchObject`, every time — both forbidden by RFC 3416 §4.2.2. pysnmp
+does not check that the OID grows, and `_walk` skipped no-such rows
+without counting them, so the same request went out hundreds of times a
+second until the poll budget took the whole poll down: that switch's
+full poll never finished once, and the polls sharing the event loop
+slowed down meanwhile. A walk now ends on an answer that is not past
+the OID before it (`non_increasing`) and on 100 no-such answers in a
+row (`no_such_run`); one such row in a table is still skipped. The rows
+that came stay, the walk is not resumed and it is not a dead-OID
+strike — it costs one request now. One WARNING per switch and OID in
+the life of the process, one INFO when it walks normally again;
+`/api/skipped-oids` lists them as `walk_faults`, `diag --skipped`
+prints them apart from the pauses, and `diag --walk` stops on the fault
+and says why instead of hanging — and does not call it a silence.
+
+**Where a poll's budget went.** "Did not finish its poll within the
+120 s budget" said nothing about where. Every walk of a full poll is
+timed now. The WARNING ends with "cut in the walk of <oid> (<name>)
+after N row(s) and S s" — or between walks, or before the first;
+`/api/polling` has `cut_at` (`null` once a full poll finishes) and the
+three `slowest_walks` of the last poll; `diag --config` prints both
+under each switch. The name is the constant MoonLan knows the OID by
+(`LLDP_REM_MAN_ADDR_IF_SUBTYPE`). No limit per walk: the budget stays
+the only clock.
+
+**diag over HTTPS.** With `listen.tls_cert` the service's port speaks
+only TLS, and `diag --config`, `--layout` and `--skipped` failed. They
+go over https now, trusting exactly the configured certificate: no CA,
+no "do not verify" — the certificate the service presents is compared
+with the first one in `listen.tls_cert` after the handshake and before
+anything is sent, so on a mismatch neither the request nor the console
+token goes out.
+
+**A phone: two fingers zoom the map.** A pinch anywhere zoomed the
+whole page, and with the tab bar fixed at the bottom the header, the
+tabs and the card went off the screen. On a phone (720 px and
+narrower) the viewport says `maximum-scale=1`, `touch-action` keeps
+panning only and the map takes its gestures itself; Safari's gesture
+events are cancelled outside the map for old iOS. A computer and a
+tablet zoom as before. In place of the page zoom, **Text size** in
+More: 100, 115 or 130 % of the root font, kept in the browser; fields
+stay at 16 px or more.
+
+**"Not on map": ARP while the address is held.** 140 of 142 records
+"Not on map" had no IP: `last_arp` stays when the address goes to
+another MAC or is released unconfirmed, and kept them "recent" after
+the very ARP that showed they were gone. ARP now counts only for a
+record that holds an address. `seen_by` — `fdb`, `arp` or `ping` —
+says where `seen_at` comes from, and such a row in "Not seen for a
+while" reads "in ARP at DD.MM HH:MM · no longer holds an address".
+
+**The text of `switch_stale` stays true.** It was built once, at the
+raise: "the data on the map is from 2026-11-17" outlived a restart that
+took that reading off the map, and "in N scans running" stood still. It
+now says only what holds while it stands — answered or not known, what
+the map shows (this run's last full poll, the reading saved before the
+restart, or an empty node) and since when — and is brought up to date
+in place on every scan, after a restart on the first, with no second
+notification and no journal entry. Active `switch_stale` alarms are
+taken back at the start, so the first full poll after a restart clears
+them.
+
+**The line under a row** in the lists of hosts, "Not on map" and "Not
+seen for a while" no longer repeats the row: a device with neither a
+name nor an IP shows its MAC once, one with an IP alone its IP once.
+
+**The demo** has `cut_at` on its two late switches and `slowest_walks`
+on the rest, a `switch_stale` on the switch never read in full left
+with the old words and brought up to date by the first scan, and
+records seen in ARP hours ago that hold no address.
+
 ## v0.8.7 — 2026-11-23
 
 A switch stays on the map without a fresh poll, "Not on map" in two, a

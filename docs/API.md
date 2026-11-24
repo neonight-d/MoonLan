@@ -567,10 +567,46 @@ polled yet, or a budget that ran out before the first answer).
 being `true`: before, it was the default of an empty reading, `false`
 for a switch that answered and only ran out of time.
 
+Where the time of a poll went (v0.8.8), by the monotonic clock in
+tenths of a second:
+
+```json
+"cut_at": {"oid": "1.3.6.1.2.1.17.7.1.2.2.1.2", "name": "Q_FDB_PORT",
+           "rows": 2140, "seconds": 118.6, "resumes": 1, "in_walk": true},
+"slowest_walks": [{"oid": "1.3.6.1.2.1.17.7.1.2.2.1.2", "name": "Q_FDB_PORT",
+                   "rows": 2140, "seconds": 118.6},
+                  {"oid": "1.3.6.1.2.1.31.1.1.1.1", "name": "IF_NAME",
+                   "rows": 28, "seconds": 2.4}]
+```
+
+`cut_at` is where the last poll that ran out of budget stopped, `null`
+once a full poll finishes: with `in_walk` true, the walk the budget
+cancelled — its rows so far, its seconds and how many times it was
+resumed; with `in_walk` false the cancellation fell between walks, and
+the fields are the last walk that finished (`oid` empty when none had).
+`slowest_walks` is up to three of the longest walks of the last poll,
+full or cut, longest first. `name` is the constant MoonLan knows the
+OID by, without its `OID_` prefix, or empty. A poll the switch did not
+answer changes neither.
+
 ### GET /api/skipped-oids
 
 The OIDs paused after answering nothing but timeouts — what
-`diag --skipped` prints.
+`diag --skipped` prints — and, since v0.8.8, the walks an agent breaks:
+
+```json
+{"strikes": 3, "cooldown_scans": 30, "polled": true, "paused": [],
+ "walk_faults": [{"host": "10.1.0.30", "oid": "1.0.8802.1.1.2.1.4.2.1.3",
+                  "fault": "non_increasing", "rows": 0, "last_oid": "",
+                  "error": "the agent answered GETNEXT with 1.0.8802.1.1.2.1.4.2.1.3 (NoSuchObject), not past the OID asked for",
+                  "first_at": 1795400000.0, "last_at": 1795430000.0}]}
+```
+
+`fault` is `non_increasing` (an answer not past the OID before it) or
+`no_such_run` (100 no-such answers in a row); `rows` are the rows kept
+from before it, `last_oid` the last OID that came in order. A walk
+leaves the list when it reads to its end again. These are asked for
+every scan — see docs/DIAGNOSTICS.md, "A walk the agent breaks".
 
 ## Topology
 
@@ -590,12 +626,17 @@ is seen, or `null` — `started_at` (the service's start) and
 `budget_seconds`.
 
 Every record in `unlocated` carries `recent` (v0.8.7) — whether
-anybody (a switch table, ARP, a ping) saw it inside `host_grace_hours`
+anybody (a switch table, ARP while it holds an address, a ping) saw it inside `host_grace_hours`
 — and `off_map`, why it is not on the map: `uplink_only` (seen only on
 uplinks, this scan), `no_port` (ARP only, a port reset, a switch not
 drawn from a reading) or `expired` (it had a place; the grace window
 ran out). `seen_at` is that last sighting, and `forget_at` when
 `host_retention_days` deletes the record, `null` while it is 0.
+`seen_by` (v0.8.8) says where `seen_at` comes from: `fdb`, `arp` or
+`ping`, empty for never. ARP makes a record `recent` only while it
+holds an address: `last_arp` stays when the address goes to another MAC
+or is released unconfirmed, and that ARP is what showed the device was
+gone.
 
 A link joins two switches (`a`, `b`) at `a_port` and `b_port`. Two
 cables between the same two switches without a LAG are two links: the

@@ -397,6 +397,16 @@ answered at all (`answered`). That is a budget to raise:
 `host_budget_seconds` in its own entry under `switches:`, set from the
 "took" column of `diag --config` once one poll has finished.
 
+Before raising it, look at where the time went (v0.8.8): the WARNING of
+a poll that ran out of budget names the walk it was cut in, with its
+rows and seconds, and `diag --config` repeats it under the switch with
+its slowest walk. A big MAC table that takes long is a budget to raise;
+a walk that takes the whole budget with no rows is worth a
+`diag --walk <switch> <oid>`. An agent that answers GETNEXT with the
+same OID — a RouterOS 6.x LLDP table did — is no longer such a case:
+that walk ends at once with one WARNING, and `diag --skipped` lists it
+(see DIAGNOSTICS.md, "A walk the agent breaks").
+
 A switch that stops answering stays on the map from its last reading,
 "not answering since HH:MM", with its branch muted; `switch_down` rises
 after two silent scans and clears with the first answer.

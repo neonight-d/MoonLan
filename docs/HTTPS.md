@@ -197,6 +197,17 @@ by itself.
   by MoonLan, HTTPS at a proxy, or plain HTTP. An https `public_url`
   with neither `tls_cert` nor `trusted_proxies` is called out: every
   request would arrive as plain HTTP and every password be refused.
+- **diag asks the service over https** (since v0.8.8) when MoonLan
+  serves it itself — `--config`, `--layout` and `--skipped` read what
+  only the running service knows. It trusts exactly the certificate in
+  `listen.tls_cert`, not a CA: after the handshake and before anything
+  is sent, the certificate the service presents is compared with the
+  first one in that file, and on a mismatch the request and the
+  console token stay home. So run diag as the user MoonLan runs as —
+  it needs that file and the `.console` token — and after renewing the
+  certificate restart the service before trusting diag again: until
+  then the port still presents the old one, and diag says so. Behind a
+  proxy the service's own port is plain HTTP, and diag asks it so.
 
 ### HSTS — off unless asked for
 

@@ -643,6 +643,13 @@ class Database:
                 "UPDATE hosts SET last_seen = ? WHERE mac = ?", (ts, mac)
             )
 
+    def set_last_arp(self, mac: str, ts: float) -> None:
+        """Overrides when ARP last showed the host (demo seeding)."""
+        with self._lock, self._conn:
+            self._conn.execute(
+                "UPDATE hosts SET last_arp = ? WHERE mac = ?", (ts, mac)
+            )
+
     def release_ip(self, mac: str, ts: float, note: str = "") -> bool:
         """Takes the IP away from a host and logs it.
 

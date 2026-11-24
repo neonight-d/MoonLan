@@ -15,6 +15,21 @@ database (`<db_path>.console`, mode 0600) and treats it as a viewer
 that only reads: run diag as the user MoonLan runs as, in its
 directory.
 
+When MoonLan serves HTTPS itself (`listen.tls_cert` is set), diag asks
+it over https on the same address and port (since v0.8.8; before, those
+reports failed). It trusts exactly the configured certificate: no CA is
+consulted and there is no "do not verify" mode — after the handshake,
+before anything is sent, the certificate the service presents is
+compared with the first certificate in `listen.tls_cert`. On a mismatch
+neither the request nor the token goes out:
+
+```
+the certificate on 127.0.0.1:8443 is not the one in listen.tls_cert — another process on that port, or MoonLan has not been restarted since the certificate was renewed
+```
+
+diag has to be able to read that file, which is one more reason to run
+it as the service's user; if it cannot, it says so instead of asking.
+
 ## Diagnosing one device
 
 ```bash
@@ -111,6 +126,30 @@ The last table it prints is the SNMP settings every switch is actually
 polled with, marking the ones that switch was given of its own rather
 than inheriting from `snmp:`.
 
+Before it, from the running service, the last complete poll of each
+switch: its budget, how long the poll took, when, and whether it is
+over budget. Since v0.8.8 two lines under a switch say where the time
+went — where the last poll that ran out of budget was cut, and the
+slowest walk of the last poll:
+
+```
+  switch               budget      took             when  state
+  10.0.0.26             120 s         —            never  12 scan(s) over budget
+      last cut: in the walk of 1.3.6.1.2.1.17.7.1.2.2.1.2 (Q_FDB_PORT) after 2140 row(s) and 118.6 s, 1 resume(s)
+      slowest walk: 1.3.6.1.2.1.17.7.1.2.2.1.2 (Q_FDB_PORT) 118.6 s, 2140 row(s)
+  10.0.0.10             120 s     6.8 s  2026-11-24 10:12  ok
+      slowest walk: 1.3.6.1.2.1.17.7.1.2.2.1.2 (Q_FDB_PORT) 3.1 s, 210 row(s)
+```
+
+The name in brackets is the constant MoonLan knows the OID by. A cut
+can also fall between walks ("the last finished was …") or before the
+first one. The same is in the WARNING the service logs when a poll runs
+out of budget — `… cut in the walk of <oid> (<name>) after N row(s) and
+S s` — and in `/api/polling` as `cut_at` and `slowest_walks`
+([API.md](API.md)). A table that is legitimately slow (the MAC table of
+a big switch) is a reason for a larger `host_budget_seconds`; one that
+takes the whole budget with no rows is worth a `--walk`.
+
 ## What is not being asked for
 
 ```bash
@@ -124,6 +163,45 @@ is tried again — see `snmp.dead_oid_strikes` in
 running service, so this asks it over the API rather than guessing; it
 needs MoonLan to be up, at the `listen.host` / `listen.port` from the
 same `config.yaml`.
+
+Under its own heading it lists the walks an agent breaks (since
+v0.8.8) — see the next section. Those are not paused: they are asked
+for every scan, and cost one request each.
+
+## A walk the agent breaks
+
+By RFC 3416 (§4.2.2) the answer to GETNEXT always carries an OID past
+the one asked for, and the end of a table is `endOfMibView`, never
+`noSuchObject`. An agent of RouterOS 6.x answers GETNEXT on
+`lldpRemManAddrIfSubtype` (`1.0.8802.1.1.2.1.4.2.1.3`) with that very
+OID and `noSuchObject`, every time. pysnmp does not check that the OID
+grows, so before v0.8.8 the same request went out hundreds of times a
+second until the poll budget took the whole poll down — its full poll
+never finished, and the polls sharing the service slowed down meanwhile.
+net-snmp's `snmpwalk` stops on "OID not increasing"; MoonLan now does
+the same:
+
+- an answer whose OID is not past the previous one (the start of the
+  walk for the first) ends the walk — `non_increasing`;
+- 100 answers in a row carrying `noSuchObject` / `noSuchInstance`
+  end it too — `no_such_run`. A single such row in a table is skipped,
+  as before.
+
+The rows that came are kept, the walk is not resumed — the agent would
+answer the same — and the rest of the poll goes on. The log has one
+WARNING per switch and OID in the life of the process:
+
+```
+WARNING moonlan.snmp_collector: 10.0.0.30: walk of 1.0.8802.1.1.2.1.4.2.1.3 stopped — the agent answered GETNEXT with 1.0.8802.1.1.2.1.4.2.1.3 (NoSuchObject), which is not past the OID asked for. An agent bug (RFC 3416 §4.2.2): this table is left out; the rest of the poll goes on
+```
+
+and one INFO, "walks normally again", if a later walk reads to its end.
+What is missing is that one table — for the OID above, the management
+addresses of LLDP neighbours, so a neighbour is matched by its other
+fields. `diag --skipped` lists the faults with their first and last
+time, and `diag --walk <switch> <oid>` stops on the same answer and
+prints why, instead of hanging. The cure is the firmware, not a MoonLan
+setting.
 
 ## How complete is the inventory
 
@@ -355,4 +433,6 @@ writing anything against them — D-Link lives under `1.3.6.1.4.1.171`
 and HPE under `1.3.6.1.4.1.11` — and it is how the loop-detection
 profiles were found. It is also the first step in adding a new one:
 see [Adding a model](NETWORK.md#adding-a-model). The default 500-row ceiling keeps a stray
-subtree from being downloaded whole.
+subtree from being downloaded whole. An agent that breaks the walk —
+the same OID back, or a long run of `noSuchObject` — ends it at once,
+with the reason (see [A walk the agent breaks](#a-walk-the-agent-breaks)).
