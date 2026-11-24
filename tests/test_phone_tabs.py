@@ -336,8 +336,9 @@ class PhonePageTest(unittest.TestCase):
     def test_more_has_the_menus_items_in_its_order(self):
         viewer = self.out["viewer"]
         menu_keys = [key for key, _group in viewer["menu"]]
-        self.assertEqual(viewer["keys"][:2], ["stp", "arrange"])
-        self.assertEqual(viewer["keys"][2:-1], menu_keys)
+        # the text size after arranging (v0.8.8)
+        self.assertEqual(viewer["keys"][:3], ["stp", "arrange", "textSize"])
+        self.assertEqual(viewer["keys"][3:-1], menu_keys)
         self.assertEqual(viewer["keys"][-1], "logout")
         # a line between the groups, as in the menu
         groups = []

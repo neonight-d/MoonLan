@@ -23,7 +23,7 @@ TABLE = APP[APP.index("const MORE_ICONS = {"):]
 TABLE = TABLE[:TABLE.index("\n};\n")]
 ICON_KEYS = set(re.findall(r"^  (\w+): \[", TABLE, re.M))
 # the rows of More that are not moreItems()
-OWN_ROWS = {"stp", "arrange", "logout"}
+OWN_ROWS = {"stp", "arrange", "textSize", "logout"}
 
 
 class SourceTest(unittest.TestCase):

@@ -58,7 +58,9 @@ class PlaceTest(unittest.TestCase):
         self.assertIn("rescan();", SETTINGS)
 
     def test_phone_fields_are_16px(self):
-        rule = '.set-input input[type="text"], .set-input input[type="email"] { font-size: 16px; }'
+        # 16 px, or more with the text size of More (v0.8.8)
+        rule = ('.set-input input[type="text"], .set-input input[type="email"] '
+                '{ font-size: max(16px, 1rem); }')
         self.assertIn(rule, STYLE)
         # after the field's own rule, which it has to win over
         self.assertGreater(STYLE.index(rule), STYLE.index('.set-input input[type="text"], .set-input input[type="email"] {\n'))

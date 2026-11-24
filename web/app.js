@@ -2637,6 +2637,8 @@ const MORE_ICONS = {
   about: ["M3 12a9 9 0 1 0 18 0a9 9 0 1 0-18 0", "M12 11v5", "M12 8v.5"],
   // a door, and the way out of it
   logout: ["M15 4h4a1 1 0 0 1 1 1v14a1 1 0 0 1-1 1h-4", "M10 16l-4-4 4-4", "M6 12h10"],
+  // a large A and a small one
+  textSize: ["M3.5 19L8.5 5l5 14M5.4 14h6.2", "M15 19l3-9 3 9M16.1 16h3.8"],
 };
 
 /* The icon of a row of More: an inline SVG, no font and no CDN */
@@ -9734,6 +9736,67 @@ function isPhone() {
   return window.matchMedia(PHONE_MEDIA).matches;
 }
 
+/* No page zoom on a phone, and a text size instead (v0.8.8).
+
+   A pinch anywhere zoomed the whole page, and with the tab bar fixed
+   to the bottom (v0.8.6) that pushed the header, the tabs and the card
+   past the edge of the screen. On a phone the viewport now says
+   maximum-scale=1 — Android Chrome keeps to it — and the style's
+   touch-action says the same to the rest (iOS Safari among them); the
+   map zooms itself. For iOS before 13, which knows neither, Safari's
+   own gesture events are cancelled outside the map. Wider than 720 px
+   the viewport is as it was, and so is Ctrl ± or a touchpad's pinch.
+
+   What the zoom was good for — larger text — is the text size of More:
+   the root font of the page, 15 px × 100 / 115 / 130 %, on a phone
+   only. Whatever is set in rem grows with it; the map's canvas has a
+   zoom of its own, and the tabs' words (px) stay the size the five of
+   them fit in. Kept in this browser. */
+const VIEWPORT_FREE = "width=device-width, initial-scale=1";
+const VIEWPORT_PHONE = VIEWPORT_FREE + ", maximum-scale=1";
+const TEXT_SIZES = [100, 115, 130];
+const TEXT_SIZE_KEY = "moonlan-text-size";
+const ROOT_FONT_PX = 15;
+
+function savedTextSize() {
+  try {
+    const size = Number(localStorage.getItem(TEXT_SIZE_KEY));
+    return TEXT_SIZES.includes(size) ? size : 100;
+  } catch (e) {
+    return 100;  // storage blocked: the default
+  }
+}
+
+let textSize = savedTextSize();
+
+function applyPhoneScale() {
+  const phone = isPhone();
+  const viewport = document.querySelector('meta[name="viewport"]');
+  if (viewport) viewport.setAttribute("content", phone ? VIEWPORT_PHONE : VIEWPORT_FREE);
+  document.documentElement.style.fontSize =
+    phone && textSize !== 100 ? (ROOT_FONT_PX * textSize) / 100 + "px" : "";
+}
+
+function setTextSize(size) {
+  if (!TEXT_SIZES.includes(size)) return;
+  textSize = size;
+  try {
+    localStorage.setItem(TEXT_SIZE_KEY, String(size));
+  } catch (e) {
+    /* not kept: this visit only */
+  }
+  applyPhoneScale();
+  renderMoreView();
+  placeMapTools();
+}
+
+for (const type of ["gesturestart", "gesturechange"]) {
+  document.addEventListener(type, (event) => {
+    const onMap = event.target && event.target.closest && event.target.closest("#network");
+    if (isPhone() && !onMap) event.preventDefault();
+  }, { passive: false });
+}
+
 let phoneStack = [];     // what is open, bottom to top
 let historyDepth = 0;    // how many entries of ours the browser's history holds
 let historyGoing = false; // a history.go() of ours is on its way
@@ -9993,6 +10056,7 @@ function renderMoreView() {
   arrange.setAttribute("aria-checked", String(arrangeMode));
   arrange.append(h("span", { class: "more-switch" + (arrangeMode ? " on" : ""), "aria-hidden": "true" }));
   parts.push(arrange);
+  parts.push(moreTextSizeRow({ key: "textSize", label: t("textSize") }));
   parts.push(h("div", { class: "more-sep", role: "separator" }));
   parts.push(...moreViewItems(moreItems(), MORE_GROUPS));
   if (signedIn) {
@@ -10020,6 +10084,22 @@ function moreRow(item, run) {
     phoneSync();
   });
   return button;
+}
+
+/* The text size (v0.8.8): the row's words, and its three sizes as the
+   language's segments are */
+function moreTextSizeRow(item) {
+  const sizes = h("span", { class: "lang-switch", role: "group", "aria-label": item.label });
+  for (const size of TEXT_SIZES) {
+    sizes.append(h("button", {
+      type: "button", class: textSize === size ? "active" : "",
+      "aria-pressed": String(textSize === size),
+      text: fmt("textSizeValue", { n: size }), onclick: () => setTextSize(size),
+    }));
+  }
+  const row = h("div", { class: "more-row more-size", "data-key": item.key });
+  row.append(moreIcon(item.key), h("span", { class: "more-label", text: item.label }), sizes);
+  return row;
 }
 
 /* The Actions menu's items as rows, by group, a line between groups */
@@ -10051,6 +10131,7 @@ function placeMapTools() {
 /* From phone to computer and back: a computer has no stack, and a
    phone starts from the map */
 function phoneModeChanged() {
+  applyPhoneScale();
   if (!isPhone()) {
     for (const view of Object.values(phoneViews)) {
       if (view.visible()) view.hide();
@@ -10084,6 +10165,7 @@ els.arrangeBannerOff.addEventListener("click", () => {
 });
 window.addEventListener("popstate", phonePopState);
 window.matchMedia(PHONE_MEDIA).addEventListener("change", phoneModeChanged);
+applyPhoneScale();
 if (typeof MutationObserver === "function") {
   const watch = new MutationObserver(() => {
     phoneSync();

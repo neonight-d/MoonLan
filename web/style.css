@@ -27,7 +27,9 @@
    Whatever is longer than the screen scrolls inside itself, and its
    end does not hand the scroll on (overscroll-behavior: contain).
    "none" here also stops Chrome's pull-to-refresh, a reload in the
-   middle of arranging the map. Zooming with two fingers stays. */
+   middle of arranging the map. Two fingers zoom the page on a
+   computer's touch screen as before; on a phone they zoom only the
+   map (v0.8.8, the phone block below). */
 html, body {
   overflow: hidden;
   overscroll-behavior: none;
@@ -135,7 +137,8 @@ header.compact-more .tagline { display: none; }
   border-color: var(--line);
   border-radius: 0;
 }
-.lang-switch button:first-child { border-radius: 6px 0 0 6px; border-right: none; }
+.lang-switch button:first-child { border-radius: 6px 0 0 6px; }
+.lang-switch button:not(:last-child) { border-right: none; }
 .lang-switch button:last-child { border-radius: 0 6px 6px 0; }
 .lang-switch button.active {
   color: var(--moon);
@@ -891,8 +894,10 @@ body.gated .toolbar > button { display: none; }
   .ports-table .th-short { display: inline; }
   /* iOS Safari zooms the page into a field whose text is smaller than
      16 px, and the page does not scroll back (v0.8.2): a phone's fields
-     are 16 px */
-  input, select, textarea { font-size: 16px; }
+     are 16 px — or larger, with the text size of More (v0.8.8) */
+  input, select, textarea { font-size: max(16px, 1rem); }
+  /* a hint longer than its field ends in "…", not mid-word */
+  input { text-overflow: ellipsis; }
   /* a larger tap area, unseen (v0.8.2): tapAreas() in app.js sets how
      far each one reaches, so that no two of them meet */
   header button { position: relative; }
@@ -1353,7 +1358,7 @@ body.gated .toolbar > button { display: none; }
 /* a phone's fields are 16 px (v0.8.3); this rule comes after the
    general one and is more specific, so it says so again */
 @media (max-width: 720px) {
-  .set-input input[type="text"], .set-input input[type="email"] { font-size: 16px; }
+  .set-input input[type="text"], .set-input input[type="email"] { font-size: max(16px, 1rem); }
 }
 
 /* ---------- a phone: one row on top, the sections at the bottom (v0.8.6) ----------
@@ -1364,6 +1369,18 @@ body.gated .toolbar > button { display: none; }
 .status-btn, .status-card, .tabbar, .map-tools, .arrange-banner, .phone-view { display: none; }
 
 @media (max-width: 720px) {
+  /* Two fingers zoom the map and nothing else (v0.8.8). With the tab
+     bar fixed to the bottom, a page zoomed by a pinch pushed the
+     header, the tabs and the card past the edge of the screen, out of
+     reach until an exact pinch back. The viewport says maximum-scale=1
+     on a phone (applyPhoneScale in app.js; Android Chrome keeps to it,
+     iOS Safari does not) and touch-action says the same to every
+     browser that knows it: panning stays, pinch and double-tap zoom
+     go — on every element, not only the root, so that a list that
+     scrolls inside itself does not bring them back. The map takes all
+     the gestures itself. The text size of More stands in for the zoom. */
+  html, body, body * { touch-action: pan-x pan-y; }
+  #network, #network * { touch-action: none; }
   /* the name and the status, in 48 px */
   header { flex-wrap: nowrap; height: 48px; padding: 0 10px 0 14px; gap: 8px; }
   .tagline, .toolbar { display: none; }
@@ -1595,6 +1612,12 @@ body.gated .toolbar > button { display: none; }
   .more-open { flex: 1 1 auto; margin: 0 8px; font-size: 0.85rem; color: var(--text-dim); }
   .more-lang { flex: 0 0 auto; margin-left: auto; }
   .more-lang button { min-width: 44px; min-height: 40px; }
+  /* the text size (v0.8.8): a row, not a button — its choices are
+     buttons of their own; they go under the words when they do not fit */
+  .more-size { cursor: default; }
+  .more-row.more-size:hover { background: none; }
+  .more-size .lang-switch { flex: 0 0 auto; margin-left: auto; }
+  .more-size .lang-switch button { min-width: 52px; min-height: 40px; white-space: nowrap; }
   .more-row {
     display: flex;
     flex-wrap: wrap;

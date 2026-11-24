@@ -147,7 +147,8 @@ class SourceTest(unittest.TestCase):
 
     def test_phone_fields_and_names(self):
         from web_source import STYLE
-        self.assertIn("input, select, textarea { font-size: 16px; }", STYLE)
+        # 16 px, or more with the text size of More (v0.8.8)
+        self.assertIn("input, select, textarea { font-size: max(16px, 1rem); }", STYLE)
         self.assertIn("-webkit-backdrop-filter: blur(3px);", STYLE)
         self.assertIn('<th><span class="sr-only" data-i18n="colState"></span></th>', INDEX)
         self.assertIn('s = s.replaceAll("{" + name + "}", () =>', function("fmt"))
