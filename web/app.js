@@ -3915,11 +3915,9 @@ function renderSidebar() {
   els.hostList.replaceChildren(
     ...topology.hosts.map((h) =>
       li(
-        (nameOf(h) || hostLabel(h)) + (h.monitored ? " ★" : ""),
-        [nameOf(h) ? hostLabel(h) : "", h.ip, h.mac, h.random_mac ? t("randomMac") : "",
-         h.vlan ? "VLAN " + h.vlan : ""]
-          .filter((part, i, all) => part && all.indexOf(part) === i)
-          .join(" · "),
+        rowTitle(h),
+        rowSubline(h, [nameOf(h) ? hostLabel(h) : "", h.ip, h.mac,
+                       h.random_mac ? t("randomMac") : "", h.vlan ? "VLAN " + h.vlan : ""]),
         statusClass(h),
         () => focusNode(h.merged_into || "host:" + h.mac),
         // VLAN is intentionally excluded from search; the maker is in:
@@ -3941,10 +3939,9 @@ function renderSidebar() {
   els.unlocatedList.replaceChildren(
     ...unlocated.map((h) =>
       li(
-        (nameOf(h) || hostLabel(h)) + (h.monitored ? " ★" : ""),
-        [nameOf(h) ? hostLabel(h) : "", h.ip, h.mac, h.random_mac ? t("randomMac") : ""]
-          .filter((part, i, all) => part && all.indexOf(part) === i)
-          .join(" · "),
+        rowTitle(h),
+        rowSubline(h, [nameOf(h) ? hostLabel(h) : "", h.ip, h.mac,
+                       h.random_mac ? t("randomMac") : ""]),
         statusClass(h),
         () => {
           // no node on the map, but on a phone its card goes over the
@@ -3961,13 +3958,11 @@ function renderSidebar() {
   els.goneList.replaceChildren(
     ...gone.map((h) =>
       li(
-        (nameOf(h) || hostLabel(h)) + (h.monitored ? " ★" : ""),
-        [nameOf(h) ? hostLabel(h) : "", h.ip, h.mac, h.vendor,
-         [goneSeenText(h),
-          h.switch ? (switchName(h.switch) + " " + (h.port || "")).trim() : ""]
-           .filter(Boolean).join(" · ")]
-          .filter((part, i, all) => part && all.indexOf(part) === i)
-          .join(" · "),
+        rowTitle(h),
+        rowSubline(h, [nameOf(h) ? hostLabel(h) : "", h.ip, h.mac, h.vendor,
+                       [goneSeenText(h),
+                        h.switch ? (switchName(h.switch) + " " + (h.port || "")).trim() : ""]
+                         .filter(Boolean).join(" · ")]),
         statusClass(h),
         () => {
           phoneLeaveSearch();
@@ -3985,6 +3980,23 @@ function renderSidebar() {
     listTabStop(kept.list, row);
     row.querySelector(".li-btn").focus({ preventScroll: true });
   }
+}
+
+/* A device's row in the lists of hosts, "Not on map" and "Not seen for
+   a while": its name, or what hostLabel finds — DNS, IP, LLDP, MAC */
+function rowTitle(h) {
+  return (nameOf(h) || hostLabel(h)) + (h.monitored ? " ★" : "");
+}
+
+/* …and the line under it: the parts, each once, and none the first line
+   already says (v0.8.8). The repeats used to be weeded out only among
+   the parts, so a device with neither a name nor an IP showed its MAC
+   twice, and one with an IP alone its IP twice. */
+function rowSubline(h, parts) {
+  const title = nameOf(h) || hostLabel(h);
+  return parts
+    .filter((part, i, all) => part && part !== title && all.indexOf(part) === i)
+    .join(" · ");
 }
 
 /* When a long-gone record was seen last. Seen last by ARP and holding
