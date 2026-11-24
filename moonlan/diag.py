@@ -47,13 +47,13 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import http.client
 import importlib.metadata
 import json
 import sqlite3
+import ssl
 import sys
 import time
-import urllib.error
-import urllib.request
 from collections import Counter
 from pathlib import Path
 
@@ -1386,20 +1386,32 @@ def _ask_service(cfg, path: str) -> dict | None:
     token it wrote next to its database at startup: this tool writes
     nothing to the database and cannot sign itself in, and whoever can
     read that file can read the database anyway.
+
+    When MoonLan serves TLS itself, the port speaks nothing else, so
+    the request goes over https (v0.8.8) — and the token is sent only
+    to the certificate in `listen.tls_cert`: see _open_https.
     """
     host = cfg.listen_host
     if host in ("0.0.0.0", "::", ""):
         host = "127.0.0.1"
-    url = f"http://{host}:{cfg.listen_port}{path}"
-    request = urllib.request.Request(url)
+    port = cfg.listen_port
+    tls = bool(cfg.listen_tls_cert)
+    shown = f"[{host}]" if ":" in host else host
+    url = f"{'https' if tls else 'http'}://{shown}:{port}{path}"
     token = _console_token(cfg)
-    if token:
-        request.add_header("X-MoonLan-Console", token)
+    headers = {"X-MoonLan-Console": token} if token else {}
+    connection = None
     try:
-        with urllib.request.urlopen(request, timeout=5) as response:
-            return json.loads(response.read().decode("utf-8"))
-    except urllib.error.HTTPError as exc:
-        if exc.code in (401, 403):
+        if tls:
+            connection = _open_https(cfg, host, port)
+            if connection is None:
+                return None
+        else:
+            connection = http.client.HTTPConnection(host, port, timeout=5)
+        connection.request("GET", path, headers=headers)
+        response = connection.getresponse()
+        body = response.read()
+        if response.status in (401, 403):
             print(
                 f"the service at {url} asks for sign-in and did not take "
                 f"this tool's token ({cfg.users_db_path()}.console"
@@ -1407,12 +1419,74 @@ def _ask_service(cfg, path: str) -> dict | None:
                 + "). Run diag as the user MoonLan runs as, in its "
                 "directory, after the service has started."
             )
-        else:
-            print(f"could not ask the service at {url}: {exc}")
-        return None
+            return None
+        if response.status >= 400:
+            print(
+                f"could not ask the service at {url}: HTTP {response.status} "
+                f"{response.reason}"
+            )
+            return None
+        return json.loads(body.decode("utf-8"))
     except Exception as exc:
         print(f"could not ask the service at {url}: {exc}")
         return None
+    finally:
+        if connection is not None:
+            connection.close()
+
+
+def _configured_certificate(cfg) -> bytes | None:
+    """The first certificate of `listen.tls_cert`, DER; None, said why."""
+    path = cfg.listen_tls_cert
+    try:
+        text = Path(path).read_text(encoding="ascii", errors="replace")
+    except OSError as exc:
+        print(
+            f"the certificate {path} (listen.tls_cert) cannot be read here "
+            f"({exc.strerror or exc}). diag trusts the service only by that "
+            "certificate: run it as the user MoonLan runs as, in its "
+            "directory — the same user that can read the .console token."
+        )
+        return None
+    begin, end = "-----BEGIN CERTIFICATE-----", "-----END CERTIFICATE-----"
+    first = text.find(begin)
+    last = text.find(end, first)
+    if first < 0 or last < 0:
+        print(f"{path} (listen.tls_cert) has no PEM certificate in it")
+        return None
+    return ssl.PEM_cert_to_DER_cert(text[first:last + len(end)] + "\n")
+
+
+def _open_https(cfg, host: str, port: int):
+    """A TLS connection to the service, made only to its own certificate.
+
+    No CA could vouch for the address of a local service, and "do not
+    check" would hand the console token to whatever answers on that
+    port. So the handshake is not verified against any CA; instead the
+    server's certificate is compared, before anything is sent, with
+    the first certificate in `listen.tls_cert`. urllib cannot do that:
+    it sends the request, token included, right after the handshake.
+    """
+    expected = _configured_certificate(cfg)
+    if expected is None:
+        return None
+    context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+    context.check_hostname = False
+    context.verify_mode = ssl.CERT_NONE
+    connection = http.client.HTTPSConnection(
+        host, port, timeout=5, context=context
+    )
+    connection.connect()
+    presented = connection.sock.getpeercert(binary_form=True)
+    if presented != expected:
+        connection.close()
+        print(
+            f"the certificate on {host}:{port} is not the one in "
+            "listen.tls_cert — another process on that port, or MoonLan has "
+            "not been restarted since the certificate was renewed"
+        )
+        return None
+    return connection
 
 
 def _print_poll_times(cfg) -> None:
