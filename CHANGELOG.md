@@ -16,13 +16,18 @@ and a bug from a phone.
 **A walk the agent sends round in circles ends.** An agent of RouterOS
 6.x answers GETNEXT on `lldpRemManAddrIfSubtype` with that very OID and
 `noSuchObject`, every time — both forbidden by RFC 3416 §4.2.2. pysnmp
-does not check that the OID grows, and `_walk` skipped no-such rows
+does not check what comes back, and `_walk` skipped no-such rows
 without counting them, so the same request went out hundreds of times a
 second until the poll budget took the whole poll down: that switch's
 full poll never finished once, and the polls sharing the event loop
-slowed down meanwhile. A walk now ends on an answer that is not past
-the OID before it (`non_increasing`) and on 100 no-such answers in a
-row (`no_such_run`); one such row in a table is still skipped. The rows
+slowed down meanwhile. A walk now ends on an answer that repeats — the
+OID asked for, or one the walk has already had (`repeated_oid`) — and
+on 100 no-such answers in a row (`no_such_run`); one such row in a
+table is still skipped. An answer that only goes back, to an OID not
+seen yet, is the agent's order and not a loop: an access switch hands
+its Q-BRIDGE table out VLAN by VLAN, not in numeric order, and ending
+the walk at the step back lost the rows after it on every scan. Such a
+table is read to its end, with one INFO. The rows
 that came stay, the walk is not resumed and it is not a dead-OID
 strike — it costs one request now. One WARNING per switch and OID in
 the life of the process, one INFO when it walks normally again;

@@ -9,10 +9,16 @@ no-such rows without counting them, so the same request went out
 hundreds of times a second until the poll budget took the whole poll
 down. Its full poll never finished once.
 
-Now each answer must be past the one before it, and a long run of
-no-such rows ends the walk too. The rows that came stay, the walk is
-not resumed, one WARNING per (host, OID), and the rest of the poll goes
-on.
+A repeat ends the walk — the OID asked for coming back, or a row this
+walk has already had — and so does a long run of no-such rows. The rows
+that came stay, the walk is not resumed, one WARNING per (host, OID),
+and the rest of the poll goes on.
+
+An answer that only goes back, to an OID not seen yet, is the agent's
+own order and not a loop (the addendum to v0.8.8): an access switch
+handed out its Q-BRIDGE table VLAN by VLAN out of numeric order, and
+the rows after the step back exist nowhere else. Ending the walk there
+lost them on every scan; such a table is read to its end.
 
 The agents here are stubs behind the real _walk.
 
@@ -36,7 +42,7 @@ from moonlan import snmp_collector as module  # noqa: E402
 from moonlan.lldp import OID_LLDP_REM_MAN_ADDR_IF_SUBTYPE  # noqa: E402
 from moonlan.snmp_collector import (  # noqa: E402
     FAULT_NO_SUCH_RUN,
-    FAULT_NON_INCREASING,
+    FAULT_REPEATED_OID,
     OID_IF_DESCR,
     OID_SYS_NAME,
     WALK_MAX_NO_SUCH,
@@ -46,6 +52,7 @@ from moonlan.snmp_collector import (  # noqa: E402
 
 HOST = "10.1.0.30"
 TABLE = "1.3.6.1.2.1.31.1.1.1.18"
+Q_FDB = "1.3.6.1.2.1.17.7.1.2.2.1.2"   # dot1qTpFdbPort.<fdbId>.<MAC>
 LOGGER = "moonlan.snmp_collector"
 
 
@@ -107,6 +114,9 @@ class Agent(SnmpCollector):
         async def rows():
             for name, value in agent.answers(start):
                 agent.served += 1
+                if name is None:   # the agent stops answering here
+                    yield value, None, None, []
+                    return
                 yield None, None, None, [(_Oid(name), value)]
 
         return _Closeable(rows())
@@ -118,6 +128,30 @@ def loop_forever(oid):
         while True:
             yield start, NoSuchObject()
     return answers
+
+
+def in_its_order(base, rows, after=None, stop_after=None):
+    """An agent that hands the rows out in the order given, whatever
+    their OIDs; then `after`, if any (the next column: the table is
+    over). `stop_after` rows into the first pass, it stops answering
+    once, and a resumed pass goes on from the OID it is given."""
+    stopped = {"yet": False}
+
+    def answers(start):
+        at = 0 if start == base else rows.index(start) + 1
+        for served, name in enumerate(rows[at:]):
+            if stop_after is not None and not stopped["yet"] and at + served == stop_after:
+                stopped["yet"] = True
+                yield None, "No SNMP response received before timeout"
+                return
+            yield name, 7
+        if after:
+            yield after, 1
+    return answers
+
+
+def fdb(vlan, last):
+    return f"{Q_FDB}.{vlan}.0.238.0.0.{vlan}.{last}"
 
 
 def walk(agent, oid=TABLE, times=1):
@@ -139,10 +173,11 @@ class LoopTest(unittest.TestCase):
         self.assertEqual(agent.opened, 1)   # not resumed
         self.assertEqual(agent.served, 1)   # one answer, one request
         self.assertEqual(status.rows, 0)
-        self.assertEqual(status.fault, FAULT_NON_INCREASING)
+        self.assertEqual(status.fault, FAULT_REPEATED_OID)
         self.assertFalse(status.truncated)
         self.assertIn(TABLE, status.error)
         self.assertIn("NoSuchObject", status.error)
+        self.assertTrue(status.error.endswith(", the OID asked for"), status.error)
 
     def test_one_warning_for_two_walks(self):
         agent = Agent(loop_forever(TABLE))
@@ -167,9 +202,10 @@ class LoopTest(unittest.TestCase):
         self.assertEqual([suffix for suffix, _value in rows],
                          [(1,), (2,), (3,), (4,), (5,)])
         self.assertTrue(status.truncated)
-        self.assertEqual(status.fault, FAULT_NON_INCREASING)
+        self.assertEqual(status.fault, FAULT_REPEATED_OID)
         self.assertEqual(status.last_oid, f"{TABLE}.5")
         self.assertEqual(agent.opened, 1)
+        self.assertIn("which it had already returned in this walk", status.error)
 
     def test_a_run_of_no_such_rows_ends_it(self):
         def answers(start):
@@ -207,6 +243,80 @@ class LoopTest(unittest.TestCase):
         self.assertEqual(agent.last_walk_status(HOST, TABLE).fault, FAULT_NO_SUCH_RUN)
 
 
+class OrderTest(unittest.TestCase):
+    """Only a repeat is a loop (the addendum to v0.8.8)."""
+
+    def test_a_table_out_of_order_is_read_to_its_end(self):
+        """An access switch's MAC table, VLAN by VLAN: 10, 40, 41, then
+        three rows of VLAN 20 that are nowhere else."""
+        rows = [fdb(10, 1), fdb(10, 2), fdb(40, 1), fdb(41, 1), fdb(41, 2),
+                fdb(20, 1), fdb(20, 2), fdb(20, 3)]
+        agent = Agent(in_its_order(Q_FDB, rows, after="1.3.6.1.2.1.17.7.1.2.2.1.3.10.1"))
+        with self.assertLogs(LOGGER, level="INFO") as logs:
+            read = walk(agent, Q_FDB, times=2)
+        status = agent.last_walk_status(HOST, Q_FDB)
+        self.assertEqual(len(read), 8)
+        self.assertEqual(read[-1][0][0], 20)
+        self.assertEqual(status.fault, "")
+        self.assertTrue(status.complete)
+        self.assertEqual(status.out_of_order, 1)
+        self.assertEqual(agent.walk_faults(), [])
+        # one INFO for the pair in the life of the process, two walks or not
+        self.assertEqual(
+            [r.getMessage() for r in logs.records if r.levelno == logging.INFO],
+            [f"{HOST}: the agent returns {Q_FDB} out of order ({fdb(41, 2)} then "
+             f"{fdb(20, 1)}); the table is read to its end anyway"],
+        )
+        self.assertFalse([r for r in logs.records if r.levelno >= logging.WARNING])
+
+    def test_back_to_the_start_is_a_loop(self):
+        rows = [f"{TABLE}.{index}" for index in (1, 2, 3, 4)]
+        agent = Agent(in_its_order(TABLE, rows + [rows[0], rows[1], rows[2]]))
+        with self.assertLogs(LOGGER, level="WARNING"):
+            read = walk(agent)
+        status = agent.last_walk_status(HOST, TABLE)
+        self.assertEqual(len(read), 4)
+        self.assertEqual(status.fault, FAULT_REPEATED_OID)
+        self.assertEqual(agent.served, 5)       # ended on the first repeat
+        self.assertTrue(status.truncated)
+        self.assertIn(f"{TABLE}.1 (int), which it had already returned in this walk",
+                      status.error)
+
+    def test_a_row_from_the_middle_again(self):
+        """Back to a row not seen yet is read on; to one seen, it ends —
+        even when that OID is past the one asked for."""
+        rows = [f"{TABLE}.{index}" for index in (1, 2, 5, 3, 4, 5, 6)]
+        agent = Agent(in_its_order(TABLE, rows))
+        with self.assertLogs(LOGGER, level="INFO"):
+            read = walk(agent)
+        status = agent.last_walk_status(HOST, TABLE)
+        self.assertEqual([suffix for suffix, _value in read], [(1,), (2,), (5,), (3,), (4,)])
+        self.assertEqual(status.fault, FAULT_REPEATED_OID)
+        self.assertEqual(status.out_of_order, 1)
+        self.assertEqual(status.last_oid, f"{TABLE}.4")
+
+    def test_what_was_seen_outlives_a_resume(self):
+        rows = [f"{TABLE}.{index}" for index in (1, 2, 3, 4, 2, 5)]
+        agent = Agent(in_its_order(TABLE, rows, stop_after=3))
+        with self.assertLogs(LOGGER, level="WARNING"):
+            read = walk(agent)
+        status = agent.last_walk_status(HOST, TABLE)
+        self.assertEqual([suffix for suffix, _value in read], [(1,), (2,), (3,), (4,)])
+        self.assertEqual(agent.opened, 2)
+        self.assertEqual(status.resumes, 1)
+        self.assertEqual(status.fault, FAULT_REPEATED_OID)
+
+    def test_a_step_back_out_of_the_subtree_ends_the_table(self):
+        rows = [f"{TABLE}.{index}" for index in (1, 2)]
+        agent = Agent(in_its_order(TABLE, rows, after="1.3.6.1.2.1.31.1.1.1.17.9"))
+        read = walk(agent)
+        status = agent.last_walk_status(HOST, TABLE)
+        self.assertEqual(len(read), 2)
+        self.assertEqual(status.fault, "")
+        self.assertEqual(status.out_of_order, 0)
+        self.assertTrue(status.complete)
+
+
 class OutcomeTest(unittest.TestCase):
     def test_not_a_dead_oid_strike(self):
         agent = Agent(loop_forever(TABLE))
@@ -231,7 +341,7 @@ class OutcomeTest(unittest.TestCase):
         self.assertEqual(len(faults), 1)
         self.assertEqual(
             {k: faults[0][k] for k in ("host", "oid", "fault", "rows", "last_oid")},
-            {"host": HOST, "oid": TABLE, "fault": FAULT_NON_INCREASING,
+            {"host": HOST, "oid": TABLE, "fault": FAULT_REPEATED_OID,
              "rows": 0, "last_oid": ""},
         )
         self.assertLessEqual(faults[0]["first_at"], faults[0]["last_at"])
@@ -264,7 +374,7 @@ class CollectTest(unittest.TestCase):
         self.assertEqual(sorted(data.ports), [1, 2])
         self.assertEqual(
             agent.last_walk_status(HOST, OID_LLDP_REM_MAN_ADDR_IF_SUBTYPE).fault,
-            FAULT_NON_INCREASING,
+            FAULT_REPEATED_OID,
         )
         self.assertEqual(
             sum(OID_LLDP_REM_MAN_ADDR_IF_SUBTYPE in r.getMessage()
@@ -287,14 +397,14 @@ class ServiceTest(unittest.IsolatedAsyncioTestCase):
         out = io.StringIO()
         with contextlib.redirect_stdout(out):
             diag._print_walk_faults([{
-                "host": HOST, "oid": TABLE, "fault": FAULT_NON_INCREASING,
+                "host": HOST, "oid": TABLE, "fault": FAULT_REPEATED_OID,
                 "rows": 0, "last_oid": "", "error": "the agent answered…",
                 "first_at": 1_700_000_000, "last_at": 1_700_000_600,
             }])
         text = out.getvalue()
         self.assertIn("Walks the agent breaks", text)
         self.assertIn(f"{HOST}", text)
-        self.assertIn(FAULT_NON_INCREASING, text)
+        self.assertIn(FAULT_REPEATED_OID, text)
         self.assertIn("the agent answered…", text)
 
 
@@ -315,8 +425,22 @@ class DiagWalkTest(unittest.TestCase):
             ), 5))
         text = out.getvalue()
         self.assertIn("stopped after 0 row(s)", text)
-        self.assertIn("not past the OID asked for", text)
+        self.assertIn("the OID asked for", text)
         self.assertIn("RFC 3416", text)
+
+    def test_diag_walk_reads_a_table_out_of_order_and_says_so(self):
+        rows = [fdb(10, 1), fdb(40, 1), fdb(20, 1), fdb(20, 2)]
+        agent = Agent(in_its_order(Q_FDB, rows))
+        out = io.StringIO()
+        with mock.patch.object(diag, "_make_collector", lambda *_a: agent), \
+                contextlib.redirect_stdout(out), \
+                self.assertLogs(LOGGER, level="INFO"):
+            asyncio.run(asyncio.wait_for(diag.run_walk(HOST, Q_FDB, 500, "public", 2), 5))
+        text = out.getvalue()
+        self.assertEqual(text.count(f"{Q_FDB}."), 4)
+        self.assertIn("the agent returned this table out of order (1 step(s) back); "
+                      "MoonLan reads it to its end", text)
+        self.assertIn("4 row(s)", text)
 
 
 if __name__ == "__main__":

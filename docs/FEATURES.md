@@ -16,9 +16,10 @@ Everything MoonLan does, as of v0.8.8 — the list the README used to carry. The
   A poll that runs out of budget says where (v0.8.8): the walk it was
   cut in, with its rows and seconds, in the log, in `diag --config`
   and in `/api/polling`, beside the slowest walks of every poll. A walk
-  the agent itself sends round in circles — the same OID back, or a
-  long run of "no such object" — ends at once with one WARNING; the
-  rest of the poll goes on.
+  the agent itself sends round in circles — an OID it has already
+  returned, or a long run of "no such object" — ends at once with one
+  WARNING; the rest of the poll goes on. A table it only hands out of
+  order is read to its end.
 - Every switch of `switches:` stays on the map whatever it answers
   (v0.8.7), in one of five states, which its card says in one line:
   polled in this scan; over budget — the last full reading, dated;

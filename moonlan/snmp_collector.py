@@ -170,8 +170,12 @@ class WalkStatus:
     last_oid: str = ""       # the last OID that did arrive
     resumes: int = 0         # how many times the walk was picked back up
     # the agent broke the GETNEXT rules and the walk was ended for it
-    # (v0.8.8): FAULT_NON_INCREASING or FAULT_NO_SUCH_RUN, else ""
+    # (v0.8.8): FAULT_REPEATED_OID or FAULT_NO_SUCH_RUN, else ""
     fault: str = ""
+    # how many times an answer went back to an OID before the previous
+    # one, not seen yet in the walk: the agent's order is not the OIDs'
+    # order, and the table is read on to its end all the same
+    out_of_order: int = 0
 
     @property
     def complete(self) -> bool:
@@ -184,12 +188,21 @@ class WalkStatus:
 # the MIB is endOfMibView. An agent of RouterOS 6.x answered GETNEXT on
 # lldpRemManAddrIfSubtype with that very OID and noSuchObject, every
 # time. pysnmp's walk_cmd stops only on its own Null or endOfMibView,
-# and does not check that the OID grows; _walk skipped no-such rows
+# and does not check what comes back; _walk skipped no-such rows
 # without counting them. So the same request went out hundreds of
 # times a second until the poll budget took the whole poll down — and
-# slowed every other poll sharing the event loop meanwhile. net-snmp's
-# snmpwalk stops on "OID not increasing"; so does this.
-FAULT_NON_INCREASING = "non_increasing"
+# slowed every other poll sharing the event loop meanwhile.
+#
+# What makes the loop is a repeat: the OID asked for coming back, or a
+# row this walk has already had (an agent that goes back to the start
+# of its table at the end). An answer that only goes back — to an OID
+# before the previous one, never seen in this walk — is the agent's own
+# order, not a loop: an access switch handed out its Q-BRIDGE table
+# VLAN by VLAN, not in numeric order, and the rows after the step back
+# exist nowhere else. Such a table is read on to its end. (net-snmp's
+# snmpwalk stops on "OID not increasing" unless told -Cc; ending there
+# lost those rows on every scan.)
+FAULT_REPEATED_OID = "repeated_oid"
 # OIDs that do grow, each answered noSuchObject / noSuchInstance: one
 # such row in a table is skipped — a damaged row should not cost the
 # table — but this many in a row is an agent walking a table it does
@@ -799,6 +812,7 @@ class SnmpCollector:
     # know about: None here, a dict of the instance's own on first use
     _walk_faults: dict | None = None
     _walk_fault_warned: set | None = None
+    _walk_order_noted: set | None = None
     _walk_now: dict | None = None
     _walks_done: dict | None = None
     _polling: set | None = None
@@ -914,7 +928,7 @@ class SnmpCollector:
 
     def _note_walk_fault(
         self, host: str, oid: str, status: "WalkStatus", answer: str,
-        kind: str,
+        kind: str, which: str = "",
     ) -> None:
         """One WARNING per (host, OID) in the life of the process.
 
@@ -947,11 +961,8 @@ class SnmpCollector:
             else f"the {status.rows} row(s) before it are kept, the tail "
                  "of the table is left out"
         )
-        if status.fault == FAULT_NON_INCREASING:
-            what = (
-                f"the agent answered GETNEXT with {answer} ({kind}), which "
-                "is not past the OID asked for"
-            )
+        if status.fault == FAULT_REPEATED_OID:
+            what = f"the agent answered GETNEXT with {answer} ({kind}), {which}"
         else:
             what = (
                 f"{WALK_MAX_NO_SUCH} answers in a row carried {kind} "
@@ -961,6 +972,24 @@ class SnmpCollector:
             "%s: walk of %s stopped — %s. An agent bug (RFC 3416 §4.2.2): "
             "%s; the rest of the poll goes on",
             host, oid, what, kept,
+        )
+
+    def _note_out_of_order(
+        self, host: str, oid: str, previous: tuple, answer: tuple
+    ) -> None:
+        """One INFO per (host, OID) in the life of the process: the agent
+        hands this table out in an order of its own, and it is read on."""
+        if self._walk_order_noted is None:
+            self._walk_order_noted = set()
+        key = (host, oid)
+        if key in self._walk_order_noted:
+            return
+        self._walk_order_noted.add(key)
+        log.info(
+            "%s: the agent returns %s out of order (%s then %s); the table "
+            "is read to its end anyway",
+            host, oid, ".".join(str(part) for part in previous),
+            ".".join(str(part) for part in answer),
         )
 
     def _note_walk_normal(self, host: str, oid: str) -> None:
@@ -1155,12 +1184,14 @@ class SnmpCollector:
         leaf OID would otherwise decide it had left its own subtree
         immediately — so the subtree boundary is checked here instead.
 
-        Each answer must carry an OID strictly past the one before it —
-        `start` for the first row of a pass, then the previous row, the
-        no-such rows included — and a run of WALK_MAX_NO_SUCH no-such
-        rows ends the walk too (v0.8.8, see FAULT_NON_INCREASING). Such
-        a walk is not resumed: the agent would answer the same again.
-        Tuples of ints compare the way OIDs are ordered.
+        An answer that repeats — the OID asked for, or an OID this walk
+        has already had, from any pass and the no-such rows included —
+        ends the walk, and so does a run of WALK_MAX_NO_SUCH no-such
+        rows (v0.8.8, see FAULT_REPEATED_OID). Such a walk is not
+        resumed: the agent would answer the same again. An answer that
+        goes back to an OID not seen yet is the agent's order, counted
+        in `out_of_order` and read on. The repeat is checked first, the
+        subtree boundary after it.
         """
         base = tuple(int(x) for x in oid.split("."))
         status = WalkStatus(oid=oid)
@@ -1199,12 +1230,17 @@ class SnmpCollector:
         start = oid
         last_oid: tuple[int, ...] | None = None
         no_such_run = 0
+        # every OID this walk has had, across its passes: a repeat is a
+        # loop. One tuple per row; for a MAC table of tens of thousands
+        # of rows that is acceptable.
+        seen: set[tuple[int, ...]] = set()
 
         while True:
             broke = ""
             fault = ""
             answer: tuple[int, ...] = ()
             kind = ""
+            which = ""
             asked = tuple(int(x) for x in start.split("."))
             try:
                 objects = await self._open_walk(host, start)
@@ -1226,15 +1262,26 @@ class SnmpCollector:
                         break
                     for name, value in var_binds:
                         full = tuple(name)
-                        if full <= asked:
-                            # not past the OID asked for: the next
-                            # GETNEXT would be this one again, forever
-                            fault, answer = FAULT_NON_INCREASING, full
+                        if full == asked or full in seen:
+                            # a repeat: from here the agent would hand
+                            # out the same answers again, forever
+                            fault, answer = FAULT_REPEATED_OID, full
                             kind = type(value).__name__
+                            which = (
+                                "the OID asked for" if full == asked
+                                else "which it had already returned in "
+                                     "this walk"
+                            )
                             break
                         if full[:len(base)] != base:
                             left_subtree = True  # the table is finished
                             break
+                        if full < asked:
+                            # back to an OID not seen yet: its order,
+                            # not a loop — read on
+                            status.out_of_order += 1
+                            self._note_out_of_order(host, oid, asked, full)
+                        seen.add(full)
                         asked = last_oid = full
                         if is_no_such(value):
                             # same sentinel as in _get: a row that says
@@ -1266,12 +1313,14 @@ class SnmpCollector:
                 )
                 status.error = (
                     f"the agent answered GETNEXT with {answer_text} ({kind}), "
-                    "not past the OID asked for"
-                    if fault == FAULT_NON_INCREASING else
+                    f"{which}"
+                    if fault == FAULT_REPEATED_OID else
                     f"{WALK_MAX_NO_SUCH} answers in a row carried {kind}, "
                     f"the last for {answer_text}"
                 )
-                self._note_walk_fault(host, oid, status, answer_text, kind)
+                self._note_walk_fault(
+                    host, oid, status, answer_text, kind, which
+                )
                 # not a dead-OID strike: the loop now costs one request
                 self._note_walk_outcome(host, oid, status)
                 return

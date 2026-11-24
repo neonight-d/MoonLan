@@ -597,13 +597,15 @@ The OIDs paused after answering nothing but timeouts — what
 ```json
 {"strikes": 3, "cooldown_scans": 30, "polled": true, "paused": [],
  "walk_faults": [{"host": "10.1.0.30", "oid": "1.0.8802.1.1.2.1.4.2.1.3",
-                  "fault": "non_increasing", "rows": 0, "last_oid": "",
-                  "error": "the agent answered GETNEXT with 1.0.8802.1.1.2.1.4.2.1.3 (NoSuchObject), not past the OID asked for",
+                  "fault": "repeated_oid", "rows": 0, "last_oid": "",
+                  "error": "the agent answered GETNEXT with 1.0.8802.1.1.2.1.4.2.1.3 (NoSuchObject), the OID asked for",
                   "first_at": 1795400000.0, "last_at": 1795430000.0}]}
 ```
 
-`fault` is `non_increasing` (an answer not past the OID before it) or
-`no_such_run` (100 no-such answers in a row); `rows` are the rows kept
+`fault` is `repeated_oid` (an answer that repeats the OID asked for or
+one the walk has already had) or `no_such_run` (100 no-such answers in
+a row). A table handed out of order — back to an OID not seen yet — is
+read to its end and is not listed; `rows` are the rows kept
 from before it, `last_oid` the last OID that came in order. A walk
 leaves the list when it reads to its end again. These are asked for
 every scan — see docs/DIAGNOSTICS.md, "A walk the agent breaks".

@@ -174,25 +174,37 @@ By RFC 3416 (§4.2.2) the answer to GETNEXT always carries an OID past
 the one asked for, and the end of a table is `endOfMibView`, never
 `noSuchObject`. An agent of RouterOS 6.x answers GETNEXT on
 `lldpRemManAddrIfSubtype` (`1.0.8802.1.1.2.1.4.2.1.3`) with that very
-OID and `noSuchObject`, every time. pysnmp does not check that the OID
-grows, so before v0.8.8 the same request went out hundreds of times a
+OID and `noSuchObject`, every time. pysnmp does not check what comes
+back, so before v0.8.8 the same request went out hundreds of times a
 second until the poll budget took the whole poll down — its full poll
 never finished, and the polls sharing the service slowed down meanwhile.
-net-snmp's `snmpwalk` stops on "OID not increasing"; MoonLan now does
-the same:
+Now:
 
-- an answer whose OID is not past the previous one (the start of the
-  walk for the first) ends the walk — `non_increasing`;
+- an answer that repeats ends the walk — `repeated_oid`: the OID asked
+  for, or one this walk has already had (an agent that goes back to the
+  start of its table at the end);
 - 100 answers in a row carrying `noSuchObject` / `noSuchInstance`
   end it too — `no_such_run`. A single such row in a table is skipped,
   as before.
+
+An answer that only goes back — to an OID before the previous one, not
+seen yet in this walk — is not a loop but the agent's own order, and
+the table is read on to its end. An access switch hands out its
+Q-BRIDGE MAC table VLAN by VLAN, not in numeric order; the rows after
+the step back are nowhere else, and net-snmp's `snmpwalk`, which stops
+on "OID not increasing" unless given `-Cc`, would lose them. The log
+says so once per switch and OID, at INFO:
+
+```
+INFO moonlan.snmp_collector: 10.0.0.31: the agent returns 1.3.6.1.2.1.17.7.1.2.2.1.2 out of order (1.3.6.1.2.1.17.7.1.2.2.1.2.41.0.238.0.0.41.2 then 1.3.6.1.2.1.17.7.1.2.2.1.2.20.0.238.0.0.20.1); the table is read to its end anyway
+```
 
 The rows that came are kept, the walk is not resumed — the agent would
 answer the same — and the rest of the poll goes on. The log has one
 WARNING per switch and OID in the life of the process:
 
 ```
-WARNING moonlan.snmp_collector: 10.0.0.30: walk of 1.0.8802.1.1.2.1.4.2.1.3 stopped — the agent answered GETNEXT with 1.0.8802.1.1.2.1.4.2.1.3 (NoSuchObject), which is not past the OID asked for. An agent bug (RFC 3416 §4.2.2): this table is left out; the rest of the poll goes on
+WARNING moonlan.snmp_collector: 10.0.0.30: walk of 1.0.8802.1.1.2.1.4.2.1.3 stopped — the agent answered GETNEXT with 1.0.8802.1.1.2.1.4.2.1.3 (NoSuchObject), the OID asked for. An agent bug (RFC 3416 §4.2.2): this table is left out; the rest of the poll goes on
 ```
 
 and one INFO, "walks normally again", if a later walk reads to its end.
@@ -200,8 +212,10 @@ What is missing is that one table — for the OID above, the management
 addresses of LLDP neighbours, so a neighbour is matched by its other
 fields. `diag --skipped` lists the faults with their first and last
 time, and `diag --walk <switch> <oid>` stops on the same answer and
-prints why, instead of hanging. The cure is the firmware, not a MoonLan
-setting.
+prints why, instead of hanging; a table it reads out of order ends
+with "the agent returned this table out of order (N step(s) back);
+MoonLan reads it to its end". The cure for a loop is the firmware, not
+a MoonLan setting.
 
 ## How complete is the inventory
 
@@ -434,5 +448,5 @@ and HPE under `1.3.6.1.4.1.11` — and it is how the loop-detection
 profiles were found. It is also the first step in adding a new one:
 see [Adding a model](NETWORK.md#adding-a-model). The default 500-row ceiling keeps a stray
 subtree from being downloaded whole. An agent that breaks the walk —
-the same OID back, or a long run of `noSuchObject` — ends it at once,
+a repeated OID, or a long run of `noSuchObject` — ends it at once,
 with the reason (see [A walk the agent breaks](#a-walk-the-agent-breaks)).

@@ -2548,6 +2548,12 @@ async def run_walk(
                         or not text.isprintable()):
                 print(f"      hex: {raw.hex(' ')}")
     status = collector.last_walk_status(host, oid)
+    if status.out_of_order:
+        # the agent's order, not a loop (v0.8.8): read to its end
+        print(
+            f"  the agent returned this table out of order "
+            f"({status.out_of_order} step(s) back); MoonLan reads it to its end"
+        )
     if status.fault:
         # The agent did answer — it answered wrong. diagnose_silence
         # would call it a community or reachability problem, which is
