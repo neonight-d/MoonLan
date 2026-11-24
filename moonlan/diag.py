@@ -1576,17 +1576,45 @@ def run_skipped_view(cfg) -> None:
     paused = data.get("paused") or []
     if not paused:
         print("\nnothing is on pause: every OID is being asked for")
-        return
-    print(f"\n{'switch':<18} {'OID':<34} {'strikes':>8} {'scans left':>11}")
-    for entry in paused:
+    else:
+        print(f"\n{'switch':<18} {'OID':<34} {'strikes':>8} {'scans left':>11}")
+        for entry in paused:
+            print(
+                f"{entry['host']:<18} {entry['oid']:<34} "
+                f"{entry['strikes']:>8} {entry['cycles_left']:>11}"
+            )
         print(
-            f"{entry['host']:<18} {entry['oid']:<34} "
-            f"{entry['strikes']:>8} {entry['cycles_left']:>11}"
+            "\nThese are not missing because the devices deny having them. "
+            "They are missing because MoonLan stopped asking, and it will "
+            "ask again when the count above runs out."
         )
+    _print_walk_faults(data.get("walk_faults") or [])
+
+
+def _print_walk_faults(faults: list[dict]) -> None:
+    """Walks an agent breaks (v0.8.8) — apart from the pauses above.
+
+    These are asked for every scan: the walk ends on the first answer
+    that breaks the GETNEXT rules, so it costs one request. What is
+    missing is the table itself, and the fault is the agent's.
+    """
+    print("\nWalks the agent breaks (asked for every scan, the table is left out)")
+    if not faults:
+        print("  none: every walk reads to its end or to a timeout")
+        return
+    for entry in faults:
+        since = time.strftime("%Y-%m-%d %H:%M", time.localtime(entry["first_at"]))
+        last = time.strftime("%Y-%m-%d %H:%M", time.localtime(entry["last_at"]))
+        print(
+            f"  {entry['host']:<18} {entry['oid']}  {entry['fault']}, "
+            f"{entry['rows']} row(s) kept, since {since}, last {last}"
+        )
+        if entry.get("error"):
+            print(f"      {entry['error']}")
     print(
-        "\nThese are not missing because the devices deny having them. "
-        "They are missing because MoonLan stopped asking, and it will "
-        "ask again when the count above runs out."
+        "  An agent bug (RFC 3416 §4.2.2: the answer to GETNEXT is always "
+        "past the OID asked for, and never noSuchObject). Firmware, not "
+        "MoonLan settings, fixes it."
     )
 
 
@@ -2408,6 +2436,17 @@ async def run_walk(
             if raw and (raw != text.encode("utf-8", "replace")
                         or not text.isprintable()):
                 print(f"      hex: {raw.hex(' ')}")
+    status = collector.last_walk_status(host, oid)
+    if status.fault:
+        # The agent did answer — it answered wrong. diagnose_silence
+        # would call it a community or reachability problem, which is
+        # the one thing it is not (v0.8.8).
+        print(
+            f"  stopped after {count} row(s): {status.error}. An agent bug "
+            "(RFC 3416 §4.2.2); the service leaves this table out and "
+            "goes on with the rest of the poll"
+        )
+        return
     if count == 0:
         # "The subtree is empty, or the agent does not implement it"
         # was the old answer, and on a switch whose community string

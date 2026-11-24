@@ -4588,6 +4588,9 @@ async def api_skipped_oids() -> dict:
         "cooldown_scans": config.snmp.dead_oid_cooldown_scans,
         "polled": collector is not None,
         "paused": paused,
+        # walks an agent breaks (v0.8.8): asked for every scan — the
+        # loop costs one request now — but the table is left out
+        "walk_faults": collector.walk_faults() if collector is not None else [],
     }
 
 

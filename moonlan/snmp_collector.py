@@ -169,10 +169,46 @@ class WalkStatus:
     truncated: bool = False  # rows arrived and then it stopped answering
     last_oid: str = ""       # the last OID that did arrive
     resumes: int = 0         # how many times the walk was picked back up
+    # the agent broke the GETNEXT rules and the walk was ended for it
+    # (v0.8.8): FAULT_NON_INCREASING or FAULT_NO_SUCH_RUN, else ""
+    fault: str = ""
 
     @property
     def complete(self) -> bool:
         return not self.error and not self.truncated
+
+
+# A walk the agent itself sends round in circles (v0.8.8). RFC 3416
+# §4.2.2: the answer to GETNEXT always carries an OID strictly past the
+# one asked for, and never noSuchObject / noSuchInstance — the end of
+# the MIB is endOfMibView. An agent of RouterOS 6.x answered GETNEXT on
+# lldpRemManAddrIfSubtype with that very OID and noSuchObject, every
+# time. pysnmp's walk_cmd stops only on its own Null or endOfMibView,
+# and does not check that the OID grows; _walk skipped no-such rows
+# without counting them. So the same request went out hundreds of
+# times a second until the poll budget took the whole poll down — and
+# slowed every other poll sharing the event loop meanwhile. net-snmp's
+# snmpwalk stops on "OID not increasing"; so does this.
+FAULT_NON_INCREASING = "non_increasing"
+# OIDs that do grow, each answered noSuchObject / noSuchInstance: one
+# such row in a table is skipped — a damaged row should not cost the
+# table — but this many in a row is an agent walking a table it does
+# not have, one request per row, and the walk ends there.
+FAULT_NO_SUCH_RUN = "no_such_run"
+WALK_MAX_NO_SUCH = 100
+
+
+@dataclass
+class WalkFault:
+    """A (host, OID) whose walk the agent broke, while it keeps doing so."""
+
+    fault: str
+    rows: int
+    last_oid: str
+    error: str
+    first_at: float
+    last_at: float
+    warned: bool = False   # this episode got the WARNING
 
 
 @dataclass
@@ -691,6 +727,11 @@ class SnmpCollector:
     RSS). Transport targets are cached per host for the same reason.
     """
 
+    # State that tests building a collector without __init__ need not
+    # know about: None here, a dict of the instance's own on first use
+    _walk_faults: dict | None = None
+    _walk_fault_warned: set | None = None
+
     def __init__(
         self,
         community: str,
@@ -728,6 +769,91 @@ class SnmpCollector:
         # full poll (v0.8.7). A poll that then runs out of budget has
         # had an answer, and "over budget" is not "not answering".
         self.answered_at: dict[str, float] = {}
+        # (host, oid) -> a walk the agent breaks (v0.8.8), and the pairs
+        # that have had their one WARNING in the life of this process
+        self._walk_faults = {}
+        self._walk_fault_warned = set()
+
+    def _faults(self) -> dict[tuple[str, str], WalkFault]:
+        if self._walk_faults is None:
+            self._walk_faults = {}
+        return self._walk_faults
+
+    def walk_faults(self) -> list[dict]:
+        """Walks the agents break right now (v0.8.8), for /api/skipped-oids."""
+        return [
+            {
+                "host": host, "oid": oid, "fault": record.fault,
+                "rows": record.rows, "last_oid": record.last_oid,
+                "error": record.error, "first_at": record.first_at,
+                "last_at": record.last_at,
+            }
+            for (host, oid), record in sorted(self._faults().items())
+        ]
+
+    def _note_walk_fault(
+        self, host: str, oid: str, status: "WalkStatus", answer: str,
+        kind: str,
+    ) -> None:
+        """One WARNING per (host, OID) in the life of the process.
+
+        The agent will answer the same next time, every scan, so the
+        repeats go to DEBUG: the first one says all there is to say.
+        """
+        key = (host, oid)
+        now = time.time()
+        faults = self._faults()
+        record = faults.get(key)
+        if record is None:
+            record = faults[key] = WalkFault(
+                fault=status.fault, rows=status.rows,
+                last_oid=status.last_oid, error=status.error,
+                first_at=now, last_at=now,
+            )
+        else:
+            record.fault, record.rows = status.fault, status.rows
+            record.last_oid, record.error = status.last_oid, status.error
+            record.last_at = now
+        if self._walk_fault_warned is None:
+            self._walk_fault_warned = set()
+        if key in self._walk_fault_warned:
+            log.debug("%s: walk of %s stopped again: %s", host, oid, status.error)
+            return
+        self._walk_fault_warned.add(key)
+        record.warned = True
+        kept = (
+            "this table is left out" if not status.rows
+            else f"the {status.rows} row(s) before it are kept, the tail "
+                 "of the table is left out"
+        )
+        if status.fault == FAULT_NON_INCREASING:
+            what = (
+                f"the agent answered GETNEXT with {answer} ({kind}), which "
+                "is not past the OID asked for"
+            )
+        else:
+            what = (
+                f"{WALK_MAX_NO_SUCH} answers in a row carried {kind} "
+                f"instead of a value, the last for {answer}"
+            )
+        log.warning(
+            "%s: walk of %s stopped — %s. An agent bug (RFC 3416 §4.2.2): "
+            "%s; the rest of the poll goes on",
+            host, oid, what, kept,
+        )
+
+    def _note_walk_normal(self, host: str, oid: str) -> None:
+        """A walk that used to be broken read to its end."""
+        record = self._faults().pop((host, oid), None)
+        if record is None:
+            return
+        if record.warned:
+            log.info(
+                "%s: walk of %s walks normally again (%d row(s))",
+                host, oid, self._walk_status[(host, oid)].rows,
+            )
+        else:
+            log.debug("%s: walk of %s walks normally again", host, oid)
 
     def begin_scan_cycle(self) -> None:
         """One more scan has started; the cooldown is counted in these."""
@@ -907,6 +1033,13 @@ class SnmpCollector:
         Resuming forces lexicographicMode=True — a walk restarted at a
         leaf OID would otherwise decide it had left its own subtree
         immediately — so the subtree boundary is checked here instead.
+
+        Each answer must carry an OID strictly past the one before it —
+        `start` for the first row of a pass, then the previous row, the
+        no-such rows included — and a run of WALK_MAX_NO_SUCH no-such
+        rows ends the walk too (v0.8.8, see FAULT_NON_INCREASING). Such
+        a walk is not resumed: the agent would answer the same again.
+        Tuples of ints compare the way OIDs are ordered.
         """
         base = tuple(int(x) for x in oid.split("."))
         status = WalkStatus(oid=oid)
@@ -919,9 +1052,14 @@ class SnmpCollector:
             return
         start = oid
         last_oid: tuple[int, ...] | None = None
+        no_such_run = 0
 
         while True:
             broke = ""
+            fault = ""
+            answer: tuple[int, ...] = ()
+            kind = ""
+            asked = tuple(int(x) for x in start.split("."))
             try:
                 objects = await self._open_walk(host, start)
             except Exception as exc:
@@ -942,17 +1080,29 @@ class SnmpCollector:
                         break
                     for name, value in var_binds:
                         full = tuple(name)
+                        if full <= asked:
+                            # not past the OID asked for: the next
+                            # GETNEXT would be this one again, forever
+                            fault, answer = FAULT_NON_INCREASING, full
+                            kind = type(value).__name__
+                            break
                         if full[:len(base)] != base:
                             left_subtree = True  # the table is finished
                             break
-                        last_oid = full
+                        asked = last_oid = full
                         if is_no_such(value):
                             # same sentinel as in _get: a row that says
                             # "nothing here" is not a row
+                            no_such_run += 1
+                            if no_such_run >= WALK_MAX_NO_SUCH:
+                                fault, answer = FAULT_NO_SUCH_RUN, full
+                                kind = type(value).__name__
+                                break
                             continue
+                        no_such_run = 0
                         status.rows += 1
                         yield full[len(base):], value
-                    if left_subtree:
+                    if left_subtree or fault:
                         break
             except GeneratorExit:
                 raise  # the consumer stopped reading; not our business
@@ -961,8 +1111,27 @@ class SnmpCollector:
                 log.warning("%s: walk of %s raised (%s)", host, oid, exc)
             finally:
                 await objects.aclose()
+            if fault:
+                answer_text = ".".join(str(part) for part in answer)
+                status.fault = fault
+                status.truncated = status.rows > 0
+                status.last_oid = (
+                    ".".join(str(part) for part in last_oid) if last_oid else ""
+                )
+                status.error = (
+                    f"the agent answered GETNEXT with {answer_text} ({kind}), "
+                    "not past the OID asked for"
+                    if fault == FAULT_NON_INCREASING else
+                    f"{WALK_MAX_NO_SUCH} answers in a row carried {kind}, "
+                    f"the last for {answer_text}"
+                )
+                self._note_walk_fault(host, oid, status, answer_text, kind)
+                # not a dead-OID strike: the loop now costs one request
+                self._note_walk_outcome(host, oid, status)
+                return
             if left_subtree or not broke:
                 self._note_walk_outcome(host, oid, status)
+                self._note_walk_normal(host, oid)
                 return  # read to the end
             status.error = broke
             if status.resumes >= self._breaks_for(host) or last_oid is None:
