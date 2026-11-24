@@ -1681,6 +1681,24 @@ class Database:
             )
         return cur.rowcount > 0
 
+    def refresh_alarm_message(
+        self, alarm_type: str, subject: str, message: str
+    ) -> bool:
+        """Brings the text of an active alarm up to date (v0.8.8).
+
+        Like escalate_alarm, without touching the severity: a text that
+        says how things stand must say how they stand now, not at the
+        moment of the raise. False when there is no such alarm, or its
+        text already is this one.
+        """
+        with self._lock, self._conn:
+            cur = self._conn.execute(
+                "UPDATE alarms SET message = ? WHERE type = ? AND subject = ? "
+                "AND ts_cleared = 0 AND message <> ?",
+                (message, alarm_type, subject, message),
+            )
+        return cur.rowcount > 0
+
     def clear_alarm(
         self, alarm_type: str, subject: str, ts: float, note: str = ""
     ) -> bool:

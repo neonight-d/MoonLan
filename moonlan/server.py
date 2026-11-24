@@ -133,6 +133,9 @@ switch_data: dict[str, SwitchData] = {}
 # once a full poll finishes; "slowest_walks" — the longest walks of the
 # last poll, full or cut. A poll with no answer changes neither.
 poll_report: dict[str, dict] = {}
+# switches whose drawn reading is the one restored from the database at
+# the start, until their first full poll (v0.8.8): switch_stale says so
+readings_from_database: set[str] = set()
 
 counter_store = counters.CounterStore()
 # Link-state transitions per port over a sliding window: a port can
@@ -403,6 +406,7 @@ def _settle(ip: str, result, now: float) -> SwitchData:
     # a full reading of some age: fresh, over budget, silent or restored
     reading = previous if previous is not None and previous.reachable else None
     if isinstance(result, SwitchData) and result.reachable:
+        readings_from_database.discard(ip)
         result.state = STATE_FRESH
         result.answered = True
         result.over_budget = False
@@ -552,6 +556,7 @@ async def restore_readings() -> None:
         sw.state = STATE_RESTORED
         sw.answered = None
         switch_data[ip] = sw
+        readings_from_database.add(ip)
         restored.append(sw)
     if not restored:
         return
@@ -1023,19 +1028,24 @@ async def _build_map(
     # A switch that keeps answering and keeps not finishing. It is
     # on the map, from a reading that may be hours old, and until
     # now the only way to learn that was to read the journal.
+    # Every switch over budget goes in, not only those past the
+    # threshold: an alarm that is already up has its text brought up to
+    # date on every scan — after a restart, on the first (v0.8.8).
     stale_switches = {
         sw.ip: {
             "scans": sw.over_budget_scans,
-            "polled_at": sw.polled_at,
+            "polled_at": sw.polled_at if sw.map_state != STATE_NEVER else 0.0,
+            "source": "saved" if sw.ip in readings_from_database else "run",
+            "started_at": STARTED_AT,
             "answered": sw.answered,
         }
         for sw in collected
         if sw.over_budget
-        and sw.over_budget_scans >= max(config.stale_switch_scans, 1)
     }
     await alarm_engine.on_stale_switches(
         stale_switches,
         {sw.ip: sw.sys_name or sw.ip for sw in collected},
+        threshold=max(config.stale_switch_scans, 1),
     )
     if over_budget:
         log.warning(

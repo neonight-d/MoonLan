@@ -199,6 +199,54 @@ def display_subject(subject: str) -> str | None:
     return None
 
 
+def _when(ts: float) -> str:
+    return time.strftime("%Y-%m-%d %H:%M", time.localtime(ts))
+
+
+def stale_switch_message(name: str, info: dict) -> str:
+    """The text of switch_stale: what is true for as long as it stands.
+
+    No count of scans — it grows every scan and was frozen at the
+    threshold — but the moment since which no full poll has finished,
+    and what the map shows meanwhile: this run's last full poll, the
+    reading saved before a restart, or an empty node.
+    """
+    answered = info.get("answered")
+    # whether it answered at all (v0.8.7): a budget that ran out before
+    # the first answer came back proves nothing either way
+    unknown = answered is None and "answered" in info
+    did = "has not" if unknown else "has answered but not"
+    polled_at = info.get("polled_at") or 0
+    if polled_at:
+        shown = (
+            "the reading of that poll saved before the restart"
+            if info.get("source") == "saved"
+            else "that poll, made by this run of the service"
+        )
+        head = (
+            f"{name} {did} finished a full poll since {_when(polled_at)}; "
+            f"the map shows {shown}"
+        )
+    else:
+        head = (
+            f"{name} {did} finished a full poll since the service started "
+            f"at {_when(info.get('started_at') or time.time())}; the map "
+            f"shows an empty node"
+        )
+    if unknown:
+        tail = (
+            "The budget ran out before its first answer came back, so "
+            "whether it is reachable is not known — give it more time to "
+            "tell"
+        )
+    else:
+        tail = (
+            "It is reachable — this is a poll budget too small for it, "
+            "not a switch that is down"
+        )
+    return f"{head}. {tail}"
+
+
 class AlarmEngine:
     def __init__(
         self,
@@ -258,6 +306,10 @@ class AlarmEngine:
         for row in await asyncio.to_thread(self._db.alarms, True, 1000):
             key = (row["type"], row["subject"])
             self._active.add(key)
+            if row["type"] == "switch_stale":
+                # or the first full poll after a restart would find
+                # nobody waiting to clear it (v0.8.8)
+                self._stale_switches.add(row["subject"])
             if row["type"] == "lag_degraded" and ":lag[" not in row["subject"]:
                 await self._clear(
                     row["type"], row["subject"],
@@ -446,15 +498,25 @@ class AlarmEngine:
                     )
 
     async def on_stale_switches(
-        self, stale: dict[str, dict], names: dict[str, str]
+        self, stale: dict[str, dict], names: dict[str, str],
+        threshold: int = 1,
     ) -> None:
         """Switches answering without ever finishing a poll.
 
-        `stale` holds one entry per switch that has now missed its
-        budget often enough to be worth saying so about: `scans` in a
-        row and `polled_at` of the last complete reading. A switch that
-        managed a full poll is simply absent from the mapping, and its
-        alarm clears.
+        `stale` holds one entry per switch whose poll ran out of budget
+        in this scan: `scans` in a row, `polled_at` of the reading on
+        the map (0 for none), `source` — "saved" for a reading restored
+        from the database — `started_at` of the service, and whether it
+        `answered`. The alarm is raised from `threshold` scans on. A
+        switch that managed a full poll is absent from the mapping, and
+        its alarm clears.
+
+        The text says only what stays true while the alarm stands
+        (v0.8.8): it was built once, at the raise, and "the data on the
+        map is from 2026-11-17" outlived a restart that took that
+        reading off the map. It is worked out again every scan and
+        brought up to date in place — no notification, no journal
+        entry: the journal keeps the raise as it was.
         """
         for ip in list(self._stale_switches):
             if ip in stale:
@@ -464,32 +526,22 @@ class AlarmEngine:
                 "switch_stale", ip, "a full poll finished again"
             )
         for ip, info in stale.items():
+            message = stale_switch_message(names.get(ip, ip), info)
+            if ("switch_stale", ip) in self._active:
+                self._stale_switches.add(ip)
+                updated = await asyncio.to_thread(
+                    self._db.refresh_alarm_message, "switch_stale", ip,
+                    message,
+                )
+                if updated:
+                    log.info(
+                        "Alarm text brought up to date: switch_stale %s — %s",
+                        ip, message,
+                    )
+                continue
+            if info.get("scans", 0) < threshold:
+                continue
             self._stale_switches.add(ip)
-            since = info.get("polled_at") or 0
-            age = (
-                "the data on the map is from "
-                + time.strftime("%Y-%m-%d %H:%M", time.localtime(since))
-                if since
-                else "it has never been read in full"
-            )
-            # Whether it answered at all (v0.8.7): a budget that ran out
-            # before the first answer came back proves nothing either
-            # way, and saying "it is reachable" then would be a guess
-            if info.get("answered") is None and "answered" in info:
-                message = (
-                    f"{names.get(ip, ip)} has not finished a full poll in "
-                    f"{info['scans']} scans running; {age}. The budget "
-                    f"ran out before its first answer came back, so "
-                    f"whether it is reachable is not known — give it more "
-                    f"time to tell"
-                )
-            else:
-                message = (
-                    f"{names.get(ip, ip)} has answered but not finished a "
-                    f"full poll in {info['scans']} scans running; {age}. "
-                    f"It is reachable — this is a poll budget too small "
-                    f"for it, not a switch that is down"
-                )
             await self._raise("switch_stale", ip, message)
 
     async def on_counters(self, ip: str, metrics: list[dict]) -> None:

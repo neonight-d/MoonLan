@@ -226,7 +226,11 @@ class StaleSwitchTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(
             sorted(r[1] for r in raised), ["10.0.0.3", "10.0.0.7"]
         )
-        self.assertIn("3 scans running", raised[0][2])
+        # no count of scans in it: it grew every scan and stood still
+        # in the text (v0.8.8); the moment of the last full poll does not
+        self.assertIn("not finished a full poll since", raised[0][2])
+        self.assertIn("the map shows that poll, made by this run", raised[0][2])
+        self.assertNotIn("scans running", raised[0][2])
         # it is answering: that must be said in the same breath
         self.assertIn("reachable", raised[0][2])
 
