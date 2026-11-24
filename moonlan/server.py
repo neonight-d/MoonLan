@@ -9,6 +9,7 @@ import json
 import logging
 import os
 import socket
+import sys
 import time
 from collections import Counter
 from contextlib import asynccontextmanager
@@ -28,6 +29,7 @@ from .alarms import AlarmEngine
 from .config import Config, load_config, parse_uplink_ports
 from .db import Database
 from .notify import Notifier
+from .textio import use_utf8
 from .snmp_collector import (
     READING_FORMAT,
     OverBudget,
@@ -2969,12 +2971,20 @@ async def purge_copies() -> None:
         log.info("Removed %d records of damaged MAC copies", removed)
 
 
-@asynccontextmanager
-async def lifespan(app: FastAPI):
+def configure_logging() -> None:
+    """The service's log: "—" and "§" as they are, not \u2014 and \xa7,
+    under any locale (v0.8.9). run.py makes the streams UTF-8 first;
+    this covers `uvicorn moonlan.server:app` as well."""
+    use_utf8(sys.stdout, sys.stderr)
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
     )
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    configure_logging()
     _log_config()
     if config.demo:
         log.info("MoonLan started in DEMO mode (virtual network)")

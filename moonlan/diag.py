@@ -68,6 +68,7 @@ from .config import (
     parse_uplink_ports,
 )
 from .snmpval import as_octets, is_octets
+from .textio import use_utf8
 from .corruption import (
     candidates, find_suspects, sample_mac, samples_by_switch,
 )
@@ -2576,6 +2577,8 @@ async def run_walk(
 
 
 def main() -> None:
+    # what it prints and what it logs in UTF-8, whatever the locale (v0.8.9)
+    use_utf8(sys.stdout, sys.stderr)
     parser = argparse.ArgumentParser(
         prog="python -m moonlan.diag",
         description="SNMP diagnostics for a switch (read-only, does not touch the DB)",

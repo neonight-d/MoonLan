@@ -5,10 +5,16 @@ import errno
 import socket
 import sys
 
-import uvicorn
+# The log in UTF-8 before anything is written, whatever the locale the
+# service was started under (v0.8.9, see moonlan/textio.py)
+from moonlan.textio import use_utf8
 
-from moonlan import https
-from moonlan.config import load_config
+use_utf8(sys.stdout, sys.stderr)
+
+import uvicorn  # noqa: E402
+
+from moonlan import https  # noqa: E402
+from moonlan.config import load_config  # noqa: E402
 
 
 def _ensure_port_free(host: str, port: int) -> None:
