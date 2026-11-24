@@ -212,6 +212,67 @@ class WalkFault:
 
 
 @dataclass
+class WalkTiming:
+    """How long one walk of a poll took (v0.8.8), by the monotonic clock.
+
+    `seconds` stays None while the walk runs. A walk the poll budget
+    cancels keeps it None: that record is where the budget went, and
+    the server reads it after the cancellation.
+    """
+
+    status: WalkStatus
+    started: float
+    seconds: float | None = None
+
+    @property
+    def running(self) -> bool:
+        return self.seconds is None
+
+    def took(self) -> float:
+        if self.seconds is not None:
+            return self.seconds
+        return time.monotonic() - self.started
+
+    def report(self, resumes: bool = False) -> dict:
+        entry = {
+            "oid": self.status.oid, "name": oid_name(self.status.oid),
+            "rows": self.status.rows, "seconds": round(self.took(), 1),
+        }
+        if resumes:
+            entry["resumes"] = self.status.resumes
+        return entry
+
+
+# The modules whose OID_* constants name the OIDs MoonLan walks, in the
+# order a name is looked for. No MIB files: the constant is the name
+# the code itself knows the OID by.
+OID_NAME_MODULES = (
+    "moonlan.snmp_collector", "moonlan.lldp", "moonlan.stp",
+    "moonlan.counters", "moonlan.loopdetect",
+)
+_OID_NAMES: dict[str, str] | None = None
+
+
+def oid_name(oid: str) -> str:
+    """LLDP_REM_MAN_ADDR_IF_SUBTYPE for its OID, "" for one without a name."""
+    global _OID_NAMES
+    if _OID_NAMES is None:
+        import importlib
+
+        names: dict[str, str] = {}
+        for module_name in OID_NAME_MODULES:
+            module = importlib.import_module(module_name)
+            for attr, value in vars(module).items():
+                if (
+                    attr.startswith("OID_") and isinstance(value, str)
+                    and value.replace(".", "").isdigit()
+                ):
+                    names.setdefault(value, attr[len("OID_"):])
+        _OID_NAMES = names
+    return _OID_NAMES.get(oid, "")
+
+
+@dataclass
 class PortInfo:
     if_index: int
     name: str = ""
@@ -274,8 +335,15 @@ class OverBudget:
     any budget — but "long before" is a matter of settings, so it is
     asked, not assumed."""
 
-    def __init__(self, answered: bool | None = None):
+    def __init__(
+        self, answered: bool | None = None, cut: dict | None = None,
+        walks: list | None = None,
+    ):
         self.answered = answered
+        # where the budget ran out (v0.8.8): SnmpCollector.poll_cut()
+        # and the slowest walks of the poll, a cut one included
+        self.cut = cut
+        self.walks = list(walks or [])
 
 
 def _int_keys(raw: dict, value=lambda v: v) -> dict:
@@ -731,6 +799,9 @@ class SnmpCollector:
     # know about: None here, a dict of the instance's own on first use
     _walk_faults: dict | None = None
     _walk_fault_warned: set | None = None
+    _walk_now: dict | None = None
+    _walks_done: dict | None = None
+    _polling: set | None = None
 
     def __init__(
         self,
@@ -773,6 +844,56 @@ class SnmpCollector:
         # that have had their one WARNING in the life of this process
         self._walk_faults = {}
         self._walk_fault_warned = set()
+        # host -> the walk running now, and the walks this poll has
+        # finished (v0.8.8): where a poll's budget went
+        self._walk_now = {}
+        self._walks_done = {}
+        # hosts inside collect() right now: only a full poll's walks
+        # are timed — a counters cycle that takes the host the moment a
+        # cancelled poll lets go of it must not overwrite the record
+        self._polling = set()
+
+    def _timings(self) -> tuple[dict, dict]:
+        if self._walk_now is None:
+            self._walk_now = {}
+        if self._walks_done is None:
+            self._walks_done = {}
+        if self._polling is None:
+            self._polling = set()
+        return self._walk_now, self._walks_done
+
+    def _poll_begins(self, host: str) -> None:
+        now, done = self._timings()
+        now.pop(host, None)
+        done[host] = []
+        self._polling.add(host)
+
+    def poll_cut(self, host: str) -> dict:
+        """Where a poll stopped, read after the budget cancelled it.
+
+        `in_walk` true: the walk that was running — OID, rows, seconds,
+        resumes. False: the cancellation fell between walks, and the
+        fields are the last walk that finished (oid "" if none had).
+        """
+        now, done = self._timings()
+        running = now.get(host)
+        if running is not None and running.running:
+            return {**running.report(resumes=True), "in_walk": True}
+        finished = done.get(host) or []
+        if finished:
+            return {**finished[-1].report(resumes=True), "in_walk": False}
+        return {"oid": "", "name": "", "rows": 0, "seconds": 0.0,
+                "resumes": 0, "in_walk": False}
+
+    def slowest_walks(self, host: str, limit: int = 3) -> list[dict]:
+        """The longest walks of the last poll, a cut one included."""
+        now, done = self._timings()
+        walks = list(done.get(host) or [])
+        running = now.get(host)
+        if running is not None and running.running:
+            walks.append(running)
+        walks.sort(key=lambda w: w.took(), reverse=True)
+        return [w.report() for w in walks[:limit]]
 
     def _faults(self) -> dict[tuple[str, str], WalkFault]:
         if self._walk_faults is None:
@@ -1050,6 +1171,31 @@ class SnmpCollector:
             # that failed, which is exactly what this is.
             status.error = SKIPPED_ERROR
             return
+        walk_now, walks_done = self._timings()
+        timed = host in self._polling
+        timing = WalkTiming(status=status, started=time.monotonic())
+        if timed:
+            walk_now[host] = timing
+        cut = False
+        rows = self._walk_rows(host, oid, base, status)
+        try:
+            async for row in rows:
+                yield row
+        except asyncio.CancelledError:
+            # the poll budget ran out here: the record stays "running",
+            # and that is what the server reads to say where it went
+            cut = True
+            raise
+        finally:
+            # a consumer that stops reading closes the pysnmp walk now,
+            # as it did before the body moved into _walk_rows
+            await rows.aclose()
+            if timed and not cut:
+                timing.seconds = time.monotonic() - timing.started
+                walks_done.setdefault(host, []).append(timing)
+
+    async def _walk_rows(self, host: str, oid: str, base: tuple, status):
+        """The body of _walk, apart so that its clock wraps every exit."""
         start = oid
         last_oid: tuple[int, ...] | None = None
         no_such_run = 0
@@ -1170,7 +1316,14 @@ class SnmpCollector:
         return self.last_walk_status(host, oid).error
 
     async def collect(self, host: str) -> SwitchData:
-        """Full poll of a single switch."""
+        """Full poll of a single switch, its walks timed (v0.8.8)."""
+        self._poll_begins(host)
+        try:
+            return await self._collect(host)
+        finally:
+            self._polling.discard(host)
+
+    async def _collect(self, host: str) -> SwitchData:
         data = SwitchData(ip=host, polled_at=time.time())
 
         sys_name = await self._get(host, OID_SYS_NAME)

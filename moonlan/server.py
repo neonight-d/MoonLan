@@ -128,6 +128,11 @@ fdb_stability = FdbStability()
 # Latest raw poll data per switch: the ports API, the counters loop and
 # the link load labels all need port lists, speeds and LAG composition
 switch_data: dict[str, SwitchData] = {}
+# ip -> where the time of its last poll went (v0.8.8), for /api/polling:
+# "cut_at" — where the last poll that ran out of budget stopped, None
+# once a full poll finishes; "slowest_walks" — the longest walks of the
+# last poll, full or cut. A poll with no answer changes neither.
+poll_report: dict[str, dict] = {}
 
 counter_store = counters.CounterStore()
 # Link-state transitions per port over a sliding window: a port can
@@ -267,18 +272,51 @@ async def _collect_within_budget(
         # How long a complete poll really takes, so budgets can be set
         # from measurements instead of guesses
         data.poll_seconds = time.monotonic() - started
+        if data.reachable and hasattr(collector, "slowest_walks"):
+            poll_report[ip] = {
+                "cut_at": None, "slowest_walks": collector.slowest_walks(ip),
+            }
         return data
     except asyncio.TimeoutError:
+        # Where the time went (v0.8.8): read before anything else can
+        # take this host, while the cancelled walk is still "running"
+        cut = collector.poll_cut(ip) if hasattr(collector, "poll_cut") else None
+        walks = (
+            collector.slowest_walks(ip)
+            if hasattr(collector, "slowest_walks") else []
+        )
         log.warning(
             "%s did not finish its poll within the %.0f s budget (gave up "
             "after %.0f s) — it is left out of this scan, which is not the "
-            "same as not answering: see snmp.host_budget_seconds",
-            ip, budget, time.monotonic() - started,
+            "same as not answering: see snmp.host_budget_seconds%s",
+            ip, budget, time.monotonic() - started, _cut_words(cut),
         )
+        if cut is not None:
+            poll_report[ip] = {"cut_at": cut, "slowest_walks": walks}
         answered_at = getattr(collector, "answered_at", {}).get(ip, 0.0)
-        return OverBudget(True if answered_at >= started_at else None)
+        return OverBudget(
+            True if answered_at >= started_at else None, cut=cut, walks=walks,
+        )
     finally:
         state.host_polled()
+
+
+def _cut_words(cut: dict | None) -> str:
+    """"… cut in the walk of X" — the tail of the over-budget WARNING."""
+    if not cut:
+        return ""
+    name = f" ({cut['name']})" if cut.get("name") else ""
+    if cut.get("in_walk"):
+        return (
+            f"; cut in the walk of {cut['oid']}{name} after {cut['rows']} "
+            f"row(s) and {cut['seconds']:.1f} s"
+        )
+    if cut.get("oid"):
+        return (
+            f"; cut between walks; the last finished was {cut['oid']}{name} "
+            f"({cut['seconds']:.1f} s)"
+        )
+    return "; cut before its first walk"
 
 
 def _counters_wait_budget() -> float:
@@ -4620,6 +4658,9 @@ async def api_polling() -> dict:
                 "state": sw.map_state if sw else STATE_NEVER,
                 "answered": sw.answered if sw else None,
                 "reachable": bool(sw and sw.answered),
+                # where the time of the poll went (v0.8.8)
+                "cut_at": poll_report.get(ip, {}).get("cut_at"),
+                "slowest_walks": poll_report.get(ip, {}).get("slowest_walks", []),
             }
             for ip, sw in (
                 (ip, switch_data.get(ip)) for ip in configured_switches()

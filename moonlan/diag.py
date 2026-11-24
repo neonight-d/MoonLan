@@ -1453,11 +1453,48 @@ def _print_poll_times(cfg) -> None:
             f"  {row['ip']:<18} {str(row['budget_seconds']) + ' s':>8} "
             f"{took:>9} {when:>18}  {state}"
         )
+        for line in _poll_time_lines(row):
+            print(f"      {line}")
     print(
         "  ^ set host_budget_seconds from the 'took' column, not by eye. "
         "A switch\n    listed as over budget has not been read in full "
         "since the time shown."
     )
+
+
+def _walk_words(walk: dict) -> str:
+    name = f" ({walk['name']})" if walk.get("name") else ""
+    return f"{walk['oid']}{name}"
+
+
+def _poll_time_lines(row: dict) -> list[str]:
+    """Where the poll's time went (v0.8.8): the cut, the slowest walk."""
+    lines = []
+    cut = row.get("cut_at")
+    if cut:
+        if cut.get("in_walk"):
+            resumes = (
+                f", {cut['resumes']} resume(s)" if cut.get("resumes") else ""
+            )
+            lines.append(
+                f"last cut: in the walk of {_walk_words(cut)} after "
+                f"{cut['rows']} row(s) and {cut['seconds']:.1f} s{resumes}"
+            )
+        elif cut.get("oid"):
+            lines.append(
+                f"last cut: between walks; the last finished was "
+                f"{_walk_words(cut)} ({cut['seconds']:.1f} s)"
+            )
+        else:
+            lines.append("last cut: before its first walk")
+    walks = row.get("slowest_walks") or []
+    if walks:
+        slowest = walks[0]
+        lines.append(
+            f"slowest walk: {_walk_words(slowest)} {slowest['seconds']:.1f} s, "
+            f"{slowest['rows']} row(s)"
+        )
+    return lines
 
 
 def run_layout_view(cfg) -> None:
