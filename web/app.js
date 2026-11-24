@@ -5400,10 +5400,7 @@ function renderGraph() {
     // v0.7.1's guard waited for a click that never came — so it
     // swallowed the next real one, and after moving a node the first
     // click on anything opened nothing.
-    network.on("dragStart", (params) => {
-      loosenForDrag(params.nodes);
-      holdCurves(params.nodes);
-    });
+    network.on("dragStart", onMapDragStart);
     network.on("dragging", (params) => followCurves(params.nodes));
     // Double click on a container takes everything on it: the cloud of
     // devices behind one switch is the thing people want to move out
@@ -5424,49 +5421,13 @@ function renderGraph() {
       followCurves(params.nodes);
       heldCurves = null;
     });
-    network.on("oncontext", (params) => {
-      params.event.preventDefault();
-      const id = network.getNodeAt(params.pointer.DOM);
-      // In arrange mode the right button is the undo of the left one:
-      // it releases the node, and asks nothing.
-      if (arrangeMode && id && isPinned(id)) {
-        unpinNode(id);
-        return;
-      }
-      if (!id) {
-        closeNodeMenu();
-        return;
-      }
-      // Right-clicking inside the selection works on all of it;
-      // right-clicking outside it means that node instead
-      const selected = network.getSelectedNodes();
-      const ids = selected.includes(id) ? selected : [id];
-      if (!selected.includes(id)) network.selectNodes([id], false);
-      openNodeMenu(ids, {
-        x: params.event.clientX,
-        y: params.event.clientY,
-      });
-    });
-    network.on("click", (params) => {
-      closeNodeMenu();
-      // Ctrl+click is "add to the selection", not "look at this one"
-      if (params.event && (params.event.srcEvent || {}).ctrlKey) return;
-      if (params.nodes.length) {
-        setSelectedNode(params.nodes[0]);
-        showDetails(params.nodes[0]);
-      } else if (
-        params.edges.length &&
-        String(params.edges[0]).startsWith("link:")
-      ) {
-        setSelectedNode(null);
-        showLinkDetails(params.edges[0]);
-      } else {
-        setSelectedNode(null);
-        hideDetails();
-      }
-    });
+    network.on("oncontext", onMapContext);
+    network.on("click", onMapClick);
     checkVisInternals(network);
-    if (visInternals.hold === true) holdIsAPress();
+    if (visInternals.hold === true) {
+      holdIsAPress();
+      longPressOpensMenu();
+    }
     network.on("beforeDrawing", (ctx) => {
       if (hoveredNodeId && hoveredNodeId !== selectedNodeId) {
         drawLabelBackdrop(ctx, hoveredNodeId, false);
@@ -5499,6 +5460,131 @@ function renderGraph() {
   edgesDs.update(edges);
 }
 
+function onMapDragStart(params) {
+  // a finger that moves on after its long press opened the menu is a
+  // drag (v0.8.9): the menu goes, the drag goes on as it would
+  if (press.handled) closeNodeMenu();
+  loosenForDrag(params.nodes);
+  holdCurves(params.nodes);
+}
+
+/* The right button — or Android's long press, which arrives as the
+   same contextmenu event */
+function onMapContext(params) {
+  params.event.preventDefault();
+  // a long press already answered this press — the menu is open, or
+  // the node was released (v0.8.9)
+  if (press.active && press.handled) return;
+  if (press.active) {
+    press.handled = true;
+    clearTimeout(press.timer);
+  }
+  menuForNodeAt(network.getNodeAt(params.pointer.DOM), params.event.clientX, params.event.clientY);
+}
+
+/* The node menu where the pointer is: the node's own, or the
+   selection's when it is part of one */
+function menuForNodeAt(id, clientX, clientY) {
+  // In arrange mode the right button is the undo of the left one:
+  // it releases the node, and asks nothing.
+  if (arrangeMode && id && isPinned(id)) {
+    unpinNode(id);
+    return;
+  }
+  if (!id) {
+    closeNodeMenu();
+    return;
+  }
+  // Right-clicking inside the selection works on all of it;
+  // right-clicking outside it means that node instead
+  const selected = network.getSelectedNodes();
+  const ids = selected.includes(id) ? selected : [id];
+  if (!selected.includes(id)) network.selectNodes([id], false);
+  openNodeMenu(ids, { x: clientX, y: clientY });
+}
+
+function onMapClick(params) {
+  closeNodeMenu();
+  // Ctrl+click is "add to the selection", not "look at this one"
+  if (params.event && (params.event.srcEvent || {}).ctrlKey) return;
+  if (params.nodes.length) {
+    setSelectedNode(params.nodes[0]);
+    showDetails(params.nodes[0]);
+  } else if (
+    params.edges.length &&
+    String(params.edges[0]).startsWith("link:")
+  ) {
+    setSelectedNode(null);
+    showLinkDetails(params.edges[0]);
+  } else {
+    setSelectedNode(null);
+    hideDetails();
+  }
+}
+
+/* A long press of a finger opens the node menu, and keeps it (v0.8.9).
+
+   On Android a long press sends contextmenu, and vis opened the menu
+   — then the finger came up, pressup went on to onTap as a click (see
+   holdIsAPress), and the click closed the menu and opened the card.
+   Safari on an iPhone sends no contextmenu for a long press at all, so
+   there the menu never opened.
+
+   Now a finger held still for LONG_PRESS.ms opens the menu by itself,
+   at the finger, on both — or contextmenu does, if it comes first; the
+   one that comes second finds the press answered and does nothing. A
+   press that opened the menu (or, in Arrange, released a pinned node)
+   ends without a click, and a finger that moves on after it is a drag
+   that closes the menu.
+
+   Which press it is lives in `press`, started over at the first input
+   of every press (hammer.input with isFirst) — never "swallow the next
+   click", the guard that broke in v0.7.1 (the comment over
+   network.on("dragStart") in renderGraph). A mouse is left as it was: the right
+   button starts no press in Hammer and opens the menu by contextmenu;
+   a left button held still is a click, never a menu. */
+const LONG_PRESS = { ms: 500, slop: 10 };
+const press = { active: false, handled: false, timer: 0, x: 0, y: 0 };
+
+function longPressOpensMenu() {
+  network.canvas.hammer.on("hammer.input", pressInput);
+}
+
+function pressInput(event) {
+  if (event.isFirst) {
+    clearTimeout(press.timer);
+    press.active = true;
+    press.handled = false;
+    press.x = event.center.x;
+    press.y = event.center.y;
+    if (event.pointerType === "touch" || event.pointerType === "pen") {
+      press.timer = setTimeout(longPress, LONG_PRESS.ms);
+    }
+    return;
+  }
+  if (event.isFinal) {
+    // `handled` stays until the next press: pressup comes after this
+    press.active = false;
+    clearTimeout(press.timer);
+    return;
+  }
+  if ((event.distance || 0) > LONG_PRESS.slop) clearTimeout(press.timer);
+}
+
+function longPress() {
+  if (!press.active || press.handled) return;
+  press.handled = true;
+  const box = els.network.getBoundingClientRect();
+  const id = network.getNodeAt({ x: press.x - box.left, y: press.y - box.top });
+  if (!id) {
+    // nothing under the finger: a long press on the map is a press,
+    // and its release a click, as before
+    press.handled = false;
+    return;
+  }
+  menuForNodeAt(id, press.x, press.y);
+}
+
 /* A long press is a press.
 
    With `multiselect` on — v0.7.1 turned it on for Ctrl+click — vis
@@ -5521,9 +5607,14 @@ function renderGraph() {
    and the Hammer instance is canvas.hammer. */
 function holdIsAPress() {
   network.body.eventListeners.onHold = () => {};
-  network.canvas.hammer.on("pressup", (event) =>
-    network.body.eventListeners.onTap(event)
-  );
+  network.canvas.hammer.on("pressup", pressUp);
+}
+
+/* The release of a held press is a click — unless the press opened
+   the node menu or released a node (v0.8.9) */
+function pressUp(event) {
+  if (press.handled) return;
+  network.body.eventListeners.onTap(event);
 }
 
 function focusNode(id) {
