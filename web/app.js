@@ -5204,7 +5204,7 @@ function closePortLabelsMenu(returnFocus) {
      dragged node's lines follow it while the layout is frozen;
    - curvePoints: edgeType.getPoint — port tags along a curved line;
    - hold: body.eventListeners and canvas.hammer — a long press is a
-     press, not a selection that adds;
+     press, not a selection that adds, and two fingers move the map;
    - labels: labelModule.size — the backdrop under the selected caption;
    - geometry: shape.resize, labelModule.getTextSize, canvas.frame — the
      size of a node and its caption for an export;
@@ -5428,6 +5428,7 @@ function renderGraph() {
     if (visInternals.hold === true) {
       holdIsAPress();
       longPressOpensMenu();
+      twoFingersMoveTheMap();
     }
     network.on("beforeDrawing", (ctx) => {
       if (hoveredNodeId && hoveredNodeId !== selectedNodeId) {
@@ -5474,8 +5475,9 @@ function onMapDragStart(params) {
 function onMapContext(params) {
   params.event.preventDefault();
   // a long press already answered this press — the menu is open, or
-  // the node was released (v0.8.9)
-  if (press.active && press.handled) return;
+  // the node was released (v0.8.9) — or a second finger made it a
+  // gesture (v0.8.10)
+  if (press.active && (press.handled || press.gesture)) return;
   if (press.active) {
     press.handled = true;
     clearTimeout(press.timer);
@@ -5538,6 +5540,11 @@ function onMapClick(params) {
    ends without a click, and a finger that moves on after it is a drag
    that closes the menu.
 
+   A second finger makes the press a gesture (v0.8.10): the timer
+   stops — in an even pinch the centre between the fingers hardly
+   moves, so the slop alone let the menu of the node under the first
+   finger open half a second in — and the release is no click.
+
    Which press it is lives in `press`, started over at the first input
    of every press (hammer.input with isFirst) — never "swallow the next
    click", the guard that broke in v0.7.1 (the comment over
@@ -5545,7 +5552,7 @@ function onMapClick(params) {
    button starts no press in Hammer and opens the menu by contextmenu;
    a left button held still is a click, never a menu. */
 const LONG_PRESS = { ms: 500, slop: 10 };
-const press = { active: false, handled: false, timer: 0, x: 0, y: 0 };
+const press = { active: false, handled: false, gesture: false, timer: 0, x: 0, y: 0 };
 
 function longPressOpensMenu() {
   network.canvas.hammer.on("hammer.input", pressInput);
@@ -5556,24 +5563,34 @@ function pressInput(event) {
     clearTimeout(press.timer);
     press.active = true;
     press.handled = false;
+    press.gesture = false;
     press.x = event.center.x;
     press.y = event.center.y;
     if (event.pointerType === "touch" || event.pointerType === "pen") {
       press.timer = setTimeout(longPress, LONG_PRESS.ms);
     }
-    return;
-  }
-  if (event.isFinal) {
-    // `handled` stays until the next press: pressup comes after this
+  } else if (event.isFinal) {
+    // `handled` and `gesture` stay until the next press: pressup comes
+    // after this
     press.active = false;
     clearTimeout(press.timer);
     return;
+  } else if ((event.distance || 0) > LONG_PRESS.slop) {
+    clearTimeout(press.timer);
   }
-  if ((event.distance || 0) > LONG_PRESS.slop) clearTimeout(press.timer);
+  // two fingers can land in one event, isFirst and all
+  if (fingersOf(event) > 1) {
+    clearTimeout(press.timer);
+    press.gesture = true;
+  }
+}
+
+function fingersOf(event) {
+  return Math.max((event.pointers || []).length, event.maxPointers || 0);
 }
 
 function longPress() {
-  if (!press.active || press.handled) return;
+  if (!press.active || press.handled || press.gesture) return;
   press.handled = true;
   const box = els.network.getBoundingClientRect();
   const id = network.getNodeAt({ x: press.x - box.left, y: press.y - box.top });
@@ -5612,10 +5629,91 @@ function holdIsAPress() {
 }
 
 /* The release of a held press is a click — unless the press opened
-   the node menu or released a node (v0.8.9) */
+   the node menu or released a node (v0.8.9), or became a gesture of
+   two fingers (v0.8.10): Hammer sends pressup for "held one finger,
+   added a second, let go" when the last finger comes up where the
+   first went down. */
 function pressUp(event) {
-  if (press.handled) return;
+  if (press.handled || press.gesture) return;
   network.body.eventListeners.onTap(event);
+}
+
+/* Two fingers move the map as well as zoom it (v0.8.10).
+
+   vis-network 9.1.9 zooms on a pinch around the point between the
+   fingers where it is now (onPinch: zoom(scale, pointer)) and drops a
+   pan while a pinch is on (onDrag returns at drag.pinched), so moving
+   both fingers moved nothing, and spreading them while moving zoomed
+   about a point that slid out from under them.
+
+   Here each step of a pinch moves the view by as much as the centre
+   between the fingers moved since the step before, through vis's own
+   moveTo at the scale it has. The order makes it exact: Hammer sends
+   pinchmove before pinch, on which vis zooms — so the point of the
+   map that was under the fingers is taken to where they are now, and
+   then the zoom about that very place leaves it there.
+
+   The first step counts from where the centre was when the second
+   finger landed, not from where Hammer saw the pinch begin (its first
+   move): Hammer's scale counts from that touch too, and a pixel lost
+   there would grow with the zoom — five of them at three times the
+   scale.
+
+   Two fingers on a node move the map, in Arrange too: vis drags a node
+   only on a pan, which wants one finger. pinchend and pinchcancel move
+   nothing — a third finger ends a pinch, and the centre would jump to
+   it. */
+const pinch = { active: false, x: 0, y: 0, fingers: 0, fromX: 0, fromY: 0 };
+
+function twoFingersMoveTheMap() {
+  const hammer = network.canvas.hammer;
+  hammer.on("hammer.input", pinchInput);
+  hammer.on("pinchstart", pinchStart);
+  hammer.on("pinchmove", pinchMove);
+  hammer.on("pinchend", pinchStop);
+  hammer.on("pinchcancel", pinchStop);
+}
+
+/* Where the centre was when there came to be two fingers */
+function pinchInput(event) {
+  const fingers = (event.pointers || []).length;
+  if (fingers === 2 && pinch.fingers !== 2) {
+    pinch.fromX = event.center.x;
+    pinch.fromY = event.center.y;
+  }
+  pinch.fingers = event.isFinal ? 0 : fingers;
+}
+
+function pinchStart(event) {
+  // the menu a long press opened before the second finger came goes,
+  // as it does when that finger drags
+  if (press.handled) closeNodeMenu();
+  pinch.active = true;
+  const landed = pinch.fingers === 2;
+  pinch.x = landed ? pinch.fromX : event.center.x;
+  pinch.y = landed ? pinch.fromY : event.center.y;
+  // pinchstart comes before vis's first pinch, like pinchmove
+  pinchMove(event);
+}
+
+function pinchMove(event) {
+  if (!pinch.active) return;
+  const dx = event.center.x - pinch.x;
+  const dy = event.center.y - pinch.y;
+  pinch.x = event.center.x;
+  pinch.y = event.center.y;
+  if (!dx && !dy) return;
+  const scale = network.getScale();
+  const at = network.getViewPosition();
+  network.moveTo({
+    position: { x: at.x - dx / scale, y: at.y - dy / scale },
+    scale,
+    animation: false,
+  });
+}
+
+function pinchStop() {
+  pinch.active = false;
 }
 
 function focusNode(id) {
