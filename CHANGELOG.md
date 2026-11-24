@@ -8,6 +8,24 @@ for before the next one started.
 
 ## v0.8.10 — 2026-11-24
 
+Two fingers move the map, a correction about UTF-8 logs. From the
+acceptance of v0.8.9 on the production network; a short version, since
+the ones after it rearrange the code and are accepted by "everything as
+before".
+
+**Two fingers move the map.** On both phones two fingers zoomed the map
+but could not move it: vis-network 9.1.9 zooms on a pinch around the
+point between the fingers where it is now, and drops a pan while a
+pinch is on. Each step of a pinch now moves the view by as much as the
+centre between the fingers moved, through vis's own `moveTo`; vis zooms
+after that, about the same place, so the point under the fingers stays
+under them while they spread, close in or slide. Two fingers on a node
+move the map, not the node, in Arrange too. A second finger ends a long
+press — in an even pinch the centre hardly moves, and the menu of the
+node under the first finger could open half a second in — and the
+fingers coming up are no click. One finger, the mouse, the wheel and a
+touchpad's pinch are as they were.
+
 **Correction.** The v0.8.9 entry on UTF-8 logs says "—" and "§" came
 out as `\u2014` and `\xa7` in the systemd journal. They did not: the
 journal there runs under `LANG=en_US.UTF-8` and has "—" as it is; the

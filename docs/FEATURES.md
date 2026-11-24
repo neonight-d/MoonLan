@@ -532,7 +532,13 @@ Everything MoonLan does, as of v0.8.9 — the list the README used to carry. The
   the menu opened is a drag: the menu closes and, in Arrange, the node
   goes where it is dragged; a long press on a pinned node in Arrange
   releases it, as the right button does. A short tap opens the card,
-  as before.
+  as before. Two fingers on the map zoom it and move it at once, as in
+  a maps app (v0.8.10): the place under the fingers stays under them
+  while they spread, close in or slide, and two fingers on a node move
+  the map, not the node — in Arrange too; a node is dragged with one
+  finger. A second finger ends a long press: a slow pinch over a node
+  opens no menu, and when the fingers come up there is no click, so no
+  card opens or closes either.
   What a role may not do is grey with the reason, as everywhere. The
   map's tools stand at the bottom right: freeze, port numbers (their
   menu opens above the button) and "fit the map to the screen".
