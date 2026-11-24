@@ -124,6 +124,37 @@ SEVERITIES = {
     "passkey_clone_suspected": "critical",
 }
 
+# The text of an alarm says only what is true for as long as it stands
+# (v0.8.9). v0.8.8 did it for switch_stale; the rest kept words of the
+# moment of the raise — "missed 3 pings in a row", "1 of 2 LAG members
+# are up", "14 day(s) left" — because _raise leaves an active alarm
+# alone. Two ways, one per type:
+#
+# (b) RESTATED: what the text describes changes while the alarm stands
+#     — members come back or go, a bridge moves, the root changes again
+#     — so a later evaluation brings the text up to date in place:
+#     refresh_alarm_message, no notification, no journal entry (the
+#     journal keeps the raise as it was), DEBUG in the log. Not a raise
+#     for flap damping either.
+RESTATED_TYPES = frozenset({
+    "port_hosts_down", "lag_degraded", "port_flapping",
+    "unmanaged_bridge_detected", "stp_root_changed", "stp_fragmented",
+    "loop_detection_disabled", "loop_detected", "switch_stale",
+})
+# (a) STABLE: written so that it stays true — the moment instead of a
+#     count, a measurement with the time it was made, a date instead of
+#     "in N days" — and never rewritten, except once to replace a text
+#     an older version wrote, which is told by these words in it.
+STABLE_TYPES = {
+    "host_down": lambda text: "in a row" in text,
+    "switch_down": lambda text: "in a row" in text,
+    "stp_topology_change": lambda text: "since the previous scan" in text,
+    "port_util": lambda text: "(threshold" not in text,
+    "port_errors": lambda text: "(threshold" not in text,
+    "port_discards": lambda text: "(threshold" not in text,
+    "tls_cert_expiring": lambda text: "day(s) left" in text,
+}
+
 HOST_DOWN_AFTER = 3    # consecutive failed pings
 SWITCH_DOWN_AFTER = 2  # consecutive failed SNMP polls
 # A host must have answered this many consecutive pings before its
@@ -201,6 +232,15 @@ def display_subject(subject: str) -> str | None:
 
 def _when(ts: float) -> str:
     return time.strftime("%Y-%m-%d %H:%M", time.localtime(ts))
+
+
+def _mass_text(at: float, devices: int, silent: list[str]) -> str:
+    """port_hosts_down: when they went silent, and who still is"""
+    names = ", ".join(silent[:5]) + (" …" if len(silent) > 5 else "")
+    return (
+        f"{devices} devices went silent at once at {_when(at)}; still "
+        f"silent: {len(silent)} of {devices}: {names}"
+    )
 
 
 def stale_switch_message(name: str, info: dict) -> str:
@@ -294,6 +334,17 @@ class AlarmEngine:
         # loop detection: subject -> when the loop was first seen, so
         # the CLEARED pair can say how long it held
         self._loop_since: dict[str, float] = {}
+        # the text and the raise time of every active alarm (v0.8.9):
+        # a restatement that would write the same words writes nothing
+        self._texts: dict[tuple[str, str], str] = {}
+        self._raised_at: dict[tuple[str, str], float] = {}
+        # when a host / a switch missed its first ping / poll in a row
+        self._ping_down_since: dict[str, float] = {}
+        self._snmp_down_since: dict[str, float] = {}
+        # port_hosts_down: subject -> (when, how many devices) at the raise
+        self._mass_first: dict[str, tuple[float, int]] = {}
+        # stp_root_changed: ip -> the root it followed before the alarm
+        self._stp_was: dict[str, str] = {}
 
     async def load(self) -> None:
         """Restores the active set from the DB after a restart.
@@ -306,6 +357,8 @@ class AlarmEngine:
         for row in await asyncio.to_thread(self._db.alarms, True, 1000):
             key = (row["type"], row["subject"])
             self._active.add(key)
+            self._texts[key] = row["message"]
+            self._raised_at[key] = row["ts_raised"]
             if row["type"] == "switch_stale":
                 # or the first full poll after a restart would find
                 # nobody waiting to clear it (v0.8.8)
@@ -385,20 +438,27 @@ class AlarmEngine:
             label = row.get("name") or row.get("ip") or mac
             if up:
                 self._ping_fails.pop(mac, None)
+                self._ping_down_since.pop(mac, None)
                 self._up_streak[mac] = streak_before[mac] + 1
                 await self._clear("host_down", mac, f"{label} answers ping again")
             else:
                 self._up_streak[mac] = 0
                 misses = self._ping_fails.get(mac, 0) + 1
                 self._ping_fails[mac] = misses
+                first_miss = self._ping_down_since.setdefault(mac, time.time())
                 if (
                     misses >= HOST_DOWN_AFTER
                     and row.get("monitored")
                     and not row.get("stale")
                 ):
+                    # the last answer is in the database and does not
+                    # move while the host is silent (v0.8.9)
+                    since = row.get("last_ping_ok") or self._since(
+                        "host_down", mac, first_miss
+                    )
                     await self._raise(
                         "host_down", mac,
-                        f"{label} missed {misses} pings in a row",
+                        f"{label} has not answered ping since {_when(since)}",
                     )
         await self._mass_down(results, meta, streak_before)
         await self.flap_maintenance()
@@ -441,15 +501,20 @@ class AlarmEngine:
         for subject, macs in newly_down.items():
             # one label per device, first occurrence wins
             by_device: dict[str, str] = {}
-            for mac in macs:
+            for mac in sorted(macs):
                 by_device.setdefault(identity(mac), label(mac))
             if len(by_device) < threshold:
                 continue
-            self._mass_sets.setdefault(subject, set()).update(macs)
-            names = ", ".join(list(by_device.values())[:5])
+            if ("port_hosts_down", subject) in self._active:
+                # more of them went silent while it stands: counted in
+                # the text below, not a raise of its own
+                self._mass_sets.setdefault(subject, set()).update(macs)
+                continue
+            self._mass_sets[subject] = set(macs)
+            self._mass_first[subject] = (time.time(), len(by_device))
             await self._raise(
                 "port_hosts_down", subject,
-                f"{len(by_device)} devices went silent at once: {names}",
+                _mass_text(time.time(), len(by_device), list(by_device.values())),
             )
 
         # An active alarm that predates a restart has no affected set:
@@ -475,10 +540,25 @@ class AlarmEngine:
             answering = {identity(m) for m in macs if results.get(m)}
             if len(answering) * 2 >= len(devices):
                 del self._mass_sets[subject]
+                self._mass_first.pop(subject, None)
                 await self._clear(
                     "port_hosts_down", subject,
                     f"{len(answering)} of {len(devices)} devices answer again",
                 )
+                continue
+            # part of them answer again, not half yet: the text says who
+            # is still silent (v0.8.9)
+            silent: dict[str, str] = {}
+            for mac in sorted(macs):
+                if identity(mac) not in answering:
+                    silent.setdefault(identity(mac), label(mac))
+            at, _n = self._mass_first.get(subject) or (
+                self._since("port_hosts_down", subject, time.time()), 0
+            )
+            await self._restate(
+                "port_hosts_down", subject,
+                _mass_text(at, len(devices), list(silent.values())),
+            )
 
     async def on_scan(
         self, reachable: dict[str, bool], names: dict[str, str]
@@ -487,14 +567,18 @@ class AlarmEngine:
         for ip, ok in reachable.items():
             if ok:
                 self._snmp_fails.pop(ip, None)
+                self._snmp_down_since.pop(ip, None)
                 await self._clear("switch_down", ip, "SNMP polling restored")
             else:
                 misses = self._snmp_fails.get(ip, 0) + 1
                 self._snmp_fails[ip] = misses
+                first_miss = self._snmp_down_since.setdefault(ip, time.time())
                 if misses >= SWITCH_DOWN_AFTER:
+                    since = self._since("switch_down", ip, first_miss)
                     await self._raise(
                         "switch_down", ip,
-                        f"{names.get(ip, ip)} missed {misses} SNMP polls in a row",
+                        f"{names.get(ip, ip)} has not answered SNMP since "
+                        f"{_when(since)}",
                     )
 
     async def on_stale_switches(
@@ -529,15 +613,9 @@ class AlarmEngine:
             message = stale_switch_message(names.get(ip, ip), info)
             if ("switch_stale", ip) in self._active:
                 self._stale_switches.add(ip)
-                updated = await asyncio.to_thread(
-                    self._db.refresh_alarm_message, "switch_stale", ip,
-                    message,
+                await self._restate(
+                    "switch_stale", ip, message, level=logging.INFO
                 )
-                if updated:
-                    log.info(
-                        "Alarm text brought up to date: switch_stale %s — %s",
-                        ip, message,
-                    )
                 continue
             if info.get("scans", 0) < threshold:
                 continue
@@ -564,7 +642,9 @@ class AlarmEngine:
                     discards > thresholds.discards_per_minute,
                     f"{discards:.0f} discards per minute "
                     f"(in: {m['in_discards_per_min']:.0f}, "
-                    f"out: {m['out_discards_per_min']:.0f})",
+                    f"out: {m['out_discards_per_min']:.0f}) at "
+                    f"{_when(time.time())} (threshold "
+                    f"{thresholds.discards_per_minute:g} per minute)",
                 )
             speed = m["speed_mbps"]
             load = _peak(m["in_mbps"], m["out_mbps"])
@@ -573,7 +653,9 @@ class AlarmEngine:
                 await self._hysteresis(
                     "port_util", subject,
                     util > self._thresholds.port_utilization_percent,
-                    f"utilization {util:.0f}% of {speed} Mbit/s",
+                    f"utilization {util:.0f}% of {speed} Mbit/s at "
+                    f"{_when(time.time())} (threshold "
+                    f"{self._thresholds.port_utilization_percent:g}%)",
                 )
             if m.get("lag_total"):
                 await self._lag_rule(subject, m["lag_up"], m["lag_total"])
@@ -598,11 +680,16 @@ class AlarmEngine:
         if ratio is not None:
             over = over and ratio * 100 > thresholds.error_ratio_percent
             share = f", {ratio * 100:.3f}% of frames"
+        limit = f"{thresholds.errors_per_minute:g} per minute" + (
+            f" and {thresholds.error_ratio_percent:g}% of frames"
+            if ratio is not None else ""
+        )
         await self._hysteresis(
             "port_errors", subject, over,
             f"{errors:.1f} errors per minute "
             f"(in: {m['in_errors_per_min']:.1f}, "
-            f"out: {m['out_errors_per_min']:.1f}{share})",
+            f"out: {m['out_errors_per_min']:.1f}{share}) at "
+            f"{_when(time.time())} (threshold {limit})",
         )
 
     async def _lag_rule(self, subject: str, up: int, total: int) -> None:
@@ -719,6 +806,7 @@ class AlarmEngine:
         )
         if not upgraded:
             return
+        self._texts[(alarm_type, subject)] = message
         ts = time.time()
         await asyncio.to_thread(
             self._db.add_event, ts, "alarm_raised", subject,
@@ -865,12 +953,17 @@ class AlarmEngine:
             previous = self._stp_root.get(ip)
             self._stp_root[ip] = root
             if previous and root and previous != root:
+                # changed again while it stands: still "was" the root
+                # before the alarm (v0.8.9)
+                if ("stp_root_changed", ip) not in self._active:
+                    self._stp_was[ip] = previous
+                was = self._stp_was.get(ip, previous)
                 await self._raise(
                     "stp_root_changed", ip,
-                    f"{entry['name']} now follows root {root} "
-                    f"(was {previous})",
+                    f"{entry['name']} now follows root {root} (was {was})",
                 )
             elif previous == root:
+                self._stp_was.pop(ip, None)
                 await self._clear(
                     "stp_root_changed", ip, f"root {root} is stable again"
                 )
@@ -885,9 +978,8 @@ class AlarmEngine:
             if delta > limit:
                 await self._raise(
                     "stp_topology_change", ip,
-                    f"{entry['name']}: {delta} topology changes since the "
-                    f"previous scan (limit {limit}), "
-                    f"{entry['top_changes']} in total",
+                    f"{entry['name']} at {_when(time.time())}: {delta} "
+                    f"topology changes in one scan (limit {limit})",
                 )
             elif delta >= 0:
                 await self._clear(
@@ -996,7 +1088,10 @@ class AlarmEngine:
             if state.lbd_enabled is False or not state.known:
                 continue
             if state.looped:
-                since = self._loop_since.setdefault(subject, now)
+                # after a restart the loop is as old as its alarm
+                since = self._loop_since.setdefault(
+                    subject, self._raised_at.get(("loop_detected", subject), now)
+                )
                 recovery = (
                     f", the switch releases it {data.recover_time} s after "
                     f"the loop is gone" if data.recover_time else ""
@@ -1005,7 +1100,7 @@ class AlarmEngine:
                     "loop_detected", subject,
                     f"{name}, port {port}: Loop Detection reports a loop "
                     f"(raw status {state.status_raw}) since "
-                    f"{time.strftime('%H:%M:%S', time.localtime(since))}. "
+                    f"{time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(since))}. "
                     f"The port is blocked by the switch{recovery}",
                 )
             elif (("loop_detected", subject)) in self._active:
@@ -1041,6 +1136,8 @@ class AlarmEngine:
         alarm_type, subject = row["type"], row["subject"]
         self._active.discard((alarm_type, subject))
         self._missing.pop((alarm_type, subject), None)
+        self._texts.pop((alarm_type, subject), None)
+        self._raised_at.pop((alarm_type, subject), None)
         await asyncio.to_thread(
             self._db.add_event, ts, "alarm_cleared", subject,
             f"{row['severity']} {alarm_type}: cleared manually", user,
@@ -1076,7 +1173,15 @@ class AlarmEngine:
         self, alarm_type: str, subject: str, message: str,
         auto_clear: bool = False, severity: str | None = None,
     ) -> None:
-        if not auto_clear and (alarm_type, subject) in self._active:
+        key = (alarm_type, subject)
+        if not auto_clear and key in self._active:
+            # standing already: its text may need bringing up to date
+            if alarm_type in RESTATED_TYPES:
+                await self._restate(alarm_type, subject, message)
+            elif alarm_type in STABLE_TYPES:
+                known = self._texts.get(key)
+                if known is not None and STABLE_TYPES[alarm_type](known):
+                    await self._restate(alarm_type, subject, message)
             return
         ts = time.time()
         severity = severity or SEVERITIES[alarm_type]
@@ -1092,6 +1197,8 @@ class AlarmEngine:
             return
         if not auto_clear:
             self._active.add((alarm_type, subject))
+            self._texts[key] = message
+            self._raised_at[key] = ts
         await asyncio.to_thread(
             self._db.add_event, ts, "alarm_raised", subject,
             f"{severity} {alarm_type}: {message}",
@@ -1104,6 +1211,36 @@ class AlarmEngine:
             display=display_subject(subject),
         )
 
+    async def _restate(
+        self, alarm_type: str, subject: str, message: str,
+        level: int = logging.DEBUG,
+    ) -> bool:
+        """Brings the text of a standing alarm up to date (v0.8.9).
+
+        In place, in alarms.message: no notification, no journal entry,
+        not a raise for flap damping, and nothing at all when the words
+        are the ones already there."""
+        key = (alarm_type, subject)
+        if key not in self._active or self._texts.get(key) == message:
+            return False
+        updated = await asyncio.to_thread(
+            self._db.refresh_alarm_message, alarm_type, subject, message
+        )
+        self._texts[key] = message
+        if updated:
+            log.log(
+                level, "Alarm text brought up to date: %s %s — %s",
+                alarm_type, subject, message,
+            )
+        return updated
+
+    def _since(self, alarm_type: str, subject: str, first: float) -> float:
+        """The start of a condition: `first` as this process saw it, or
+        the raise of the standing alarm when that is earlier — after a
+        restart the process has seen only the end of it."""
+        raised = self._raised_at.get((alarm_type, subject))
+        return min(first, raised) if raised else first
+
     async def _clear(
         self, alarm_type: str, subject: str, message: str, note: str = ""
     ) -> None:
@@ -1111,6 +1248,8 @@ class AlarmEngine:
             return
         ts = time.time()
         self._active.discard((alarm_type, subject))
+        self._texts.pop((alarm_type, subject), None)
+        self._raised_at.pop((alarm_type, subject), None)
         cleared = await asyncio.to_thread(
             self._db.clear_alarm, alarm_type, subject, ts, note
         )

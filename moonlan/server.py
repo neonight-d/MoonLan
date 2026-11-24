@@ -2754,8 +2754,7 @@ async def check_certificate_end() -> None:
     if left < CERT_ALARM_DAYS * 86400:
         await alarm_engine.service_alarm(
             "tls_cert_expiring", subject, True,
-            f"the certificate MoonLan serves ends on {ends} "
-            f"({max(0, int(left // 86400))} day(s) left). Replace "
+            f"the certificate MoonLan serves expires on {ends}. Replace "
             f"{config.listen_tls_cert} and restart MoonLan: the certificate "
             f"is read at startup, so a new file alone changes nothing",
         )
