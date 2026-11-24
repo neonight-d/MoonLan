@@ -1688,7 +1688,10 @@ def _mark_recent(
     142 records without an IP "recent" for host_grace_hours after the
     very ARP that showed the device was not there. `seen_at` is still
     the last sighting of any kind, and `seen_by` says which: "fdb",
-    "arp" or "ping"."""
+    "arp" or "ping".
+
+    A ping too, since v0.8.9: it goes to the address, and once the
+    address is another device's, the answer is that device's."""
     grace = config.host_grace_hours * 3600
     days = config.host_retention_days
     for host in unlocated:
@@ -1703,7 +1706,7 @@ def _mark_recent(
             else "arp" if seen == arp else "ping"
         )
         holds_address = bool(host.get("ip") or row.get("ip"))
-        present = max(fdb, arp if holds_address else 0, ping)
+        present = max(fdb, max(arp, ping) if holds_address else 0)
         # seen this very scan, on an uplink: recent by definition
         host["recent"] = bool(host.get("uplink_only")) or (
             grace > 0 and now - present < grace

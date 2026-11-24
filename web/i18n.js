@@ -811,7 +811,9 @@ const I18N = {
     unlocatedHeader: "Not on map",
     goneHeader: "Not seen for a while",
     goneSeen: "seen {date}",
-    goneArpSeen: "in ARP at {time} · no longer holds an address",
+    goneNoAddress: "{how} · no longer holds an address",
+    goneByArp: "in ARP at {time}",
+    goneByPing: "answered ping at {time}",
     goneHint:
       "Nothing has seen this device \u2014 no switch table, no ARP, no "
       + "ping \u2014 since {seen}, longer than host_grace_hours. It is an "
@@ -2093,7 +2095,9 @@ const I18N = {
     unlocatedHeader: "Вне карты",
     goneHeader: "Давно не видны",
     goneSeen: "был {date}",
-    goneArpSeen: "в ARP был {time} · адреса за ним больше нет",
+    goneNoAddress: "{how} · адреса за ним больше нет",
+    goneByArp: "в ARP был {time}",
+    goneByPing: "отвечал на пинг {time}",
     goneHint:
       "Это устройство никто не видел \u2014 ни таблицы коммутаторов, ни "
       + "ARP, ни пинг \u2014 с {seen}, дольше host_grace_hours. Это "

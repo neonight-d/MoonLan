@@ -3999,12 +3999,13 @@ function rowSubline(h, parts) {
     .join(" · ");
 }
 
-/* When a long-gone record was seen last. Seen last by ARP and holding
-   no address now (v0.8.8): the date is fresh, and it is in this list
-   because the address went to another MAC or was not confirmed — said
-   so, or the date looks like a mistake. */
+/* When a long-gone record was seen last. Seen last by ARP (v0.8.8) or
+   by a ping (v0.8.9) and holding no address now: the date is fresh,
+   and it is in this list because the address went to another device or
+   was not confirmed — said so, or the date looks like a mistake. */
 function goneSeenText(h) {
-  if (h.seen_by === "arp" && !h.ip) return fmt("goneArpSeen", { time: fmtDayTime(h.seen_at) });
+  const by = { arp: "goneByArp", ping: "goneByPing" }[h.seen_by];
+  if (by && !h.ip) return fmt("goneNoAddress", { how: fmt(by, { time: fmtDayTime(h.seen_at) }) });
   return fmt("goneSeen", { date: fmtDay(h.seen_at) });
 }
 

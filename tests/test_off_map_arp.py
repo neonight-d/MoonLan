@@ -11,6 +11,11 @@ an address; the switches' tables and the pings count as before.
 which; in "Not seen for a while" such a row says it was in ARP and no
 longer holds an address, or its fresh date would look like a mistake.
 
+A ping is the same (v0.8.9): it goes to the address, and once the
+address is another device's, the answer is that device's. A record
+without an IP is not "recent" by a ping either, and its row says it
+answered ping and no longer holds an address.
+
 Run with:  python -m unittest discover -s tests
 """
 
@@ -66,8 +71,14 @@ class RecentTest(unittest.TestCase):
         self.assertTrue(host["recent"])
         self.assertEqual(host["seen_by"], "fdb")
 
-    def test_a_ping_without_an_address_is(self):
-        host, _now = mark(last_ping_ok=HOUR, last_seen=200 * HOUR)
+    def test_a_ping_without_an_address_is_not(self):
+        host, now = mark(last_ping_ok=HOUR, last_seen=200 * HOUR)
+        self.assertFalse(host["recent"])
+        self.assertEqual(host["seen_by"], "ping")
+        self.assertAlmostEqual(host["seen_at"], now - HOUR, delta=2)
+
+    def test_a_ping_with_an_address_is(self):
+        host, _now = mark(ip="10.1.2.3", last_ping_ok=HOUR, last_seen=200 * HOUR)
         self.assertTrue(host["recent"])
         self.assertEqual(host["seen_by"], "ping")
 
@@ -90,6 +101,8 @@ for (const code of ["ru", "en"]) {
     goneSeenText({ seen_by: "arp", ip: "", seen_at: at }),
     goneSeenText({ seen_by: "arp", ip: "10.1.2.3", seen_at: at }),
     goneSeenText({ seen_by: "fdb", ip: "", seen_at: at }),
+    goneSeenText({ seen_by: "ping", ip: "", seen_at: at }),
+    goneSeenText({ seen_by: "ping", ip: "10.1.2.3", seen_at: at }),
   ];
 }
 __done(out);
@@ -100,7 +113,7 @@ __done(out);
 class PageTest(unittest.TestCase):
     def test_the_row_says_why_its_fresh_date_is_here(self):
         out = run_page(PAGE)
-        arp, held, fdb = out["ru"]
+        arp, held, fdb, ping, ping_held = out["ru"]
         self.assertTrue(arp.startswith("в ARP был 23.11"), arp)
         self.assertIn("14:05", arp)
         self.assertTrue(arp.endswith("· адреса за ним больше нет"), arp)
@@ -108,6 +121,16 @@ class PageTest(unittest.TestCase):
         self.assertTrue(fdb.startswith("был 23.11"), fdb)
         self.assertTrue(out["en"][0].startswith("in ARP at "), out["en"][0])
         self.assertTrue(out["en"][0].endswith("· no longer holds an address"))
+
+    def test_a_ping_says_so_too(self):
+        out = run_page(PAGE)
+        ping, ping_held = out["ru"][3], out["ru"][4]
+        self.assertTrue(ping.startswith("отвечал на пинг 23.11"), ping)
+        self.assertIn("14:05", ping)
+        self.assertTrue(ping.endswith("· адреса за ним больше нет"), ping)
+        self.assertTrue(ping_held.startswith("был 23.11"), ping_held)
+        self.assertTrue(out["en"][3].startswith("answered ping at "), out["en"][3])
+        self.assertTrue(out["en"][3].endswith("· no longer holds an address"))
 
 
 if __name__ == "__main__":
