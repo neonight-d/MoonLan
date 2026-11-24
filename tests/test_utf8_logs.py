@@ -1,12 +1,16 @@
 """The log in UTF-8 whatever the locale (v0.8.9).
 
-In the systemd journal MoonLan's lines read `switch(es) \\u2014 on the
-map` and `RFC 3416 \\xa7…`: Python writes stderr in the locale's
-encoding with `backslashreplace`, and under an 8-bit locale (LANG=en_US
-is ISO-8859-1) an em dash becomes the text `\\u2014` and a section sign
-the byte 0xA7, which journalctl shows as `\\xa7`. PEP 538 and PEP 540
-act only on the C and POSIX locales. The service and diag now make
-their streams UTF-8 before the first line.
+Python writes stderr in the locale's encoding with `backslashreplace`,
+so under an 8-bit locale (LANG=en_US is ISO-8859-1) an em dash in
+MoonLan's lines becomes the text `\\u2014` and a section sign the byte
+0xA7, which journalctl shows as `\\xa7`. PEP 538 and PEP 540 act only
+on the C and POSIX locales. The service and diag make their streams
+UTF-8 before the first line.
+
+(v0.8.10: the `\\u2014` that started this came from copying a
+terminal's output, not from the journal, which runs under
+LANG=en_US.UTF-8 there. The case is real under LANG=en_US all the same,
+and the first test below shows it.)
 
 Each case runs in a process of its own with PYTHONIOENCODING=ascii,
 which is what such a locale amounts to — and which a test can set on

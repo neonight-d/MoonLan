@@ -1,11 +1,14 @@
 """The standard streams in UTF-8, whatever the locale (v0.8.9).
 
-The log said `switch(es) \\u2014 on the map` and `RFC 3416 \\xa7` in the
-systemd journal. Python opens stdout and stderr in the locale's
-encoding, with `backslashreplace` on stderr: under an 8-bit locale —
-`LANG=en_US`, which is ISO-8859-1 — an em dash cannot be written at all
-and comes out as the text `\\u2014`, and a section sign goes out as the
-single byte 0xA7, which journalctl, expecting UTF-8, shows as `\\xa7`.
+MoonLan's lines have "—" and "§" in them. Python opens stdout and
+stderr in the locale's encoding, with `backslashreplace` on stderr, so
+under an 8-bit locale — `LANG=en_US`, which is ISO-8859-1 — an em dash
+cannot be written at all and comes out as the text `\\u2014`, and a
+section sign goes out as the single byte 0xA7, which journalctl,
+expecting UTF-8, shows as `\\xa7`. That is reproduced with
+`LANG=en_US` (tests/test_utf8_logs.py). Under `LANG=en_US.UTF-8` the
+journal has the characters as they are; a `\\u2014` pasted from a
+terminal is not by itself a sign of this (v0.8.10).
 
 PEP 538 does not help there: it coerces only the C and POSIX locales to
 C.UTF-8, and PEP 540's UTF-8 mode switches itself on only for those two

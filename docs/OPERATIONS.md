@@ -64,14 +64,22 @@ of a system service). The same numbers are exposed as `open_fds` and
 ### The log in UTF-8 (v0.8.9)
 
 The log has "—" and "§" in it. Python writes its streams in the
-locale's encoding, and a system whose locale is not UTF-8 — `LANG=en_US`
-is ISO-8859-1 — turned them into `\u2014` and `\xa7` in the journal
-(the second a raw byte journalctl cannot show). Python's own remedies,
-PEP 538 and the UTF-8 mode of PEP 540, act only on the C and POSIX
-locales, and a unit file without `Environment=` takes whatever locale
-the system manager has (`systemctl show-environment`). Since v0.8.9 the
-service and `diag` switch their streams to UTF-8 themselves before the
-first line, so nothing needs to be set. The example unit also carries
+locale's encoding, so under a locale that is not UTF-8 — `LANG=en_US`
+is ISO-8859-1 — they would come out as `\u2014` and `\xa7` in the
+journal (the second a raw byte journalctl cannot show). Python's own
+remedies, PEP 538 and the UTF-8 mode of PEP 540, act only on the C and
+POSIX locales, and a unit file without `Environment=` takes whatever
+locale the system manager has (`systemctl show-environment`). Since
+v0.8.9 the service and `diag` switch their streams to UTF-8 themselves
+before the first line, so nothing needs to be set.
+
+If you see `\uXXXX` in the log, look at the journal itself first —
+`journalctl -u moonlan -n 20 | od -c | less`, or a screenshot of the
+terminal: copying text out of a terminal can spoil it in just this way
+on its own, Cyrillic along with it. Under `LANG=en_US.UTF-8` the
+journal has the characters as they are.
+
+The example unit also carries
 
 ```ini
 Environment=PYTHONUTF8=1

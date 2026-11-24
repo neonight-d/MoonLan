@@ -20,9 +20,9 @@ Group=<group>
 WorkingDirectory=/opt/moonlan
 ExecStart=/opt/moonlan/.venv/bin/python run.py
 # The log in UTF-8 under any system locale. Without it a non-UTF-8
-# locale (LANG=en_US, say) wrote "—" as \u2014 and "§" as \xa7 in the
-# journal. MoonLan makes its streams UTF-8 by itself since v0.8.9; this
-# line is the same from outside, for anything else Python prints.
+# locale (LANG=en_US, say) would write "—" as \u2014 and "§" as \xa7 in
+# the journal. MoonLan makes its streams UTF-8 by itself since v0.8.9;
+# this line is the same from outside, for anything else Python prints.
 Environment=PYTHONUTF8=1
 
 # Restart on crashes, but not on clean exit (Ctrl+C / systemctl stop)

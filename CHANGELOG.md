@@ -6,6 +6,19 @@ for before the next one started.
 
 Русская версия — [CHANGELOG_RU.md](CHANGELOG_RU.md).
 
+## v0.8.10 — 2026-11-24
+
+**Correction.** The v0.8.9 entry on UTF-8 logs says "—" and "§" came
+out as `\u2014` and `\xa7` in the systemd journal. They did not: the
+journal there runs under `LANG=en_US.UTF-8` and has "—" as it is; the
+`\u2014` came from copying a terminal's output, which spoiled the
+Cyrillic in the same paste. The fix stays — under a real 8-bit locale
+(`LANG=en_US`) the stream is spoiled just so, and that is reproduced —
+only the explanation was wrong. `moonlan/textio.py` and
+[OPERATIONS](docs/OPERATIONS.md) now say it as a condition, and tell
+you to look at the journal itself (`journalctl … | od -c` or a
+screenshot) before you believe a `\uXXXX`.
+
 ## v0.8.9 — 2026-11-24
 
 A long press that keeps its menu, alarm texts that stay true, ping and
