@@ -64,6 +64,31 @@ moonlan/server.py is the FastAPI boundary. It combines the latest topology state
 
 The /api/health endpoint is intentionally cheap, answers without sign-in, and says only that the process is up and which version it is. /api/status contains deeper operational state and needs a viewer.
 
+#### server.py, taken apart in stages (v0.8.12)
+
+server.py grew to nearly 5000 lines: the state of the process, 46 routes, the scan and polling loops, the building of the map, the cleanups and the lines the log opens with. It is being taken apart one stage per version, and each stage is accepted on one criterion: everything works as before — any visible difference is a bug.
+
+1. **v0.8.12:** moonlan/startup.py and moonlan/housekeeping.py — leaves with no state of their own.
+2. moonlan/runtime.py: the state of the process in one object, `rt`; the tests move onto it.
+3. moonlan/routes/: the routes, by module, through `rt`.
+4. moonlan/poller.py: the polling loops and the building of the map, through `rt`.
+5. `_build_map` split into steps, with a test of the order of its side effects.
+
+Where things are now:
+
+- **moonlan/startup.py** — what the start says, and the port that only redirects: `configure_logging`; `_log_config` with `_config_missing`, `_log_settings` and `_setting_problem`; `_log_public_url` and `_log_transport`; `_log_certificate` (`CERT_WARN_DAYS`), which returns the certificate it read for server.py to keep; `start_redirect_listener`.
+- **moonlan/housekeeping.py** — the cleanups (`purge_invalid_macs`, `purge_old_hosts`, `purge_journal`, `hide_confirmed_copies`, `purge_copies`, `drop_unpinned_positions`), the end of the certificate (`check_certificate_end`, `CERT_ALARM_DAYS`, `CERT_CHECK_SECONDS`), the leak watch's `resource_usage`, and `RESOURCE_LOG_SECONDS` and `CLEANUP_SECONDS`.
+- **moonlan/server.py** — the rest: the state of the process (the config, the database, the alarm engine, the certificate, the public address…), `lifespan`, the routes, the scan and polling loops and `_build_map`. The loops that run the cleanups (`periodic_cleanup`, `periodic_certificate_check`, `periodic_resource_log`) stay here until stage 4, and `purge_layout` until stage 3: it needs the helpers of the layout routes.
+
+The border, for this stage and every later one:
+
+- A module taken out of server.py **never imports moonlan.server** — not at the top, not inside a function, not by name. It imports only the modules below it: config, db, https, settings and so on.
+- **What it needs is given to it**, as parameters named after the server.py globals they stand for (`config`, `db`, `alarm_engine`, `public_url`…). The moved code is the old code word for word, comments included; a function that set a global returns the value instead. Its log is `logging.getLogger("moonlan")`, not `__name__`, so the log lines stay `moonlan: …`.
+- **server.py keeps a wrapper** of the same name and signature for every function that moved, and re-exports every constant. A wrapper reads the globals when it is called, so a test that patches `server.certificate` or replaces `server.db` works unchanged. The wrappers are temporary: stage 2 removes them.
+- A move is a commit of its own, with nothing else in it, so `git diff --color-moved` and `git blame -C -C` show the code as moved, not rewritten.
+
+tests/test_module_boundaries.py holds every module of the list `NEW_MODULES` to this: no import of moonlan.server, none loaded with it in a clean process, the "moonlan" logger, and every moved name still in server.py. A new stage adds its modules and names there.
+
 ### Sign-in and rights
 
 - moonlan/access.py is the rights table: every route of the app ("METHOD /path/template") and the least role it needs — public, signed_in, viewer, user, admin, accounts. A route missing from it is for administrators only; tests/test_access.py lists every route of the app and fails on any the table does not name, and tests/test_docs.py checks the table in docs/API.md against it.

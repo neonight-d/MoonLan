@@ -6,6 +6,42 @@ for before the next one started.
 
 Русская версия — [CHANGELOG_RU.md](CHANGELOG_RU.md).
 
+## v0.8.12 — 2026-11-26
+
+Internal: server.py, stage 1 — no visible changes. server.py has grown
+to nearly 5000 lines: 46 routes, more than 50 names at module level.
+It is taken apart one stage per version, so that what comes next —
+SNMPv3, later WMI/WinRM — does not land in the same file. Each stage is
+accepted on one criterion: everything works as before. The page, the
+API, the log lines and what the service does are those of v0.8.11.
+
+**moonlan/startup.py** — what the start says, and the port that only
+redirects: `configure_logging`, `_config_missing`, `_log_config`,
+`_setting_problem`, `_log_settings`, `_log_public_url`,
+`_log_transport`, `_log_certificate`, `start_redirect_listener`, and
+`CERT_WARN_DAYS`.
+
+**moonlan/housekeeping.py** — the cleanups, the end of the certificate
+and the leak watch: `purge_invalid_macs`, `purge_old_hosts`,
+`purge_journal`, `hide_confirmed_copies`, `purge_copies`,
+`drop_unpinned_positions`, `check_certificate_end`, `resource_usage`,
+and `CERT_ALARM_DAYS`, `CERT_CHECK_SECONDS`, `RESOURCE_LOG_SECONDS`,
+`CLEANUP_SECONDS`.
+
+The code moved word for word, comments included. What a function reads
+from the process it is now given, as parameters named after the
+server.py globals they stand for; `_log_certificate` returns the
+certificate it read instead of setting the global. server.py keeps a
+wrapper of the same name and signature for every function and
+re-exports the constants, so no test changed. The loops that run the
+cleanups and `purge_layout` stay in server.py for now.
+
+A new module never imports moonlan.server: `tests/test_module_boundaries.py`
+checks that, its logger ("moonlan", so the log lines are byte for byte
+the same) and every moved name still in server.py. docs/ARCHITECTURE.md
+has the map of the modules, the next four stages and the rules of the
+border.
+
 ## v0.8.11 — 2026-11-26
 
 A router on LACP: its own MACs, LLDP behind an aggregate, no false

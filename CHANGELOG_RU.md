@@ -6,6 +6,41 @@
 
 English version — [CHANGELOG.md](CHANGELOG.md).
 
+## v0.8.12 — 26.11.2026
+
+Внутреннее: server.py, этап 1 — без видимых изменений. `server.py`
+разросся почти до 5000 строк: 46 маршрутов, больше 50 имён на уровне
+модуля. Его разбирают по одному этапу за версию, чтобы следующее —
+SNMPv3, позже WMI/WinRM — не ложилось в тот же файл. Критерий приёмки
+у каждого этапа один: всё работает как раньше. Страница, API, строки
+лога и поведение сервиса — те же, что в v0.8.11.
+
+**moonlan/startup.py** — что говорит старт, и порт, который только
+перенаправляет: `configure_logging`, `_config_missing`, `_log_config`,
+`_setting_problem`, `_log_settings`, `_log_public_url`,
+`_log_transport`, `_log_certificate`, `start_redirect_listener` и
+`CERT_WARN_DAYS`.
+
+**moonlan/housekeeping.py** — чистки, срок сертификата и наблюдение за
+утечками: `purge_invalid_macs`, `purge_old_hosts`, `purge_journal`,
+`hide_confirmed_copies`, `purge_copies`, `drop_unpinned_positions`,
+`check_certificate_end`, `resource_usage` и `CERT_ALARM_DAYS`,
+`CERT_CHECK_SECONDS`, `RESOURCE_LOG_SECONDS`, `CLEANUP_SECONDS`.
+
+Код перенесён дословно, вместе с комментариями. Что функция берёт у
+процесса, она теперь получает параметрами с именами тех глобалов
+`server.py`, которые они заменяют; `_log_certificate` возвращает
+прочитанный сертификат, а не записывает глобал. В `server.py` для
+каждой функции осталась обёртка с тем же именем и сигнатурой, а
+константы реэкспортируются, поэтому ни один тест не менялся. Циклы,
+которые запускают чистки, и `purge_layout` пока остаются в `server.py`.
+
+Новый модуль никогда не импортирует `moonlan.server`: это проверяет
+`tests/test_module_boundaries.py`, вместе с логгером («moonlan», чтобы
+строки лога остались побайтно прежними) и тем, что каждое перенесённое
+имя по-прежнему есть в `server.py`. В docs/ARCHITECTURE.md — карта
+модулей, следующие четыре этапа и правила границы.
+
 ## v0.8.11 — 26.11.2026
 
 Маршрутизатор на LACP: свои MAC, LLDP за агрегатом, без ложной «копии
