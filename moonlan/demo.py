@@ -419,6 +419,12 @@ def _old_copies() -> list[str]:
     return copies
 
 
+def router_identities() -> list:
+    """What the routers of ROUTERS say about themselves (v0.8.11): none
+    of them answers yet."""
+    return []
+
+
 def _rand_mac(prefix: str = "00:4d:4c") -> str:
     return prefix + ":" + ":".join(f"{_rng.randint(0, 255):02x}" for _ in range(3))
 

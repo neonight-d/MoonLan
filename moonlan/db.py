@@ -424,6 +424,7 @@ class Database:
     def upsert_hosts(
         self, hosts: list[dict], confirm_scans: int = 1,
         hold: set[str] | None = None,
+        vouched: set[str] | None = None,
     ) -> list[str]:
         """Updates hosts after an FDB poll; returns the MACs CONFIRMED now.
 
@@ -446,9 +447,15 @@ class Database:
         holds: doing so replaced "sw2 port 1/3", which was true, with
         "sw0 Slot0/3", which was a guess — and the guess then became
         what the next scan remembered.
+
+        vouched are MACs a router of `routers:` reports as its own
+        (v0.8.11): confirmed at once, the way an IP confirms, and
+        quietly — no new_mac and not in what this returns. A router's
+        interface is not a new device in the network.
         """
         now = time.time()
         hold = hold or set()
+        vouched = vouched or set()
         confirmed: list[str] = []
         with self._lock, self._conn:
             for h in hosts:
@@ -483,6 +490,12 @@ class Database:
                 ).fetchone()
                 if row["confirmed"]:
                     continue
+                if h["mac"] in vouched:
+                    self._conn.execute(
+                        "UPDATE hosts SET confirmed = 1 WHERE mac = ?",
+                        (h["mac"],),
+                    )
+                    continue
                 if row["ip"]:
                     pass  # ARP vouches for it whatever else is true
                 elif h["mac"] in hold or row["seen_count"] < confirm_scans:
@@ -502,6 +515,48 @@ class Database:
             "INSERT INTO journal (ts, event, mac, details) VALUES (?, ?, ?, ?)",
             (ts, "new_mac", mac, details),
         )
+
+    def vouch_for(self, macs, held_after: int) -> list[dict]:
+        """MACs a router reports as its own, released from what the
+        damaged-copy rules did to them (v0.8.11): the mark of a copy is
+        cleared, and a record still unconfirmed is confirmed — quietly,
+        as upsert_hosts confirms `vouched`.
+
+        Returns what was released, {mac, was, sample}: was "copy" for a
+        record marked as a copy of `sample`, "held" for one seen in at
+        least `held_after` polls and still unconfirmed — held back as a
+        possible copy — and "new" for one simply seen too few times.
+        """
+        macs = sorted(set(macs))
+        released: list[dict] = []
+        if not macs:
+            return released
+        with self._lock, self._conn:
+            for start in range(0, len(macs), 500):
+                chunk = macs[start:start + 500]
+                marks = ",".join("?" for _ in chunk)
+                rows = self._conn.execute(
+                    "SELECT mac, corrupt_of, confirmed, seen_count "
+                    f"FROM hosts WHERE mac IN ({marks}) AND "
+                    "(corrupt_of <> '' OR confirmed = 0)",
+                    chunk,
+                ).fetchall()
+                for row in rows:
+                    if row["corrupt_of"]:
+                        was = "copy"
+                    elif row["seen_count"] >= held_after:
+                        was = "held"
+                    else:
+                        was = "new"
+                    released.append({
+                        "mac": row["mac"], "was": was,
+                        "sample": row["corrupt_of"] or "",
+                    })
+                    self._conn.execute(
+                        "UPDATE hosts SET corrupt_of = '', confirmed = 1 "
+                        "WHERE mac = ?", (row["mac"],),
+                    )
+        return released
 
     def confirm_hosts_with_ip(self) -> list[str]:
         """Confirms unconfirmed hosts ARP has given an IP.
@@ -897,6 +952,37 @@ class Database:
     ) -> None:
         """One node, moved by hand."""
         self.save_layout({node_id: {"x": x, "y": y, "pinned": pinned}})
+
+    def move_position(self, source: str, target: str) -> bool:
+        """The pinned position of `source` becomes `target`'s (v0.8.11):
+        a router drawn as one node where the operator had pinned another
+        of its MACs. The target's own row, if any, is replaced; the
+        source's goes, and the nodes placed around the source are placed
+        around the target. False — the source has no pinned position."""
+        now = time.time()
+        with self._lock, self._conn:
+            row = self._conn.execute(
+                "SELECT x, y FROM layout WHERE node_id = ? AND pinned = 1",
+                (source,),
+            ).fetchone()
+            if row is None:
+                return False
+            self._conn.execute(
+                "INSERT INTO layout (node_id, x, y, pinned, updated_at) "
+                "VALUES (?, ?, ?, 1, ?) "
+                "ON CONFLICT(node_id) DO UPDATE SET "
+                "x = excluded.x, y = excluded.y, pinned = 1, "
+                "updated_at = excluded.updated_at, anchor = NULL",
+                (target, row["x"], row["y"], now),
+            )
+            self._conn.execute(
+                "DELETE FROM layout WHERE node_id = ?", (source,)
+            )
+            self._conn.execute(
+                "UPDATE layout SET anchor = ? WHERE anchor = ?",
+                (target, source),
+            )
+        return True
 
     def forget_node_position(self, node_id: str) -> bool:
         """Forgets one node, and the offsets of the nodes around it: with

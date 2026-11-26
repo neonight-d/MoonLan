@@ -7679,7 +7679,7 @@ function noteDraft(nodeId) {
 function noteMeta(note) {
   if (note.source === "import") return fmt("noteImported", { date: fmtDate(note.updated_at) });
   return note.updated_by
-    ? fmt("noteChangedBy", { user: note.updated_by, time: fmtTime(note.updated_at) })
+    ? fmt("noteChangedBy", { user: actorName(note.updated_by), time: fmtTime(note.updated_at) })
     : fmt("noteChanged", { time: fmtTime(note.updated_at) });
 }
 
@@ -8339,6 +8339,10 @@ function showDetails(nodeId) {
         bridge.cap_known ? `${t("kind_" + (bridge.kind || "other"))} (${caps})`
         : t("capsUnknown")
       }</dd>
+      ${bridge.router_ip
+        ? html`<dt>${t("routerAddr")}</dt><dd>${addressLink(bridge.router_ip)}</dd>`
+        : ""}
+      ${routerInterfaces(bridge.router)}
       ${bridge.shares_port || bridge.external
         ? ""
         : html`<dt>${t("devicesBehindPort")}</dt><dd>${bridge.host_count ?? 0}</dd>`}
@@ -8455,6 +8459,7 @@ function showDetails(nodeId) {
       ${(host.lldp && (host.lldp.mgmt_ips || []).length > 1)
         ? html`<dt>${t("mgmtIp")}</dt><dd>${addressList(host.lldp.mgmt_ips)}</dd>`
         : ""}
+      ${routerInterfaces(host.router)}
       <dt>${t("lastReply")}</dt><dd>${fmtTime(host.last_ping_ok)}</dd>
       <dt>${t("lastSeenLabel")}</dt><dd>${fmtTime(host.last_seen)}</dd>
       ${host.from_saved
@@ -8549,6 +8554,25 @@ function addressList(addresses, limit) {
   const rest = list.slice(keep).map((a) => html`<li>${addressLink(a)}</li>`);
   return html`<ul class="addr-list">${shown}</ul><button type="button" class="addr-more">${
     fmt("andMore", { n: list.length - keep })}</button><ul class="addr-list addr-rest hidden">${rest}</ul>`;
+}
+
+/* "Router interfaces" (v0.8.11): the MACs a router of `routers:`
+   reports as its own, each by the name of the interface it belongs to
+   — "bond1 · 02:ee:… (on the map)" — and the MACs no switch table has
+   ever had, the router's other ports, in one line under them. Every
+   name a MAC goes by is in its tooltip: a bond's MAC is also its
+   members' and its VLANs'. */
+function routerInterfaces(router) {
+  if (!router || !(router.interfaces || []).length) return "";
+  const names = (i) => (i.names || []).join(", ") + (i.more ? ", …" : "");
+  const line = (i) => html`<li title="${names(i)}">${i.name} · ${i.mac}${
+    i.on_map ? html` <span class="muted on-map">(${t("routerIfaceOnMap")})</span>` : ""}</li>`;
+  const unmet = router.unmet || [];
+  return html`<dt>${t("routerIfaces")}</dt><dd><ul class="addr-list router-ifaces">${
+    router.interfaces.map(line)}${unmet.length
+    ? html`<li class="muted" title="${unmet.map((i) => i.name + " · " + i.mac).join("\n")}">${
+      plural("routerIfacesUnmet", unmet.length)}</li>`
+    : ""}</ul></dd>`;
 }
 
 /* What LLDP says about a device that is already a host on the map:
@@ -9511,6 +9535,15 @@ function renderJournal(events) {
   renderJournalMore();
 }
 
+/* Who did it, in words: an account by its name, the server console and
+   MoonLan itself (v0.8.11: a note or a pin that followed a router's
+   node) by what they are */
+function actorName(user) {
+  if (user === "@console") return t("evConsole");
+  if (user === "@moonlan") return t("evMoonlan");
+  return user;
+}
+
 /* One entry of the journal */
 function journalItem(ev) {
   const item = document.createElement("li");
@@ -9549,7 +9582,7 @@ function journalItem(ev) {
     const who = document.createElement("span");
     who.className = "ev-user";
     who.textContent = fmt("evBy", {
-      user: ev.user === "@console" ? t("evConsole") : ev.user,
+      user: actorName(ev.user),
     });
     item.append(who);
   }

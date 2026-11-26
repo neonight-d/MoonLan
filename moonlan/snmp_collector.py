@@ -25,6 +25,7 @@ from dataclasses import dataclass, field
 
 from . import lldp as lldp_mod
 from . import pinger
+from .routers import RouterIdentity, identity_from_tables
 from . import stp as stp_mod
 from .snmpval import as_octets, is_no_such
 
@@ -59,6 +60,7 @@ OID_PORT_IFINDEX = "1.3.6.1.2.1.17.1.4.1.2"   # dot1dBasePortIfIndex.<port>
 OID_FDB_PORT = "1.3.6.1.2.1.17.4.3.1.2"       # dot1dTpFdbPort.<6-byte MAC>
 OID_Q_FDB_PORT = "1.3.6.1.2.1.17.7.1.2.2.1.2" # dot1qTpFdbPort.<fdbId>.<6-byte MAC>
 OID_ARP_PHYS = "1.3.6.1.2.1.4.22.1.2"         # ipNetToMediaPhysAddress.<ifIndex>.<IP>
+OID_IP_AD_ENT_IF_INDEX = "1.3.6.1.2.1.4.20.1.2"  # ipAdEntIfIndex.<IP> = ifIndex
 # dot3adAggPortAttachedAggID.<member ifIndex> -> aggregate ifIndex (IEEE8023-LAG-MIB)
 OID_LAG_ATTACHED_ID = "1.2.840.10006.300.43.1.2.1.1.13"
 OID_PVID = "1.3.6.1.2.1.17.7.1.4.5.1.1"       # dot1qPvid.<bridge-port>
@@ -1639,3 +1641,46 @@ class SnmpCollector:
             arp[_fmt_mac(raw)] = ip
         log.info("ARP from %s: %d entries", host, len(arp))
         return arp
+
+    async def collect_router_identity(self, host: str) -> RouterIdentity:
+        """What a router of `routers:` says about itself (v0.8.11).
+
+        Its MACs (ifPhysAddress), what to call them (ifName; ifDescr for
+        an interface whose ifName is empty), the kind of each interface
+        (ifType) and the interface each of its addresses is on
+        (ipAdEntIfIndex: the index is the IP, the value its ifIndex).
+        Every table through _walk, with all it guards against. No MACs
+        — an empty identity, and the next three walks are not sent.
+        """
+        phys: dict[int, str] = {}
+        async for suffix, value in self._walk(host, OID_IF_PHYS_ADDRESS):
+            raw = as_octets(value)
+            if len(raw) == 6 and any(raw):
+                phys[suffix[0]] = _fmt_mac(raw)
+        if not phys:
+            return RouterIdentity(address=host)
+        names: dict[int, str] = {}
+        async for suffix, value in self._walk(host, OID_IF_NAME):
+            name = str(value).strip()
+            if name:
+                names[suffix[0]] = name
+        if any(if_index not in names for if_index in phys):
+            async for suffix, value in self._walk(host, OID_IF_DESCR):
+                name = str(value).strip()
+                if name and suffix[0] in phys and suffix[0] not in names:
+                    names[suffix[0]] = name
+        types: dict[int, int] = {}
+        async for suffix, value in self._walk(host, OID_IF_TYPE):
+            try:
+                types[suffix[0]] = int(value)
+            except (TypeError, ValueError):
+                continue
+        ip_index: dict[str, int] = {}
+        async for suffix, value in self._walk(host, OID_IP_AD_ENT_IF_INDEX):
+            if len(suffix) != 4:
+                continue
+            try:
+                ip_index[".".join(str(octet) for octet in suffix)] = int(value)
+            except (TypeError, ValueError):
+                continue
+        return identity_from_tables(host, phys, names, types, ip_index)

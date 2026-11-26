@@ -446,6 +446,10 @@ main { flex: 1; display: flex; min-height: 0; position: relative; }
 #details dd { margin: 2px 0 0; font-family: ui-monospace, monospace; word-break: break-all; }
 #details dd .vendor { word-break: normal; overflow-wrap: anywhere; }
 #details dd .muted { color: var(--text-dim); font-family: inherit; }
+/* "bond1 · 02:ee:… (on the map)": the mark stays whole, and the line of
+   the MACs never met wraps between words, not letters (v0.8.11) */
+#details .router-ifaces .on-map { white-space: nowrap; }
+#details .router-ifaces li.muted { word-break: normal; overflow-wrap: anywhere; }
 #details dd .hint-line code { font-family: ui-monospace, monospace; }
 /* ---------- event journal ---------- */
 

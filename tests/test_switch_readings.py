@@ -158,6 +158,11 @@ class StubCollector:
     async def collect_arp(self, host: str) -> dict[str, str]:
         return {QUIET_MAC: QUIET}
 
+    async def collect_router_identity(self, host: str):
+        # the router answers no interface table (v0.8.11): ARP alone
+        from moonlan.routers import RouterIdentity
+        return RouterIdentity(address=host)
+
     async def collect(self, host: str) -> SwitchData:
         if host in self.silent:
             return SwitchData(ip=host)

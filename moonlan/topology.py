@@ -973,6 +973,22 @@ def detect_bridges(
     )
 
 
+def lldp_metadata(device: dict) -> dict:
+    """What a host card shows of the LLDP neighbour the host is: a
+    neighbour that is no bridge gets no node, and its name goes onto
+    the host it belongs to."""
+    return {
+        "sys_name": device["name"] if device["name"] != device["chassis_id"]
+        else "",
+        "sys_desc": device["sys_desc"],
+        "port_id": device["remote_port"],
+        "mgmt_ips": device["mgmt_ips"],
+        "capabilities": device["capabilities"],
+        "cap_known": device["cap_known"],
+        "kind": device["kind"],
+    }
+
+
 def normalized_fdb(switches: list[SwitchData]) -> dict[str, dict[str, int]]:
     """FDB per switch with aggregate members mapped to the aggregate.
 
@@ -2350,16 +2366,7 @@ def build_topology(
         )
         if host is None:
             continue
-        host["lldp"] = {
-            "sys_name": device["name"] if device["name"] != device["chassis_id"]
-            else "",
-            "sys_desc": device["sys_desc"],
-            "port_id": device["remote_port"],
-            "mgmt_ips": device["mgmt_ips"],
-            "capabilities": device["capabilities"],
-            "cap_known": device["cap_known"],
-            "kind": device["kind"],
-        }
+        host["lldp"] = lldp_metadata(device)
         attached += 1
     if bridges:
         log.info(

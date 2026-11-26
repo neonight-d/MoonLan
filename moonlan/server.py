@@ -29,6 +29,12 @@ from .alarms import AlarmEngine
 from .config import Config, load_config, parse_uplink_ports
 from .db import Database
 from .notify import Notifier
+from .routers import (
+    RouterIdentity,
+    card as router_card,
+    own_macs as router_own_macs,
+    place as place_routers,
+)
 from .textio import use_utf8
 from .snmp_collector import (
     READING_FORMAT,
@@ -48,6 +54,7 @@ from .topology import (
     TopologyState,
     build_topology,
     group_beyond_trunk,
+    lldp_metadata,
     port_name,
     suspect_uplink_ports,
 )
@@ -488,11 +495,15 @@ async def run_scan() -> None:
                     result = SwitchData(ip=ip)
                 results.append((ip, result))
         collected = [_settle(ip, result, now) for ip, result in results]
+        identities: list[RouterIdentity] = []
         if config.demo:
             ip_to_mac = {ip: mac for mac, ip in demo.SWITCH_ARP.items()}
+            identities = demo.router_identities()
         else:
             if config.routers:
-                arp = await collect_arp(collector)
+                arp, identities = await asyncio.gather(
+                    collect_arp(collector), collect_identities(collector)
+                )
             ip_to_mac = {ip: mac for mac, ip in arp.items()}
         # The MAC of the switch's management IP is also its MAC:
         # neighbors see the switch under it in their FDB tables
@@ -501,7 +512,7 @@ async def run_scan() -> None:
             if mac:
                 sw.own_macs.add(mac)
         over_budget = [sw.ip for sw in collected if sw.over_budget]
-        await _build_map(collected, arp, observe=True)
+        await _build_map(collected, arp, observe=True, identities=identities)
     finally:
         state.scan_ended(over_budget)
 
@@ -634,7 +645,8 @@ def _stub_switches(
 
 
 async def _build_map(
-    collected: list[SwitchData], arp: dict[str, str], observe: bool
+    collected: list[SwitchData], arp: dict[str, str], observe: bool,
+    identities: list[RouterIdentity] | None = None,
 ) -> None:
     """The map from what `collected` holds, and — when `observe` — the
     inventory, the journal and the alarms from what this scan saw.
@@ -642,6 +654,10 @@ async def _build_map(
     `observe=False` is the start, drawing the saved readings: the map
     is built the same way, so it is the same map, and nothing is
     written down — no sighting, no event, no alarm raised or cleared.
+
+    `identities` are what the routers of `routers:` said about
+    themselves in this scan (v0.8.11, see routers.py); none at the
+    start, where there is no ARP either.
     """
     global first_scan_done, fdb_macs, prev_pseudo_ports
     over_budget = [sw.ip for sw in collected if sw.over_budget]
@@ -679,6 +695,14 @@ async def _build_map(
     # the database by port name
     if observe:
         await _retire_port_names(collected)
+    # A router's own MACs vouch for themselves the way an IP from ARP
+    # does (v0.8.11): never a damaged copy, never held back. What the
+    # copy rules did to them before is undone here, before anything
+    # below reads the database.
+    identities = [identity for identity in identities or () if identity]
+    own = router_own_macs(identities)
+    if observe and own:
+        await _release_router_macs(own)
     # A MAC has to be seen more than once before it counts as a
     # device (unless ARP vouches for it); the verdict is needed
     # before the topology so that unconfirmed addresses stay out of
@@ -701,7 +725,7 @@ async def _build_map(
             for mac in sw.fdb
         },
         confirm_scans,
-    )
+    ) - set(own)
     # Damaged copies of a MAC are looked for among the addresses the
     # database has not accepted, and measured against the ones it
     # had accepted BEFORE this poll (v0.8.5). The projection above
@@ -709,7 +733,7 @@ async def _build_map(
     # in it — it is about to be confirmed — and it used to be taken
     # for a sample and confirmed. An empty database is the initial
     # inventory, as above: nothing in it to be a copy of.
-    with_ip = set(arp)
+    with_ip = set(arp) | set(own)
     grace = config.host_grace_hours * 3600
     copy_candidates = corruption.candidates(
         {mac for sw in collected if sw.reachable for mac in sw.fdb},
@@ -830,12 +854,14 @@ async def _build_map(
         new_macs = await asyncio.to_thread(
             db.upsert_hosts, observed + seen_nowhere, confirm_scans,
             suspect_macs if config.filter_suspect_macs else set(),
+            set(own),
         )
         await asyncio.to_thread(demo.enrich_db, db, hosts)
     else:
         new_macs = await asyncio.to_thread(
             db.upsert_hosts, observed + seen_nowhere, confirm_scans,
             suspect_macs if config.filter_suspect_macs else set(),
+            set(own),
         )
         if arp:
             # ARP knows devices no switch port ever showed (behind a
@@ -865,7 +891,9 @@ async def _build_map(
             log.info("New MACs confirmed: %d", len(new_macs))
         # copies confirmed before v0.8.5 held them back, now that this
         # poll's sightings and addresses are written
-        await hide_confirmed_copies()
+        await hide_confirmed_copies(set(own))
+        # an ARP answer never makes a router's interface a new device
+        new_macs = [mac for mac in new_macs if mac not in own]
     unconfirmed = await asyncio.to_thread(db.unconfirmed_macs)
     if unconfirmed and observe:
         log.info(
@@ -886,12 +914,27 @@ async def _build_map(
     fdb_macs = {h["mac"] for h in hosts}
     if observe:
         await _release_unconfirmed_ips(db_rows)
+    # One node per router of `routers:` (v0.8.11): one of its MACs, or
+    # the LLDP bridge it is, and every other MAC of its drawn as that
+    # node — on the same port, elsewhere, or only in the database
+    placement = place_routers(
+        identities, hosts, bridges,
+        topo_info.get("other_devices", []) + topo_info.get("unidentified", []),
+        _remembered_router_macs(
+            own, db_rows, {sw.ip for sw in collected if sw.reachable},
+            fdb_macs | unconfirmed,
+        ),
+    )
+    _merge_router_macs(placement, hosts, bridges)
     # a record on an empty node has no port to be drawn at
     hosts, offline_groups, unlocated, trunk_groups = _assemble_hosts(
         hosts, db_rows, pseudo_switches,
         {sw.ip for sw in collected if sw.reachable},
         unconfirmed,
-        {h["mac"]: h["merged_into"] for h in hosts if h.get("merged_into")},
+        {
+            **placement.merged,
+            **{h["mac"]: h["merged_into"] for h in hosts if h.get("merged_into")},
+        },
         _nodes_on_port(bridges, pseudo_switches),
         uplink_only,
         topo_info.get("trunk_names", {}),
@@ -945,13 +988,16 @@ async def _build_map(
         bridge["known"] = _is_known_bridge(bridge)
     _merge_bridge_identity(bridges, hosts, db_rows)
     # the address the operator reaches a router at, for the caption
-    router_ips = _router_addresses(arp)
+    router_ips = _router_addresses(arp, identities)
     for host in hosts:
         if host["mac"] in router_ips:
             host["router_ip"] = router_ips[host["mac"]]
     for bridge in bridges:
         if bridge["chassis_id"] in router_ips:
             bridge["router_ip"] = router_ips[bridge["chassis_id"]]
+    _mark_router_nodes(placement, hosts, bridges, db_rows)
+    if observe:
+        await _router_nodes_take_over(placement)
     # Ports that look like a way out but are not configured as one.
     # Addresses are only known once the DB has been merged in, so
     # this happens here rather than inside build_topology.
@@ -1333,7 +1379,9 @@ def _infrastructure() -> set[str]:
     return set(config.switches) | set(config.routers)
 
 
-def _router_addresses(arp: dict[str, str]) -> dict[str, str]:
+def _router_addresses(
+    arp: dict[str, str], identities: list[RouterIdentity] | None = None,
+) -> dict[str, str]:
     """MAC -> the address config.routers actually reaches it at.
 
     A router announces a management address per VLAN interface — the
@@ -1341,12 +1389,177 @@ def _router_addresses(arp: dict[str, str]) -> dict[str, str]:
     returns is as likely to be a segment gateway as the address anyone
     uses. The one in `routers:` is the one the operator types, so that
     is what goes under the node's name.
+
+    Every MAC a router reports as its own is that router (v0.8.11). ARP
+    is what is left when it reports nothing: a router's own addresses
+    are not in its own ARP table, only in another router's.
     """
-    routers = set(config.routers)
-    found = {mac: ip for mac, ip in arp.items() if ip in routers}
+    found = {
+        mac: identity.address
+        for mac, identity in router_own_macs(identities or ()).items()
+    }
+    listed = set(config.routers)
+    for mac, ip in arp.items():
+        if ip in listed:
+            found.setdefault(mac, ip)
     if config.demo:
-        found.update(demo.ROUTER_ADDRESSES)
+        for mac, ip in demo.ROUTER_ADDRESSES.items():
+            found.setdefault(mac, ip)
     return found
+
+
+async def _release_router_macs(own: dict[str, RouterIdentity]) -> None:
+    """A router's own MACs, out of what the damaged-copy rules did to
+    them: the mark of a copy cleared, a record held back confirmed. One
+    INFO line for what was undone; a record that was only new is
+    confirmed without one."""
+    released = await asyncio.to_thread(
+        db.vouch_for, set(own), max(config.new_host_confirm_scans, 1)
+    )
+    undone = [r for r in released if r["was"] != "new"]
+    if not undone:
+        return
+    log.info(
+        "Own MACs of routers in routers: are not damaged copies, and are "
+        "devices now: %s",
+        "; ".join(
+            f"{r['mac']} ({own[r['mac']].name(r['mac'])} of "
+            f"{own[r['mac']].address}, "
+            + (
+                f"was marked a copy of {r['sample']}" if r["was"] == "copy"
+                else "was held back as a possible copy"
+            ) + ")"
+            for r in undone
+        ),
+    )
+
+
+def _remembered_router_macs(
+    own: dict[str, RouterIdentity], db_rows: dict[str, dict],
+    switch_ips: set[str], drawn: set[str],
+) -> dict[str, dict]:
+    """The own MACs of routers the map would draw out of the grace
+    window — the records _assemble_hosts puts on the map grey — as
+    mac -> {switch, port, last_seen}. `drawn` are the MACs this scan
+    has already (and the unconfirmed ones)."""
+    grace = config.host_grace_hours * 3600
+    now = time.time()
+    remembered: dict[str, dict] = {}
+    for mac in own:
+        row = db_rows.get(mac)
+        if row is None or mac in drawn:
+            continue
+        if row["switch_ip"] not in switch_ips or not row["port"]:
+            continue
+        if grace > 0 and now - row["last_seen"] < grace:
+            remembered[mac] = {
+                "switch": row["switch_ip"], "port": row["port"],
+                "last_seen": row["last_seen"],
+            }
+    return remembered
+
+
+def _merge_router_macs(placement, hosts: list[dict], bridges: list[dict]) -> None:
+    """This scan's hosts that are a router's MAC other than its node:
+    drawn as the node. A bridge that is the router no longer counts
+    them among the devices behind it — they are the bridge."""
+    by_id = {bridge["id"]: bridge for bridge in bridges}
+    for host in hosts:
+        target = placement.merged.get(host["mac"])
+        if not target or host.get("merged_into"):
+            continue
+        host["merged_into"] = target
+        bridge = by_id.get(target)
+        if (
+            bridge is not None and bridge.get("host_count")
+            and host.get("via") == target
+        ):
+            bridge["host_count"] -= 1
+
+
+def _mark_router_nodes(
+    placement, hosts: list[dict], bridges: list[dict],
+    db_rows: dict[str, dict],
+) -> None:
+    """The node of each router learns it is one: its address, its
+    interfaces for the card, and — for a host — the LLDP neighbour that
+    is the router on its port, whatever chassis ID that one sent."""
+    by_mac = {host["mac"]: host for host in hosts}
+    by_id = {bridge["id"]: bridge for bridge in bridges}
+    for node in placement.nodes:
+        identity = node.identity
+        target = by_id.get(node.node_id) if node.is_bridge else by_mac.get(node.mac)
+        if target is None:
+            continue
+        target["router_ip"] = identity.address
+        target["router"] = router_card(
+            identity, node.mac, node.seen, identity.macs & set(db_rows),
+        )
+        if node.lldp is not None and not node.is_bridge:
+            target["lldp"] = lldp_metadata(node.lldp)
+
+
+# who the journal says moved a note or a pin that followed a router's
+# node: MoonLan itself, worded by the page like "@console"
+MOONLAN_ACTOR = "@moonlan"
+
+
+async def _router_nodes_take_over(placement) -> None:
+    """A note or a pin on a router's MAC now drawn as its node goes to
+    the node, once (v0.8.11).
+
+    The operator named and pinned the MAC that was on the map; the
+    router is drawn as another one now. Only when the node has none of
+    its own: a node with its own note keeps it, and the note of the
+    merged MAC goes to "Notes without a node" after notes.MISSING_SCANS
+    scans, as any note whose node is gone. Journalled as a note moved
+    and a node pinned by hand are, by MoonLan.
+    """
+    if not placement.nodes:
+        return
+    layout = await asyncio.to_thread(db.layout)
+    stored = await asyncio.to_thread(db.notes)
+    for node in placement.nodes:
+        sources = [
+            "host:" + mac for mac, target in sorted(placement.merged.items())
+            if target == node.node_id
+        ]
+        if node.node_id not in stored:
+            noted = [key for key in sources if key in stored]
+            if noted:
+                # the one written last, if the operator wrote several
+                source = max(noted, key=lambda key: stored[key]["updated_at"])
+                await asyncio.to_thread(
+                    db.move_note, source, node.node_id, MOONLAN_ACTOR,
+                    time.time(),
+                )
+                details = {"from": source, "to": node.node_id}
+                await asyncio.to_thread(
+                    db.add_event, time.time(), "note_moved", node.node_id,
+                    json.dumps(details), MOONLAN_ACTOR,
+                )
+                log.info(
+                    "Note moved from %s to %s by MoonLan: router %s is "
+                    "drawn as %s now", source, node.node_id,
+                    node.identity.address, node.node_id,
+                )
+        if not (layout.get(node.node_id) or {}).get("pinned"):
+            pinned = [key for key in sources if (layout.get(key) or {}).get("pinned")]
+            if pinned:
+                source = max(pinned, key=lambda key: layout[key]["updated_at"] or 0)
+                if await asyncio.to_thread(db.move_position, source, node.node_id):
+                    await asyncio.to_thread(
+                        db.add_event, time.time(), "layout_pinned", "",
+                        json.dumps({
+                            "n": 1, "ids": [node.node_id], "from": source,
+                        }),
+                        MOONLAN_ACTOR,
+                    )
+                    log.info(
+                        "Pinned position moved from %s to %s by MoonLan: "
+                        "router %s is drawn as %s now", source,
+                        node.node_id, node.identity.address, node.node_id,
+                    )
 
 
 def _merge_bridge_identity(
@@ -1943,6 +2156,63 @@ async def collect_arp(collector: SnmpCollector) -> dict[str, str]:
     for table in tables:  # on conflict the last entry wins
         merged.update(table)
     return merged
+
+
+# routers of `routers:` whose empty identity has been reported, and
+# the MACs of the last identity of each — a line when it changes, not
+# one per scan
+_identity_reported: dict[str, frozenset[str]] = {}
+
+
+async def collect_identities(collector: SnmpCollector) -> list[RouterIdentity]:
+    """What each router of `routers:` says about itself (v0.8.11).
+
+    A router that does not answer the tables has an empty identity, and
+    its MACs are known through ARP alone, as before. That is said once
+    at INFO, and so is the identity when it first arrives or changes —
+    not on every scan.
+    """
+    identities = await asyncio.gather(
+        *(collector.collect_router_identity(ip) for ip in config.routers),
+        return_exceptions=True,
+    )
+    result: list[RouterIdentity] = []
+    for ip, identity in zip(config.routers, identities):
+        if isinstance(identity, BaseException):
+            log.warning(
+                "Router %s: reading its interfaces raised — its MACs are "
+                "known through ARP alone in this scan", ip,
+                exc_info=identity,
+            )
+            identity = RouterIdentity(address=ip)
+        _report_identity(identity)
+        result.append(identity)
+    return result
+
+
+def _report_identity(identity: RouterIdentity) -> None:
+    """One INFO line when a router's identity appears, changes or goes."""
+    macs = frozenset(identity.macs)
+    if _identity_reported.get(identity.address) == macs:
+        return
+    _identity_reported[identity.address] = macs
+    if not identity:
+        log.info(
+            "Router %s did not answer ifPhysAddress: its own MACs are known "
+            "only through ARP, as before v0.8.11 (a router's own addresses "
+            "are not in its ARP table, so those MACs have no IP and may be "
+            "taken for damaged copies). Said once, until it answers.",
+            identity.address,
+        )
+        return
+    log.info(
+        "Router %s: %d MAC(s) of its own — %s; %s",
+        identity.address, len(macs), identity.describe(),
+        f"{identity.address} is on {identity.name(identity.primary)}"
+        if identity.primary else
+        f"which interface {identity.address} is on is not known "
+        "(no ipAdEntIfIndex)",
+    )
 
 
 # mac -> unix time of the last reverse DNS attempt
@@ -2914,7 +3184,7 @@ def _marked_copies(db_rows: dict[str, dict]) -> set[str]:
     return {mac for mac, row in db_rows.items() if row.get("corrupt_of")}
 
 
-async def hide_confirmed_copies() -> None:
+async def hide_confirmed_copies(vouched: set[str] | None = None) -> None:
     """Damaged copies the database confirmed before v0.8.5 held them
     back: marked, off the map from this moment, and deleted at the next
     daily cleanup. One journal entry per batch — the copies of one
@@ -2922,7 +3192,8 @@ async def hide_confirmed_copies() -> None:
 
     At the start and after every scan. Cheap: confirmed records that
     never had an address are few. With filter_suspect_macs off nothing
-    is marked: that is the choice to draw the damage.
+    is marked: that is the choice to draw the damage. `vouched` are the
+    MACs routers reported as their own: never marked.
     """
     if not config.filter_suspect_macs:
         return
@@ -2933,6 +3204,8 @@ async def hide_confirmed_copies() -> None:
         if node_id.startswith("host:")
         and (note.get("label") or note.get("note"))
     }
+    # a router's own MACs are never copies (v0.8.11)
+    noted |= vouched or set()
     batches = corruption.confirmed_copies(
         rows, noted, config.thresholds.corruption_hamming_bits,
         config.thresholds.corruption_macs_threshold,
