@@ -8,3 +8,18 @@ before the static page. The routes that need the poller —
 poller leaves it. Nothing here imports moonlan.server: what a route
 needs of the process it reads from rt (runtime.py) when it runs.
 """
+
+# server.py includes the router of each, in its own order
+from . import system  # noqa: F401
+
+
+def include(app, router) -> None:
+    """The routes of a module, each its own entry in app.routes.
+
+    Not app.include_router: an included router is one opaque entry in
+    app.routes, and the guard — like the test that every route is in
+    the rights table — has to see each route by its own path (so
+    signin.add_routes adds its routes to the app itself). The routes are
+    the router's own, made by its decorators; the order is kept.
+    """
+    app.router.routes.extend(router.routes)

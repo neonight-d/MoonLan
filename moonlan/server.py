@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import asyncio
 import functools
-import hashlib
 import json
 import logging
 import socket
@@ -13,16 +12,14 @@ import time
 import types
 from collections import Counter
 from contextlib import asynccontextmanager
-from pathlib import Path
 
 from fastapi import FastAPI, Query, Request
-from fastapi.responses import HTMLResponse, JSONResponse, Response
-from fastapi.staticfiles import StaticFiles
+from fastapi.responses import JSONResponse, Response
 from pydantic import BaseModel
 
 from . import (
-    __version__, about, corruption, counters, demo, housekeeping, https,
-    loopdetect, menu, notes, notify, oui, pinger, probes, settings, signin,
+    __version__, corruption, counters, demo, housekeeping, https, loopdetect,
+    menu, notes, notify, oui, pinger, probes, routes, settings, signin,
     startup, stp, subscriptions,
 )
 from .alarms import AlarmEngine
@@ -53,6 +50,13 @@ from .routers import (
     place as place_routers,
 )
 from .routes.common import _copy_samples, _refuse
+from .routes.system import (  # noqa: F401 (moved)
+    STARTED_AT,
+    VERSIONED_ASSETS,
+    WEB_DIR,
+    RevalidatedStaticFiles,
+    api_about,
+)
 from .runtime import FIELDS, rt
 from .startup import CERT_WARN_DAYS  # noqa: F401 (moved)
 from .snmp_collector import (
@@ -113,7 +117,6 @@ class _StrictModule(types.ModuleType):
 
 sys.modules[__name__].__class__ = _StrictModule
 
-WEB_DIR = Path(__file__).resolve().parent.parent / "web"
 
 rt.state = TopologyState()
 rt.config: Config = load_config()
@@ -147,12 +150,6 @@ rt.transport = https.transport_mode(
     rt.config.listen_tls_cert, rt.trusted_proxies, rt.public_url
 )
 rt.sign_in = signin.SignIn(rt.accounts, rt.db, rt.config.auth, rt.public_url, rt.transport)
-# For About (v0.8.1): when this process started, and the commit it was
-# started from — read once, as a pull after the start changes .git and
-# not the code that is running
-STARTED_AT = time.time()
-BUILD = about.build_hash()
-COPYRIGHT = about.copyright_line(about.license_text())
 
 # Ping state of switches (they are not in the hosts table): ip -> {ping_up, last_ping_ok}
 rt.switch_ping: dict[str, dict] = {}
@@ -2886,46 +2883,9 @@ if rt.config.listen_hsts_max_age:
     # outermost, so the refusals the guard answers carry it too
     app.add_middleware(https.Hsts, max_age=rt.config.listen_hsts_max_age)
 signin.add_routes(app, rt.sign_in)
-
-
-@app.get("/api/health")
-async def api_health() -> dict:
-    """For monitoring from outside, without signing in: is it up, and
-    which version. Nothing about the network."""
-    return {"status": "ok", "version": __version__}
-
-
-@app.get("/api/about")
-async def api_about() -> dict:
-    """What MoonLan is, which build, what it runs on and with which
-    versions, and the IEEE register. The server itself — Python, the
-    system, uptime, sign-in, HTTPS — only to an administrator, or to
-    everybody while sign-in is off, when everybody is one."""
-    on = await asyncio.to_thread(rt.sign_in.sign_in_on)
-    who = signin.principal()
-    body = {
-        "version": __version__,
-        "build": BUILD,
-        "copyright": COPYRIGHT,
-        "components": about.components(),
-        "ieee": {
-            "loaded": rt.vendors.loaded,
-            "date": rt.vendors.oldest(),
-            "command": oui.UPDATE_COMMAND,
-        },
-    }
-    if not on or (who is not None and who.role == "admin"):
-        body["server"] = about.server(STARTED_AT, on, rt.transport)
-    return body
-
-
-@app.get("/api/about/license")
-async def api_about_license() -> Response:
-    """The LICENSE file, as text: MIT asks for it to go with every copy"""
-    text = await asyncio.to_thread(about.license_text)
-    if text is None:
-        return _refuse("no_license", 404)
-    return Response(text, media_type="text/plain; charset=utf-8")
+# The routes by subject (routes/), in this order, each its own entry
+# in app.routes (routes.include says why); the static page stays last
+routes.include(app, routes.system.router)
 
 
 # ---------- Settings (v0.8.4) ----------
@@ -4523,54 +4483,6 @@ async def api_status() -> dict:
         "open_fds": open_fds,
         "rss_kb": rss_kb,
     }
-
-
-# The page's own files, addressed in index.html by what is in them
-VERSIONED_ASSETS = ("app.js", "i18n.js", "style.css")
-
-
-def _index_html() -> str:
-    """index.html with each of the page's files named by its content.
-
-    `no-cache` below only helps a browser that has been told it: a
-    copy cached before this header existed carries no such instruction
-    and is still "fresh" by the browser's own reckoning. After the
-    upgrade that introduced the header, a page went on running with a
-    new app.js and an old i18n.js — and showed translation keys where
-    the journal should have said "Placed by hand". A file whose content
-    changes gets a new address, and no cache has a copy of that.
-    """
-    html = (WEB_DIR / "index.html").read_text(encoding="utf-8")
-    for name in VERSIONED_ASSETS:
-        digest = hashlib.sha1((WEB_DIR / name).read_bytes()).hexdigest()[:12]
-        html = html.replace(f'"{name}"', f'"{name}?v={digest}"')
-    return html
-
-
-@app.get("/", include_in_schema=False)
-@app.get("/index.html", include_in_schema=False)
-async def index_page() -> HTMLResponse:
-    return HTMLResponse(
-        await asyncio.to_thread(_index_html),
-        headers={"Cache-Control": "no-cache"},
-    )
-
-
-class RevalidatedStaticFiles(StaticFiles):
-    """The web UI, which the browser must re-check on every load.
-
-    Served without a Cache-Control header, a file last modified weeks
-    ago is "fresh" by the browser's own reckoning for days: after an
-    upgrade the page went on running the previous app.js, and a fix to
-    the map reached nobody until their cache happened to expire.
-    `no-cache` is not "do not cache" — the browser keeps its copy and
-    asks each time, and an unchanged file costs a 304.
-    """
-
-    async def get_response(self, path: str, scope):
-        response = await super().get_response(path, scope)
-        response.headers["Cache-Control"] = "no-cache"
-        return response
 
 
 # The static web UI comes last so it does not shadow /api/*
