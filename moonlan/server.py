@@ -14,7 +14,7 @@ from collections import Counter
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Query, Request
-from fastapi.responses import JSONResponse, Response
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
 from . import (
@@ -50,6 +50,24 @@ from .routers import (
     place as place_routers,
 )
 from .routes.common import _copy_samples, _refuse
+from .routes.layout import (  # noqa: F401 (moved)
+    LAYOUT_EVENT_IDS,
+    LayoutBody,
+    NodePosition,
+    Offset,
+    _layout_anchors,
+    _layout_node_ids,
+    api_clear_layout,
+    api_delete_node_position,
+    api_layout,
+    api_patch_positions,
+    api_put_layout,
+)
+from .routes.notes import (  # noqa: F401 (moved)
+    _mac_directory,
+    _noted_node_ids,
+    _stand_in,
+)
 from .routes.system import (  # noqa: F401 (moved)
     STARTED_AT,
     VERSIONED_ASSETS,
@@ -2887,6 +2905,8 @@ signin.add_routes(app, rt.sign_in)
 # in app.routes (routes.include says why); the static page stays last
 routes.include(app, routes.system.router)
 routes.include(app, routes.settings.router)
+routes.include(app, routes.notes.router)
+routes.include(app, routes.layout.router)
 
 
 @app.get("/api/topology")
@@ -2984,12 +3004,6 @@ def _attach_notes(topo: dict, rows: dict[str, dict]) -> None:
             group = {**group, "note": notes.public(row), "note_key": key}
         groups.append(group)
     topo["offline_groups"] = groups
-
-
-def _stand_in(offline_id: str) -> str:
-    """The switch without SNMP an offline group stands in for: the same
-    switch and port"""
-    return "pseudo:" + offline_id[len("offline:"):]
 
 
 @app.get("/api/switch/{ip}/ports")
@@ -3458,103 +3472,6 @@ async def api_patch_host(mac: str, body: HostPatch):
     return {"mac": mac, "monitored": body.monitored}
 
 
-class NodePosition(BaseModel):
-    x: float
-    y: float
-    pinned: bool | None = None
-
-
-class Offset(BaseModel):
-    x: float
-    y: float
-
-
-class LayoutBody(BaseModel):
-    nodes: dict[str, NodePosition] = {}
-    # Store only nodes that have no position yet, and say what the
-    # others already have. What v0.7.2's automatic save used; kept for
-    # a page still running that script.
-    only_new: bool = False
-    # pinned node -> {node hanging directly off it -> its offset}: how
-    # the groups and switches around a pinned node stood when a person
-    # placed it. The whole set for that anchor; it replaces the last.
-    neighbours: dict[str, dict[str, Offset]] = {}
-
-
-def _layout_anchors() -> dict[str, str]:
-    """node id -> the node it hangs off, as the map draws it.
-
-    The page reads this off the edges it has just built (the first edge
-    into a node); this builds the same edges in the same order from the
-    same topology. Needed here to tell whether an offset recorded around
-    a pinned node still describes the map: a device that moved to
-    another switch has nothing to do with the old one.
-    """
-    topo = rt.state.as_dict()
-    anchors: dict[str, str] = {}
-    for link in topo["links"]:
-        anchors.setdefault("sw:" + link["b"], "sw:" + link["a"])
-    for pseudo in topo.get("pseudo_switches") or ():
-        anchors.setdefault(pseudo["id"], "sw:" + pseudo["switch"])
-    for bridge in topo.get("bridges") or ():
-        anchors.setdefault(bridge["id"], "sw:" + bridge["switch"])
-    for key in ("external_networks", "trunk_groups", "offline_groups"):
-        for group in topo.get(key) or ():
-            anchors.setdefault(
-                group["id"], group.get("via") or "sw:" + group["switch"]
-            )
-    for host in topo["hosts"]:
-        if host.get("merged_into"):
-            continue
-        anchors.setdefault(
-            "host:" + host["mac"], host.get("via") or "sw:" + host["switch"]
-        )
-    return anchors
-
-
-def _current_offsets(saved: dict[str, dict]) -> dict[str, dict]:
-    """The saved layout without offsets that no longer describe the map.
-
-    An offset is kept while its anchor is pinned and — for a node on
-    the map — while the node still hangs off that anchor. Otherwise it
-    is left out, and the node is laid out from the pinned ones like
-    anything else.
-    """
-    anchors = _layout_anchors()
-    kept = {}
-    for node_id, pos in saved.items():
-        anchor = pos.get("anchor")
-        if anchor:
-            base = saved.get(anchor)
-            if not base or not base["pinned"]:
-                continue
-            if node_id in anchors and anchors[node_id] != anchor:
-                continue
-        kept[node_id] = pos
-    return kept
-
-
-def _layout_node_ids() -> set[str]:
-    """Every node id the current map draws.
-
-    The same ids the front end uses, built here so the housekeeping and
-    the diagnostics do not have to ask the browser what exists.
-    """
-    topo = rt.state.as_dict()
-    ids = {"sw:" + sw["ip"] for sw in topo["switches"]}
-    # A device drawn AS another node — a bridge that answers LLDP and
-    # is also in somebody's MAC table — has no node of its own, so it
-    # has no position of its own either. Counting it would put two
-    # nodes in "not in the saved layout" that nobody can place.
-    ids |= {
-        "host:" + h["mac"] for h in topo["hosts"] if not h.get("merged_into")
-    }
-    for key in ("pseudo_switches", "bridges", "external_networks",
-                "offline_groups", "trunk_groups"):
-        ids |= {node["id"] for node in topo.get(key) or () if node.get("id")}
-    return ids
-
-
 def _node_directory() -> dict[str, dict]:
     """Every node on the map with what the node menu needs to know.
 
@@ -3755,396 +3672,6 @@ async def api_action_state(job_id: str):
     ):
         return _refuse("unknown_job", 404)
     return job.as_dict()
-
-
-@app.get("/api/layout")
-async def api_layout() -> dict:
-    """Saved node positions, and how they compare with the map."""
-    saved = _current_offsets(await asyncio.to_thread(rt.db.layout))
-    present = _layout_node_ids()
-    return {
-        "nodes": saved,
-        "saved_at": await asyncio.to_thread(rt.db.layout_saved_at),
-        # When somebody last reset the whole layout. An open page that
-        # sees this move treats it as a reset of its own; the rows alone
-        # could not tell it that.
-        "cleared_at": await asyncio.to_thread(rt.db.layout_cleared_at),
-        # Nodes on the map with no saved position: since v0.7.3 that is
-        # everything nobody pinned, laid out again on every load from
-        # the pinned nodes. A count, not a list of gaps to fill.
-        "missing": sorted(present - set(saved)),
-        # …and the other direction: a saved position whose node is not
-        # on the map. Kept on purpose — a device switched off for the
-        # night comes back to its place — and only forgotten by age.
-        "orphans": sorted(set(saved) - present),
-    }
-
-
-@app.put("/api/layout")
-async def api_put_layout(body: LayoutBody) -> dict:
-    """Stores the whole picture as it is on screen right now.
-
-    With `only_new`, only nodes nobody has placed yet: the rest keep
-    what they have, and the answer says what that is, so the page can
-    take it instead of believing its own copy.
-    """
-    positions = {
-        node_id: pos.model_dump(exclude_none=True)
-        for node_id, pos in body.nodes.items()
-    }
-    if body.only_new:
-        stored, existing = await asyncio.to_thread(
-            rt.db.add_new_positions, positions
-        )
-    else:
-        await asyncio.to_thread(rt.db.save_layout, positions)
-        stored, existing = list(positions), {}
-    if stored:
-        await asyncio.to_thread(
-            rt.db.add_event, time.time(), "layout_saved", "",
-            f"{len(stored)} node(s)", signin.actor(),
-        )
-        log.info("Map layout saved: %d node(s)", len(stored))
-    return {
-        "saved": len(stored),
-        "stored": stored,
-        "existing": existing,
-        "saved_at": await asyncio.to_thread(rt.db.layout_saved_at),
-    }
-
-
-# How many node ids a journal entry about a layout action names; the
-# count is always there, the list only while it is short enough to read
-LAYOUT_EVENT_IDS = 5
-
-
-async def _journal_layout_action(event: str, node_ids: list[str]) -> None:
-    """One journal entry per action, however many nodes it touched.
-
-    Pinning and releasing were not in the journal at all, which is why
-    a pin wiped out by another page's save was visible to nobody. The
-    details are data, not a sentence — the page words them in its own
-    language and by the nodes' captions — and it names who did it.
-    """
-    if not node_ids:
-        return
-    details = json.dumps({
-        "n": len(node_ids), "ids": node_ids[:LAYOUT_EVENT_IDS],
-    })
-    await asyncio.to_thread(
-        rt.db.add_event, time.time(), event, "", details, signin.actor()
-    )
-
-
-async def _store_hand_placed(positions: dict[str, NodePosition]) -> dict:
-    """Stores nodes placed or released by hand, journalled per kind.
-
-    A node sent without `pinned` is pinned: this is the hand putting it
-    somewhere. Released (`pinned: false`) is forgotten: only what a
-    person placed is kept, and a released node is laid out from the
-    pinned ones on the next load like everything else.
-    """
-    rows = {
-        node_id: {"x": pos.x, "y": pos.y, "pinned": True}
-        for node_id, pos in positions.items()
-        if pos.pinned is None or pos.pinned
-    }
-    released = [node_id for node_id in positions if node_id not in rows]
-    if rows:
-        await asyncio.to_thread(rt.db.save_layout, rows)
-    if released:
-        await asyncio.to_thread(rt.db.forget_positions, released)
-    pinned = list(rows)
-    await _journal_layout_action("layout_pinned", pinned)
-    await _journal_layout_action("layout_released", released)
-    return {"pinned": pinned, "released": released}
-
-
-@app.patch("/api/layout")
-async def api_patch_positions(body: LayoutBody) -> dict:
-    """Several nodes placed or released in one action — a dragged
-    selection, `P` on a selection, one item of the menu — and how the
-    nodes around each placed one stood at that moment."""
-    result = await _store_hand_placed(body.nodes)
-    result["neighbours"] = {}
-    for anchor, offsets in body.neighbours.items():
-        result["neighbours"][anchor] = await asyncio.to_thread(
-            rt.db.set_neighbours, anchor,
-            {node_id: {"x": o.x, "y": o.y} for node_id, o in offsets.items()},
-        )
-    return result
-
-
-@app.patch("/api/layout/{node_id:path}")
-async def api_patch_node_position(node_id: str, body: NodePosition) -> dict:
-    """One node, moved by hand — pinned unless told otherwise."""
-    await _store_hand_placed({node_id: body})
-    pinned = True if body.pinned is None else body.pinned
-    return {"node_id": node_id, "x": body.x, "y": body.y, "pinned": pinned}
-
-
-@app.delete("/api/layout/{node_id:path}")
-async def api_delete_node_position(node_id: str):
-    """Forgets one node: it goes back under the physics engine.
-
-    The page no longer releases a node this way — it keeps the row and
-    clears the pin — but a page still running an older script does, so
-    it is journalled as the release it means.
-    """
-    removed = await asyncio.to_thread(rt.db.forget_node_position, node_id)
-    if not removed:
-        return JSONResponse(
-            {"error": "no saved position for this node"}, status_code=404
-        )
-    await _journal_layout_action("layout_released", [node_id])
-    return {"node_id": node_id, "removed": True}
-
-
-@app.delete("/api/layout")
-async def api_clear_layout() -> dict:
-    """Forgets the whole layout. The map is laid out from scratch."""
-    removed = await asyncio.to_thread(rt.db.clear_layout)
-    cleared_at = time.time()
-    await asyncio.to_thread(
-        rt.db.add_event, cleared_at, "layout_cleared", "",
-        f"{removed} node(s)", signin.actor(),
-    )
-    log.info(
-        "Map layout cleared: %d node(s) forgotten%s", removed,
-        f" (by {signin.actor()})" if signin.actor() else "",
-    )
-    # the page that asked for it must not mistake its own reset for
-    # somebody else's on the next refresh
-    return {"removed": removed, "cleared_at": cleared_at}
-
-
-# ---------- names and notes on nodes (v0.8.0) ----------
-
-
-class NoteBody(BaseModel):
-    label: str = ""
-    note: str = ""
-
-
-class NoteMove(BaseModel):
-    to: str
-    # the target has a note of its own: replace it (the page asks first)
-    replace: bool = False
-
-
-def _noted_node_ids() -> set[str]:
-    """The nodes a note can be written on now: everything on the map,
-    and the devices MoonLan knows that are not on it. An offline group
-    keeps the switch without SNMP of its port present: a night with
-    every device of a room off is not a cable moved."""
-    topo = rt.state.as_dict()
-    ids = {i for i in _layout_node_ids() if not notes.retired(i)}
-    ids |= {"host:" + h["mac"] for h in topo.get("unlocated") or ()}
-    ids |= {_stand_in(g["id"]) for g in topo.get("offline_groups") or ()}
-    return ids
-
-
-async def _note_key_for(node_id: str) -> str:
-    """notes.note_key — and for an offline group, the switch without
-    SNMP it stands in for, when that has a note and is not drawn. An
-    offline group on a port that never had one gets nothing: a name is
-    not put on a port where no switch without SNMP ever was."""
-    if node_id.startswith("offline:"):
-        key = _stand_in(node_id)
-        drawn = {p["id"] for p in rt.state.as_dict().get("pseudo_switches") or ()}
-        if key not in drawn and await asyncio.to_thread(rt.db.note, key):
-            return key
-    return notes.note_key(node_id)
-
-
-async def _existing_note_key(node_id: str) -> str:
-    """The key of a note that is there to be deleted or moved away —
-    including one on a kind of node that takes no notes any more"""
-    try:
-        return await _note_key_for(node_id)
-    except notes.NoteError:
-        key = notes.stored_key(node_id)
-        if await asyncio.to_thread(rt.db.note, key):
-            return key
-        raise
-
-
-def _note_refused(exc: notes.NoteError) -> JSONResponse:
-    return _refuse(exc.code, 400, text=str(exc))
-
-
-async def _journal_note(event: str, node_id: str, details: dict) -> None:
-    """One entry per change, as data the page words: the node, and what
-    happened to its name and note. The log gets the same in a line."""
-    await asyncio.to_thread(
-        rt.db.add_event, time.time(), event, node_id, json.dumps(details),
-        signin.actor(),
-    )
-    log.info(
-        "Note %s on %s%s: %s", event.replace("note_", ""), node_id,
-        f" by {signin.actor()}" if signin.actor() else "",
-        json.dumps(details, ensure_ascii=False),
-    )
-
-
-@app.get("/api/notes")
-async def api_notes() -> dict:
-    """Every name and note, those without a node on the map included."""
-    rows = await asyncio.to_thread(rt.db.notes)
-    return {
-        "notes": [
-            {
-                "node_id": node_id, **notes.public(row),
-                "state": notes.state(row),
-                "missing_since": row["missing_since"],
-                # on a group behind a trunk: kept, but no longer a name
-                "retired": notes.retired(node_id),
-            }
-            for node_id, row in sorted(rows.items())
-        ],
-        "missing_scans": notes.MISSING_SCANS,
-    }
-
-
-def _mac_directory() -> dict[str, str]:
-    """MAC -> the node an imported note goes on: a device (on the map
-    or off it; one drawn as a bridge is that bridge), then a switch by
-    its bridge MAC, then an LLDP bridge by its chassis MAC."""
-    topo = rt.state.as_dict()
-    found: dict[str, str] = {}
-    for host in topo["hosts"]:
-        found.setdefault(host["mac"], host.get("merged_into") or "host:" + host["mac"])
-    for host in topo.get("unlocated") or ():
-        found.setdefault(host["mac"], "host:" + host["mac"])
-    for sw in topo["switches"]:
-        mac = notes.mac_key(sw.get("mac"))
-        if mac:
-            found.setdefault(mac, "sw:" + sw["ip"])
-    for bridge in topo.get("bridges") or ():
-        mac = notes.mac_key(bridge.get("chassis_id"))
-        if mac:
-            found.setdefault(mac, bridge["id"])
-    return found
-
-
-@app.post("/api/notes/import")
-async def api_import_notes(request: Request, dry_run: bool = Query(default=False)):
-    """Names and notes from a CSV (mac;label;note), the body of the
-    request. With dry_run, what would be written and nothing written —
-    the page shows that first. A note written by hand is never
-    overwritten; one line per MAC, the last one counts."""
-    data = await request.body()
-    if len(data) > notes.IMPORT_MAX_BYTES:
-        return _refuse("too_big", 413, text="a CSV of notes is at most 2 MB")
-    rows, errors, warnings = notes.parse_csv(data)
-    existing = await asyncio.to_thread(rt.db.notes)
-    plan = notes.plan_import(rows, existing, _mac_directory())
-    report = notes.import_report(plan, errors, warnings, dry_run)
-    if dry_run:
-        return report
-    ts = time.time()
-    for write in plan["writes"]:
-        await asyncio.to_thread(
-            rt.db.set_note, write["node_id"], write["label"], write["note"],
-            "import", signin.actor(), ts, seen=write["found"],
-        )
-    summary = {"written": report["written"], "skipped": len(report["skipped_manual"]),
-               "errors": len(report["errors"])}
-    await asyncio.to_thread(
-        rt.db.add_event, ts, "notes_imported", "", json.dumps(summary), signin.actor()
-    )
-    log.info(
-        "Notes imported%s: %d written (%d on the map, %d not found yet), "
-        "%d skipped (written by hand), %d error(s)",
-        f" by {signin.actor()}" if signin.actor() else "", report["written"],
-        report["on_map"], report["not_found"], summary["skipped"], summary["errors"],
-    )
-    return report
-
-
-@app.get("/api/notes/export")
-async def api_export_notes(preview: bool = Query(default=False)):
-    """The notes that have a MAC, as the CSV the import takes: UTF-8
-    with a BOM, `;`. With preview, only how many go in and how many
-    cannot — notes of nodes without a MAC."""
-    rows = await asyncio.to_thread(rt.db.notes)
-    switch_macs = {sw["ip"]: sw.get("mac") or "" for sw in rt.state.as_dict()["switches"]}
-    data, left_out = notes.export_csv(rows, switch_macs)
-    if preview:
-        return {"exported": len(rows) - left_out, "left_out": left_out}
-    return Response(
-        content=data, media_type="text/csv; charset=utf-8",
-        headers={"Content-Disposition": 'attachment; filename="moonlan-notes.csv"'},
-    )
-
-
-@app.put("/api/notes/{node_id:path}")
-async def api_put_note(node_id: str, body: NoteBody):
-    """A node's name and note, as a person wrote them. Both empty
-    deletes the note. A note is written only on a node the map has:
-    one without a node comes from a node that has gone, or an import."""
-    try:
-        key = await _note_key_for(node_id)
-        label = notes.clean_label(body.label)
-        text = notes.clean_note(body.note)
-    except notes.NoteError as exc:
-        return _note_refused(exc)
-    before = await asyncio.to_thread(rt.db.note, key)
-    if before is None and key not in _noted_node_ids():
-        return _refuse("no_node", 404, text="no such node on the map")
-    row = await asyncio.to_thread(
-        rt.db.set_note, key, label, text, "manual", signin.actor(), time.time()
-    )
-    if row is None:
-        if before is not None:
-            await _journal_note("note_changed", key, {"deleted": True})
-        return {"node_id": key, "note": None}
-    details = {}
-    if before is None or before["label"] != label:
-        details["label"] = label
-    if before is None or before["note"] != text:
-        details["note"] = bool(text)
-    if details:
-        await _journal_note("note_changed", key, details)
-    return {"node_id": key, "note": notes.public(row)}
-
-
-@app.delete("/api/notes/{node_id:path}")
-async def api_delete_note(node_id: str):
-    try:
-        key = await _existing_note_key(node_id)
-    except notes.NoteError as exc:
-        return _note_refused(exc)
-    if not await asyncio.to_thread(rt.db.delete_note, key):
-        return _refuse("no_note", 404, text="this node has no note")
-    await _journal_note("note_changed", key, {"deleted": True})
-    return {"node_id": key, "deleted": True}
-
-
-@app.post("/api/notes/{node_id:path}/move")
-async def api_move_note(node_id: str, body: NoteMove):
-    """A note whose node is gone, put on a node that is there — a cable
-    moved to another port. A target with a note of its own is replaced
-    only when asked to."""
-    try:
-        source = await _existing_note_key(node_id)
-        target = await _note_key_for(body.to)
-    except notes.NoteError as exc:
-        return _note_refused(exc)
-    if source == target:
-        return _refuse("same_node", 400, text="the note is already there")
-    if await asyncio.to_thread(rt.db.note, source) is None:
-        return _refuse("no_note", 404, text="this node has no note")
-    if target not in _noted_node_ids():
-        return _refuse("no_node", 404, text="no such node on the map")
-    if not body.replace and await asyncio.to_thread(rt.db.note, target):
-        return _refuse("target_has_note", 409,
-                       text="the target node has a note of its own")
-    row = await asyncio.to_thread(
-        rt.db.move_note, source, target, signin.actor(), time.time()
-    )
-    await _journal_note("note_moved", target, {"from": source, "to": target})
-    return {"node_id": target, "note": notes.public(row)}
 
 
 async def _scan_once() -> None:

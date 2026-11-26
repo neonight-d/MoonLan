@@ -44,7 +44,7 @@ def written_events() -> dict[str, list[str]]:
     anchors = {"add_event", "account_event", "_event",
                "_journal_layout_action", "_journal_note", "journal"}
     found: dict[str, list[str]] = {}
-    for path in sorted(CODE.glob("*.py")):
+    for path in sorted(CODE.rglob("*.py")):
         tokens = [
             t for t in tokenize.generate_tokens(
                 io.StringIO(path.read_text(encoding="utf-8")).readline
