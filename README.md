@@ -295,6 +295,7 @@ See **[CONTRIBUTING.md](CONTRIBUTING.md)**.
 | v0.8.10 ✓ | Two fingers move the map in the mobile version, a correction about UTF-8 logs |
 | v0.8.11 ✓ | A router on LACP: one node with its own MACs, LLDP behind an aggregate, no false damaged copy |
 | v0.8.12 ✓ | Inside: server.py taken apart, stage 1 — startup and housekeeping, no visible changes |
+| v0.8.13 ✓ | Inside: server.py taken apart, stages 2 and 3 — the runtime and the routes, no visible changes |
 | v0.9 | Windows computer inventory (WMI/WinRM) |
 
 Every version so far: [CHANGELOG.md](CHANGELOG.md).

@@ -6,6 +6,46 @@ for before the next one started.
 
 Русская версия — [CHANGELOG_RU.md](CHANGELOG_RU.md).
 
+## v0.8.13 — 2026-11-27
+
+Internal: server.py, stages 2 and 3 — no visible changes. Stage 1
+turned out cheap, so this version takes two: the state of the process
+in one object, and the routes out of server.py. The page, the API, the
+log lines and what the service does are those of v0.8.12.
+
+**moonlan/runtime.py** — the 41 mutable globals of server.py (the
+config, the database, the topology state, the alarm engine, the
+readings of the switches…) are the fields of one `Runtime`, `rt`, made
+once and never replaced. server.py fills it at its import, in the
+order it assigned the globals, and the code reads `rt.X` when it runs.
+The tests moved onto it by a script: `server.X` → `server.rt.X`,
+`patch.object(server, "X")` → `patch.object(server.rt, "X")`. A name
+of the state asked of moonlan.server now fails loudly — "server.db
+moved to the runtime: use server.rt.db" — so a test left behind cannot
+pass checking nothing.
+
+**moonlan/routes/** — 43 of the 46 routes, word for word, by subject:
+`system`, `settings`, `notes`, `layout`, `actions`, `alarms`,
+`topology`, and `common` for what several of them use.
+**moonlan/derived.py** — what both the routes and the scan derive from
+the state. Each module has its own APIRouter; server.py puts their
+routes into the app one by one (`routes.include`), not with
+`app.include_router`, which would make each router one opaque entry
+the rights guard cannot see by path. The same methods, paths and
+handlers as before — `tests/test_route_table.py` holds them — and the
+static page still last. `/api/topology`, `/api/polling` and
+`/api/scan` depend on polling and stay in server.py until stage 4.
+
+Beyond `X` → `rt.X` and `@app` → `@router`, one line changed:
+`WEB_DIR` counts one folder more up from routes/system.py. The OpenAPI
+document (administrators only) names one schema after its new module,
+`moonlan__routes__settings__CodeBody`, as signin.py has a `CodeBody`
+too. `tests/test_journal.py` reads moonlan/ with its subfolders now,
+to keep finding the events written in routes/.
+`tests/test_module_boundaries.py` holds the new modules to the border,
+`tests/test_runtime.py` the strict module; docs/ARCHITECTURE.md has
+the map of the modules and the rule of `rt`.
+
 ## v0.8.12 — 2026-11-26
 
 Internal: server.py, stage 1 — no visible changes. server.py has grown

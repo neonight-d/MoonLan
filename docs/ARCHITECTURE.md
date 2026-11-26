@@ -60,34 +60,52 @@ SQLite stores inventory, layout, alarms, and journal information. WAL mode is us
 
 ### API
 
-moonlan/server.py is the FastAPI boundary. It combines the latest topology state with fresh database fields when serving the UI.
+moonlan/server.py makes the FastAPI app; its routes are in moonlan/routes/, by subject, but for the three that depend on polling. `/api/topology` combines the latest topology state with fresh database fields when serving the UI.
 
 The /api/health endpoint is intentionally cheap, answers without sign-in, and says only that the process is up and which version it is. /api/status contains deeper operational state and needs a viewer.
 
-#### server.py, taken apart in stages (v0.8.12)
+#### server.py, taken apart in stages (v0.8.12, v0.8.13)
 
-server.py grew to nearly 5000 lines: the state of the process, 46 routes, the scan and polling loops, the building of the map, the cleanups and the lines the log opens with. It is being taken apart one stage per version, and each stage is accepted on one criterion: everything works as before — any visible difference is a bug.
+server.py grew to nearly 5000 lines: the state of the process, 46 routes, the scan and polling loops, the building of the map, the cleanups and the lines the log opens with. It is being taken apart in stages, and each stage is accepted on one criterion: everything works as before — any visible difference is a bug.
 
 1. **v0.8.12:** moonlan/startup.py and moonlan/housekeeping.py — leaves with no state of their own.
-2. moonlan/runtime.py: the state of the process in one object, `rt`; the tests move onto it.
-3. moonlan/routes/: the routes, by module, through `rt`.
-4. moonlan/poller.py: the polling loops and the building of the map, through `rt`.
+2. **v0.8.13:** moonlan/runtime.py — the state of the process in one object, `rt`; the tests moved onto it.
+3. **v0.8.13:** moonlan/routes/ — 43 of the 46 routes, by subject, and moonlan/derived.py for what the routes and the scan both derive from the state.
+4. moonlan/poller.py — the polling loops and the building of the map; the three routes that depend on polling (`/api/topology`, `/api/polling`, `/api/scan`); `lifespan` and the periodic loops, and with them the stage 1 wrappers go.
 5. `_build_map` split into steps, with a test of the order of its side effects.
 
 Where things are now:
 
+- **moonlan/runtime.py** — `Runtime`, a dataclass with a field, and its type, for each of the 41 pieces of mutable state the globals of server.py were: the config, the database and the accounts one, the topology state, the public address and the certificate, the sign-in, the notifier and the alarm engine, the readings, counters and flaps of the switches, the flags of the first scan and the cleanup, the collector, the locks… `FIELDS` is their names, the one list; `rt` is the one instance. Nothing from MoonLan is imported there but for the annotations.
+- **moonlan/derived.py** — what both the API and the scan derive from the state: `_uplink_ports`, `_copies_window`, `_subject_inbound_errors`, `_effective_monitored`, `_lag_groups`, `_sum_known`, `_rates_hide_age`, `_round`, `_loop_report`.
+- **moonlan/routes/** — one module per subject, each with its own `router = APIRouter()`, and what only its routes use:
+  - `system.py` — `/api/health`, `/api/about`, `/api/about/license`, `/` and `/index.html`; `WEB_DIR`, `STARTED_AT`, `BUILD`, `COPYRIGHT`, `VERSIONED_ASSETS`, `RevalidatedStaticFiles`;
+  - `settings.py` — `/api/settings…`, `/api/me/notifications…`, `DELETE /api/users/{name}/notifications`;
+  - `notes.py` — `/api/notes…`, and `_noted_node_ids` and `_stand_in`, which server.py needs too;
+  - `layout.py` — `/api/layout…`, and `_layout_anchors` and `_layout_node_ids`, which `purge_layout` in server.py needs too;
+  - `actions.py` — `/api/node-menu`, `/api/actions…`, `PATCH /api/host/{mac}`;
+  - `alarms.py` — `/api/alarms…`, `/api/journal` and the journal's groups (`JOURNAL_GROUPS`, `JOURNAL_OTHER`, `EVENT_GROUP`);
+  - `topology.py` — `/api/switch/{ip}/ports`, `/api/stp`, `/api/search`, `/api/skipped-oids`, `/api/status`;
+  - `common.py` — what more than one of them uses: `_refuse`, `_copy_samples`;
+  - `__init__.py` — `include(app, router)`, which puts each route of a router into `app.routes` as its own entry, in order. Not `app.include_router`: an included router is one opaque entry in `app.routes`, and the guard finds the rights of a request by the path of the route that will serve it (`signin.route_key`), as the test that every route is in the rights table does — the reason `signin.add_routes` adds its routes to the app itself.
 - **moonlan/startup.py** — what the start says, and the port that only redirects: `configure_logging`; `_log_config` with `_config_missing`, `_log_settings` and `_setting_problem`; `_log_public_url` and `_log_transport`; `_log_certificate` (`CERT_WARN_DAYS`), which returns the certificate it read for server.py to keep; `start_redirect_listener`.
 - **moonlan/housekeeping.py** — the cleanups (`purge_invalid_macs`, `purge_old_hosts`, `purge_journal`, `hide_confirmed_copies`, `purge_copies`, `drop_unpinned_positions`), the end of the certificate (`check_certificate_end`, `CERT_ALARM_DAYS`, `CERT_CHECK_SECONDS`), the leak watch's `resource_usage`, and `RESOURCE_LOG_SECONDS` and `CLEANUP_SECONDS`.
-- **moonlan/server.py** — the rest: the state of the process (the config, the database, the alarm engine, the certificate, the public address…), `lifespan`, the routes, the scan and polling loops and `_build_map`. The loops that run the cleanups (`periodic_cleanup`, `periodic_certificate_check`, `periodic_resource_log`) stay here until stage 4, and `purge_layout` until stage 3: it needs the helpers of the layout routes.
+- **moonlan/server.py** — the rest, until stages 4 and 5: filling `rt` at its import; the app, its middleware, `signin.add_routes`, the routers in the order above, the static page last; the three routes that depend on polling, with what only they use (`_attach_notes`, `_link_load`, `_refresh_link_lag`); `lifespan`; the scan, ping and counter loops, `_build_map` and everything it calls (`MOONLAN_ACTOR` among it); the loops that run the cleanups (`periodic_cleanup`, `periodic_certificate_check`, `periodic_resource_log`) and `purge_layout`; the stage 1 wrappers.
 
-The border, for this stage and every later one:
+The state of the process, since stage 2:
 
-- A module taken out of server.py **never imports moonlan.server** — not at the top, not inside a function, not by name. It imports only the modules below it: config, db, https, settings and so on.
-- **What it needs is given to it**, as parameters named after the server.py globals they stand for (`config`, `db`, `alarm_engine`, `public_url`…). The moved code is the old code word for word, comments included; a function that set a global returns the value instead. Its log is `logging.getLogger("moonlan")`, not `__name__`, so the log lines stay `moonlan: …`.
-- **server.py keeps a wrapper** of the same name and signature for every function that moved, and re-exports every constant. A wrapper reads the globals when it is called, so a test that patches `server.certificate` or replaces `server.db` works unchanged. The wrappers are temporary: stage 2 removes them.
-- A move is a commit of its own, with nothing else in it, so `git diff --color-moved` and `git blame -C -C` show the code as moved, not rewritten.
+- **One `rt`, never replaced.** `rt = Runtime()` is made when moonlan/runtime.py is imported. server.py fills its fields at its own import, in the order it used to assign the globals — `settings.load(config, db)` changes the config in place, so the order matters.
+- **`rt.X` is read when the code runs.** `from .runtime import rt` is how a module gets it; `db = rt.db` at module level is not allowed: it would keep what was there before server.py filled it. The config is never replaced as a whole: the alarm engine and the notifier hold parts of it, and settings.py edits them in place.
+- **The strict module.** A name of the state asked of moonlan.server fails loudly: `server.db`, `server.db = fake` and `patch.object(server, "db", …)` raise AttributeError "server.db moved to the runtime: use server.rt.db" — reading through the module's `__getattr__` (PEP 562), writing and deleting through its class, a `types.ModuleType` with `__setattr__` and `__delattr__`. A write is never passed on to `rt`: `patch.object` deletes the attribute on the way out and would not put the value back. Tests patch `server.rt`: `patch.object(server.rt, "db", …)`.
 
-tests/test_module_boundaries.py holds every module of the list `NEW_MODULES` to this: no import of moonlan.server, none loaded with it in a clean process, the "moonlan" logger, and every moved name still in server.py. A new stage adds its modules and names there.
+The border, for every stage:
+
+- A module taken out of server.py **never imports moonlan.server** — not at the top, not inside a function, not by name. It imports `rt` and the modules below it: config, db, https, settings and so on. server.py imports them, never the other way round.
+- **The moved code is the old code word for word**, comments included. Since stage 2 a module reads what it needs from `rt`, and the one change allowed in a moved body is `X` → `rt.X` (a `global X` line goes, and `X = …` becomes `rt.X = …`); a route's `@app.<method>(…)` becomes `@router.<method>(…)` with the same arguments. Stage 1 modules are given what they need as parameters named after the globals they stand for. The log is `logging.getLogger("moonlan")`, not `__name__`, so the log lines stay `moonlan: …`.
+- **server.py keeps every name that moved and is called or read through it**: a stage 1 wrapper of the same name and signature, which reads `rt` when it is called (the wrappers go with stage 4), or the name itself, re-exported — a constant, or a function that reads `rt` on its own.
+- A move is a commit of its own, with nothing else in it, so `git diff --color-moved` and `git blame --minimal -C -C` show the code as moved, not rewritten (without `--minimal`, blame does not follow it in a file this size).
+
+The tests hold it: tests/test_module_boundaries.py — every module of `NEW_MODULES` imports no moonlan.server and none is loaded with it in a clean process, the "moonlan" logger, no module but server.py reads `rt` at its import, and every name of `MOVED` is still in server.py; a new stage adds its modules and names there. tests/test_runtime.py — the strict module, and every field of `Runtime` filled at the import of server in its order. tests/test_route_table.py — the methods, paths and handlers of the app as they were before stage 3, each route its own entry, the static page last, only the three polling routes declared in server.py.
 
 ### Sign-in and rights
 
