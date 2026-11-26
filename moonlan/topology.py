@@ -891,6 +891,15 @@ def detect_bridges(
     would otherwise scatter the same device over several ports. The
     placement with the strongest claim wins — an untainted port before
     a forwarded one, an access port before a trunk.
+
+    `port` is the port the map knows the neighbour on (v0.8.11). LLDP
+    arrives on a physical member, while the devices behind an aggregate
+    are on the aggregate: a router moved onto a LAG came in on Gi0/16
+    while its MACs were under "LAG Gi0/15+Gi0/16", and nothing
+    keyed by (switch, port) put the two together — no bridge took over
+    its port, no name reached its host. The member is kept in
+    `member_port` ("" when the port is no aggregate's); the ports panel
+    reads the LLDP table itself and still shows it on the member's row.
     """
     best: dict[str, tuple] = {}
     found: dict[str, dict] = {}
@@ -906,7 +915,8 @@ def detect_bridges(
                 continue  # a switch we poll ourselves — already a node
             if_index = neighbor.local_ifindex
             forwarded = if_index in sw.lldp_forwarded
-            is_trunk = aggregate_port(sw, if_index) in trunks.get(sw.ip, {})
+            aggregate = aggregate_port(sw, if_index)
+            is_trunk = aggregate in trunks.get(sw.ip, {})
             entry = {
                 "lldp_crowded": if_index in sw.lldp_crowded,
                 "chassis_id": neighbor.chassis_id,
@@ -915,7 +925,16 @@ def detect_bridges(
                 "mgmt_ip": neighbor.mgmt_ip,
                 "mgmt_ips": list(neighbor.mgmt_ips),
                 "switch": sw.ip,
-                "port": port_name(sw, if_index),
+                # the port the map knows: an aggregate's devices are on
+                # the aggregate, and so is what LLDP found on a member
+                "port": (
+                    port_name(sw, aggregate) or port_name(sw, if_index)
+                    if aggregate != if_index else port_name(sw, if_index)
+                ),
+                # the cable it came in on, for whoever needs to know
+                "member_port": (
+                    port_name(sw, if_index) if aggregate != if_index else ""
+                ),
                 "remote_port": neighbor.port_id or neighbor.port_desc,
                 "port_matched_by": neighbor.port_matched_by,
                 "capabilities": sorted(neighbor.cap_enabled),
@@ -955,14 +974,28 @@ def detect_bridges(
 
 
 def normalized_fdb(switches: list[SwitchData]) -> dict[str, dict[str, int]]:
-    """FDB per switch with LACP member ports mapped to the aggregate."""
-    return {
-        sw.ip: {
-            mac: sw.lag_members.get(if_index, if_index)
+    """FDB per switch with aggregate members mapped to the aggregate.
+
+    Both kinds, as aggregate_port() resolves them (v0.8.11): an
+    IEEE8023-LAG-MIB member to its aggregate ifIndex, a member of a
+    D-Link trunk to the synthetic port. A D-Link agent hands the trunk's
+    FDB on the synthetic port already; the members are resolved anyway,
+    so the FDB and LLDP agree on where an aggregate's devices are
+    whatever the agent does.
+    """
+    normalized: dict[str, dict[str, int]] = {}
+    for sw in switches:
+        members = {
+            member: -bridge_port
+            for bridge_port, group in sw.lag_groups.items()
+            for member in group
+        }
+        members.update(sw.lag_members)  # aggregate_port's order
+        normalized[sw.ip] = {
+            mac: members.get(if_index, if_index)
             for mac, if_index in sw.fdb.items()
         }
-        for sw in switches
-    }
+    return normalized
 
 
 def switch_sightings(
