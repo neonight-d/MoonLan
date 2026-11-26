@@ -118,24 +118,24 @@ class StubCollector:
 
 class RootOnTheMapTest(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
-        self.ips = list(server.config.switches)
+        self.ips = list(server.rt.config.switches)
         self.assertGreaterEqual(len(self.ips), 2)
         self._get_collector = server.get_collector
         server.get_collector = lambda: StubCollector(self.ips)
-        server.switch_data.clear()
+        server.rt.switch_data.clear()
 
     def tearDown(self):
         server.get_collector = self._get_collector
-        server.state.scanning = False
+        server.rt.state.scanning = False
 
     async def test_a_root_its_neighbours_vouch_for_reaches_the_map(self):
         await server.run_scan()
-        drawn = {sw["ip"]: sw for sw in server.state.as_dict()["switches"]}
+        drawn = {sw["ip"]: sw for sw in server.rt.state.as_dict()["switches"]}
         root = drawn[self.ips[0]]
         # what the panel says…
         panel = {
             entry["ip"]: entry
-            for entry in server.state.as_dict()["stp"]["switches"]
+            for entry in server.rt.state.as_dict()["stp"]["switches"]
         }
         self.assertTrue(panel[self.ips[0]]["operating"])
         self.assertTrue(panel[self.ips[0]]["is_root"])
@@ -152,10 +152,10 @@ class RootOnTheMapTest(unittest.IsolatedAsyncioTestCase):
         in the same breath as the root caption.
         """
         await server.run_scan()
-        drawn = {sw["ip"]: sw for sw in server.state.as_dict()["switches"]}
+        drawn = {sw["ip"]: sw for sw in server.rt.state.as_dict()["switches"]}
         panel = {
             entry["ip"]: entry
-            for entry in server.state.as_dict()["stp"]["switches"]
+            for entry in server.rt.state.as_dict()["stp"]["switches"]
         }
         for ip in self.ips[:2]:
             self.assertEqual(
@@ -164,7 +164,7 @@ class RootOnTheMapTest(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(drawn[ip]["stp_root"], panel[ip]["is_root"], ip)
         # one tree, not two: the root is a root, not a second island
         self.assertEqual(
-            server.state.as_dict()["stp"]["verdict"]["verdict"], "single"
+            server.rt.state.as_dict()["stp"]["verdict"]["verdict"], "single"
         )
 
 

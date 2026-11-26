@@ -363,7 +363,7 @@ class RightsTest(unittest.TestCase):
     """Through the service: one's own and nobody else's"""
 
     def setUp(self):
-        self.db = server.accounts
+        self.db = server.rt.accounts
         self.clean()
         self.addCleanup(self.clean)
 
@@ -400,7 +400,7 @@ class RightsTest(unittest.TestCase):
 
     def test_the_console_is_nobody(self):
         self.account("anton", "admin")
-        with mock.patch.object(server.sign_in, "_console", auth.token_hash("console-token")):
+        with mock.patch.object(server.rt.sign_in, "_console", auth.token_hash("console-token")):
             header = {"x-moonlan-console": "console-token"}
             self.assertEqual(call(server.app, "GET", "/api/topology", headers=header).status, 200)
             self.assertEqual(call(server.app, "GET", "/api/me/notifications",
@@ -417,7 +417,7 @@ class RightsTest(unittest.TestCase):
         answer = call(server.app, "DELETE", "/api/users/olga/notifications", cookie=admin)
         self.assertEqual(answer.status, 200)
         self.assertEqual(self.db.subscriptions_of(olga), {})
-        self.assertEqual(server.db.journal(1)[0]["event"], "user_notifications_removed")
+        self.assertEqual(server.rt.db.journal(1)[0]["event"], "user_notifications_removed")
         self.assertEqual(call(server.app, "DELETE", "/api/users/nobody/notifications",
                               cookie=admin).status, 404)
 

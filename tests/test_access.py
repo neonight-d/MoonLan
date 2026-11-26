@@ -120,7 +120,7 @@ class ServiceTest(unittest.TestCase):
     """Through the real app: the guard in front of the real handlers."""
 
     def setUp(self):
-        self.db = server.accounts
+        self.db = server.rt.accounts
         self.clean()
         self.addCleanup(self.clean)
 
@@ -190,7 +190,7 @@ class ServiceTest(unittest.TestCase):
         user = self.account("vera", "user")
         call(server.app, "PATCH", "/api/layout", cookie=user,
              json_body={"nodes": {"sw:10.0.0.1": {"x": 1, "y": 2}}})
-        event = server.db.journal(1)[0]
+        event = server.rt.db.journal(1)[0]
         self.assertEqual((event["event"], event["user"]),
                          ("layout_pinned", "vera"))
 
@@ -243,7 +243,7 @@ class OpenModeTest(unittest.TestCase):
 
     @property
     def db(self):
-        return server.accounts
+        return server.rt.accounts
 
     def cli(self, *argv):
         out = io.StringIO()
@@ -276,18 +276,18 @@ class OpenModeTest(unittest.TestCase):
 
     def test_the_log_says_which(self):
         with self.assertLogs("moonlan", "WARNING") as logged:
-            server.sign_in.log_state()
+            server.rt.sign_in.log_state()
         self.assertIn("python -m moonlan.users add", logged.output[0])
         self.cli("add", "anton", "--role", "admin")
         with self.assertLogs("moonlan", "INFO") as logged:
-            server.sign_in.log_state()
+            server.rt.sign_in.log_state()
         self.assertIn("Sign-in: on", logged.output[0])
         # …and what sign-in over plain HTTP is worth
         self.assertIn("plain HTTP", logged.output[1])
 
     def test_switching_on_is_logged_when_it_happens(self):
         call(server.app, "GET", "/api/topology")
-        self.assertIs(server.sign_in._was_on, False)
+        self.assertIs(server.rt.sign_in._was_on, False)
         self.cli("add", "anton", "--role", "admin")
         with self.assertLogs("moonlan", "INFO") as logged:
             call(server.app, "GET", "/api/topology")
@@ -303,8 +303,8 @@ class JobOwnerTest(unittest.TestCase):
         self.job = server.probes.Job(
             id="job1", action="ping", targets=[], owner="vera"
         )
-        server.jobs._jobs["job1"] = self.job
-        self.addCleanup(server.jobs._jobs.pop, "job1", None)
+        server.rt.jobs._jobs["job1"] = self.job
+        self.addCleanup(server.rt.jobs._jobs.pop, "job1", None)
 
     def ask(self, who):
         token = signin._current.set(who)

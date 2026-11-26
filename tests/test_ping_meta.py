@@ -53,9 +53,9 @@ class PingMetaTest(unittest.TestCase):
         async def ping_many(ips):
             return {ip: answers.get(ip, True) for ip in ips}
 
-        with mock.patch.object(server, "db", db), \
-                mock.patch.object(server, "alarm_engine", engine), \
-                mock.patch.object(server, "fdb_macs",
+        with mock.patch.object(server.rt, "db", db), \
+                mock.patch.object(server.rt, "alarm_engine", engine), \
+                mock.patch.object(server.rt, "fdb_macs",
                                   set(PINGED) | set(NOT_PINGED)), \
                 mock.patch.object(server.pinger, "ping_many", ping_many):
             asyncio.run(server.run_ping())
@@ -65,17 +65,17 @@ class PingMetaTest(unittest.TestCase):
         if whole_inventory:
             # what the cycle did before: every row of the inventory
             db.hosts_by_macs = lambda macs: db.hosts_by_mac()
-        notifier = Notifier(server.config)
-        engine = AlarmEngine(db, notifier, server.config.thresholds,
-                             server.config.notifications)
+        notifier = Notifier(server.rt.config)
+        engine = AlarmEngine(db, notifier, server.rt.config.thresholds,
+                             server.rt.config.notifications)
         up = {ip: True for ip in PINGED.values()}
         down = {ip: False for ip in PINGED.values()}
         for answers in (up, up, down, down, down):
             self.run_cycles(db, engine, answers)
         # a restart while the port is down: the active port_hosts_down
         # has to rebuild its set of devices from the metadata
-        engine = AlarmEngine(db, notifier, server.config.thresholds,
-                             server.config.notifications)
+        engine = AlarmEngine(db, notifier, server.rt.config.thresholds,
+                             server.rt.config.notifications)
         asyncio.run(engine.load())
         for answers in (down, {**down, "192.0.2.1": True, "192.0.2.2": True},
                         up):

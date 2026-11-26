@@ -56,33 +56,33 @@ class SettingsTest(unittest.TestCase):
 
 class CleanupTest(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
-        self._db = server.db
+        self._db = server.rt.db
         self._tmp = tempfile.TemporaryDirectory()
-        server.db = Database(Path(self._tmp.name) / "journal.db")
-        self._keep = server.config.journal_keep_days
-        self._ping = server.config.journal_ping_keep_days
-        server.config.journal_keep_days = 365
-        server.config.journal_ping_keep_days = 30
+        server.rt.db = Database(Path(self._tmp.name) / "journal.db")
+        self._keep = server.rt.config.journal_keep_days
+        self._ping = server.rt.config.journal_ping_keep_days
+        server.rt.config.journal_keep_days = 365
+        server.rt.config.journal_ping_keep_days = 30
 
     def tearDown(self):
-        server.db.close()
-        server.db = self._db
-        server.config.journal_keep_days = self._keep
-        server.config.journal_ping_keep_days = self._ping
+        server.rt.db.close()
+        server.rt.db = self._db
+        server.rt.config.journal_keep_days = self._keep
+        server.rt.config.journal_ping_keep_days = self._ping
         self._tmp.cleanup()
 
     def fill(self, rows):
         """(event, age in days, how many)"""
         now = time.time()
-        with server.db._lock, server.db._conn:
-            server.db._conn.executemany(
+        with server.rt.db._lock, server.rt.db._conn:
+            server.rt.db._conn.executemany(
                 "INSERT INTO journal (ts, event, mac, details) VALUES (?, ?, '', '')",
                 [(now - age * DAY - i * 0.001, event, )
                  for event, age, count in rows for i in range(count)],
             )
 
     def count(self, event):
-        return server.db._conn.execute(
+        return server.rt.db._conn.execute(
             "SELECT COUNT(*) FROM journal WHERE event = ?", (event,)
         ).fetchone()[0]
 
@@ -106,12 +106,12 @@ class CleanupTest(unittest.IsolatedAsyncioTestCase):
         self.assertIn("the oldest from", lines[0])
         # the cleanup is not an event of its own
         self.assertEqual(
-            server.db._conn.execute("SELECT COUNT(*) FROM journal").fetchone()[0],
+            server.rt.db._conn.execute("SELECT COUNT(*) FROM journal").fetchone()[0],
             9,
         )
 
     async def test_keep_for_good_still_cleans_pings(self):
-        server.config.journal_keep_days = 0
+        server.rt.config.journal_keep_days = 0
         self.fill([("host_down", 40, 5), ("host_up", 10, 1),
                    ("new_mac", 4000, 3), ("alarm_raised", 900, 2)])
         with self.assertLogs("moonlan", "INFO"):
@@ -122,15 +122,15 @@ class CleanupTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.count("alarm_raised"), 2)
 
     async def test_a_ping_term_of_zero_is_the_general_one(self):
-        server.config.journal_ping_keep_days = 0
+        server.rt.config.journal_ping_keep_days = 0
         self.fill([("host_down", 40, 5), ("host_down", 400, 2)])
         with self.assertLogs("moonlan", "INFO"):
             await server.purge_journal()
         self.assertEqual(self.count("host_down"), 5)
 
     async def test_both_zero_deletes_nothing(self):
-        server.config.journal_keep_days = 0
-        server.config.journal_ping_keep_days = 0
+        server.rt.config.journal_keep_days = 0
+        server.rt.config.journal_ping_keep_days = 0
         self.fill([("host_down", 4000, 5), ("new_mac", 4000, 3)])
         with self.assertLogs("moonlan", "INFO"):
             await server.purge_journal()
@@ -141,12 +141,12 @@ class CleanupTest(unittest.IsolatedAsyncioTestCase):
         self.fill([("host_down", 40, 60_000), ("host_up", 5, 7),
                    ("new_mac", 40, 11)])
         commits = []
-        conn = server.db._conn
+        conn = server.rt.db._conn
         conn.set_trace_callback(
             lambda sql: commits.append(sql) if sql.startswith("DELETE") else None
         )
         try:
-            removed, batches = server.db.purge_journal(
+            removed, batches = server.rt.db.purge_journal(
                 ["host_down", "host_up"], time.time() - 30 * DAY
             )
         finally:
@@ -167,7 +167,7 @@ class DiagTest(unittest.TestCase):
             db.add_event(time.time() - 3 * DAY, "host_down", "aa:bb:cc:00:00:01", "")
             db.add_event(time.time(), "new_mac", "aa:bb:cc:00:00:02", "")
             db.close()
-            cfg = server.config
+            cfg = server.rt.config
             saved = cfg.db_path
             cfg.db_path = str(path)
             out = io.StringIO()

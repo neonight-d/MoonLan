@@ -32,15 +32,15 @@ logging.getLogger("moonlan").setLevel(logging.ERROR)
 
 
 def stale():
-    return [a for a in server.db.alarms(True) if a["type"] == "switch_stale"]
+    return [a for a in server.rt.db.alarms(True) if a["type"] == "switch_stale"]
 
 
 async def run():
     out = {}
-    demo.seed_notes(server.db)
-    demo.seed_reading(server.db)
-    demo.seed_stale_alarm(server.db)
-    await server.alarm_engine.load()
+    demo.seed_notes(server.rt.db)
+    demo.seed_reading(server.rt.db)
+    demo.seed_stale_alarm(server.rt.db)
+    await server.rt.alarm_engine.load()
     await server.restore_readings()
     out["before"] = [a["message"] for a in stale()]
     await server.run_scan()
@@ -48,7 +48,7 @@ async def run():
     await server.run_scan()
     out["polling"] = (await server.api_polling())["switches"]
     out["raised"] = sum(
-        1 for e in server.db.journal(1000)
+        1 for e in server.rt.db.journal(1000)
         if e["event"] == "alarm_raised" and "switch_stale" in e["details"]
     )
     topo = json.loads((await server.api_topology()).body)

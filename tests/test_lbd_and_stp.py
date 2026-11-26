@@ -107,62 +107,62 @@ class CountersCycleTest(unittest.IsolatedAsyncioTestCase):
 
     def setUp(self):
         self.ip = SWITCHES[0]
-        server.switch_data.clear()
+        server.rt.switch_data.clear()
         sw = SwitchData(ip=self.ip, reachable=True, sys_name="core-sw")
         sw.ports[1] = PortInfo(if_index=1, name="Gi0/1", oper_up=True)
         sw.stp = StpData(supported=True, operating=True, confirmed_root=True)
         sw.loop_detection = lbd(False)
-        server.switch_data[self.ip] = sw
+        server.rt.switch_data[self.ip] = sw
         self.sw = sw
-        server.db._conn.execute("DELETE FROM alarms")
-        server.db._conn.execute("DELETE FROM journal")
-        server.db._conn.commit()
+        server.rt.db._conn.execute("DELETE FROM alarms")
+        server.rt.db._conn.execute("DELETE FROM journal")
+        server.rt.db._conn.commit()
         self._collector = server.get_collector
         server.get_collector = lambda: _Silent()
         self._counters = server._counters_locked
 
         async def counters(collector, ip):
             # nothing measured, the loop state as the switch reports it
-            return {}, {}, {}, server.switch_data[ip].loop_detection \
-                if ip in server.switch_data else None
+            return {}, {}, {}, server.rt.switch_data[ip].loop_detection \
+                if ip in server.rt.switch_data else None
 
         server._counters_locked = counters
 
     def tearDown(self):
         server.get_collector = self._collector
         server._counters_locked = self._counters
-        server.switch_data.clear()
-        server.alarm_engine._active.discard(
+        server.rt.switch_data.clear()
+        server.rt.alarm_engine._active.discard(
             ("loop_detection_disabled", self.ip)
         )
 
     async def test_the_first_cycle_clears_it(self):
         # the alarm as an older version left it, active since September
-        server.db.raise_alarm(
+        server.rt.db.raise_alarm(
             "loop_detection_disabled", self.ip, "info",
             "core-sw: Loop Detection is switched off globally, and this "
             "network runs no spanning tree — nothing is watching for loops "
             "on this switch", time.time() - 60 * 86400,
         )
-        server.alarm_engine._active.add(("loop_detection_disabled", self.ip))
+        server.rt.alarm_engine._active.add(("loop_detection_disabled", self.ip))
         await server.run_counters()
-        active = [a for a in server.db.alarms(True, 50)
+        active = [a for a in server.rt.db.alarms(True, 50)
                   if a["type"] == "loop_detection_disabled"]
         self.assertEqual(active, [])
-        cleared = [e for e in server.db.journal(50)
+        cleared = [e for e in server.rt.db.journal(50)
                    if e["event"] == "alarm_cleared"]
         self.assertEqual(len(cleared), 1)
         # …and the next cycle raises nothing new while the tree runs
         await server.run_counters()
         self.assertEqual(
-            [a for a in server.db.alarms(True, 50)
+            [a for a in server.rt.db.alarms(True, 50)
              if a["type"] == "loop_detection_disabled"], [],
         )
 
     async def test_stp_stopped_raises_it(self):
         self.sw.stp.operating = False
         await server.run_counters()
-        (alarm,) = [a for a in server.db.alarms(True, 50)
+        (alarm,) = [a for a in server.rt.db.alarms(True, 50)
                     if a["type"] == "loop_detection_disabled"]
         self.assertIn("not running on this switch", alarm["message"])
 

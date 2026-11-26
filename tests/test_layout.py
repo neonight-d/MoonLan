@@ -350,21 +350,21 @@ class NodeIdTest(unittest.TestCase):
     """
 
     def setUp(self):
-        self._switches = server.state.switches
-        self._hosts = server.state.hosts
-        self._bridges = server.state.bridges
-        server.state.switches = [{"ip": "10.0.0.10"}]
-        server.state.bridges = [{"id": "bridge:aa:bb:cc:00:00:02"}]
-        server.state.hosts = [
+        self._switches = server.rt.state.switches
+        self._hosts = server.rt.state.hosts
+        self._bridges = server.rt.state.bridges
+        server.rt.state.switches = [{"ip": "10.0.0.10"}]
+        server.rt.state.bridges = [{"id": "bridge:aa:bb:cc:00:00:02"}]
+        server.rt.state.hosts = [
             {"mac": "aa:bb:cc:00:00:01"},
             {"mac": "aa:bb:cc:00:00:02",
              "merged_into": "bridge:aa:bb:cc:00:00:02"},
         ]
 
     def tearDown(self):
-        server.state.switches = self._switches
-        server.state.hosts = self._hosts
-        server.state.bridges = self._bridges
+        server.rt.state.switches = self._switches
+        server.rt.state.hosts = self._hosts
+        server.rt.state.bridges = self._bridges
 
     def test_a_host_drawn_as_a_bridge_is_not_a_node_of_its_own(self):
         ids = server._layout_node_ids()
@@ -378,10 +378,10 @@ class OnlyNewApiTest(unittest.TestCase):
     """PUT /api/layout with only_new, through the handler itself."""
 
     def setUp(self):
-        server.db.clear_layout()
+        server.rt.db.clear_layout()
 
     def tearDown(self):
-        server.db.clear_layout()
+        server.rt.db.clear_layout()
 
     def _put(self, nodes, only_new):
         body = server.LayoutBody(
@@ -391,28 +391,28 @@ class OnlyNewApiTest(unittest.TestCase):
         return asyncio.run(server.api_put_layout(body))
 
     def test_the_automatic_save_cannot_unpin(self):
-        server.db.set_node_position(HOST, 1234, -567, pinned=True)
+        server.rt.db.set_node_position(HOST, 1234, -567, pinned=True)
         answer = self._put(
             {HOST: {"x": 125, "y": -27, "pinned": False}}, only_new=True
         )
         self.assertEqual(answer["stored"], [])
         self.assertTrue(answer["existing"][HOST]["pinned"])
-        saved = server.db.layout()[HOST]
+        saved = server.rt.db.layout()[HOST]
         self.assertEqual(
             (saved["x"], saved["y"], saved["pinned"]), (1234.0, -567.0, True)
         )
 
     def test_nothing_stored_is_not_a_journal_entry(self):
-        server.db.set_node_position(HOST, 1, 1, pinned=True)
-        before = len(server.db.journal(1000))
+        server.rt.db.set_node_position(HOST, 1, 1, pinned=True)
+        before = len(server.rt.db.journal(1000))
         self._put({HOST: {"x": 2, "y": 2, "pinned": False}}, only_new=True)
-        self.assertEqual(len(server.db.journal(1000)), before)
+        self.assertEqual(len(server.rt.db.journal(1000)), before)
 
     def test_an_open_page_is_told_about_a_reset(self):
         """A reset is announced, not inferred from rows going missing:
         a node released by an older page or forgotten by age takes its
         row with it just the same."""
-        server.db.set_node_position(CORE, 1, 1, pinned=True)
+        server.rt.db.set_node_position(CORE, 1, 1, pinned=True)
         before = asyncio.run(server.api_layout())["cleared_at"]
         answer = asyncio.run(server.api_clear_layout())
         after = asyncio.run(server.api_layout())["cleared_at"]
@@ -422,17 +422,17 @@ class OnlyNewApiTest(unittest.TestCase):
         self.assertEqual(answer["cleared_at"], after)
 
     def test_forgetting_one_node_is_not_a_reset(self):
-        server.db.set_node_position(CORE, 1, 1, pinned=True)
+        server.rt.db.set_node_position(CORE, 1, 1, pinned=True)
         before = asyncio.run(server.api_layout())["cleared_at"]
         asyncio.run(server.api_delete_node_position(CORE))
         self.assertEqual(asyncio.run(server.api_layout())["cleared_at"], before)
 
     def test_a_plain_save_still_writes_everything(self):
         """The old form stays for compatibility and for diag."""
-        server.db.set_node_position(CORE, 1, 1, pinned=True)
+        server.rt.db.set_node_position(CORE, 1, 1, pinned=True)
         answer = self._put({CORE: {"x": 7, "y": 8}}, only_new=False)
         self.assertEqual(answer["stored"], [CORE])
-        saved = server.db.layout()[CORE]
+        saved = server.rt.db.layout()[CORE]
         self.assertEqual((saved["x"], saved["y"]), (7.0, 8.0))
         # …and still does not un-place what was put by hand
         self.assertTrue(saved["pinned"])
@@ -442,13 +442,13 @@ class HandPlacedTest(unittest.TestCase):
     """Pinning and releasing: one action, one journal line, no lost row."""
 
     def setUp(self):
-        server.db.clear_layout()
-        self._switches = server.state.switches
-        server.state.switches = [{"ip": "10.0.0.10"}, {"ip": "10.0.0.21"}]
+        server.rt.db.clear_layout()
+        self._switches = server.rt.state.switches
+        server.rt.state.switches = [{"ip": "10.0.0.10"}, {"ip": "10.0.0.21"}]
 
     def tearDown(self):
-        server.db.clear_layout()
-        server.state.switches = self._switches
+        server.rt.db.clear_layout()
+        server.rt.state.switches = self._switches
 
     def _patch(self, nodes):
         body = server.LayoutBody(
@@ -458,12 +458,12 @@ class HandPlacedTest(unittest.TestCase):
 
     def _entries(self, event, since):
         return [
-            e for e in server.db.journal(1000)
+            e for e in server.rt.db.journal(1000)
             if e["event"] == event and e["id"] > since
         ]
 
     def _last_id(self):
-        rows = server.db.journal(1)
+        rows = server.rt.db.journal(1)
         return rows[0]["id"] if rows else 0
 
     def test_a_selection_pinned_at_once_is_one_entry(self):
@@ -497,7 +497,7 @@ class HandPlacedTest(unittest.TestCase):
         self._patch({CORE: {"x": 1, "y": 1}})
         since = self._last_id()
         self._patch({CORE: {"x": 40, "y": 50, "pinned": False}})
-        self.assertNotIn(CORE, server.db.layout())
+        self.assertNotIn(CORE, server.rt.db.layout())
         self.assertEqual(len(self._entries("layout_released", since)), 1)
         self.assertEqual(self._entries("layout_pinned", since), [])
 
@@ -507,7 +507,7 @@ class HandPlacedTest(unittest.TestCase):
             CORE: {"x": 1, "y": 1, "pinned": False},
             "sw:10.0.0.21": {"x": 2, "y": 2},
         })
-        self.assertEqual(list(server.db.layout()), ["sw:10.0.0.21"])
+        self.assertEqual(list(server.rt.db.layout()), ["sw:10.0.0.21"])
 
     def test_an_older_page_releasing_by_delete_is_journalled_too(self):
         self._patch({CORE: {"x": 1, "y": 1}})
@@ -520,24 +520,24 @@ class OffsetApiTest(unittest.TestCase):
     """Offsets through the handlers, against a small map."""
 
     def setUp(self):
-        server.db.clear_layout()
-        self._saved = (server.state.switches, server.state.links,
-                       server.state.hosts, server.state.offline_groups,
-                       server.state.trunk_groups)
-        server.state.switches = [{"ip": "10.0.0.10"}, {"ip": "10.0.0.21"}]
-        server.state.links = [{"a": "10.0.0.10", "b": "10.0.0.21"}]
-        server.state.hosts = []
-        server.state.offline_groups = [
+        server.rt.db.clear_layout()
+        self._saved = (server.rt.state.switches, server.rt.state.links,
+                       server.rt.state.hosts, server.rt.state.offline_groups,
+                       server.rt.state.trunk_groups)
+        server.rt.state.switches = [{"ip": "10.0.0.10"}, {"ip": "10.0.0.21"}]
+        server.rt.state.links = [{"a": "10.0.0.10", "b": "10.0.0.21"}]
+        server.rt.state.hosts = []
+        server.rt.state.offline_groups = [
             {"id": OFFLINE, "switch": "10.0.0.10", "port": "Gi0/7", "via": ""},
         ]
-        server.state.trunk_groups = [
+        server.rt.state.trunk_groups = [
             {"id": TRUNK, "switch": "10.0.0.21", "port": "Gi0/24", "via": ""},
         ]
 
     def tearDown(self):
-        server.db.clear_layout()
-        (server.state.switches, server.state.links, server.state.hosts,
-         server.state.offline_groups, server.state.trunk_groups) = self._saved
+        server.rt.db.clear_layout()
+        (server.rt.state.switches, server.rt.state.links, server.rt.state.hosts,
+         server.rt.state.offline_groups, server.rt.state.trunk_groups) = self._saved
 
     def _patch(self, nodes=None, neighbours=None):
         body = server.LayoutBody(
@@ -563,11 +563,11 @@ class OffsetApiTest(unittest.TestCase):
         recorded from the core — the group was there once — says
         nothing about where it belongs now."""
         self._patch({CORE: {"x": 0, "y": 0}, "sw:10.0.0.21": {"x": 300, "y": 0}})
-        server.db.set_neighbours(CORE, {TRUNK: {"x": 50, "y": 50}})
+        server.rt.db.set_neighbours(CORE, {TRUNK: {"x": 50, "y": 50}})
         nodes = asyncio.run(server.api_layout())["nodes"]
         self.assertNotIn(TRUNK, nodes)
         # …while one measured from its real anchor is taken
-        server.db.set_neighbours("sw:10.0.0.21", {TRUNK: {"x": 50, "y": 50}})
+        server.rt.db.set_neighbours("sw:10.0.0.21", {TRUNK: {"x": 50, "y": 50}})
         nodes = asyncio.run(server.api_layout())["nodes"]
         self.assertEqual(nodes[TRUNK]["anchor"], "sw:10.0.0.21")
 
@@ -577,7 +577,7 @@ class OffsetApiTest(unittest.TestCase):
             {CORE: {OFFLINE: {"x": -80, "y": 20}}},
         )
         self._patch({CORE: {"x": 0, "y": 0, "pinned": False}})
-        self.assertEqual(server.db.layout(), {})
+        self.assertEqual(server.rt.db.layout(), {})
 
     def test_the_anchors_the_server_derives(self):
         anchors = server._layout_anchors()

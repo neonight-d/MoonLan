@@ -48,14 +48,14 @@ def row(mac, *, switch="", port="", ip="", last_seen=0.0, last_arp=0.0,
 
 class RecordsTest(unittest.TestCase):
     def setUp(self):
-        self._grace = server.config.host_grace_hours
-        self._days = server.config.host_retention_days
-        server.config.host_grace_hours = 72
-        server.config.host_retention_days = 30
+        self._grace = server.rt.config.host_grace_hours
+        self._days = server.rt.config.host_retention_days
+        server.rt.config.host_grace_hours = 72
+        server.rt.config.host_retention_days = 30
 
     def tearDown(self):
-        server.config.host_grace_hours = self._grace
-        server.config.host_retention_days = self._days
+        server.rt.config.host_grace_hours = self._grace
+        server.rt.config.host_retention_days = self._days
 
     def assemble(self):
         now = time.time()
@@ -108,20 +108,20 @@ class RecordsTest(unittest.TestCase):
         )
 
     def test_retention_zero_forgets_nothing(self):
-        server.config.host_retention_days = 0
+        server.rt.config.host_retention_days = 0
         _now, off = self.assemble()
         self.assertIsNone(off[EXPIRED]["forget_at"])
 
 
 class StatusTest(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
-        self._unlocated = server.state.unlocated
+        self._unlocated = server.rt.state.unlocated
 
     def tearDown(self):
-        server.state.unlocated = self._unlocated
+        server.rt.state.unlocated = self._unlocated
 
     async def test_the_counters(self):
-        server.state.unlocated = [
+        server.rt.state.unlocated = [
             {"mac": "aa:00:00:00:00:01", "recent": True},
             {"mac": "aa:00:00:00:00:02", "recent": False},
             {"mac": "aa:00:00:00:00:03", "recent": False},

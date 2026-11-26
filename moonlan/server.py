@@ -39,6 +39,7 @@ from .routers import (
     own_macs as router_own_macs,
     place as place_routers,
 )
+from .runtime import rt
 from .startup import CERT_WARN_DAYS  # noqa: F401 (moved)
 from .snmp_collector import (
     READING_FORMAT,
@@ -66,38 +67,38 @@ log = logging.getLogger("moonlan")
 
 WEB_DIR = Path(__file__).resolve().parent.parent / "web"
 
-state = TopologyState()
-config: Config = load_config()
+rt.state = TopologyState()
+rt.config: Config = load_config()
 # listen.public_url, taken apart: the origin requests and passkeys are
 # checked against, and the host a passkey is bound to
-public_url, public_url_problems = https.parse_public_url(
-    config.listen_public_url
+rt.public_url, rt.public_url_problems = https.parse_public_url(
+    rt.config.listen_public_url
 )
-trusted_proxies, trusted_proxy_problems = https.parse_trusted_proxies(
-    config.listen_trusted_proxies
+rt.trusted_proxies, rt.trusted_proxy_problems = https.parse_trusted_proxies(
+    rt.config.listen_trusted_proxies
 )
 # listen.tls_cert, read once at startup: the certificate uvicorn loaded
 # is the one this process serves until it is restarted
-certificate: https.CertInfo | None = None
+rt.certificate: https.CertInfo | None = None
 # The IEEE register of MAC blocks: who made a device. Read once, at
 # startup; without it every maker is "unknown" and nothing else changes
-vendors = oui.Registry.load(config.oui_folder())
+rt.vendors = oui.Registry.load(rt.config.oui_folder())
 # In demo mode the DB lives in memory so the real one is not polluted
-db = Database(":memory:" if config.demo else config.db_path)
+rt.db = Database(":memory:" if rt.config.demo else rt.config.db_path)
 # Settings (v0.8.4): the database's values onto the config, and
 # config.yaml's moved into the database where it has none. Before
 # anything below reads the config; said in the log at startup.
-settings_loaded = settings.load(config, db)
+rt.settings_loaded = settings.load(rt.config, rt.db)
 # Accounts and sessions: the same database — except in demo mode, where
 # they need a file python -m moonlan.users can reach (see
 # Config.users_db_path)
-accounts = Database(config.users_db_path()) if config.demo else db
+rt.accounts = Database(rt.config.users_db_path()) if rt.config.demo else rt.db
 # "tls", "proxy" or "http": said at startup, and what the warning about
 # passwords in the clear depends on
-transport = https.transport_mode(
-    config.listen_tls_cert, trusted_proxies, public_url
+rt.transport = https.transport_mode(
+    rt.config.listen_tls_cert, rt.trusted_proxies, rt.public_url
 )
-sign_in = signin.SignIn(accounts, db, config.auth, public_url, transport)
+rt.sign_in = signin.SignIn(rt.accounts, rt.db, rt.config.auth, rt.public_url, rt.transport)
 # For About (v0.8.1): when this process started, and the commit it was
 # started from — read once, as a pull after the start changes .git and
 # not the code that is running
@@ -106,153 +107,151 @@ BUILD = about.build_hash()
 COPYRIGHT = about.copyright_line(about.license_text())
 
 # Ping state of switches (they are not in the hosts table): ip -> {ping_up, last_ping_ok}
-switch_ping: dict[str, dict] = {}
+rt.switch_ping: dict[str, dict] = {}
 
 
 async def _demo_probe(argv: list[str], timeout: float):
     """The menu's ping and traceroute in demo mode: nothing is sent.
     A device answers when the demo's own monitoring says it does."""
     ip = argv[-1]
-    row = await asyncio.to_thread(db.host_by_ip, ip)
+    row = await asyncio.to_thread(rt.db.host_by_ip, ip)
     answers = bool(row and row["ping_up"]) or any(
         sw_ip == ip and ping.get("ping_up")
-        for sw_ip, ping in switch_ping.items()
+        for sw_ip, ping in rt.switch_ping.items()
     )
     return await demo.fake_probe(argv, answers)
 
 
 # The node menu's ping and traceroute: which tools this machine has,
 # and the requests running or recently finished
-tools = (
+rt.tools = (
     {"ping": "simulated", "traceroute": ("traceroute", "simulated")}
-    if config.demo else probes.find_tools()
+    if rt.config.demo else probes.find_tools()
 )
-jobs = probes.Jobs(tools, _demo_probe if config.demo else probes.run)
+rt.jobs = probes.Jobs(rt.tools, _demo_probe if rt.config.demo else probes.run)
 
 # FDB merged with previous polls: protects links from MAC table aging
-fdb_stability = FdbStability()
+rt.fdb_stability = FdbStability()
 
 # Latest raw poll data per switch: the ports API, the counters loop and
 # the link load labels all need port lists, speeds and LAG composition
-switch_data: dict[str, SwitchData] = {}
+rt.switch_data: dict[str, SwitchData] = {}
 # ip -> where the time of its last poll went (v0.8.8), for /api/polling:
 # "cut_at" — where the last poll that ran out of budget stopped, None
 # once a full poll finishes; "slowest_walks" — the longest walks of the
 # last poll, full or cut. A poll with no answer changes neither.
-poll_report: dict[str, dict] = {}
+rt.poll_report: dict[str, dict] = {}
 # switches whose drawn reading is the one restored from the database at
 # the start, until their first full poll (v0.8.8): switch_stale says so
-readings_from_database: set[str] = set()
+rt.readings_from_database: set[str] = set()
 
-counter_store = counters.CounterStore()
+rt.counter_store = counters.CounterStore()
 # Link-state transitions per port over a sliding window: a port can
 # bounce four times between two counter polls, and oper status alone
 # would show none of it
-flap_tracker = counters.FlapTracker(
-    config.thresholds.flap_window_minutes * 60
+rt.flap_tracker = counters.FlapTracker(
+    rt.config.thresholds.flap_window_minutes * 60
 )
 # (switch ip, port name) -> the flap count shown in the ports panel
-flap_by_port: dict[tuple[str, str], counters.PortFlaps] = {}
+rt.flap_by_port: dict[tuple[str, str], counters.PortFlaps] = {}
 ZERO_FLAPS = counters.PortFlaps(count=0, last=0.0)
 
 # switch ip -> which counter columns answered in the latest poll, so the
 # ports panel can say "unknown" where it used to say 0.0
-counter_columns: dict[str, dict[str, counters.ColumnStatus]] = {}
-notifier = Notifier(config, demo=config.demo)
+rt.counter_columns: dict[str, dict[str, counters.ColumnStatus]] = {}
+rt.notifier = Notifier(rt.config, demo=rt.config.demo)
 # One's own email and Telegram (v0.8.4): kept beside the accounts,
 # journalled with everything else; the notifier asks it who chose what
-personal = subscriptions.Subscriptions(
-    accounts, db, config, notifier, demo=config.demo
+rt.personal = subscriptions.Subscriptions(
+    rt.accounts, rt.db, rt.config, rt.notifier, demo=rt.config.demo
 )
-notifier.personal = personal.recipients
-alarm_engine = AlarmEngine(
-    db, notifier, config.thresholds, config.notifications
+rt.notifier.personal = rt.personal.recipients
+rt.alarm_engine = AlarmEngine(
+    rt.db, rt.notifier, rt.config.thresholds, rt.config.notifications
 )
-demo_counters = demo.DemoCounters() if config.demo else None
+rt.demo_counters = demo.DemoCounters() if rt.config.demo else None
 
 # The first scan is the initial inventory: every MAC is "new" there,
 # alerting on all of them would be pure noise
-first_scan_done = False
+rt.first_scan_done = False
 
 # MACs present in the FDB of the latest scan. A host missing from it is
 # "stale": still drawn at its last known port during the grace window,
 # but never alarmed on — its presence is no longer confirmed.
-fdb_macs: set[str] = set()
+rt.fdb_macs: set[str] = set()
 
 # (switch ip, port) of the pseudo-switches drawn last time: a group
 # that already exists must not vanish while any device is left on the
 # port, or the nodes would jump around between scans
-prev_pseudo_ports: set[tuple[str, str]] = set()
+rt.prev_pseudo_ports: set[tuple[str, str]] = set()
 
 # (switch ip, port) -> the distorted MACs of the latest scan, for the
 # ports panel and the diagnostics
-suspect_by_port: dict[tuple[str, str], list[dict]] = {}
+rt.suspect_by_port: dict[tuple[str, str], list[dict]] = {}
 
 # (switch ip, port) -> why the port looks like a way out of the network
 # and might belong in config.uplink_ports
-uplink_suspects: dict[tuple[str, str], dict] = {}
+rt.uplink_suspects: dict[tuple[str, str], dict] = {}
 
 # Saved node positions are cleaned up once, after the first scan —
 # not at startup proper. The rule is "old AND no longer on the map",
 # and before the first scan there is no map: every position would look
 # orphaned and the whole layout would be thrown away on a restart.
-layout_purged = False
+rt.layout_purged = False
 
 # Loop-detection profiles: the built-in ones plus whatever
 # config.yaml adds or overrides by name (see loopdetect.py)
-_loop_profiles: list | None = None
+rt._loop_profiles: list | None = None
 
 
 def loop_profiles() -> list:
-    global _loop_profiles
-    if _loop_profiles is None:
+    if rt._loop_profiles is None:
         extra, problems = loopdetect.parse_profiles(
-            config.loop_detection.profiles
+            rt.config.loop_detection.profiles
         )
         for problem in problems:
             log.warning("config.yaml loop_detection.profiles: %s", problem)
-        _loop_profiles = loopdetect.merge_profiles(
+        rt._loop_profiles = loopdetect.merge_profiles(
             loopdetect.BUILTIN_PROFILES, extra
         )
         log.info(
             "Loop detection profiles: %s",
-            ", ".join(p.name for p in _loop_profiles),
+            ", ".join(p.name for p in rt._loop_profiles),
         )
-    return _loop_profiles
+    return rt._loop_profiles
 
 # One SnmpEngine per process: a new engine per cycle leaks sockets and
 # MIB state (OSError 24, MibNotFoundError, growing RSS). Recreate only
 # if the SNMP config ever changes at runtime — it currently cannot.
-_collector: SnmpCollector | None = None
+rt._collector: SnmpCollector | None = None
 
 
 # One poll per switch at a time. A DGS-1210 answers one request at a
 # time, and the scan and the counters loop can otherwise land on the
 # same agent together. Different switches stay parallel — this is a
 # lock per IP, not a global one.
-_host_locks: dict[str, asyncio.Lock] = {}
+rt._host_locks: dict[str, asyncio.Lock] = {}
 
 
 def host_lock(ip: str) -> asyncio.Lock:
-    lock = _host_locks.get(ip)
+    lock = rt._host_locks.get(ip)
     if lock is None:
-        lock = _host_locks[ip] = asyncio.Lock()
+        lock = rt._host_locks[ip] = asyncio.Lock()
     return lock
 
 
 def get_collector() -> SnmpCollector:
-    global _collector
-    if _collector is None:
-        _collector = SnmpCollector(
-            community=config.snmp.community,
-            timeout=config.snmp.timeout,
-            retries=config.snmp.retries,
-            retries_on_break=config.snmp.retries_on_break,
-            per_host=config.switch_snmp,
-            dead_oid_strikes=config.snmp.dead_oid_strikes,
-            dead_oid_cooldown_scans=config.snmp.dead_oid_cooldown_scans,
+    if rt._collector is None:
+        rt._collector = SnmpCollector(
+            community=rt.config.snmp.community,
+            timeout=rt.config.snmp.timeout,
+            retries=rt.config.snmp.retries,
+            retries_on_break=rt.config.snmp.retries_on_break,
+            per_host=rt.config.switch_snmp,
+            dead_oid_strikes=rt.config.snmp.dead_oid_strikes,
+            dead_oid_cooldown_scans=rt.config.snmp.dead_oid_cooldown_scans,
         )
-    return _collector
+    return rt._collector
 
 
 async def _collect_locked(collector: SnmpCollector, ip: str) -> SwitchData:
@@ -283,7 +282,7 @@ async def _collect_within_budget(
         # from measurements instead of guesses
         data.poll_seconds = time.monotonic() - started
         if data.reachable and hasattr(collector, "slowest_walks"):
-            poll_report[ip] = {
+            rt.poll_report[ip] = {
                 "cut_at": None, "slowest_walks": collector.slowest_walks(ip),
             }
         return data
@@ -302,13 +301,13 @@ async def _collect_within_budget(
             ip, budget, time.monotonic() - started, _cut_words(cut),
         )
         if cut is not None:
-            poll_report[ip] = {"cut_at": cut, "slowest_walks": walks}
+            rt.poll_report[ip] = {"cut_at": cut, "slowest_walks": walks}
         answered_at = getattr(collector, "answered_at", {}).get(ip, 0.0)
         return OverBudget(
             True if answered_at >= started_at else None, cut=cut, walks=walks,
         )
     finally:
-        state.host_polled()
+        rt.state.host_polled()
 
 
 def _cut_words(cut: dict | None) -> str:
@@ -335,7 +334,7 @@ def _counters_wait_budget() -> float:
     Long enough to outlast a normal scan of one host, short enough that
     cycles never pile up: half an interval, capped at twenty seconds.
     """
-    return min(max(config.counters_interval_seconds, 2) / 2, 20)
+    return min(max(rt.config.counters_interval_seconds, 2) / 2, 20)
 
 
 async def _counters_locked(collector: SnmpCollector, ip: str):
@@ -366,7 +365,7 @@ async def _counters_locked(collector: SnmpCollector, ip: str):
         )
         return {}, {}, {}, None
     try:
-        sw = switch_data.get(ip)
+        sw = rt.switch_data.get(ip)
         # The interface table from the last scan: without it a truncated
         # column has no way of knowing which ports it failed to reach.
         # Real interfaces only — a negative ifIndex is one of our own
@@ -382,7 +381,7 @@ async def _counters_locked(collector: SnmpCollector, ip: str):
         # scan: a loop is an incident, and one walk of a small vendor
         # branch is what it costs to hear about it within a minute.
         loop = None
-        if config.loop_detection.enabled and sw is not None:
+        if rt.config.loop_detection.enabled and sw is not None:
             loop = await loopdetect.collect_loop_detection(
                 collector, ip, sw.ports, loop_profiles(),
                 sys_object_id=sw.sys_object_id,
@@ -396,7 +395,7 @@ def configured_switches() -> list[str]:
     """The switches the map is about: `switches:` in config.yaml, or the
     demo's own network. Each of them is on the map whatever it answers
     (v0.8.7) — from this scan, from a reading, or as an empty node."""
-    return list(demo.SWITCH_IPS) if config.demo else list(config.switches)
+    return list(demo.SWITCH_IPS) if rt.config.demo else list(rt.config.switches)
 
 
 def _settle(ip: str, result, now: float) -> SwitchData:
@@ -409,11 +408,11 @@ def _settle(ip: str, result, now: float) -> SwitchData:
     The reading object is the same one every time, so a switch that
     goes from late to silent keeps its data and its loop detection.
     """
-    previous = switch_data.get(ip)
+    previous = rt.switch_data.get(ip)
     # a full reading of some age: fresh, over budget, silent or restored
     reading = previous if previous is not None and previous.reachable else None
     if isinstance(result, SwitchData) and result.reachable:
-        readings_from_database.discard(ip)
+        rt.readings_from_database.discard(ip)
         result.state = STATE_FRESH
         result.answered = True
         result.over_budget = False
@@ -453,28 +452,28 @@ def _settle(ip: str, result, now: float) -> SwitchData:
 
 async def run_scan() -> None:
     """One cycle of polling all switches and rebuilding the topology."""
-    if state.scanning:
+    if rt.state.scanning:
         return
     ips = configured_switches()
-    state.scan_started(len(ips))
+    rt.state.scan_started(len(ips))
     over_budget: list[str] = []
     try:
         arp: dict[str, str] = {}
         now = time.time()
-        if config.demo:
+        if rt.config.demo:
             results = demo.demo_poll()
             for ip, result in results:
-                state.host_polled()
+                rt.state.host_polled()
                 times = demo.poll_times(ip, result)
                 if times is not None:
-                    poll_report[ip] = times
+                    rt.poll_report[ip] = times
         else:
             collector = get_collector()
             collector.begin_scan_cycle()
             polled = await asyncio.gather(
                 *(
                     _collect_within_budget(
-                        collector, ip, config.host_budget(ip)
+                        collector, ip, rt.config.host_budget(ip)
                     )
                     for ip in ips
                 ),
@@ -494,11 +493,11 @@ async def run_scan() -> None:
                 results.append((ip, result))
         collected = [_settle(ip, result, now) for ip, result in results]
         identities: list[RouterIdentity] = []
-        if config.demo:
+        if rt.config.demo:
             ip_to_mac = {ip: mac for mac, ip in demo.SWITCH_ARP.items()}
             identities = demo.router_identities()
         else:
-            if config.routers:
+            if rt.config.routers:
                 arp, identities = await asyncio.gather(
                     collect_arp(collector), collect_identities(collector)
                 )
@@ -512,7 +511,7 @@ async def run_scan() -> None:
         over_budget = [sw.ip for sw in collected if sw.over_budget]
         await _build_map(collected, arp, observe=True, identities=identities)
     finally:
-        state.scan_ended(over_budget)
+        rt.state.scan_ended(over_budget)
 
 
 async def restore_readings() -> None:
@@ -528,15 +527,15 @@ async def restore_readings() -> None:
     replaces its reading.
     """
     ips = configured_switches()
-    rows = await asyncio.to_thread(db.switch_readings)
+    rows = await asyncio.to_thread(rt.db.switch_readings)
     gone = sorted(ip for ip in rows if ip not in set(ips))
     if gone:
-        await asyncio.to_thread(db.delete_switch_readings, gone)
+        await asyncio.to_thread(rt.db.delete_switch_readings, gone)
         log.info(
             "Saved readings of %d switch(es) no longer in switches: "
             "deleted: %s", len(gone), ", ".join(gone),
         )
-    days = config.host_retention_days
+    days = rt.config.host_retention_days
     cutoff = time.time() - days * 86400 if days > 0 else 0.0
     restored = []
     for ip in ips:
@@ -569,8 +568,8 @@ async def restore_readings() -> None:
             continue
         sw.state = STATE_RESTORED
         sw.answered = None
-        switch_data[ip] = sw
-        readings_from_database.add(ip)
+        rt.switch_data[ip] = sw
+        rt.readings_from_database.add(ip)
         restored.append(sw)
     if not restored:
         return
@@ -580,7 +579,7 @@ async def restore_readings() -> None:
         "poll", len(restored), len(ips),
     )
     collected = [
-        switch_data.get(ip) or SwitchData(ip=ip, state=STATE_NEVER)
+        rt.switch_data.get(ip) or SwitchData(ip=ip, state=STATE_NEVER)
         for ip in ips
     ]
     await _build_map(collected, {}, observe=False)
@@ -637,7 +636,7 @@ def _stub_switches(
             "attached": attached,
             # for the card: since when, and against which budget
             "started_at": STARTED_AT,
-            "budget_seconds": config.host_budget(ip),
+            "budget_seconds": rt.config.host_budget(ip),
         })
     return stubs
 
@@ -657,10 +656,9 @@ async def _build_map(
     themselves in this scan (v0.8.11, see routers.py); none at the
     start, where there is no ARP either.
     """
-    global first_scan_done, fdb_macs, prev_pseudo_ports
     over_budget = [sw.ip for sw in collected if sw.over_budget]
     for sw in collected:
-        previous = switch_data.get(sw.ip)
+        previous = rt.switch_data.get(sw.ip)
         if previous is not None and sw.loop_detection is None:
             # Loop detection is refreshed by the counters cycle,
             # not by the scan. A fresh SwitchData carries none, and
@@ -669,7 +667,7 @@ async def _build_map(
             # scan — a claim about hardware, made because of our
             # own bookkeeping.
             sw.loop_detection = previous.loop_detection
-        switch_data[sw.ip] = sw
+        rt.switch_data[sw.ip] = sw
     # The last full reading of each switch read in full, for the next
     # start (v0.8.7). Taken here, before the spanning-tree test and the
     # map write their conclusions into the objects: a reading is what
@@ -705,18 +703,18 @@ async def _build_map(
     # device (unless ARP vouches for it); the verdict is needed
     # before the topology so that unconfirmed addresses stay out of
     # the per-port device counts as well as off the map
-    db_rows = await asyncio.to_thread(db.hosts_by_mac)
+    db_rows = await asyncio.to_thread(rt.db.hosts_by_mac)
     # An empty database is the initial inventory — there is no map
     # yet for a phantom to pollute, and waiting would only show the
     # operator an empty screen on the first poll
-    confirm_scans = config.new_host_confirm_scans if db_rows else 1
+    confirm_scans = rt.config.new_host_confirm_scans if db_rows else 1
     # Only switches actually read this cycle. A switch that ran out
     # of budget contributes the table it produced last time, and
     # counting a MAC again out of a copy of one reading is how an
     # address gets "seen in three polls" without anyone looking for
     # it twice.
     unconfirmed = await asyncio.to_thread(
-        db.projected_unconfirmed,
+        rt.db.projected_unconfirmed,
         {
             mac for sw in collected
             if sw.reachable and not sw.from_reading
@@ -732,7 +730,7 @@ async def _build_map(
     # for a sample and confirmed. An empty database is the initial
     # inventory, as above: nothing in it to be a copy of.
     with_ip = set(arp) | set(own)
-    grace = config.host_grace_hours * 3600
+    grace = rt.config.host_grace_hours * 3600
     copy_candidates = corruption.candidates(
         {mac for sw in collected if sw.reachable for mac in sw.fdb},
         db_rows, with_ip,
@@ -742,7 +740,7 @@ async def _build_map(
     # would make the port behind one real device a switch without
     # SNMP. Neither do the records marked as copies (v0.8.5).
     voting_out = unconfirmed
-    if config.filter_suspect_macs:
+    if rt.config.filter_suspect_macs:
         voting_out = unconfirmed | _marked_copies(db_rows)
         voting_out |= corruption.likely_copies(
             {sw.ip: set(sw.fdb) for sw in collected if sw.reachable},
@@ -750,7 +748,7 @@ async def _build_map(
             corruption.samples_by_switch(
                 [], db_rows, with_ip, grace, time.time()
             ),
-            config.thresholds.corruption_hamming_bits,
+            rt.config.thresholds.corruption_hamming_bits,
         )
     # What the database already knows about each port feeds the
     # unmanaged-switch threshold, so groups survive FDB aging
@@ -759,15 +757,15 @@ async def _build_map(
         topo_info,
     ) = build_topology(
         collected,
-        config.unmanaged_threshold,
+        rt.config.unmanaged_threshold,
         # a reading drawn at the start does not touch the smoothing
-        fdb_stability=None if config.demo or not observe else fdb_stability,
+        fdb_stability=None if rt.config.demo or not observe else rt.fdb_stability,
         known_hosts_per_port=_known_hosts_per_port(
             db_rows, {sw.ip for sw in collected if sw.reachable}
         ),
-        sticky_pseudo_ports=prev_pseudo_ports,
+        sticky_pseudo_ports=rt.prev_pseudo_ports,
         unconfirmed_macs=voting_out,
-        place_trunk_only=config.place_trunk_only_hosts,
+        place_trunk_only=rt.config.place_trunk_only_hosts,
         uplink_ports=_uplink_ports(),
         remembered_locations=_remembered_locations(db_rows),
     )
@@ -777,7 +775,7 @@ async def _build_map(
     # interface, where the map they changed is.
     for dropped in topo_info.get("dropped_links", []) if observe else ():
         await asyncio.to_thread(
-            db.add_event, time.time(), "link_dropped", "",
+            rt.db.add_event, time.time(), "link_dropped", "",
             _dropped_link_details(dropped),
         )
     # The switches with no reading anywhere (v0.8.7): an empty node
@@ -790,7 +788,7 @@ async def _build_map(
     }
     hosts = [h for h in hosts if h["mac"] not in stub_macs]
     switches = switches + stubs
-    prev_pseudo_ports = {
+    rt.prev_pseudo_ports = {
         (p["switch"], p["port"]) for p in pseudo_switches
     }
     # Addresses a bit or two away from a real one on the same
@@ -805,7 +803,7 @@ async def _build_map(
         corruption.samples_by_switch(
             hosts, db_rows, with_ip, grace, time.time()
         ),
-        config.thresholds.corruption_hamming_bits,
+        rt.config.thresholds.corruption_hamming_bits,
     )
     _apply_suspects(hosts, suspects)
     suspect_macs = {
@@ -848,17 +846,17 @@ async def _build_map(
     new_macs = []
     if not observe:
         pass
-    elif config.demo:
+    elif rt.config.demo:
         new_macs = await asyncio.to_thread(
-            db.upsert_hosts, observed + seen_nowhere, confirm_scans,
-            suspect_macs if config.filter_suspect_macs else set(),
+            rt.db.upsert_hosts, observed + seen_nowhere, confirm_scans,
+            suspect_macs if rt.config.filter_suspect_macs else set(),
             set(own),
         )
-        await asyncio.to_thread(demo.enrich_db, db, hosts)
+        await asyncio.to_thread(demo.enrich_db, rt.db, hosts)
     else:
         new_macs = await asyncio.to_thread(
-            db.upsert_hosts, observed + seen_nowhere, confirm_scans,
-            suspect_macs if config.filter_suspect_macs else set(),
+            rt.db.upsert_hosts, observed + seen_nowhere, confirm_scans,
+            suspect_macs if rt.config.filter_suspect_macs else set(),
             set(own),
         )
         if arp:
@@ -866,14 +864,14 @@ async def _build_map(
             # router or an unpolled switch): keep them as inventory
             # with an empty switch_ip. Switches and routers
             # themselves are map nodes, not hosts.
-            infra_ips = set(config.switches) | set(config.routers)
+            infra_ips = set(rt.config.switches) | set(rt.config.routers)
             own_macs = _switch_macs()
             arp_hosts = {
                 mac: ip for mac, ip in arp.items()
                 if mac not in own_macs and ip not in infra_ips
             }
             created = await asyncio.to_thread(
-                db.set_ips, arp_hosts, True
+                rt.db.set_ips, arp_hosts, True
             )
             if created:
                 log.info(
@@ -884,7 +882,7 @@ async def _build_map(
     if observe:
         # ARP vouches for an address, so a newcomer it knows joins the
         # map in the same poll it first appeared in
-        new_macs += await asyncio.to_thread(db.confirm_hosts_with_ip)
+        new_macs += await asyncio.to_thread(rt.db.confirm_hosts_with_ip)
         if new_macs:
             log.info("New MACs confirmed: %d", len(new_macs))
         # copies confirmed before v0.8.5 held them back, now that this
@@ -892,14 +890,14 @@ async def _build_map(
         await hide_confirmed_copies(set(own))
         # an ARP answer never makes a router's interface a new device
         new_macs = [mac for mac in new_macs if mac not in own]
-    unconfirmed = await asyncio.to_thread(db.unconfirmed_macs)
+    unconfirmed = await asyncio.to_thread(rt.db.unconfirmed_macs)
     if unconfirmed and observe:
         log.info(
             "MACs awaiting confirmation (%d poll(s) each): %d",
             confirm_scans, len(unconfirmed),
         )
-    db_rows = await asyncio.to_thread(db.hosts_by_mac)
-    if config.filter_suspect_macs:
+    db_rows = await asyncio.to_thread(rt.db.hosts_by_mac)
+    if rt.config.filter_suspect_macs:
         # off the map whatever the database holds: a switch past its
         # budget is drawn from a reading nobody wrote down, and its
         # copies are in no table of unconfirmed addresses. Nor in
@@ -909,7 +907,7 @@ async def _build_map(
     else:
         unconfirmed -= suspect_macs  # draw the damage instead
     hosts = [h for h in hosts if h["mac"] not in unconfirmed]
-    fdb_macs = {h["mac"] for h in hosts}
+    rt.fdb_macs = {h["mac"] for h in hosts}
     if observe:
         await _release_unconfirmed_ips(db_rows)
     # One node per router of `routers:` (v0.8.11): one of its MACs, or
@@ -920,7 +918,7 @@ async def _build_map(
         topo_info.get("other_devices", []) + topo_info.get("unidentified", []),
         _remembered_router_macs(
             own, db_rows, {sw.ip for sw in collected if sw.reachable},
-            fdb_macs | unconfirmed,
+            rt.fdb_macs | unconfirmed,
         ),
     )
     _merge_router_macs(placement, hosts, bridges)
@@ -956,9 +954,9 @@ async def _build_map(
     fresh = [sw for sw in collected if sw.map_state == STATE_FRESH]
     fresh_ips = {sw.ip for sw in fresh}
     if observe:
-        await asyncio.to_thread(db.upsert_lldp, _lldp_rows(fresh), now)
+        await asyncio.to_thread(rt.db.upsert_lldp, _lldp_rows(fresh), now)
         await asyncio.to_thread(
-            db.upsert_bridges,
+            rt.db.upsert_bridges,
             [
                 {
                     "chassis_id": b["chassis_id"],
@@ -975,10 +973,10 @@ async def _build_map(
         )
         for ip, polled_at, data in readings:
             await asyncio.to_thread(
-                db.save_switch_reading, ip, polled_at, READING_FORMAT,
+                rt.db.save_switch_reading, ip, polled_at, READING_FORMAT,
                 __version__, data,
             )
-    bridge_rows = await asyncio.to_thread(db.bridges)
+    bridge_rows = await asyncio.to_thread(rt.db.bridges)
     for bridge in bridges:
         row = bridge_rows.get(bridge["chassis_id"], {})
         bridge["first_seen"] = row.get("first_seen", now)
@@ -999,8 +997,8 @@ async def _build_map(
     # Ports that look like a way out but are not configured as one.
     # Addresses are only known once the DB has been merged in, so
     # this happens here rather than inside build_topology.
-    uplink_suspects.clear()
-    uplink_suspects.update(
+    rt.uplink_suspects.clear()
+    rt.uplink_suspects.update(
         suspect_uplink_ports(
             [sw for sw in collected if sw.reachable],
             [
@@ -1015,7 +1013,7 @@ async def _build_map(
         )
     )
     for (sw_ip, port), why in (
-        sorted(uplink_suspects.items()) if observe else ()
+        sorted(rt.uplink_suspects.items()) if observe else ()
     ):
         log.info(
             "%s port %s looks like a way out of the network (%s). Add "
@@ -1025,7 +1023,7 @@ async def _build_map(
             sw_ip, port, why["text"], sw_ip, port,
         )
     stp_report = _stp_report(collected, topo_info.get("trunk_names", {}))
-    state.update(
+    rt.state.update(
         switches, links, hosts, pseudo_switches, vlan_names, unlocated,
         offline_groups, bridges, stp_report,
         topo_info.get("external_networks", []),
@@ -1041,7 +1039,7 @@ async def _build_map(
             len(switches), len(links), len(hosts),
         )
         return
-    if config.demo:
+    if rt.config.demo:
         await run_ping()  # set the switches' ping state right away
 
     # A switch that ran out of budget is not reported either way.
@@ -1051,7 +1049,7 @@ async def _build_map(
     # just as much of an invention.
     # And it goes by the answer in this scan, never by what is drawn:
     # a switch on the map from its last reading may be silent now.
-    await alarm_engine.on_scan(
+    await rt.alarm_engine.on_scan(
         {
             sw.ip: bool(sw.answered) for sw in collected
             if not sw.over_budget and sw.answered is not None
@@ -1084,17 +1082,17 @@ async def _build_map(
         sw.ip: {
             "scans": sw.over_budget_scans,
             "polled_at": sw.polled_at if sw.map_state != STATE_NEVER else 0.0,
-            "source": "saved" if sw.ip in readings_from_database else "run",
+            "source": "saved" if sw.ip in rt.readings_from_database else "run",
             "started_at": STARTED_AT,
             "answered": sw.answered,
         }
         for sw in collected
         if sw.over_budget
     }
-    await alarm_engine.on_stale_switches(
+    await rt.alarm_engine.on_stale_switches(
         stale_switches,
         {sw.ip: sw.sys_name or sw.ip for sw in collected},
-        threshold=max(config.stale_switch_scans, 1),
+        threshold=max(rt.config.stale_switch_scans, 1),
         # how each switch came out of this scan: the words a standing
         # switch_stale clears with depend on it (v0.8.9)
         states={
@@ -1111,26 +1109,26 @@ async def _build_map(
             len(over_budget), len(collected),
             ", ".join(over_budget),
         )
-    await alarm_engine.clear_suppressed(
+    await rt.alarm_engine.clear_suppressed(
         _suppressed_bridges(bridges, bridge_rows)
     )
-    await alarm_engine.on_bridges(bridges, _known_bridge_ids())
-    await alarm_engine.on_stp(stp_report)
-    await alarm_engine.on_corruption(
+    await rt.alarm_engine.on_bridges(bridges, _known_bridge_ids())
+    await rt.alarm_engine.on_stp(stp_report)
+    await rt.alarm_engine.on_corruption(
         {f"{sw_ip}:{port}": found
          for (sw_ip, port), found in suspects.items()},
         inbound_errors=_subject_inbound_errors,
         window_minutes=_copies_window() / 60,
-        maker=lambda mac: vendors.lookup(mac).name or "",
+        maker=lambda mac: rt.vendors.lookup(mac).name or "",
     )
-    if new_macs and first_scan_done:
-        rows = await asyncio.to_thread(db.hosts_by_mac)
-        await alarm_engine.on_new_macs(
+    if new_macs and rt.first_scan_done:
+        rows = await asyncio.to_thread(rt.db.hosts_by_mac)
+        await rt.alarm_engine.on_new_macs(
             new_macs,
             {mac: _new_device_text(mac, rows[mac])
              for mac in new_macs if mac in rows},
         )
-    first_scan_done = True
+    rt.first_scan_done = True
     log.info(
         "Scan finished: %d switches, %d links, %d hosts",
         len(switches), len(links), len(hosts),
@@ -1161,7 +1159,7 @@ async def _retire_port_names(collected: list[SwitchData]) -> None:
             if -bridge_port in sw.ports and sw.ports[-bridge_port].name
         }
         counts = await asyncio.to_thread(
-            db.retire_port_names, sw.ip, renames
+            rt.db.retire_port_names, sw.ip, renames
         )
         if any(counts.values()):
             log.info(
@@ -1178,7 +1176,7 @@ async def _reconcile_notes() -> None:
     note is "without a node" only after notes.MISSING_SCANS scans in a
     row; it is never deleted."""
     changed = await asyncio.to_thread(
-        db.reconcile_notes, _noted_node_ids(), time.time()
+        rt.db.reconcile_notes, _noted_node_ids(), time.time()
     )
     if changed["lost"]:
         log.info(
@@ -1219,27 +1217,26 @@ async def _purge_layout_once() -> None:
     same scan says what each node hangs off, so an offset recorded
     around a pinned node that a device has since left goes too.
     """
-    global layout_purged
-    if layout_purged:
+    if rt.layout_purged:
         return
-    layout_purged = True
+    rt.layout_purged = True
     await purge_layout()
 
 
 async def purge_layout() -> None:
     gone = await asyncio.to_thread(
-        db.purge_layout, config.layout_keep_days, _layout_node_ids()
+        rt.db.purge_layout, rt.config.layout_keep_days, _layout_node_ids()
     )
     if gone:
         log.info(
             "Map layout: forgot the saved position of %d node(s) not seen "
             "for over %.0f day(s) and no longer on the map: %s",
-            len(gone), config.layout_keep_days,
+            len(gone), rt.config.layout_keep_days,
             ", ".join(sorted(gone)[:10])
             + (" and more" if len(gone) > 10 else ""),
         )
     moved = await asyncio.to_thread(
-        db.drop_misplaced_offsets, _layout_anchors()
+        rt.db.drop_misplaced_offsets, _layout_anchors()
     )
     if moved:
         log.info(
@@ -1310,7 +1307,7 @@ def _stp_report(
     trunk_names = trunk_names or {}
     switches = []
     for ip, data in sorted(per_switch.items()):
-        sw = switch_data.get(ip)
+        sw = rt.switch_data.get(ip)
         own_macs = sw.own_macs if sw else set()
         # The VLANs of this switch's trunk ports. Untagged BPDUs are
         # handled in the VLAN of the port they arrive on, so two
@@ -1372,9 +1369,9 @@ def _infrastructure() -> set[str]:
     In demo mode these come from the demo network, not from the
     config.yaml that happens to be in the working directory.
     """
-    if config.demo:
-        return set(switch_data) | set(demo.ROUTERS)
-    return set(config.switches) | set(config.routers)
+    if rt.config.demo:
+        return set(rt.switch_data) | set(demo.ROUTERS)
+    return set(rt.config.switches) | set(rt.config.routers)
 
 
 def _router_addresses(
@@ -1396,11 +1393,11 @@ def _router_addresses(
         mac: identity.address
         for mac, identity in router_own_macs(identities or ()).items()
     }
-    listed = set(config.routers)
+    listed = set(rt.config.routers)
     for mac, ip in arp.items():
         if ip in listed:
             found.setdefault(mac, ip)
-    if config.demo:
+    if rt.config.demo:
         for mac, ip in demo.ROUTER_ADDRESSES.items():
             found.setdefault(mac, ip)
     return found
@@ -1412,7 +1409,7 @@ async def _release_router_macs(own: dict[str, RouterIdentity]) -> None:
     INFO line for what was undone; a record that was only new is
     confirmed without one."""
     released = await asyncio.to_thread(
-        db.vouch_for, set(own), max(config.new_host_confirm_scans, 1)
+        rt.db.vouch_for, set(own), max(rt.config.new_host_confirm_scans, 1)
     )
     undone = [r for r in released if r["was"] != "new"]
     if not undone:
@@ -1440,7 +1437,7 @@ def _remembered_router_macs(
     window — the records _assemble_hosts puts on the map grey — as
     mac -> {switch, port, last_seen}. `drawn` are the MACs this scan
     has already (and the unconfirmed ones)."""
-    grace = config.host_grace_hours * 3600
+    grace = rt.config.host_grace_hours * 3600
     now = time.time()
     remembered: dict[str, dict] = {}
     for mac in own:
@@ -1515,8 +1512,8 @@ async def _router_nodes_take_over(placement) -> None:
     """
     if not placement.nodes:
         return
-    layout = await asyncio.to_thread(db.layout)
-    stored = await asyncio.to_thread(db.notes)
+    layout = await asyncio.to_thread(rt.db.layout)
+    stored = await asyncio.to_thread(rt.db.notes)
     for node in placement.nodes:
         sources = [
             "host:" + mac for mac, target in sorted(placement.merged.items())
@@ -1528,12 +1525,12 @@ async def _router_nodes_take_over(placement) -> None:
                 # the one written last, if the operator wrote several
                 source = max(noted, key=lambda key: stored[key]["updated_at"])
                 await asyncio.to_thread(
-                    db.move_note, source, node.node_id, MOONLAN_ACTOR,
+                    rt.db.move_note, source, node.node_id, MOONLAN_ACTOR,
                     time.time(),
                 )
                 details = {"from": source, "to": node.node_id}
                 await asyncio.to_thread(
-                    db.add_event, time.time(), "note_moved", node.node_id,
+                    rt.db.add_event, time.time(), "note_moved", node.node_id,
                     json.dumps(details), MOONLAN_ACTOR,
                 )
                 log.info(
@@ -1545,9 +1542,9 @@ async def _router_nodes_take_over(placement) -> None:
             pinned = [key for key in sources if (layout.get(key) or {}).get("pinned")]
             if pinned:
                 source = max(pinned, key=lambda key: layout[key]["updated_at"] or 0)
-                if await asyncio.to_thread(db.move_position, source, node.node_id):
+                if await asyncio.to_thread(rt.db.move_position, source, node.node_id):
                     await asyncio.to_thread(
-                        db.add_event, time.time(), "layout_pinned", "",
+                        rt.db.add_event, time.time(), "layout_pinned", "",
                         json.dumps({
                             "n": 1, "ids": [node.node_id], "from": source,
                         }),
@@ -1614,9 +1611,9 @@ def _uplink_ports() -> set[tuple[str, str]]:
     naming a port of the real network would otherwise put an empty
     "External network" node on the demo map.
     """
-    if config.demo:
+    if rt.config.demo:
         return set(demo.UPLINK_PORTS)
-    return parse_uplink_ports(config.uplink_ports)
+    return parse_uplink_ports(rt.config.uplink_ports)
 
 
 def _suppressed_bridges(
@@ -1633,7 +1630,7 @@ def _suppressed_bridges(
     rather than waiting for a neighbour that is never going away.
     """
     uplinks = _uplink_ports()
-    known = set(config.known_bridges)
+    known = set(rt.config.known_bridges)
     ours = _polled_identities()
     located: dict[str, tuple[str, str, str]] = {
         row["chassis_id"]: (row["switch_ip"], row["port"], row["mgmt_ip"])
@@ -1677,10 +1674,10 @@ def _polled_identities() -> dict[str, str]:
     ours: dict[str, str] = {}
     for ip in _infrastructure():
         ours[ip.lower()] = (
-            "it is a router MoonLan polls" if ip in set(config.routers)
+            "it is a router MoonLan polls" if ip in set(rt.config.routers)
             else "it is a switch MoonLan polls"
         )
-    for ip, sw in switch_data.items():
+    for ip, sw in rt.switch_data.items():
         why = f"it is {sw.sys_name or ip}, a switch MoonLan polls"
         for mac in sw.own_macs:
             ours[mac.lower()] = why
@@ -1691,7 +1688,7 @@ def _polled_identities() -> dict[str, str]:
 
 def _known_bridge_ids() -> set[str]:
     """Chassis ids and addresses that must never raise a bridge alarm."""
-    return set(config.known_bridges) | set(_polled_identities())
+    return set(rt.config.known_bridges) | set(_polled_identities())
 
 
 def _is_known_bridge(bridge: dict) -> bool:
@@ -1712,7 +1709,7 @@ def _copy_counts(found: list[dict]) -> dict[str, int]:
 def _copy_samples(counts: dict[str, int]) -> list[dict]:
     """[{mac, vendor, n}] for the page, which words the conclusion"""
     return [
-        {"mac": mac, "vendor": vendors.lookup(mac).name or "", "n": n}
+        {"mac": mac, "vendor": rt.vendors.lookup(mac).name or "", "n": n}
         for mac, n in counts.items()
     ]
 
@@ -1720,14 +1717,14 @@ def _copy_samples(counts: dict[str, int]) -> list[dict]:
 def _copies_window() -> float:
     """What "inbound errors in N min" counts over: one scan interval —
     the copies a scan finds were learned since the one before it."""
-    return (config.scan_interval_minutes or 10) * 60
+    return (rt.config.scan_interval_minutes or 10) * 60
 
 
 def _subject_inbound_errors(subject: str) -> int | None:
     """Inbound errors of the port "switch ip:port" over _copies_window();
     None while the counters do not know."""
     ip, _sep, port = subject.partition(":")
-    sw = switch_data.get(ip)
+    sw = rt.switch_data.get(ip)
     if sw is None:
         return None
     if_index = next(
@@ -1735,7 +1732,7 @@ def _subject_inbound_errors(subject: str) -> int | None:
     )
     if if_index is None:
         return None
-    return counter_store.inbound_errors(
+    return rt.counter_store.inbound_errors(
         ip, if_index, time.time() - _copies_window()
     )
 
@@ -1744,8 +1741,8 @@ def _apply_suspects(
     hosts: list[dict], suspects: dict[tuple[str, str], list[dict]]
 ) -> None:
     """Marks the distorted MACs and remembers them for the ports panel."""
-    suspect_by_port.clear()
-    suspect_by_port.update(suspects)
+    rt.suspect_by_port.clear()
+    rt.suspect_by_port.update(suspects)
     flat = {
         s["mac"]: s for found in suspects.values() for s in found
     }
@@ -1766,7 +1763,7 @@ def _switch_macs() -> set[str]:
     """Every MAC belonging to a polled switch — those are nodes of the
     map, never hosts, even when a router's ARP table lists them."""
     macs: set[str] = set()
-    for sw in switch_data.values():
+    for sw in rt.switch_data.values():
         macs |= sw.own_macs
         if sw.bridge_mac:
             macs.add(sw.bridge_mac)
@@ -1783,19 +1780,19 @@ async def _release_unconfirmed_ips(db_rows: dict[str, dict]) -> None:
     address is released and the record stops being pinged. db_rows is
     updated in place so the rest of this scan sees the change.
     """
-    hours = config.ip_confirm_hours
+    hours = rt.config.ip_confirm_hours
     if hours <= 0:
         return
     now = time.time()
     cutoff = now - hours * 3600
     released = []
     for mac, row in db_rows.items():
-        if not row["ip"] or mac in fdb_macs:
+        if not row["ip"] or mac in rt.fdb_macs:
             continue
         if row["ip_confirmed"] >= cutoff:
             continue
         if await asyncio.to_thread(
-            db.release_ip, mac, now,
+            rt.db.release_ip, mac, now,
             f"not confirmed by ARP for {hours:g} h",
         ):
             released.append(mac)
@@ -1865,14 +1862,14 @@ def _known_hosts_per_port(
     the ones inside the grace window — the same set that stays on the
     map — so the unmanaged-switch threshold sees the whole group and
     not only the MACs this particular poll happened to catch."""
-    grace = config.host_grace_hours * 3600
+    grace = rt.config.host_grace_hours * 3600
     now = time.time()
     counts: Counter = Counter()
     for row in db_rows.values():
         if not row["confirmed"]:
             continue  # not a device yet: it must not push a port over
                       # the unmanaged-switch threshold
-        if row.get("corrupt_of") and config.filter_suspect_macs:
+        if row.get("corrupt_of") and rt.config.filter_suspect_macs:
             continue  # a damaged copy, never one
         if row["switch_ip"] in switch_ips and row["port"]:
             if grace > 0 and now - row["last_seen"] < grace:
@@ -1905,8 +1902,8 @@ def _mark_recent(
 
     A ping too, since v0.8.9: it goes to the address, and once the
     address is another device's, the answer is that device's."""
-    grace = config.host_grace_hours * 3600
-    days = config.host_retention_days
+    grace = rt.config.host_grace_hours * 3600
+    days = rt.config.host_retention_days
     for host in unlocated:
         row = db_rows.get(host["mac"], {})
         fdb = row.get("last_seen", 0) or 0
@@ -1967,7 +1964,7 @@ def _assemble_hosts(
         h["stale"] = False
     now = time.time()
     merged = merged or {}
-    grace = config.host_grace_hours * 3600
+    grace = rt.config.host_grace_hours * 3600
     uplink_only = uplink_only or {}
     known = {h["mac"] for h in fresh} | _switch_macs() | (unconfirmed or set())
     pseudo_by_port = {(p["switch"], p["port"]): p["id"] for p in pseudo_switches}
@@ -2035,7 +2032,7 @@ def _assemble_hosts(
         if row.get("ip") and not row.get("ping_up")
     }
     trunk_groups = group_beyond_trunk(
-        on_map, trunk_names or {}, config.trunk_group_threshold,
+        on_map, trunk_names or {}, rt.config.trunk_group_threshold,
         nodes_on_port, silent,
     )
     return (
@@ -2065,7 +2062,7 @@ def _group_offline(
     three places, with the quiet half apparently somewhere else
     entirely.
     """
-    threshold = config.offline_group_threshold
+    threshold = rt.config.offline_group_threshold
     if threshold <= 0:
         return []
     nodes_on_port = nodes_on_port or {}
@@ -2102,7 +2099,7 @@ def _group_offline(
 def _effective_monitored(row: dict) -> bool:
     """monitored_by_default=true restores the old alert-on-everything
     behavior regardless of the per-host flag."""
-    return config.monitored_by_default or bool(row.get("monitored", 0))
+    return rt.config.monitored_by_default or bool(row.get("monitored", 0))
 
 
 def _new_device_text(mac: str, row: dict) -> str:
@@ -2110,7 +2107,7 @@ def _new_device_text(mac: str, row: dict) -> str:
     mail: who made the device and where it came in, so the administrator
     knows who joined the network without opening the map. "new device by
     GIGA-BYTE TECHNOLOGY CO.,LTD. on access-sw-1 (10.0.0.21) Gi0/9"."""
-    maker = vendors.lookup(mac)
+    maker = rt.vendors.lookup(mac)
     who = {
         "found": f"new device by {maker.name}",
         "unregistered": "new device, its maker not in the IEEE register,",
@@ -2119,7 +2116,7 @@ def _new_device_text(mac: str, row: dict) -> str:
     switch = row.get("switch_ip", "")
     if not switch:
         return who
-    name = next((sw["name"] for sw in state.as_dict()["switches"]
+    name = next((sw["name"] for sw in rt.state.as_dict()["switches"]
                  if sw["ip"] == switch), "")
     where = f"{name} ({switch})" if name and name != switch else switch
     return f"{who} on {where} {row.get('port', '')}".rstrip()
@@ -2142,13 +2139,13 @@ def _merge_db_fields(hosts: list[dict], db_hosts: dict[str, dict]) -> None:
         # why one device can leave a trail of one-off entries
         h["random_mac"] = is_random_mac(h["mac"])
         # who made it: the name, or why there is none (vendor_status)
-        h.update(vendors.fields(h["mac"]))
+        h.update(rt.vendors.fields(h["mac"]))
 
 
 async def collect_arp(collector: SnmpCollector) -> dict[str, str]:
     """The merged ARP table of all routers: MAC -> IP."""
     tables = await asyncio.gather(
-        *(collector.collect_arp(ip) for ip in config.routers)
+        *(collector.collect_arp(ip) for ip in rt.config.routers)
     )
     merged: dict[str, str] = {}
     for table in tables:  # on conflict the last entry wins
@@ -2159,7 +2156,7 @@ async def collect_arp(collector: SnmpCollector) -> dict[str, str]:
 # routers of `routers:` whose empty identity has been reported, and
 # the MACs of the last identity of each — a line when it changes, not
 # one per scan
-_identity_reported: dict[str, frozenset[str]] = {}
+rt._identity_reported: dict[str, frozenset[str]] = {}
 
 
 async def collect_identities(collector: SnmpCollector) -> list[RouterIdentity]:
@@ -2171,11 +2168,11 @@ async def collect_identities(collector: SnmpCollector) -> list[RouterIdentity]:
     not on every scan.
     """
     identities = await asyncio.gather(
-        *(collector.collect_router_identity(ip) for ip in config.routers),
+        *(collector.collect_router_identity(ip) for ip in rt.config.routers),
         return_exceptions=True,
     )
     result: list[RouterIdentity] = []
-    for ip, identity in zip(config.routers, identities):
+    for ip, identity in zip(rt.config.routers, identities):
         if isinstance(identity, BaseException):
             log.warning(
                 "Router %s: reading its interfaces raised — its MACs are "
@@ -2191,9 +2188,9 @@ async def collect_identities(collector: SnmpCollector) -> list[RouterIdentity]:
 def _report_identity(identity: RouterIdentity) -> None:
     """One INFO line when a router's identity appears, changes or goes."""
     macs = frozenset(identity.macs)
-    if _identity_reported.get(identity.address) == macs:
+    if rt._identity_reported.get(identity.address) == macs:
         return
-    _identity_reported[identity.address] = macs
+    rt._identity_reported[identity.address] = macs
     if not identity:
         log.info(
             "Router %s did not answer ifPhysAddress: its own MACs are known "
@@ -2214,7 +2211,7 @@ def _report_identity(identity: RouterIdentity) -> None:
 
 
 # mac -> unix time of the last reverse DNS attempt
-_dns_attempts: dict[str, float] = {}
+rt._dns_attempts: dict[str, float] = {}
 DNS_RETRY_SECONDS = 3600
 DNS_TIMEOUT = 1.0
 
@@ -2234,18 +2231,18 @@ async def resolve_names() -> None:
     now = time.time()
     candidates = [
         (mac, ip)
-        for mac, ip in await asyncio.to_thread(db.hosts_without_name)
-        if now - _dns_attempts.get(mac, 0) >= DNS_RETRY_SECONDS
+        for mac, ip in await asyncio.to_thread(rt.db.hosts_without_name)
+        if now - rt._dns_attempts.get(mac, 0) >= DNS_RETRY_SECONDS
     ]
     if not candidates:
         return
     for mac, _ in candidates:
-        _dns_attempts[mac] = now
+        rt._dns_attempts[mac] = now
     names = await asyncio.gather(*(_reverse_dns(ip) for _, ip in candidates))
     resolved = 0
     for (mac, _), name in zip(candidates, names):
         if name:
-            await asyncio.to_thread(db.set_name, mac, name)
+            await asyncio.to_thread(rt.db.set_name, mac, name)
             resolved += 1
     if resolved:
         log.info("Reverse DNS: got %d names out of %d", resolved, len(candidates))
@@ -2254,7 +2251,7 @@ async def resolve_names() -> None:
 # A loop's sleep, cut short when its interval is changed in Settings
 # (v0.8.4): without it a new interval held only after the sleep in
 # progress — up to ten minutes for the scan.
-interval_changed = {
+rt.interval_changed = {
     key: asyncio.Event() for key in settings.INTERVALS
 }
 
@@ -2265,7 +2262,7 @@ async def sleep_interval(key: str, seconds) -> None:
     again from the same start — a shorter one may be due at once.
     `seconds()` None — only on request: until the interval changes."""
     began = time.monotonic()
-    changed = interval_changed[key]
+    changed = rt.interval_changed[key]
     while True:
         changed.clear()
         interval = seconds()
@@ -2284,7 +2281,7 @@ async def sleep_interval(key: str, seconds) -> None:
 def _scan_seconds() -> float | None:
     # 0 — only on request (the Actions menu, /api/scan), as documented;
     # before v0.8.4 it meant once an hour
-    interval = config.scan_interval_minutes
+    interval = rt.config.scan_interval_minutes
     return interval * 60 if interval > 0 else None
 
 
@@ -2296,7 +2293,7 @@ async def periodic_scan() -> None:
             # The map from the previous scan stays on screen; what
             # changes is that the header now says the last attempt
             # failed, and with what
-            state.scan_failed(exc)
+            rt.state.scan_failed(exc)
             log.exception("Network scan failed")
         await sleep_interval("scan_interval_minutes", _scan_seconds)
 
@@ -2304,48 +2301,48 @@ async def periodic_scan() -> None:
 async def run_ping() -> None:
     """One ping cycle: every host with an IP and every switch."""
     now = time.time()
-    if config.demo:
+    if rt.config.demo:
         # No real pings: the demo scenario drives the ping state
         # (one host stays silent, another recovers after a while)
-        results_by_mac = await asyncio.to_thread(demo.ping_results, db)
-        for sw in state.as_dict()["switches"]:
+        results_by_mac = await asyncio.to_thread(demo.ping_results, rt.db)
+        for sw in rt.state.as_dict()["switches"]:
             # the switch the demo takes down does not ping either
             up = not demo.switch_down_now(sw["ip"])
-            prev = switch_ping.get(sw["ip"], {})
-            switch_ping[sw["ip"]] = {
+            prev = rt.switch_ping.get(sw["ip"], {})
+            rt.switch_ping[sw["ip"]] = {
                 "ping_up": up,
                 "last_ping_ok": now if up else prev.get("last_ping_ok", 0),
             }
     else:
-        targets = await asyncio.to_thread(db.hosts_with_ip)
+        targets = await asyncio.to_thread(rt.db.hosts_with_ip)
         # One ping per unique address, the result applied to every host
         # holding it: IPs are unique in the DB since v0.5.3, but a
         # single probe per address is the right shape regardless
         unique_ips = list(dict.fromkeys(ip for _, ip in targets))
-        ips = unique_ips + list(config.switches)
+        ips = unique_ips + list(rt.config.switches)
         if not ips:
             return
         results = await pinger.ping_many(ips)
         results_by_mac = {mac: results.get(ip, False) for mac, ip in targets}
-        await asyncio.to_thread(db.update_ping, results_by_mac, now)
-        for ip in config.switches:
-            prev = switch_ping.get(ip, {})
+        await asyncio.to_thread(rt.db.update_ping, results_by_mac, now)
+        for ip in rt.config.switches:
+            prev = rt.switch_ping.get(ip, {})
             up = results.get(ip, False)
-            switch_ping[ip] = {
+            rt.switch_ping[ip] = {
                 "ping_up": up,
                 "last_ping_ok": now if up else prev.get("last_ping_ok", 0),
             }
     if results_by_mac:
         # Only ping targets can affect this cycle's host alarms. Avoid
         # rebuilding metadata for the entire inventory every minute.
-        meta = await asyncio.to_thread(db.hosts_by_macs, results_by_mac)
+        meta = await asyncio.to_thread(rt.db.hosts_by_macs, results_by_mac)
         for mac, row in meta.items():
             row["monitored"] = _effective_monitored(row)
             # A located host missing from the latest FDB is not
             # confirmed present, so it raises no alarms. Hosts that
             # were never located (ARP-only) keep alerting normally.
-            row["stale"] = bool(row["switch_ip"]) and mac not in fdb_macs
-        await alarm_engine.on_ping(results_by_mac, meta)
+            row["stale"] = bool(row["switch_ip"]) and mac not in rt.fdb_macs
+        await rt.alarm_engine.on_ping(results_by_mac, meta)
 
 
 async def periodic_ping() -> None:
@@ -2355,7 +2352,7 @@ async def periodic_ping() -> None:
         except Exception:
             log.exception("Ping monitoring failed")
         await sleep_interval(
-            "ping_interval_seconds", lambda: max(config.ping_interval_seconds, 1)
+            "ping_interval_seconds", lambda: max(rt.config.ping_interval_seconds, 1)
         )
 
 
@@ -2448,24 +2445,24 @@ def _port_metrics(
 
 async def run_counters() -> None:
     """One light counters poll of every switch (no topology rebuild)."""
-    if not switch_data:
+    if not rt.switch_data:
         return  # port lists are unknown until the first scan
     oper_by_ip: dict[str, dict[int, bool]] = {}
     loop_by_ip: dict[str, object] = {}
-    if config.demo:
+    if rt.config.demo:
         # the demo flips port states directly in switch_data
-        samples_by_ip = demo_counters.sample(list(switch_data.values()))
-        counter_columns.clear()
-        counter_columns.update(
-            {ip: demo_counters.columns(ip) for ip in samples_by_ip}
+        samples_by_ip = rt.demo_counters.sample(list(rt.switch_data.values()))
+        rt.counter_columns.clear()
+        rt.counter_columns.update(
+            {ip: rt.demo_counters.columns(ip) for ip in samples_by_ip}
         )
         loop_by_ip = {
-            ip: demo_counters.loop_detection(switch_data[ip])
-            for ip in samples_by_ip if ip in switch_data
+            ip: rt.demo_counters.loop_detection(rt.switch_data[ip])
+            for ip in samples_by_ip if ip in rt.switch_data
         }
     else:
         collector = get_collector()
-        ips = list(config.switches)
+        ips = list(rt.config.switches)
         # One switch failing must not cost the others their counters:
         # a single malformed OID on sw1 emptied every column on all
         # five for as long as the service ran.
@@ -2484,15 +2481,15 @@ async def run_counters() -> None:
             polls[ip] = result
         samples_by_ip = {ip: p[0] for ip, p in polls.items()}
         oper_by_ip = {ip: p[1] for ip, p in polls.items()}
-        counter_columns.clear()
-        counter_columns.update({ip: p[2] for ip, p in polls.items()})
+        rt.counter_columns.clear()
+        rt.counter_columns.update({ip: p[2] for ip, p in polls.items()})
         loop_by_ip = {
             ip: p[3] for ip, p in polls.items() if p[3] is not None
         }
     for ip, samples in samples_by_ip.items():
         if not samples:
             continue
-        sw = switch_data.get(ip)
+        sw = rt.switch_data.get(ip)
         oper = oper_by_ip.get(ip) or {}
         if not oper and sw is not None:
             # demo mode drives the port states directly in switch_data
@@ -2508,22 +2505,22 @@ async def run_counters() -> None:
             {p.if_index: p.speed_mbps for p in sw.ports.values()}
             if sw is not None else None
         )
-        rates = counter_store.update(ip, samples, speeds)
+        rates = rt.counter_store.update(ip, samples, speeds)
         if sw is not None:
-            await alarm_engine.on_counters(ip, _port_metrics(sw, rates))
+            await rt.alarm_engine.on_counters(ip, _port_metrics(sw, rates))
             await _check_flaps(sw, oper, samples)
     for ip, loop in loop_by_ip.items():
-        sw = switch_data.get(ip)
+        sw = rt.switch_data.get(ip)
         if sw is None or loop is None:
             continue
         sw.loop_detection = loop
         _log_loop_state(sw, loop)
-        await alarm_engine.on_loop_detection(
+        await rt.alarm_engine.on_loop_detection(
             ip, sw.sys_name or ip, loop,
             {i: p.name or str(i) for i, p in sw.ports.items()},
             _stp_operating(sw),
         )
-    await alarm_engine.janitor(_observed_subjects())
+    await rt.alarm_engine.janitor(_observed_subjects())
 
 
 def _stp_operating(sw: SwitchData) -> bool | None:
@@ -2538,15 +2535,15 @@ def _stp_operating(sw: SwitchData) -> bool | None:
 
 # What each switch's loop detection last said, so the same line is not
 # repeated every minute for a network where nothing is happening
-_loop_logged: dict[str, str] = {}
+rt._loop_logged: dict[str, str] = {}
 
 
 def _log_loop_state(sw: SwitchData, loop) -> None:
     """One line per switch, and only when the answer changes."""
     line = loopdetect.describe(loop)
-    if _loop_logged.get(sw.ip) == line:
+    if rt._loop_logged.get(sw.ip) == line:
         return
-    _loop_logged[sw.ip] = line
+    rt._loop_logged[sw.ip] = line
     level = logging.WARNING if loop.looped_ports() else logging.INFO
     log.log(level, "%s loop detection: %s", sw.sys_name or sw.ip, line)
     if loop.index_mismatch:
@@ -2567,7 +2564,7 @@ async def _check_flaps(
     # only ports this poll actually returned: a port missing from the
     # walk has no ifLastChange, and a zero there would read as the
     # agent restarting its clock
-    flaps = flap_tracker.update(
+    flaps = rt.flap_tracker.update(
         sw.ip,
         {i: up for i, up in oper.items() if i in samples},
         {i: s.last_change for i, s in samples.items()},
@@ -2578,19 +2575,19 @@ async def _check_flaps(
         if port is None or not port.is_physical:
             continue
         name = port.name or str(if_index)
-        flap_by_port[(sw.ip, name)] = info
+        rt.flap_by_port[(sw.ip, name)] = info
         entries.append(
             {"port": name, "flaps": info.count, "last": info.last}
         )
     if entries:
-        await alarm_engine.on_flaps(sw.ip, entries)
+        await rt.alarm_engine.on_flaps(sw.ip, entries)
 
 
 def _observed_subjects() -> set[tuple[str, str]]:
     """(type, subject) pairs that exist in the current switch data —
     the janitor auto-clears active alarms that fell out of this set."""
     observed: set[tuple[str, str]] = set()
-    for ip, sw in switch_data.items():
+    for ip, sw in rt.switch_data.items():
         labels = [
             p.name or str(p.if_index)
             for p in sw.ports.values() if p.is_physical
@@ -2616,7 +2613,7 @@ async def periodic_counters() -> None:
             log.exception("Counter polling failed")
         await sleep_interval(
             "counters_interval_seconds",
-            lambda: max(config.counters_interval_seconds, 5),
+            lambda: max(rt.config.counters_interval_seconds, 5),
         )
 
 
@@ -2632,10 +2629,10 @@ async def periodic_cleanup() -> None:
             await purge_old_hosts()
             await purge_journal()
             await purge_copies()
-            await alarm_engine.clear_missing_hosts(
-                set(await asyncio.to_thread(db.hosts_by_mac))
+            await rt.alarm_engine.clear_missing_hosts(
+                set(await asyncio.to_thread(rt.db.hosts_by_mac))
             )
-            if layout_purged:
+            if rt.layout_purged:
                 # the map exists: a scan has run since the start
                 await purge_layout()
         except Exception:
@@ -2663,7 +2660,7 @@ def _rates_hide_age() -> float:
     really is a memory rather than a measurement; everything younger is
     shown with its age next to it.
     """
-    return max(config.stale_rate_hide_minutes, 0.0) * 60
+    return max(rt.config.stale_rate_hide_minutes, 0.0) * 60
 
 
 def _refresh_link_lag(link: dict) -> None:
@@ -2677,7 +2674,7 @@ def _refresh_link_lag(link: dict) -> None:
     active_counts: list[int] = []
     speeds: dict[str, int] = {}
     for side in ("a", "b"):
-        sw = switch_data.get(link[side])
+        sw = rt.switch_data.get(link[side])
         names = lag.get(f"{side}_members")
         if sw is None or not names:
             continue
@@ -2708,10 +2705,10 @@ def _link_load(link: dict) -> dict | None:
     """
     lag = link.get("lag") or {}
     for side, flip in (("a", False), ("b", True)):
-        sw = switch_data.get(link[side])
+        sw = rt.switch_data.get(link[side])
         if sw is None:
             continue
-        rates = counter_store.current(link[side], max_age=_rates_hide_age())
+        rates = rt.counter_store.current(link[side], max_age=_rates_hide_age())
         if not rates:
             continue
         names = lag.get(f"{side}_members") or [link[f"{side}_port"]]
@@ -2743,17 +2740,17 @@ def _link_load(link: dict) -> dict | None:
 
 def _config_missing() -> dict | None:
     """Moved to startup._config_missing."""
-    return startup._config_missing(config=config)
+    return startup._config_missing(config=rt.config)
 
 
 def _log_config() -> None:
     """Moved to startup._log_config."""
     startup._log_config(
-        config=config, db=db, tools=tools, vendors=vendors,
-        settings_loaded=settings_loaded, public_url=public_url,
-        public_url_problems=public_url_problems,
-        trusted_proxies=trusted_proxies,
-        trusted_proxy_problems=trusted_proxy_problems, transport=transport,
+        config=rt.config, db=rt.db, tools=rt.tools, vendors=rt.vendors,
+        settings_loaded=rt.settings_loaded, public_url=rt.public_url,
+        public_url_problems=rt.public_url_problems,
+        trusted_proxies=rt.trusted_proxies,
+        trusted_proxy_problems=rt.trusted_proxy_problems, transport=rt.transport,
     )
 
 
@@ -2764,40 +2761,39 @@ def _setting_problem(error: dict) -> str:
 
 def _log_settings() -> None:
     """Moved to startup._log_settings."""
-    startup._log_settings(settings_loaded=settings_loaded, db=db)
+    startup._log_settings(settings_loaded=rt.settings_loaded, db=rt.db)
 
 
 def _log_public_url() -> None:
     """Moved to startup._log_public_url."""
     startup._log_public_url(
-        config=config, public_url=public_url,
-        public_url_problems=public_url_problems,
-        trusted_proxies=trusted_proxies,
-        trusted_proxy_problems=trusted_proxy_problems, transport=transport,
+        config=rt.config, public_url=rt.public_url,
+        public_url_problems=rt.public_url_problems,
+        trusted_proxies=rt.trusted_proxies,
+        trusted_proxy_problems=rt.trusted_proxy_problems, transport=rt.transport,
     )
 
 
 def _log_transport() -> None:
     """Moved to startup._log_transport."""
     startup._log_transport(
-        config=config, public_url=public_url,
-        trusted_proxies=trusted_proxies, transport=transport,
+        config=rt.config, public_url=rt.public_url,
+        trusted_proxies=rt.trusted_proxies, transport=rt.transport,
     )
 
 
 def _log_certificate() -> None:
     """Moved to startup._log_certificate."""
-    global certificate
-    found = startup._log_certificate(config=config, public_url=public_url)
+    found = startup._log_certificate(config=rt.config, public_url=rt.public_url)
     if found is not None:
-        certificate = found
+        rt.certificate = found
 
 
 async def check_certificate_end() -> None:
     """Moved to housekeeping.check_certificate_end."""
     await housekeeping.check_certificate_end(
-        certificate=certificate, public_url=public_url, config=config,
-        alarm_engine=alarm_engine,
+        certificate=rt.certificate, public_url=rt.public_url, config=rt.config,
+        alarm_engine=rt.alarm_engine,
     )
 
 
@@ -2813,29 +2809,29 @@ async def periodic_certificate_check() -> None:
 async def start_redirect_listener():
     """Moved to startup.start_redirect_listener."""
     return await startup.start_redirect_listener(
-        config=config, public_url=public_url
+        config=rt.config, public_url=rt.public_url
     )
 
 
 async def drop_unpinned_positions() -> None:
     """Moved to housekeeping.drop_unpinned_positions."""
-    await housekeeping.drop_unpinned_positions(db=db)
+    await housekeeping.drop_unpinned_positions(db=rt.db)
 
 
 async def purge_invalid_macs() -> None:
     """Moved to housekeeping.purge_invalid_macs."""
-    await housekeeping.purge_invalid_macs(db=db)
+    await housekeeping.purge_invalid_macs(db=rt.db)
 
 
 async def purge_old_hosts() -> None:
     """Moved to housekeeping.purge_old_hosts."""
-    await housekeeping.purge_old_hosts(config=config, db=db)
+    await housekeeping.purge_old_hosts(config=rt.config, db=rt.db)
 
 
 async def purge_journal() -> None:
     """Moved to housekeeping.purge_journal."""
     await housekeeping.purge_journal(
-        config=config, db=db, JOURNAL_GROUPS=JOURNAL_GROUPS
+        config=rt.config, db=rt.db, JOURNAL_GROUPS=JOURNAL_GROUPS
     )
 
 
@@ -2846,12 +2842,12 @@ def _marked_copies(db_rows: dict[str, dict]) -> set[str]:
 
 async def hide_confirmed_copies(vouched: set[str] | None = None) -> None:
     """Moved to housekeeping.hide_confirmed_copies."""
-    await housekeeping.hide_confirmed_copies(vouched, config=config, db=db)
+    await housekeeping.hide_confirmed_copies(vouched, config=rt.config, db=rt.db)
 
 
 async def purge_copies() -> None:
     """Moved to housekeeping.purge_copies."""
-    await housekeeping.purge_copies(config=config, db=db)
+    await housekeeping.purge_copies(config=rt.config, db=rt.db)
 
 
 def configure_logging() -> None:
@@ -2863,19 +2859,19 @@ def configure_logging() -> None:
 async def lifespan(app: FastAPI):
     configure_logging()
     _log_config()
-    if config.demo:
+    if rt.config.demo:
         log.info("MoonLan started in DEMO mode (virtual network)")
-        await asyncio.to_thread(demo.seed_notes, db)
-        await asyncio.to_thread(demo.seed_reading, db)
-        await asyncio.to_thread(demo.seed_stale_alarm, db)
-    elif not config.switches:
+        await asyncio.to_thread(demo.seed_notes, rt.db)
+        await asyncio.to_thread(demo.seed_reading, rt.db)
+        await asyncio.to_thread(demo.seed_stale_alarm, rt.db)
+    elif not rt.config.switches:
         log.warning(
             "No switches are configured in config.yaml. Add addresses to "
             "the switches section or start with MOONLAN_DEMO=1."
         )
-    await asyncio.to_thread(sign_in.log_state)
+    await asyncio.to_thread(rt.sign_in.log_state)
     await asyncio.to_thread(
-        sign_in.write_console_token, config.users_db_path() + ".console"
+        rt.sign_in.write_console_token, rt.config.users_db_path() + ".console"
     )
     await purge_invalid_macs()
     await purge_old_hosts()
@@ -2883,9 +2879,9 @@ async def lifespan(app: FastAPI):
     await purge_copies()
     await hide_confirmed_copies()
     await drop_unpinned_positions()
-    await alarm_engine.load()
-    await alarm_engine.clear_missing_hosts(
-        set(await asyncio.to_thread(db.hosts_by_mac))
+    await rt.alarm_engine.load()
+    await rt.alarm_engine.clear_missing_hosts(
+        set(await asyncio.to_thread(rt.db.hosts_by_mac))
     )
     # the map from the readings saved before the restart, at once
     try:
@@ -2895,8 +2891,8 @@ async def lifespan(app: FastAPI):
     _log_certificate()
     await check_certificate_end()
     # a Telegram link made just before a restart still works
-    if await asyncio.to_thread(accounts.waiting_links, time.time()):
-        personal.ensure_polling()
+    if await asyncio.to_thread(rt.accounts.waiting_links, time.time()):
+        rt.personal.ensure_polling()
     redirect = await start_redirect_listener()
     tasks = [
         asyncio.create_task(periodic_scan()),
@@ -2911,24 +2907,24 @@ async def lifespan(app: FastAPI):
         task.cancel()
     if redirect is not None:
         redirect.close()
-    sign_in.remove_console_token()
+    rt.sign_in.remove_console_token()
 
 
 # a key that looks copied raises an alarm like anything on the network
-sign_in.raise_alarm = lambda alarm_type, subject, message: (
-    alarm_engine.service_alarm(alarm_type, subject, True, message)
+rt.sign_in.raise_alarm = lambda alarm_type, subject, message: (
+    rt.alarm_engine.service_alarm(alarm_type, subject, True, message)
 )
 
 app = FastAPI(title="MoonLan", version=__version__, lifespan=lifespan)
 # Every request passes the rights table in access.py before a handler
 # sees it (a no-op while sign-in is off)
-app.add_middleware(signin.Guard, signin=sign_in, router=app.router)
+app.add_middleware(signin.Guard, signin=rt.sign_in, router=app.router)
 # CSP, nosniff, Referrer-Policy on every answer, the guard's refusals too
 app.add_middleware(https.SecurityHeaders)
-if config.listen_hsts_max_age:
+if rt.config.listen_hsts_max_age:
     # outermost, so the refusals the guard answers carry it too
-    app.add_middleware(https.Hsts, max_age=config.listen_hsts_max_age)
-signin.add_routes(app, sign_in)
+    app.add_middleware(https.Hsts, max_age=rt.config.listen_hsts_max_age)
+signin.add_routes(app, rt.sign_in)
 
 
 @app.get("/api/health")
@@ -2944,7 +2940,7 @@ async def api_about() -> dict:
     versions, and the IEEE register. The server itself — Python, the
     system, uptime, sign-in, HTTPS — only to an administrator, or to
     everybody while sign-in is off, when everybody is one."""
-    on = await asyncio.to_thread(sign_in.sign_in_on)
+    on = await asyncio.to_thread(rt.sign_in.sign_in_on)
     who = signin.principal()
     body = {
         "version": __version__,
@@ -2952,13 +2948,13 @@ async def api_about() -> dict:
         "copyright": COPYRIGHT,
         "components": about.components(),
         "ieee": {
-            "loaded": vendors.loaded,
-            "date": vendors.oldest(),
+            "loaded": rt.vendors.loaded,
+            "date": rt.vendors.oldest(),
             "command": oui.UPDATE_COMMAND,
         },
     }
     if not on or (who is not None and who.role == "admin"):
-        body["server"] = about.server(STARTED_AT, on, transport)
+        body["server"] = about.server(STARTED_AT, on, rt.transport)
     return body
 
 
@@ -2982,14 +2978,14 @@ def _may_change_settings(on: bool) -> bool:
 
 
 async def _settings_answer() -> dict:
-    on = await asyncio.to_thread(sign_in.sign_in_on)
+    on = await asyncio.to_thread(rt.sign_in.sign_in_on)
     editor = _may_change_settings(on)
-    rows = await asyncio.to_thread(db.settings)
+    rows = await asyncio.to_thread(rt.db.settings)
     return {
-        "settings": settings.describe(config, rows, personal=editor),
+        "settings": settings.describe(rt.config, rows, personal=editor),
         "sections": list(settings.SECTIONS),
-        "alarm_types": list(config.alarm_notify),
-        "channels": notify.channel_state(config.notifications),
+        "alarm_types": list(rt.config.alarm_notify),
+        "channels": notify.channel_state(rt.config.notifications),
         "can_edit": editor,
         "sign_in": on,
     }
@@ -3000,9 +2996,9 @@ def _settings_applied(changes: list[dict], how: str) -> None:
     and the log says what changed, by whom, in one line."""
     keys = {settings.setting_of(c["key"]) for c in changes}
     for key in keys & set(settings.INTERVALS):
-        interval_changed[key].set()
+        rt.interval_changed[key].set()
     if "thresholds.flap_window_minutes" in keys:
-        flap_tracker.window_seconds = config.thresholds.flap_window_minutes * 60
+        rt.flap_tracker.window_seconds = rt.config.thresholds.flap_window_minutes * 60
     log.info("Settings %s by %s: %s", how, signin.actor() or "(sign-in off)",
              settings.log_line(changes))
 
@@ -3024,7 +3020,7 @@ async def api_settings_save(request: Request) -> JSONResponse:
     except ValueError:
         return _refuse("bad_request", 400)
     changes, errors = await asyncio.to_thread(
-        settings.save, config, db, body, signin.actor()
+        settings.save, rt.config, rt.db, body, signin.actor()
     )
     if errors:
         return JSONResponse({"errors": errors}, status_code=400)
@@ -3038,7 +3034,7 @@ async def api_settings_reset(key: str) -> JSONResponse:
     if key not in settings.BY_KEY:
         return _refuse("unknown_setting", 404)
     changes = await asyncio.to_thread(
-        settings.reset, config, db, key, signin.actor()
+        settings.reset, rt.config, rt.db, key, signin.actor()
     )
     if changes:
         _settings_applied(changes, "reset")
@@ -3048,12 +3044,12 @@ async def api_settings_reset(key: str) -> JSONResponse:
 @app.post("/api/settings/test/{channel}")
 async def api_settings_test(channel: str) -> JSONResponse:
     """A test message to the shared recipients of one channel"""
-    state = notify.channel_state(config.notifications).get(channel)
+    state = notify.channel_state(rt.config.notifications).get(channel)
     if state is None:
         return _refuse("unknown_channel", 404)
     if not state["ready"]:
         return _refuse("channel_off", 409, why=state["why"])
-    recipients = notifier.shared(channel)
+    recipients = rt.notifier.shared(channel)
     if not recipients:
         return _refuse("no_recipients", 409)
     text = notify.format_text(
@@ -3061,12 +3057,12 @@ async def api_settings_test(channel: str) -> JSONResponse:
         f"a test message to the shared recipients, sent by "
         f"{signin.actor() or 'the page'}", False,
     )
-    if config.demo:
+    if rt.config.demo:
         log.info("NOTIFY (demo): %s (%s, %d recipient(s))", text, channel,
                  len(recipients))
         return JSONResponse({"sent": len(recipients), "failed": 0,
                              "demo": True})
-    failed = await asyncio.to_thread(notifier.deliver, channel, recipients,
+    failed = await asyncio.to_thread(rt.notifier.deliver, channel, recipients,
                                      text)
     log.info("Test message via %s to the shared recipients, by %s: %d sent, "
              "%d failed", channel, signin.actor() or "(sign-in off)",
@@ -3110,21 +3106,21 @@ def _who() -> tuple[int, str]:
 @app.get("/api/me/notifications")
 async def api_my_notifications() -> JSONResponse:
     user_id, _ = _who()
-    return await _personal(personal.state, user_id)
+    return await _personal(rt.personal.state, user_id)
 
 
 @app.post("/api/me/notifications/email")
 async def api_my_email(body: AddressBody) -> JSONResponse:
     """A code to the address, which is not anybody's until it comes back"""
     user_id, name = _who()
-    return await _personal(personal.send_code, user_id, name, body.address,
+    return await _personal(rt.personal.send_code, user_id, name, body.address,
                            _lang(body.lang))
 
 
 @app.post("/api/me/notifications/email/confirm")
 async def api_my_email_confirm(body: CodeBody) -> JSONResponse:
     user_id, name = _who()
-    return await _personal(personal.confirm_code, user_id, name, body.code)
+    return await _personal(rt.personal.confirm_code, user_id, name, body.code)
 
 
 @app.post("/api/me/notifications/telegram")
@@ -3132,17 +3128,17 @@ async def api_my_telegram(body: LangBody) -> JSONResponse:
     """A link to the bot, good for ten minutes; the bot's updates are
     read while it waits"""
     user_id, name = _who()
-    answer = await _personal(personal.start_link, user_id, name,
+    answer = await _personal(rt.personal.start_link, user_id, name,
                              _lang(body.lang))
     if answer.status_code == 200:
-        personal.ensure_polling()
+        rt.personal.ensure_polling()
     return answer
 
 
 @app.get("/api/me/notifications/telegram")
 async def api_my_telegram_state() -> JSONResponse:
     user_id, _ = _who()
-    return await _personal(personal.link_state, user_id)
+    return await _personal(rt.personal.link_state, user_id)
 
 
 @app.patch("/api/me/notifications/{channel}")
@@ -3157,41 +3153,41 @@ async def api_my_notifications_change(channel: str,
     if not isinstance(body, dict):
         return _refuse("bad_request", 400)
     user_id, _ = _who()
-    return await _personal(personal.change, user_id, channel, body)
+    return await _personal(rt.personal.change, user_id, channel, body)
 
 
 @app.post("/api/me/notifications/{channel}/test")
 async def api_my_notifications_test(channel: str,
                                     body: LangBody) -> JSONResponse:
     user_id, name = _who()
-    return await _personal(personal.test, user_id, name, channel,
+    return await _personal(rt.personal.test, user_id, name, channel,
                            _lang(body.lang))
 
 
 @app.delete("/api/me/notifications/{channel}")
 async def api_my_notifications_remove(channel: str) -> JSONResponse:
     user_id, name = _who()
-    return await _personal(personal.remove, user_id, name, channel)
+    return await _personal(rt.personal.remove, user_id, name, channel)
 
 
 @app.delete("/api/users/{name}/notifications")
 async def api_user_notifications_remove(name: str) -> JSONResponse:
     """Somebody's subscriptions, by an administrator: a person who left,
     whose account is not deleted yet"""
-    row = await asyncio.to_thread(sign_in.accounts.user, name)
+    row = await asyncio.to_thread(rt.sign_in.accounts.user, name)
     if row is None:
         return _refuse("unknown", 404, name=name)
     removed = await asyncio.to_thread(
-        personal.remove_all, row["id"], row["name"], signin.actor()
+        rt.personal.remove_all, row["id"], row["name"], signin.actor()
     )
     return JSONResponse({"status": "removed", "removed": removed})
 
 
 @app.get("/api/topology")
 async def api_topology() -> JSONResponse:
-    topo = state.as_dict()
+    topo = rt.state.as_dict()
     # Fresh DB data: ping is updated more often than SNMP polls happen
-    db_hosts = await asyncio.to_thread(db.hosts_by_mac)
+    db_hosts = await asyncio.to_thread(rt.db.hosts_by_mac)
     hosts = [dict(h) for h in topo["hosts"]]
     _merge_db_fields(hosts, db_hosts)
     topo["hosts"] = hosts
@@ -3206,7 +3202,7 @@ async def api_topology() -> JSONResponse:
         if oui.normalize(bridge["chassis_id"]):
             # its maker by the chassis MAC; a chassis id that is a name
             # or a local address says nothing about who made it
-            bridge.update(vendors.fields(bridge["chassis_id"]))
+            bridge.update(rt.vendors.fields(bridge["chassis_id"]))
         row = db_hosts.get(bridge["chassis_id"], {})
         if row:
             bridge["ip"] = row.get("ip", "") or bridge.get("mgmt_ip", "")
@@ -3221,13 +3217,13 @@ async def api_topology() -> JSONResponse:
     topo["switches"] = [
         {
             **sw,
-            **(vendors.fields(sw["mac"]) if sw.get("mac") else {}),
-            "ping_up": switch_ping.get(sw["ip"], {}).get("ping_up", False),
-            "last_ping_ok": switch_ping.get(sw["ip"], {}).get("last_ping_ok", 0),
+            **(rt.vendors.fields(sw["mac"]) if sw.get("mac") else {}),
+            "ping_up": rt.switch_ping.get(sw["ip"], {}).get("ping_up", False),
+            "last_ping_ok": rt.switch_ping.get(sw["ip"], {}).get("last_ping_ok", 0),
             # loop detection is polled at the counters cadence, not by
             # the scan the rest of this map comes from, so it is
             # attached per request rather than baked into the topology
-            "loop": _loop_report(switch_data.get(sw["ip"])),
+            "loop": _loop_report(rt.switch_data.get(sw["ip"])),
         }
         for sw in topo["switches"]
     ]
@@ -3242,7 +3238,7 @@ async def api_topology() -> JSONResponse:
             link["load"] = load
         links.append(link)
     topo["links"] = links
-    _attach_notes(topo, await asyncio.to_thread(db.notes))
+    _attach_notes(topo, await asyncio.to_thread(rt.db.notes))
     return JSONResponse(topo)
 
 
@@ -3293,18 +3289,18 @@ def _stand_in(offline_id: str) -> str:
 @app.get("/api/switch/{ip}/ports")
 async def api_switch_ports(ip: str) -> dict:
     """Port table of one switch with current rates."""
-    sw = switch_data.get(ip)
+    sw = rt.switch_data.get(ip)
     if sw is None:
         return {"switch": ip, "name": ip, "ports": []}
     # Everything measured, however old. What is too old to show is
     # decided below, once, and said out loud rather than by omission.
-    rates = counter_store.current(ip)
+    rates = rt.counter_store.current(ip)
     hide_age = _rates_hide_age()
     now = time.time()
-    db_hosts = await asyncio.to_thread(db.hosts_by_mac)
+    db_hosts = await asyncio.to_thread(rt.db.hosts_by_mac)
     host_counts: Counter = Counter()
     monitored_counts: Counter = Counter()
-    for h in state.as_dict()["hosts"]:
+    for h in rt.state.as_dict()["hosts"]:
         if h["switch"] != ip:
             continue
         host_counts[h["port"]] += 1
@@ -3315,7 +3311,7 @@ async def api_switch_ports(ip: str) -> dict:
         for m in members:
             member_of[m] = port_name(sw, aggregate)
     flapping = {
-        port: info for (sw_ip, port), info in flap_by_port.items()
+        port: info for (sw_ip, port), info in rt.flap_by_port.items()
         if sw_ip == ip
     }
     external = {port for sw_ip, port in _uplink_ports() if sw_ip == ip}
@@ -3366,9 +3362,9 @@ async def api_switch_ports(ip: str) -> dict:
             # MACs that look like damaged copies of a real one here,
             # and the addresses they are copies of: one of them points
             # at that device's adapter, several at the port (v0.8.5)
-            "suspect_macs": suspect_by_port.get((ip, name), []),
+            "suspect_macs": rt.suspect_by_port.get((ip, name), []),
             "suspect_samples": _copy_samples(
-                _copy_counts(suspect_by_port.get((ip, name), []))
+                _copy_counts(rt.suspect_by_port.get((ip, name), []))
             ),
             # link-state transitions inside the flap window
             "flaps": flapping.get(name, ZERO_FLAPS).count,
@@ -3388,7 +3384,7 @@ async def api_switch_ports(ip: str) -> dict:
             # a port that leaves the network (config.uplink_ports)
             "external": name in external,
             # …or one that looks like it should be, and is not listed
-            "uplink_hint": uplink_suspects.get((ip, name)),
+            "uplink_hint": rt.uplink_suspects.get((ip, name)),
         })
         if aggregate is not None:
             ports[-1].update(aggregate)
@@ -3409,13 +3405,13 @@ async def api_switch_ports(ip: str) -> dict:
         # needs both to tell "stale" from "never measured"; neither
         # belongs hardcoded in the front end.
         "rates": {
-            "stale_after_seconds": max(config.counters_interval_seconds, 5) * 3,
+            "stale_after_seconds": max(rt.config.counters_interval_seconds, 5) * 3,
             "hide_after_seconds": hide_age,
         },
         # so the panel can colour the values it shows
         "thresholds": {
-            "errors_per_minute": config.thresholds.errors_per_minute,
-            "discards_per_minute": config.thresholds.discards_per_minute,
+            "errors_per_minute": rt.config.thresholds.errors_per_minute,
+            "discards_per_minute": rt.config.thresholds.discards_per_minute,
         },
     }
 
@@ -3553,7 +3549,7 @@ def _column_report(ip: str) -> dict:
     opposite things — sw0 reported honest zeros for errors while its
     outbound octets were simply never returned.
     """
-    columns = counter_columns.get(ip) or {}
+    columns = rt.counter_columns.get(ip) or {}
     report: dict[str, dict] = {}
     for name, sources in COLUMN_GROUPS.items():
         present = [columns[src] for src in sources if src in columns]
@@ -3588,7 +3584,7 @@ def _lldp_dict(neighbor) -> dict:
         # how many lldpRemTable rows this one device sent
         "rows": neighbor.rows,
         # who made it, when the chassis id is a MAC the register knows
-        "vendor": vendors.lookup(neighbor.chassis_id).name,
+        "vendor": rt.vendors.lookup(neighbor.chassis_id).name,
     }
 
 
@@ -3612,7 +3608,7 @@ def _alarm_meta(
         # the subject is a chassis id, which is a MAC — splitting it on
         # ":" the way port subjects are split would produce nonsense
         bridge = next(
-            (b for b in state.as_dict()["bridges"]
+            (b for b in rt.state.as_dict()["bridges"]
              if b["chassis_id"] == subject),
             {},
         )
@@ -3654,7 +3650,7 @@ async def api_stp() -> dict:
     comes first, and root / cost / root port are empty strings for a
     switch where they would be meaningless.
     """
-    return state.as_dict()["stp"] or {
+    return rt.state.as_dict()["stp"] or {
         "verdict": {"verdict": "not_operating", "roots": {}, "operating": [],
                     "total": 0},
         "switches": [],
@@ -3666,11 +3662,11 @@ async def api_alarms(
     active: int = Query(default=1, ge=0, le=1),
     limit: int = Query(default=50, ge=1, le=500),
 ) -> dict:
-    rows = await asyncio.to_thread(db.alarms, bool(active), limit)
-    db_hosts = await asyncio.to_thread(db.hosts_by_mac)
-    sw_names = {sw["ip"]: sw["name"] for sw in state.as_dict()["switches"]}
-    flapping = alarm_engine.flapping_keys()
-    stats = alarm_engine.raise_stats()
+    rows = await asyncio.to_thread(rt.db.alarms, bool(active), limit)
+    db_hosts = await asyncio.to_thread(rt.db.hosts_by_mac)
+    sw_names = {sw["ip"]: sw["name"] for sw in rt.state.as_dict()["switches"]}
+    flapping = rt.alarm_engine.flapping_keys()
+    stats = rt.alarm_engine.raise_stats()
     for row in rows:
         key = (row["type"], row["subject"])
         row.update(_alarm_meta(row, db_hosts, sw_names))
@@ -3678,7 +3674,7 @@ async def api_alarms(
         row["raise_count"], row["last_raise"] = stats.get(key, (1, row["ts_raised"]))
         if row["type"] == "port_frame_corruption" and active:
             # which fault is likelier, as data the page words (v0.8.5)
-            samples = alarm_engine.corruption_samples(row["subject"])
+            samples = rt.alarm_engine.corruption_samples(row["subject"])
             if samples:
                 row["corruption"] = {
                     "samples": _copy_samples(samples),
@@ -3687,13 +3683,13 @@ async def api_alarms(
                 }
     return {
         "alarms": rows,
-        "flap_window_hours": config.notifications.flap_window_seconds / 3600,
+        "flap_window_hours": rt.config.notifications.flap_window_seconds / 3600,
     }
 
 
 @app.post("/api/alarms/{alarm_id}/clear")
 async def api_clear_alarm(alarm_id: int):
-    row = await alarm_engine.manual_clear(alarm_id, user=signin.actor())
+    row = await rt.alarm_engine.manual_clear(alarm_id, user=signin.actor())
     if row is None:
         return JSONResponse({"error": "no such active alarm"}, status_code=404)
     return {"id": alarm_id, "cleared": True}
@@ -3770,7 +3766,7 @@ async def api_journal(
             not_events = list(EVENT_GROUP)
     rows = await asyncio.to_thread(
         functools.partial(
-            db.journal, limit + 1, events=events, not_events=not_events,
+            rt.db.journal, limit + 1, events=events, not_events=not_events,
             before=before,
         )
     )
@@ -3780,7 +3776,7 @@ async def api_journal(
         event["group"] = EVENT_GROUP.get(event["event"], JOURNAL_OTHER)
         # who made the device an event is about — looked up now, not
         # stored: the register is updated, the journal is not
-        name = vendors.lookup(event.get("mac") or "").name
+        name = rt.vendors.lookup(event.get("mac") or "").name
         if name:
             event["vendor"] = name
     return {
@@ -3796,12 +3792,12 @@ class HostPatch(BaseModel):
 @app.patch("/api/host/{mac}")
 async def api_patch_host(mac: str, body: HostPatch):
     mac = mac.lower()
-    ok = await asyncio.to_thread(db.set_monitored, mac, body.monitored)
+    ok = await asyncio.to_thread(rt.db.set_monitored, mac, body.monitored)
     if not ok:
         return JSONResponse({"error": "unknown host"}, status_code=404)
     # who asked for alarms about this device, or stopped them
     await asyncio.to_thread(
-        db.add_event, time.time(),
+        rt.db.add_event, time.time(),
         "monitor_on" if body.monitored else "monitor_off", mac, "",
         signin.actor(),
     )
@@ -3840,7 +3836,7 @@ def _layout_anchors() -> dict[str, str]:
     a pinned node still describes the map: a device that moved to
     another switch has nothing to do with the old one.
     """
-    topo = state.as_dict()
+    topo = rt.state.as_dict()
     anchors: dict[str, str] = {}
     for link in topo["links"]:
         anchors.setdefault("sw:" + link["b"], "sw:" + link["a"])
@@ -3890,7 +3886,7 @@ def _layout_node_ids() -> set[str]:
     The same ids the front end uses, built here so the housekeeping and
     the diagnostics do not have to ask the browser what exists.
     """
-    topo = state.as_dict()
+    topo = rt.state.as_dict()
     ids = {"sw:" + sw["ip"] for sw in topo["switches"]}
     # A device drawn AS another node — a bridge that answers LLDP and
     # is also in somebody's MAC table — has no node of its own, so it
@@ -3914,8 +3910,8 @@ def _node_directory() -> dict[str, dict]:
     `switch` is the address of the switch the node hangs off (a
     switch's own, for a switch), `port` the port there.
     """
-    topo = state.as_dict()
-    db_hosts = db.hosts_by_mac()
+    topo = rt.state.as_dict()
+    db_hosts = rt.db.hosts_by_mac()
     nodes: dict[str, dict] = {}
 
     def entry(kind, ip="", mac="", name="", switch="", port="", row=None):
@@ -3932,7 +3928,7 @@ def _node_directory() -> dict[str, dict]:
     for sw in topo["switches"]:
         nodes["sw:" + sw["ip"]] = entry(
             "switch", sw["ip"], sw.get("mac"), sw.get("name"), sw["ip"],
-            row=switch_ping.get(sw["ip"]),
+            row=rt.switch_ping.get(sw["ip"]),
         )
     for host in topo["hosts"]:
         if host.get("merged_into"):
@@ -3964,12 +3960,12 @@ def _node_directory() -> dict[str, dict]:
 
 def _tool_state() -> dict:
     """What the menu can run, for greying out what it cannot."""
-    trace = tools.get("traceroute")
+    trace = rt.tools.get("traceroute")
     return {
-        "ping": bool(tools.get("ping")),
+        "ping": bool(rt.tools.get("ping")),
         "traceroute": trace[0] if trace else None,
-        "simulated": config.demo,
-        "max_targets": config.context_menu.max_targets,
+        "simulated": rt.config.demo,
+        "max_targets": rt.config.context_menu.max_targets,
     }
 
 
@@ -3984,9 +3980,9 @@ def _menu_links(node_id: str, facts: dict) -> tuple[list[dict], list[dict]]:
     builtin: list[dict] = []
     if kind in ("switch", "host"):
         if node_id.startswith("sw:"):
-            scheme = config.web_scheme(facts["ip"])
+            scheme = rt.config.web_scheme(facts["ip"])
         elif kind == "switch":
-            scheme = config.context_menu.web_scheme
+            scheme = rt.config.context_menu.web_scheme
         else:
             scheme = "http"
         for key, template in (("web", scheme + "://{ip}"),
@@ -3994,7 +3990,7 @@ def _menu_links(node_id: str, facts: dict) -> tuple[list[dict], list[dict]]:
             url, missing = menu.expand(template, facts)
             builtin.append({"key": key, "url": url, "missing": missing})
     custom: list[dict] = []
-    for link in config.context_menu.links:
+    for link in rt.config.context_menu.links:
         if not link.applies(kind):
             continue
         url, missing = menu.expand(link.url, facts)
@@ -4031,8 +4027,8 @@ def _refuse(error: str, status: int, **extra) -> JSONResponse:
 
 @app.get("/api/actions")
 async def api_actions_state() -> dict:
-    return {**_tool_state(), "running": jobs.running(),
-            "max_running": config.context_menu.max_running}
+    return {**_tool_state(), "running": rt.jobs.running(),
+            "max_running": rt.config.context_menu.max_running}
 
 
 @app.post("/api/actions")
@@ -4048,16 +4044,16 @@ async def api_start_action(body: ActionBody, request: Request):
     ids = list(dict.fromkeys(body.nodes))
     if not ids:
         return _refuse("no_targets", 400)
-    limit = config.context_menu.max_targets
+    limit = rt.config.context_menu.max_targets
     if len(ids) > limit:
         # refused, not trimmed: a silently shortened list reads as
         # "these are all of them"
         return _refuse("too_many_targets", 400, limit=limit, count=len(ids))
     if body.action == "traceroute" and len(ids) > 1:
         return _refuse("traceroute_one", 400)
-    if body.action == "ping" and not tools.get("ping"):
+    if body.action == "ping" and not rt.tools.get("ping"):
         return _refuse("tool_missing", 503, tool="ping")
-    if body.action == "traceroute" and not tools.get("traceroute"):
+    if body.action == "traceroute" and not rt.tools.get("traceroute"):
         return _refuse("tool_missing", 503, tool="traceroute")
     nodes = await asyncio.to_thread(_node_directory)
     unknown = [node_id for node_id in ids if node_id not in nodes]
@@ -4080,12 +4076,12 @@ async def api_start_action(body: ActionBody, request: Request):
         for node_id in ids
     ]
     try:
-        job = jobs.start(
-            body.action, targets, config.context_menu.max_running,
+        job = rt.jobs.start(
+            body.action, targets, rt.config.context_menu.max_running,
             owner=signin.actor(),
         )
     except probes.Busy:
-        return _refuse("busy", 429, limit=config.context_menu.max_running)
+        return _refuse("busy", 429, limit=rt.config.context_menu.max_running)
     client = request.client.host if request.client else "?"
     shown = ", ".join(
         f"{t.node} ({t.ip or 'no address'})" for t in targets[:5]
@@ -4102,7 +4098,7 @@ async def api_start_action(body: ActionBody, request: Request):
 async def api_action_state(job_id: str):
     """A ping's result is for whoever started it, and for an
     administrator. Somebody else's job answers as if it did not exist."""
-    job = jobs.get(job_id)
+    job = rt.jobs.get(job_id)
     who = signin.principal()
     if job is None or (
         who is not None and who.role != "admin" and job.owner != who.name
@@ -4114,15 +4110,15 @@ async def api_action_state(job_id: str):
 @app.get("/api/layout")
 async def api_layout() -> dict:
     """Saved node positions, and how they compare with the map."""
-    saved = _current_offsets(await asyncio.to_thread(db.layout))
+    saved = _current_offsets(await asyncio.to_thread(rt.db.layout))
     present = _layout_node_ids()
     return {
         "nodes": saved,
-        "saved_at": await asyncio.to_thread(db.layout_saved_at),
+        "saved_at": await asyncio.to_thread(rt.db.layout_saved_at),
         # When somebody last reset the whole layout. An open page that
         # sees this move treats it as a reset of its own; the rows alone
         # could not tell it that.
-        "cleared_at": await asyncio.to_thread(db.layout_cleared_at),
+        "cleared_at": await asyncio.to_thread(rt.db.layout_cleared_at),
         # Nodes on the map with no saved position: since v0.7.3 that is
         # everything nobody pinned, laid out again on every load from
         # the pinned nodes. A count, not a list of gaps to fill.
@@ -4148,14 +4144,14 @@ async def api_put_layout(body: LayoutBody) -> dict:
     }
     if body.only_new:
         stored, existing = await asyncio.to_thread(
-            db.add_new_positions, positions
+            rt.db.add_new_positions, positions
         )
     else:
-        await asyncio.to_thread(db.save_layout, positions)
+        await asyncio.to_thread(rt.db.save_layout, positions)
         stored, existing = list(positions), {}
     if stored:
         await asyncio.to_thread(
-            db.add_event, time.time(), "layout_saved", "",
+            rt.db.add_event, time.time(), "layout_saved", "",
             f"{len(stored)} node(s)", signin.actor(),
         )
         log.info("Map layout saved: %d node(s)", len(stored))
@@ -4163,7 +4159,7 @@ async def api_put_layout(body: LayoutBody) -> dict:
         "saved": len(stored),
         "stored": stored,
         "existing": existing,
-        "saved_at": await asyncio.to_thread(db.layout_saved_at),
+        "saved_at": await asyncio.to_thread(rt.db.layout_saved_at),
     }
 
 
@@ -4186,7 +4182,7 @@ async def _journal_layout_action(event: str, node_ids: list[str]) -> None:
         "n": len(node_ids), "ids": node_ids[:LAYOUT_EVENT_IDS],
     })
     await asyncio.to_thread(
-        db.add_event, time.time(), event, "", details, signin.actor()
+        rt.db.add_event, time.time(), event, "", details, signin.actor()
     )
 
 
@@ -4205,9 +4201,9 @@ async def _store_hand_placed(positions: dict[str, NodePosition]) -> dict:
     }
     released = [node_id for node_id in positions if node_id not in rows]
     if rows:
-        await asyncio.to_thread(db.save_layout, rows)
+        await asyncio.to_thread(rt.db.save_layout, rows)
     if released:
-        await asyncio.to_thread(db.forget_positions, released)
+        await asyncio.to_thread(rt.db.forget_positions, released)
     pinned = list(rows)
     await _journal_layout_action("layout_pinned", pinned)
     await _journal_layout_action("layout_released", released)
@@ -4223,7 +4219,7 @@ async def api_patch_positions(body: LayoutBody) -> dict:
     result["neighbours"] = {}
     for anchor, offsets in body.neighbours.items():
         result["neighbours"][anchor] = await asyncio.to_thread(
-            db.set_neighbours, anchor,
+            rt.db.set_neighbours, anchor,
             {node_id: {"x": o.x, "y": o.y} for node_id, o in offsets.items()},
         )
     return result
@@ -4245,7 +4241,7 @@ async def api_delete_node_position(node_id: str):
     clears the pin — but a page still running an older script does, so
     it is journalled as the release it means.
     """
-    removed = await asyncio.to_thread(db.forget_node_position, node_id)
+    removed = await asyncio.to_thread(rt.db.forget_node_position, node_id)
     if not removed:
         return JSONResponse(
             {"error": "no saved position for this node"}, status_code=404
@@ -4257,10 +4253,10 @@ async def api_delete_node_position(node_id: str):
 @app.delete("/api/layout")
 async def api_clear_layout() -> dict:
     """Forgets the whole layout. The map is laid out from scratch."""
-    removed = await asyncio.to_thread(db.clear_layout)
+    removed = await asyncio.to_thread(rt.db.clear_layout)
     cleared_at = time.time()
     await asyncio.to_thread(
-        db.add_event, cleared_at, "layout_cleared", "",
+        rt.db.add_event, cleared_at, "layout_cleared", "",
         f"{removed} node(s)", signin.actor(),
     )
     log.info(
@@ -4291,7 +4287,7 @@ def _noted_node_ids() -> set[str]:
     and the devices MoonLan knows that are not on it. An offline group
     keeps the switch without SNMP of its port present: a night with
     every device of a room off is not a cable moved."""
-    topo = state.as_dict()
+    topo = rt.state.as_dict()
     ids = {i for i in _layout_node_ids() if not notes.retired(i)}
     ids |= {"host:" + h["mac"] for h in topo.get("unlocated") or ()}
     ids |= {_stand_in(g["id"]) for g in topo.get("offline_groups") or ()}
@@ -4305,8 +4301,8 @@ async def _note_key_for(node_id: str) -> str:
     not put on a port where no switch without SNMP ever was."""
     if node_id.startswith("offline:"):
         key = _stand_in(node_id)
-        drawn = {p["id"] for p in state.as_dict().get("pseudo_switches") or ()}
-        if key not in drawn and await asyncio.to_thread(db.note, key):
+        drawn = {p["id"] for p in rt.state.as_dict().get("pseudo_switches") or ()}
+        if key not in drawn and await asyncio.to_thread(rt.db.note, key):
             return key
     return notes.note_key(node_id)
 
@@ -4318,7 +4314,7 @@ async def _existing_note_key(node_id: str) -> str:
         return await _note_key_for(node_id)
     except notes.NoteError:
         key = notes.stored_key(node_id)
-        if await asyncio.to_thread(db.note, key):
+        if await asyncio.to_thread(rt.db.note, key):
             return key
         raise
 
@@ -4331,7 +4327,7 @@ async def _journal_note(event: str, node_id: str, details: dict) -> None:
     """One entry per change, as data the page words: the node, and what
     happened to its name and note. The log gets the same in a line."""
     await asyncio.to_thread(
-        db.add_event, time.time(), event, node_id, json.dumps(details),
+        rt.db.add_event, time.time(), event, node_id, json.dumps(details),
         signin.actor(),
     )
     log.info(
@@ -4344,7 +4340,7 @@ async def _journal_note(event: str, node_id: str, details: dict) -> None:
 @app.get("/api/notes")
 async def api_notes() -> dict:
     """Every name and note, those without a node on the map included."""
-    rows = await asyncio.to_thread(db.notes)
+    rows = await asyncio.to_thread(rt.db.notes)
     return {
         "notes": [
             {
@@ -4364,7 +4360,7 @@ def _mac_directory() -> dict[str, str]:
     """MAC -> the node an imported note goes on: a device (on the map
     or off it; one drawn as a bridge is that bridge), then a switch by
     its bridge MAC, then an LLDP bridge by its chassis MAC."""
-    topo = state.as_dict()
+    topo = rt.state.as_dict()
     found: dict[str, str] = {}
     for host in topo["hosts"]:
         found.setdefault(host["mac"], host.get("merged_into") or "host:" + host["mac"])
@@ -4391,7 +4387,7 @@ async def api_import_notes(request: Request, dry_run: bool = Query(default=False
     if len(data) > notes.IMPORT_MAX_BYTES:
         return _refuse("too_big", 413, text="a CSV of notes is at most 2 MB")
     rows, errors, warnings = notes.parse_csv(data)
-    existing = await asyncio.to_thread(db.notes)
+    existing = await asyncio.to_thread(rt.db.notes)
     plan = notes.plan_import(rows, existing, _mac_directory())
     report = notes.import_report(plan, errors, warnings, dry_run)
     if dry_run:
@@ -4399,13 +4395,13 @@ async def api_import_notes(request: Request, dry_run: bool = Query(default=False
     ts = time.time()
     for write in plan["writes"]:
         await asyncio.to_thread(
-            db.set_note, write["node_id"], write["label"], write["note"],
+            rt.db.set_note, write["node_id"], write["label"], write["note"],
             "import", signin.actor(), ts, seen=write["found"],
         )
     summary = {"written": report["written"], "skipped": len(report["skipped_manual"]),
                "errors": len(report["errors"])}
     await asyncio.to_thread(
-        db.add_event, ts, "notes_imported", "", json.dumps(summary), signin.actor()
+        rt.db.add_event, ts, "notes_imported", "", json.dumps(summary), signin.actor()
     )
     log.info(
         "Notes imported%s: %d written (%d on the map, %d not found yet), "
@@ -4421,8 +4417,8 @@ async def api_export_notes(preview: bool = Query(default=False)):
     """The notes that have a MAC, as the CSV the import takes: UTF-8
     with a BOM, `;`. With preview, only how many go in and how many
     cannot — notes of nodes without a MAC."""
-    rows = await asyncio.to_thread(db.notes)
-    switch_macs = {sw["ip"]: sw.get("mac") or "" for sw in state.as_dict()["switches"]}
+    rows = await asyncio.to_thread(rt.db.notes)
+    switch_macs = {sw["ip"]: sw.get("mac") or "" for sw in rt.state.as_dict()["switches"]}
     data, left_out = notes.export_csv(rows, switch_macs)
     if preview:
         return {"exported": len(rows) - left_out, "left_out": left_out}
@@ -4443,11 +4439,11 @@ async def api_put_note(node_id: str, body: NoteBody):
         text = notes.clean_note(body.note)
     except notes.NoteError as exc:
         return _note_refused(exc)
-    before = await asyncio.to_thread(db.note, key)
+    before = await asyncio.to_thread(rt.db.note, key)
     if before is None and key not in _noted_node_ids():
         return _refuse("no_node", 404, text="no such node on the map")
     row = await asyncio.to_thread(
-        db.set_note, key, label, text, "manual", signin.actor(), time.time()
+        rt.db.set_note, key, label, text, "manual", signin.actor(), time.time()
     )
     if row is None:
         if before is not None:
@@ -4469,7 +4465,7 @@ async def api_delete_note(node_id: str):
         key = await _existing_note_key(node_id)
     except notes.NoteError as exc:
         return _note_refused(exc)
-    if not await asyncio.to_thread(db.delete_note, key):
+    if not await asyncio.to_thread(rt.db.delete_note, key):
         return _refuse("no_note", 404, text="this node has no note")
     await _journal_note("note_changed", key, {"deleted": True})
     return {"node_id": key, "deleted": True}
@@ -4487,15 +4483,15 @@ async def api_move_note(node_id: str, body: NoteMove):
         return _note_refused(exc)
     if source == target:
         return _refuse("same_node", 400, text="the note is already there")
-    if await asyncio.to_thread(db.note, source) is None:
+    if await asyncio.to_thread(rt.db.note, source) is None:
         return _refuse("no_note", 404, text="this node has no note")
     if target not in _noted_node_ids():
         return _refuse("no_node", 404, text="no such node on the map")
-    if not body.replace and await asyncio.to_thread(db.note, target):
+    if not body.replace and await asyncio.to_thread(rt.db.note, target):
         return _refuse("target_has_note", 409,
                        text="the target node has a note of its own")
     row = await asyncio.to_thread(
-        db.move_note, source, target, signin.actor(), time.time()
+        rt.db.move_note, source, target, signin.actor(), time.time()
     )
     await _journal_note("note_moved", target, {"from": source, "to": target})
     return {"node_id": target, "note": notes.public(row)}
@@ -4506,7 +4502,7 @@ async def _scan_once() -> None:
     try:
         await run_scan()
     except Exception as exc:
-        state.scan_failed(exc)
+        rt.state.scan_failed(exc)
         log.exception("Network scan failed")
 
 
@@ -4520,14 +4516,14 @@ async def api_scan() -> dict:
 
 @app.get("/api/search")
 async def api_search(q: str = Query(default="")) -> dict:
-    results = state.search(q)
+    results = rt.state.search(q)
     # …and by maker: "mercusys" finds every MERCUSYS device
     needle = q.strip().lower()
     if needle:
         seen = {r.get("mac") for r in results}
-        topo = state.as_dict()
+        topo = rt.state.as_dict()
         for host in topo["hosts"] + topo.get("unlocated", []):
-            name = vendors.lookup(host["mac"]).name
+            name = rt.vendors.lookup(host["mac"]).name
             if name and needle in name.lower() and host["mac"] not in seen:
                 results.append({"type": "host", **host, "vendor": name})
                 seen.add(host["mac"])
@@ -4542,11 +4538,11 @@ async def api_skipped_oids() -> dict:
     the service rather than guessing: a separate CLI run has its own
     collector and has never seen any of this.
     """
-    collector = _collector
+    collector = rt._collector
     paused = collector.paused_oids() if collector is not None else []
     return {
-        "strikes": config.snmp.dead_oid_strikes,
-        "cooldown_scans": config.snmp.dead_oid_cooldown_scans,
+        "strikes": rt.config.snmp.dead_oid_strikes,
+        "cooldown_scans": rt.config.snmp.dead_oid_cooldown_scans,
         "polled": collector is not None,
         "paused": paused,
         # walks an agent breaks (v0.8.8): asked for every scan — the
@@ -4564,12 +4560,12 @@ async def api_polling() -> dict:
     `diag --config` asks for them rather than guessing.
     """
     return {
-        "counters_interval_seconds": config.counters_interval_seconds,
+        "counters_interval_seconds": rt.config.counters_interval_seconds,
         "switches": [
             {
                 "ip": ip,
                 "name": (sw.sys_name or ip) if sw else "",
-                "budget_seconds": config.host_budget(ip),
+                "budget_seconds": rt.config.host_budget(ip),
                 "polled_at": sw.polled_at if sw else 0.0,
                 "poll_seconds": round(sw.poll_seconds, 1) if sw else 0.0,
                 "over_budget_scans": sw.over_budget_scans if sw else 0,
@@ -4582,11 +4578,11 @@ async def api_polling() -> dict:
                 "answered": sw.answered if sw else None,
                 "reachable": bool(sw and sw.answered),
                 # where the time of the poll went (v0.8.8)
-                "cut_at": poll_report.get(ip, {}).get("cut_at"),
-                "slowest_walks": poll_report.get(ip, {}).get("slowest_walks", []),
+                "cut_at": rt.poll_report.get(ip, {}).get("cut_at"),
+                "slowest_walks": rt.poll_report.get(ip, {}).get("slowest_walks", []),
             }
             for ip, sw in (
-                (ip, switch_data.get(ip)) for ip in configured_switches()
+                (ip, rt.switch_data.get(ip)) for ip in configured_switches()
             )
         ],
     }
@@ -4600,24 +4596,24 @@ async def api_status() -> dict:
         open_fds, rss_kb = 0, 0
     return {
         "version": __version__,
-        "demo": config.demo,
-        "switch_count": len(state.switches),
-        "host_count": len(state.hosts),
+        "demo": rt.config.demo,
+        "switch_count": len(rt.state.switches),
+        "host_count": len(rt.state.hosts),
         # every record off the map, as before; and the two lists of
         # the page (v0.8.7): there now without a place, and long gone
-        "unlocated_count": len(state.unlocated),
+        "unlocated_count": len(rt.state.unlocated),
         "unlocated_recent": sum(
-            1 for h in state.unlocated if h.get("recent")
+            1 for h in rt.state.unlocated if h.get("recent")
         ),
         "unlocated_gone": sum(
-            1 for h in state.unlocated if not h.get("recent")
+            1 for h in rt.state.unlocated if not h.get("recent")
         ),
-        "last_scan": state.last_scan,
-        "last_scan_ok": state.last_scan_ok,
-        "last_error": state.last_error,
-        "last_error_ts": state.last_error_ts,
-        **state.scan_progress(),
-        "layout_saved_at": await asyncio.to_thread(db.layout_saved_at),
+        "last_scan": rt.state.last_scan,
+        "last_scan_ok": rt.state.last_scan_ok,
+        "last_error": rt.state.last_error,
+        "last_error_ts": rt.state.last_error_ts,
+        **rt.state.scan_progress(),
+        "layout_saved_at": await asyncio.to_thread(rt.db.layout_saved_at),
         "uptime_hint": time.time(),
         "open_fds": open_fds,
         "rss_kb": rss_kb,

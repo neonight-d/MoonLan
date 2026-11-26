@@ -162,24 +162,24 @@ class InventoryTest(unittest.IsolatedAsyncioTestCase):
         self.collector = StubCollector()
         self._get_collector = server.get_collector
         server.get_collector = lambda: self.collector
-        server.switch_data.clear()
-        self._budget = server.config.snmp.host_budget_seconds
-        server.config.snmp.host_budget_seconds = 1
-        server.config.switch_snmp = {}
-        server.db._conn.execute("DELETE FROM hosts")
-        server.db._conn.execute("DELETE FROM journal")
-        server.db._conn.commit()
+        server.rt.switch_data.clear()
+        self._budget = server.rt.config.snmp.host_budget_seconds
+        server.rt.config.snmp.host_budget_seconds = 1
+        server.rt.config.switch_snmp = {}
+        server.rt.db._conn.execute("DELETE FROM hosts")
+        server.rt.db._conn.execute("DELETE FROM journal")
+        server.rt.db._conn.commit()
 
     def tearDown(self):
         server.get_collector = self._get_collector
-        server.config.snmp.host_budget_seconds = self._budget
-        server.state.scanning = False
+        server.rt.config.snmp.host_budget_seconds = self._budget
+        server.rt.state.scanning = False
 
     def _row(self, mac: str):
-        return server.db.hosts_by_mac().get(mac)
+        return server.rt.db.hosts_by_mac().get(mac)
 
     def _journal(self, event: str, mac: str = "") -> int:
-        return server.db._conn.execute(
+        return server.rt.db._conn.execute(
             "SELECT COUNT(*) AS n FROM journal WHERE event = ? AND mac = ?",
             (event, mac),
         ).fetchone()["n"]
@@ -235,7 +235,7 @@ class InventoryTest(unittest.IsolatedAsyncioTestCase):
         for _ in range(3):
             with self.assertLogs("moonlan", "WARNING"):
                 await server.run_scan()
-        drawn = server.state.as_dict()
+        drawn = server.rt.state.as_dict()
         self.assertIn(
             frozenset({CORE, SLOW}),
             {frozenset({link["a"], link["b"]}) for link in drawn["links"]},

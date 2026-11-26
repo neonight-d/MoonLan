@@ -244,22 +244,22 @@ class ServiceTest(unittest.IsolatedAsyncioTestCase):
         self.agent = StubAgent()
         self._get_collector = server.get_collector
         server.get_collector = lambda: self.agent
-        self._stability = server.fdb_stability
-        server.fdb_stability = FdbStability()
-        server.switch_data.clear()
-        server.config.switch_snmp = {}
+        self._stability = server.rt.fdb_stability
+        server.rt.fdb_stability = FdbStability()
+        server.rt.switch_data.clear()
+        server.rt.config.switch_snmp = {}
         for table in ("hosts", "journal", "layout", "notes"):
-            server.db._conn.execute(f"DELETE FROM {table}")
-        server.db._conn.commit()
+            server.rt.db._conn.execute(f"DELETE FROM {table}")
+        server.rt.db._conn.commit()
 
     def tearDown(self):
         server.get_collector = self._get_collector
-        server.fdb_stability = self._stability
-        server.state.scanning = False
+        server.rt.fdb_stability = self._stability
+        server.rt.state.scanning = False
 
     async def test_the_link_and_the_group_behind_it_carry_the_names(self):
         await server.run_scan()
-        drawn = server.state.as_dict()
+        drawn = server.rt.state.as_dict()
         link = next(
             link for link in drawn["links"]
             if {link["a"], link["b"]} == {CORE_A, CORE_B}
@@ -275,12 +275,12 @@ class ServiceTest(unittest.IsolatedAsyncioTestCase):
         database record from before, and the phantom row itself."""
         self.agent.phantom = True
         core_a_mac = _specs(False)[CORE_A]["bridge"]
-        server.fdb_stability._cache[ACCESS] = {
+        server.rt.fdb_stability._cache[ACCESS] = {
             core_a_mac: [-PHANTOM_BRIDGE_PORT, 3],
             PHANTOM_MAC: [-PHANTOM_BRIDGE_PORT, 3],
         }
         now = time.time()
-        server.db.seed_host(
+        server.rt.db.seed_host(
             "00:1b:2c:00:00:77", ACCESS, str(-PHANTOM_BRIDGE_PORT), 1,
             first_seen=now - 86400, last_seen=now - 600, seen_count=5,
         )
@@ -297,41 +297,41 @@ class ServiceTest(unittest.IsolatedAsyncioTestCase):
 
     async def test_old_names_in_the_database(self):
         now = time.time()
-        server.db.seed_host(
+        server.rt.db.seed_host(
             "00:1b:2c:00:00:71", ACCESS, str(-PHANTOM_BRIDGE_PORT), 1,
             first_seen=now - 86400, last_seen=now - 600, seen_count=5,
         )
-        server.db.seed_host(
+        server.rt.db.seed_host(
             "00:1b:2c:00:00:72", CORE_A, "bridge-port 1", 1,
             first_seen=now - 86400, last_seen=now - 600, seen_count=5,
         )
-        server.db.seed_host(
+        server.rt.db.seed_host(
             "00:1b:2c:00:00:73", CORE_B, "bridge-port 7", 1,
             first_seen=now - 86400, last_seen=now - 600, seen_count=5,
         )
-        server.db.save_layout({
+        server.rt.db.save_layout({
             f"offline:{CORE_A}:bridge-port 1": {"x": 10, "y": 20, "pinned": True},
             f"pseudo:{ACCESS}:-{PHANTOM_BRIDGE_PORT}": {"x": 1, "y": 2},
         })
-        server.db.set_note(
+        server.rt.db.set_note(
             f"trunk:{CORE_A}:bridge-port 1", "Basement", "", "manual", "", now
         )
-        server.db.set_note(
+        server.rt.db.set_note(
             f"pseudo:{CORE_B}:bridge-port 7", "Old", "", "manual", "", now
         )
         with self.assertLogs("moonlan", "INFO") as logged:
             await server.run_scan()
-        rows = server.db.hosts_by_mac()
+        rows = server.rt.db.hosts_by_mac()
         self.assertEqual(rows["00:1b:2c:00:00:71"]["port"], "")
         self.assertEqual(rows["00:1b:2c:00:00:72"]["port"], CORE_A_LAG)
         self.assertEqual(rows["00:1b:2c:00:00:73"]["port"], "")
-        layout = server.db.layout()
+        layout = server.rt.db.layout()
         self.assertIn(f"offline:{CORE_A}:{CORE_A_LAG}", layout)
         self.assertTrue(layout[f"offline:{CORE_A}:{CORE_A_LAG}"]["pinned"])
         self.assertNotIn(f"offline:{CORE_A}:bridge-port 1", layout)
         # no aggregate to rename it to: left to age out
         self.assertIn(f"pseudo:{ACCESS}:-{PHANTOM_BRIDGE_PORT}", layout)
-        notes = server.db.notes()
+        notes = server.rt.db.notes()
         self.assertIn(f"trunk:{CORE_A}:{CORE_A_LAG}", notes)
         self.assertNotIn(f"trunk:{CORE_A}:bridge-port 1", notes)
         # …and a note whose port is no aggregate is left as it was: it
@@ -350,14 +350,14 @@ class ServiceTest(unittest.IsolatedAsyncioTestCase):
     async def test_a_saved_reading_renames_nothing(self):
         """Only a full poll says which aggregates exist."""
         now = time.time()
-        server.db.seed_host(
+        server.rt.db.seed_host(
             "00:1b:2c:00:00:74", CORE_B, "bridge-port 25", 1,
             first_seen=now - 86400, last_seen=now - 600, seen_count=5,
         )
         stale = SwitchData(ip=CORE_B, reachable=True, over_budget=True)
         await server._retire_port_names([stale])
         self.assertEqual(
-            server.db.hosts_by_mac()["00:1b:2c:00:00:74"]["port"],
+            server.rt.db.hosts_by_mac()["00:1b:2c:00:00:74"]["port"],
             "bridge-port 25",
         )
 
@@ -369,7 +369,7 @@ class AggregateRowTest(unittest.IsolatedAsyncioTestCase):
         from collections import deque
         from moonlan.counters import PortRates
         self.deque, self.PortRates = deque, PortRates
-        server.switch_data.clear()
+        server.rt.switch_data.clear()
         sw = SwitchData(ip=CORE_B, reachable=True, sys_name="core-b")
         for i in range(1, 29):
             sw.ports[i] = PortInfo(if_index=i, name=f"1/{i}",
@@ -377,18 +377,18 @@ class AggregateRowTest(unittest.IsolatedAsyncioTestCase):
         sw.lag_groups = {25: [25, 26]}
         sw.ports[-25] = PortInfo(if_index=-25, name=CORE_B_LAG,
                                  is_physical=False)
-        server.switch_data[CORE_B] = sw
+        server.rt.switch_data[CORE_B] = sw
         self.sw = sw
-        for key in [k for k in server.counter_store._rates if k[0] == CORE_B]:
-            del server.counter_store._rates[key]
+        for key in [k for k in server.rt.counter_store._rates if k[0] == CORE_B]:
+            del server.rt.counter_store._rates[key]
 
     def tearDown(self):
-        server.switch_data.clear()
-        for key in [k for k in server.counter_store._rates if k[0] == CORE_B]:
-            del server.counter_store._rates[key]
+        server.rt.switch_data.clear()
+        for key in [k for k in server.rt.counter_store._rates if k[0] == CORE_B]:
+            del server.rt.counter_store._rates[key]
 
     def _rate(self, if_index, in_mbps, out_mbps, ago=10.0):
-        server.counter_store._rates[(CORE_B, if_index)] = self.deque([
+        server.rt.counter_store._rates[(CORE_B, if_index)] = self.deque([
             self.PortRates(
                 ts=time.time() - ago, in_mbps=in_mbps, out_mbps=out_mbps,
                 in_errors_per_min=1.0, out_errors_per_min=0.0,
@@ -485,7 +485,7 @@ class DiagFdbTest(unittest.TestCase):
         try:
             with contextlib.redirect_stdout(out):
                 asyncio.run(diag.run_fdb_dump(
-                    ACCESS, None, "public", 1, server.config
+                    ACCESS, None, "public", 1, server.rt.config
                 ))
         finally:
             diag._make_collector = original
@@ -505,7 +505,7 @@ class DiagFdbTest(unittest.TestCase):
         try:
             with contextlib.redirect_stdout(out):
                 asyncio.run(diag.run_fdb_dump(
-                    CORE_A, None, "public", 1, server.config
+                    CORE_A, None, "public", 1, server.rt.config
                 ))
         finally:
             diag._make_collector = original

@@ -179,8 +179,8 @@ class CertificateTest(unittest.IsolatedAsyncioTestCase):
 
         async def service_alarm(alarm_type, subject, active, message):
             calls.append((alarm_type, active, message))
-        with mock.patch.object(server, "certificate", SimpleNamespace(not_after=ends)), \
-                mock.patch.object(server.alarm_engine, "service_alarm", service_alarm):
+        with mock.patch.object(server.rt, "certificate", SimpleNamespace(not_after=ends)), \
+                mock.patch.object(server.rt.alarm_engine, "service_alarm", service_alarm):
             await server.check_certificate_end()
         (alarm_type, active, message), = calls
         self.assertEqual((alarm_type, active), ("tls_cert_expiring", True))

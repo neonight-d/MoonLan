@@ -170,54 +170,54 @@ class ScanCase(unittest.IsolatedAsyncioTestCase):
         self.collector = StubCollector()
         self._get_collector = server.get_collector
         server.get_collector = lambda: self.collector
-        server.switch_data.clear()
+        server.rt.switch_data.clear()
         self._saved = (
-            server.config.new_host_confirm_scans,
-            server.config.filter_suspect_macs,
-            server.config.unmanaged_threshold,
-            server.config.thresholds.corruption_hamming_bits,
+            server.rt.config.new_host_confirm_scans,
+            server.rt.config.filter_suspect_macs,
+            server.rt.config.unmanaged_threshold,
+            server.rt.config.thresholds.corruption_hamming_bits,
         )
-        server.config.new_host_confirm_scans = 2
-        server.config.filter_suspect_macs = True
-        server.config.unmanaged_threshold = 3
-        server.config.thresholds.corruption_hamming_bits = 8
-        server.config.switch_snmp = {}
-        server.prev_pseudo_ports = set()
-        server.db._conn.execute("DELETE FROM hosts")
-        server.db._conn.execute("DELETE FROM journal")
-        server.db._conn.execute("DELETE FROM notes")
-        server.db._conn.execute(
+        server.rt.config.new_host_confirm_scans = 2
+        server.rt.config.filter_suspect_macs = True
+        server.rt.config.unmanaged_threshold = 3
+        server.rt.config.thresholds.corruption_hamming_bits = 8
+        server.rt.config.switch_snmp = {}
+        server.rt.prev_pseudo_ports = set()
+        server.rt.db._conn.execute("DELETE FROM hosts")
+        server.rt.db._conn.execute("DELETE FROM journal")
+        server.rt.db._conn.execute("DELETE FROM notes")
+        server.rt.db._conn.execute(
             "DELETE FROM alarms WHERE type = 'port_frame_corruption'"
         )
-        server.db._conn.commit()
-        server.alarm_engine._corrupt.clear()
-        server.alarm_engine._active = {
-            key for key in server.alarm_engine._active
+        server.rt.db._conn.commit()
+        server.rt.alarm_engine._corrupt.clear()
+        server.rt.alarm_engine._active = {
+            key for key in server.rt.alarm_engine._active
             if key[0] != "port_frame_corruption"
         }
 
     def tearDown(self):
         server.get_collector = self._get_collector
         (
-            server.config.new_host_confirm_scans,
-            server.config.filter_suspect_macs,
-            server.config.unmanaged_threshold,
-            server.config.thresholds.corruption_hamming_bits,
+            server.rt.config.new_host_confirm_scans,
+            server.rt.config.filter_suspect_macs,
+            server.rt.config.unmanaged_threshold,
+            server.rt.config.thresholds.corruption_hamming_bits,
         ) = self._saved
-        server.state.scanning = False
-        server.prev_pseudo_ports = set()
+        server.rt.state.scanning = False
+        server.rt.prev_pseudo_ports = set()
 
     def row(self, mac: str):
-        return server.db.hosts_by_mac().get(mac)
+        return server.rt.db.hosts_by_mac().get(mac)
 
     def new_macs(self, mac: str) -> int:
-        return server.db._conn.execute(
+        return server.rt.db._conn.execute(
             "SELECT COUNT(*) AS n FROM journal WHERE event = 'new_mac' "
             "AND mac = ?", (mac,),
         ).fetchone()["n"]
 
     def drawn(self) -> set[str]:
-        return {h["mac"] for h in server.state.as_dict()["hosts"]}
+        return {h["mac"] for h in server.rt.state.as_dict()["hosts"]}
 
     async def inventory(self, **where) -> None:
         """The first poll of an empty database: the sample is real."""
@@ -243,16 +243,16 @@ class ScanTest(ScanCase):
         await self.inventory(access={SAMPLE: 7})
         self.collector.access[COPY] = 7
         await self.assert_held(COPY)
-        found = server.suspect_by_port[(ACCESS, "Gi0/7")]
+        found = server.rt.suspect_by_port[(ACCESS, "Gi0/7")]
         self.assertEqual(found, [{"mac": COPY, "sample": SAMPLE, "distance": 2}])
         self.assertIn(SAMPLE, self.drawn())
 
     async def test_the_sample_switched_off_ten_minutes_ago(self):
         await self.inventory(access={SAMPLE: 7})
-        server.db.set_last_seen(SAMPLE, time.time() - 600)
+        server.rt.db.set_last_seen(SAMPLE, time.time() - 600)
         self.collector.access = {COPY: 7}
         await self.assert_held(COPY)
-        self.assertIn((ACCESS, "Gi0/7"), server.suspect_by_port)
+        self.assertIn((ACCESS, "Gi0/7"), server.rt.suspect_by_port)
 
     async def test_the_sample_on_the_next_port(self):
         """Moved from port 3 to port 5: the copies stay, and the port
@@ -261,9 +261,9 @@ class ScanTest(ScanCase):
         self.collector.access[COPY] = 3
         await self.assert_held(COPY)
         self.assertEqual(
-            [s["mac"] for s in server.suspect_by_port[(ACCESS, "Gi0/3")]], [COPY]
+            [s["mac"] for s in server.rt.suspect_by_port[(ACCESS, "Gi0/3")]], [COPY]
         )
-        self.assertNotIn((ACCESS, "Gi0/5"), server.suspect_by_port)
+        self.assertNotIn((ACCESS, "Gi0/5"), server.rt.suspect_by_port)
 
     async def test_a_sample_on_another_switch_is_not_one(self):
         """A switch learns a damaged address from the frame that
@@ -276,29 +276,29 @@ class ScanTest(ScanCase):
         await server.run_scan()
         self.assertTrue(self.row(COPY)["confirmed"])
         self.assertIn(COPY, self.drawn())
-        self.assertEqual(server.suspect_by_port, {})
+        self.assertEqual(server.rt.suspect_by_port, {})
 
     async def test_an_ip_confirms_however_alike(self):
         await self.inventory(access={SAMPLE: 7})
         self.collector.access[COPY] = 7
         await server.run_scan()
         self.assertFalse(self.row(COPY)["confirmed"])
-        server.db.set_ips({COPY: "10.0.99.87"})
+        server.rt.db.set_ips({COPY: "10.0.99.87"})
         await server.run_scan()
         self.assertTrue(self.row(COPY)["confirmed"])
         self.assertIn(COPY, self.drawn())
-        self.assertEqual(server.suspect_by_port, {})
+        self.assertEqual(server.rt.suspect_by_port, {})
 
     async def test_with_the_filter_off_the_copies_are_drawn(self):
         """filter_suspect_macs = false is the choice to see the damage:
         the copies are marked, and confirmed the way they used to be."""
-        server.config.filter_suspect_macs = False
+        server.rt.config.filter_suspect_macs = False
         await self.inventory(access={SAMPLE: 7})
         self.collector.access[COPY] = 7
         await server.run_scan()
         await server.run_scan()
         self.assertTrue(self.row(COPY)["confirmed"])
-        host = next(h for h in server.state.as_dict()["hosts"] if h["mac"] == COPY)
+        host = next(h for h in server.rt.state.as_dict()["hosts"] if h["mac"] == COPY)
         self.assertTrue(host["suspect_corrupt"])
         self.assertEqual(host["suspect_of"], SAMPLE)
 
@@ -312,11 +312,11 @@ class ScanTest(ScanCase):
             await server.run_scan()
             pseudo = {
                 (p["switch"], p["port"])
-                for p in server.state.as_dict()["pseudo_switches"]
+                for p in server.rt.state.as_dict()["pseudo_switches"]
             }
             self.assertNotIn((ACCESS, "Gi0/7"), pseudo)
         self.assertEqual(
-            sorted(s["mac"] for s in server.suspect_by_port[(ACCESS, "Gi0/7")]),
+            sorted(s["mac"] for s in server.rt.suspect_by_port[(ACCESS, "Gi0/7")]),
             sorted(COPIES),
         )
 
@@ -457,17 +457,17 @@ class OldCopiesScanTest(ScanCase):
     def setUp(self):
         super().setUp()
         now = time.time()
-        server.db.seed_host(SAMPLE, ACCESS, "Gi0/5", 1, first_seen=now - 86400,
+        server.rt.db.seed_host(SAMPLE, ACCESS, "Gi0/5", 1, first_seen=now - 86400,
                             last_seen=now, seen_count=400)
-        server.db.set_ips({SAMPLE: "10.0.99.49"})
+        server.rt.db.set_ips({SAMPLE: "10.0.99.49"})
         for n, mac in enumerate(HUNDRED):
             port = "Gi0/5" if n % 4 else "Gi0/3"  # the hub was on port 3 first
-            server.db.seed_host(mac, ACCESS, port, 1, first_seen=now - 7200,
+            server.rt.db.seed_host(mac, ACCESS, port, 1, first_seen=now - 7200,
                                 last_seen=now - 3600, seen_count=2)
         self.collector.access = {SAMPLE: 5}
 
     def events(self) -> list:
-        return server.db._conn.execute(
+        return server.rt.db._conn.execute(
             "SELECT mac, details FROM journal WHERE event = 'copies_removed'"
         ).fetchall()
 
@@ -481,18 +481,18 @@ class OldCopiesScanTest(ScanCase):
         self.assertEqual((data["switch"], data["ports"]), (ACCESS, ["Gi0/5", "Gi0/3"]))
 
         await server.run_scan()
-        drawn = server.state.as_dict()
+        drawn = server.rt.state.as_dict()
         self.assertEqual(self.drawn(), {SAMPLE})
         self.assertEqual(drawn["offline_groups"], [])
         self.assertEqual(drawn["unlocated"], [])
-        self.assertEqual(server._known_hosts_per_port(server.db.hosts_by_mac(), {ACCESS}),
+        self.assertEqual(server._known_hosts_per_port(server.rt.db.hosts_by_mac(), {ACCESS}),
                          {(ACCESS, "Gi0/5"): 1})
         self.assertEqual(len(self.events()), 1)     # not once a scan
 
         await server.purge_copies()
-        self.assertEqual(set(server.db.hosts_by_mac()), {SAMPLE})
+        self.assertEqual(set(server.rt.db.hosts_by_mac()), {SAMPLE})
         self.assertEqual(len(self.events()), 1)
-        self.assertEqual(server.db._conn.execute(
+        self.assertEqual(server.rt.db._conn.execute(
             "SELECT COUNT(*) FROM journal WHERE event <> 'copies_removed'"
         ).fetchone()[0], 0)
 
@@ -508,27 +508,27 @@ class OldCopiesScanTest(ScanCase):
         await server.run_scan()
         self.assertEqual(self.drawn(), {SAMPLE})
         self.assertEqual(
-            sorted(s["mac"] for s in server.suspect_by_port[(ACCESS, "Gi0/5")]),
+            sorted(s["mac"] for s in server.rt.suspect_by_port[(ACCESS, "Gi0/5")]),
             sorted(HUNDRED[:3]),
         )
-        self.assertEqual(server.state.as_dict()["pseudo_switches"], [])
+        self.assertEqual(server.rt.state.as_dict()["pseudo_switches"], [])
 
     async def test_an_ip_takes_it_back(self):
         await server.hide_confirmed_copies()
-        server.db.set_ips({HUNDRED[0]: "10.0.99.50"})
-        self.assertEqual(server.db.hosts_by_mac()[HUNDRED[0]]["corrupt_of"], "")
+        server.rt.db.set_ips({HUNDRED[0]: "10.0.99.50"})
+        self.assertEqual(server.rt.db.hosts_by_mac()[HUNDRED[0]]["corrupt_of"], "")
         await server.purge_copies()
-        self.assertIn(HUNDRED[0], server.db.hosts_by_mac())
+        self.assertIn(HUNDRED[0], server.rt.db.hosts_by_mac())
 
     async def test_with_the_filter_off_nothing_is_marked_or_removed(self):
-        server.config.filter_suspect_macs = False
+        server.rt.config.filter_suspect_macs = False
         await server.hide_confirmed_copies()
         await server.run_scan()
         self.assertEqual(self.events(), [])
         self.assertTrue(set(HUNDRED) <= self.drawn())
-        server.db.mark_copies(SAMPLE, HUNDRED)
+        server.rt.db.mark_copies(SAMPLE, HUNDRED)
         await server.purge_copies()
-        self.assertEqual(len(server.db.hosts_by_mac()), 101)
+        self.assertEqual(len(server.rt.db.hosts_by_mac()), 101)
 
 
 
@@ -673,8 +673,8 @@ class HintScanTest(ScanCase):
     def test_the_port_s_inbound_errors_by_its_name(self):
         from moonlan.counters import Sample
         sw = switch(ACCESS, "access-sw", 2)
-        server.switch_data[ACCESS] = sw
-        store = server.counter_store
+        server.rt.switch_data[ACCESS] = sw
+        store = server.rt.counter_store
         self.addCleanup(lambda: [store._rates.pop((ACCESS, 5), None),
                                  store._last.pop((ACCESS, 5), None)])
         now = time.time()
@@ -773,8 +773,8 @@ real = {demo.CORRUPT_REAL, demo.CORRUPT_NEIGHBOR}
 async def scans():
     for _ in range(14):
         await server.run_scan()
-        rows = server.db.hosts_by_mac()
-        topo = server.state.as_dict()
+        rows = server.rt.db.hosts_by_mac()
+        topo = server.rt.state.as_dict()
         out["scans"].append({
             "drawn": sorted(h["mac"] for h in topo["hosts"]
                             if (h["switch"], h["port"]) == port),

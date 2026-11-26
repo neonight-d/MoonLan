@@ -36,7 +36,7 @@ if sys.argv[1] == "without":
 
 
 async def run():
-    demo.seed_notes(server.db)
+    demo.seed_notes(server.rt.db)
     out = {"scans": []}
     for _ in range(3):
         await server.run_scan()
@@ -48,12 +48,12 @@ async def run():
             "lag": [p for p in ports["ports"] if p["name"] == "LAG Gi0/15+Gi0/16"],
         })
     out["journal"] = [
-        e for e in server.db.journal(2000)
+        e for e in server.rt.db.journal(2000)
         if e["event"] in ("note_moved", "new_mac")
     ]
-    out["note"] = server.db.note("host:" + demo.LAG_ROUTER_BOND)
+    out["note"] = server.rt.db.note("host:" + demo.LAG_ROUTER_BOND)
     out["rows"] = {
-        mac: row for mac, row in server.db.hosts_by_mac().items()
+        mac: row for mac, row in server.rt.db.hosts_by_mac().items()
         if mac in demo.LAG_ROUTER_MACS
     }
     print(json.dumps(out))

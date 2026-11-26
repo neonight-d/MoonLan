@@ -30,20 +30,20 @@ logging.getLogger("moonlan").setLevel(logging.ERROR)
 
 
 def mass():
-    return [a["message"] for a in server.db.alarms(True) if a["type"] == "port_hosts_down"]
+    return [a["message"] for a in server.rt.db.alarms(True) if a["type"] == "port_hosts_down"]
 
 
 async def run():
     out = {"texts": {}}
-    demo.seed_notes(server.db)
-    demo.seed_reading(server.db)
+    demo.seed_notes(server.rt.db)
+    demo.seed_reading(server.rt.db)
     await server.restore_readings()
     await server.run_scan()
     while demo._ping_cycle < demo.MASS_RECOVER_AT:
         await server.run_ping()
         out["texts"][demo._ping_cycle] = mass()
     out["raised"] = [
-        e["details"] for e in server.db.journal(2000)
+        e["details"] for e in server.rt.db.journal(2000)
         if e["event"] == "alarm_raised" and "port_hosts_down" in e["details"]
     ]
     topo = json.loads((await server.api_topology()).body)

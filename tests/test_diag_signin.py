@@ -101,13 +101,13 @@ class ConsoleTokenTest(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
-        self.db = server.accounts
+        self.db = server.rt.accounts
         self.clean()
         self.addCleanup(self.clean)
         self.db.add_user("anton", "admin", "hash")   # sign-in on
         self.file = Path(self.tmp.name) / "moonlan.db.console"
-        server.sign_in.write_console_token(str(self.file))
-        self.addCleanup(setattr, server.sign_in, "_console", "")
+        server.rt.sign_in.write_console_token(str(self.file))
+        self.addCleanup(setattr, server.rt.sign_in, "_console", "")
         self.token = self.file.read_text().strip()
 
     def clean(self):
@@ -140,7 +140,7 @@ class ConsoleTokenTest(unittest.TestCase):
             call(server.app, "GET", "/api/layout", headers=header).status, 401
         )
         # a restart writes a new one; the old one stops working
-        server.sign_in.write_console_token(str(self.file))
+        server.rt.sign_in.write_console_token(str(self.file))
         header = {"x-moonlan-console": self.token}
         self.assertEqual(
             call(server.app, "GET", "/api/layout", headers=header).status, 401

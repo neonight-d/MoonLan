@@ -42,7 +42,7 @@ from asgi_client import call
 
 
 async def run():
-    demo.seed_notes(server.db)
+    demo.seed_notes(server.rt.db)
     for _ in range(2):
         await server.run_scan()
         await server.run_counters()
@@ -59,7 +59,7 @@ out = {
         if a["type"] == "loop_detection_disabled"}),
     "groups": sorted({e["group"] for e in call(
         server.app, "GET", "/api/journal?limit=1000").json()["events"]}),
-    "notes": sorted(server.db.notes()),
+    "notes": sorted(server.rt.db.notes()),
     "records": records,
 }
 print(json.dumps(out))

@@ -157,7 +157,7 @@ from asgi_client import call
 
 
 async def scan():
-    await asyncio.to_thread(demo.seed_notes, server.db)
+    await asyncio.to_thread(demo.seed_notes, server.rt.db)
     await server.run_scan()
 
 asyncio.run(scan())

@@ -53,7 +53,7 @@ WITHOUT_FIDO2 = textwrap.dedent("""
     from moonlan import passkeys, server
     server._log_config()
     # sign-in on: the form is where a key would be offered
-    server.accounts.add_user("anton", "admin", "scrypt$unused")
+    server.rt.accounts.add_user("anton", "admin", "scrypt$unused")
     print(json.dumps({
         "health": call(server.app, "GET", "/api/health").status,
         "me": call(server.app, "GET", "/api/auth/me").json(),
@@ -277,15 +277,15 @@ class KeysCase(unittest.TestCase):
         self.addCleanup(logger.setLevel, logger.level)
         # a copied key is an ERROR line by design; not here
         logger.setLevel(logging.CRITICAL)
-        self.db = server.accounts
+        self.db = server.rt.accounts
         self.clean()
         self.addCleanup(self.clean)
-        server.sign_in._tickets.clear()
-        server.sign_in.throttle = signin.Throttle()
+        server.rt.sign_in._tickets.clear()
+        server.rt.sign_in.throttle = signin.Throttle()
         public, _ = https.parse_public_url(ORIGIN)
         for name, value in (("public_url", public),
                             ("webauthn", passkeys.Passkeys(public))):
-            patch = mock.patch.object(server.sign_in, name, value)
+            patch = mock.patch.object(server.rt.sign_in, name, value)
             patch.start()
             self.addCleanup(patch.stop)
         self.db.add_user("anton", "admin", auth.hash_password(PASSWORD))
@@ -485,7 +485,7 @@ class AddKeyTest(KeysCase):
 
     def test_journaled(self):
         self.add_key(label="blue key")
-        event = next(e for e in server.db.journal(5)
+        event = next(e for e in server.rt.db.journal(5)
                      if e["event"] == "user_passkey_added")
         self.assertEqual(event["user"], "vera")
         self.assertEqual(json.loads(event["details"])["label"], "blue key")
@@ -506,7 +506,7 @@ class AddKeyTest(KeysCase):
         self.assertEqual(answer.json()["error"], "too_many_keys")
 
     def test_keys_off(self):
-        server.sign_in.webauthn.why = "no_fido2"
+        server.rt.sign_in.webauthn.why = "no_fido2"
         answer = self.begin_add(self.cookie("vera"))
         self.assertEqual(answer.status, 409)
         self.assertEqual(answer.json(), {"error": "passkeys_off",
@@ -602,7 +602,7 @@ class SignInCase(KeysCase):
         return self.finish(begun["request"], credential, client=client)
 
     def logins(self):
-        return [json.loads(e["details"]) for e in server.db.journal(20)
+        return [json.loads(e["details"]) for e in server.rt.db.journal(20)
                 if e["event"] == "login"]
 
 
@@ -724,7 +724,7 @@ class SignInWithKeyTest(SignInCase):
         key, _ = self.add_key(passwordless=False)
         ticket = self.password()["ticket"]
         begun = self.begin(ticket).json()
-        for entry in server.sign_in._tickets.values():
+        for entry in server.rt.sign_in._tickets.values():
             entry.expires = time.time() - 1
         answer = self.finish(begun["request"],
                              soft.get(begun["options"], ORIGIN, key))
@@ -740,7 +740,7 @@ class SignInWithKeyTest(SignInCase):
 
     def test_keys_off(self):
         key, _ = self.add_key(passwordless=False)
-        server.sign_in.webauthn.why = "no_fido2"
+        server.rt.sign_in.webauthn.why = "no_fido2"
         self.assertEqual(self.begin().json()["error"], "passkeys_off")
         # the second step then offers what is left
         self.assertEqual(self.password()["methods"], ["recovery"])
@@ -762,17 +762,17 @@ class CounterTest(SignInCase):
         self.key, _ = self.add_key(passwordless=True)
 
     def clear_alarms(self):
-        with server.db._lock, server.db._conn:
-            server.db._conn.execute(
+        with server.rt.db._lock, server.rt.db._conn:
+            server.rt.db._conn.execute(
                 "DELETE FROM alarms WHERE type = 'passkey_clone_suspected'"
             )
-        server.alarm_engine._active = {
-            a for a in server.alarm_engine._active
+        server.rt.alarm_engine._active = {
+            a for a in server.rt.alarm_engine._active
             if a[0] != "passkey_clone_suspected"
         }
 
     def clone_alarms(self):
-        return [a for a in server.db.alarms(True, 100)
+        return [a for a in server.rt.db.alarms(True, 100)
                 if a["type"] == "passkey_clone_suspected"]
 
     def test_counting_up(self):
@@ -801,7 +801,7 @@ class CounterTest(SignInCase):
                      if a["type"] == "passkey_clone_suspected")
         self.assertEqual((shown["display"], shown["port"]),
                          (alarm["subject"], ""))
-        events = [e for e in server.db.journal(20)
+        events = [e for e in server.rt.db.journal(20)
                   if e["event"] == "passkey_clone_suspected"]
         self.assertEqual(len(events), 2)
         self.assertEqual(json.loads(events[-1]["details"])["counter"], 5)
@@ -882,7 +882,7 @@ class SecondFactorTest(SignInCase):
                       cookie=cookie, scheme="https", host=HOST)
         self.assertEqual(answer.status, 200, answer.body)
         self.assertEqual(len(self.olga_keys()), 1)
-        event = server.db.journal(1)[0]
+        event = server.rt.db.journal(1)[0]
         self.assertEqual(event["event"], "user_passkey_removed")
 
     def test_nobody_elses_key(self):

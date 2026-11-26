@@ -31,28 +31,28 @@ class MapTest(unittest.TestCase):
     off it, an LLDP bridge, a switch without SNMP, an offline group."""
 
     def setUp(self):
-        self._saved = {key: getattr(server.state, key) for key in STATE}
-        server.state.switches = [
+        self._saved = {key: getattr(server.rt.state, key) for key in STATE}
+        server.rt.state.switches = [
             {"ip": "10.0.0.1", "name": "core", "mac": CORE_MAC},
             {"ip": "10.0.0.2", "name": "edge", "mac": "02:4d:4c:00:00:02"},
         ]
-        server.state.hosts = [{"mac": HOST, "switch": "10.0.0.2", "port": "Gi0/3"}]
-        server.state.unlocated = [{"mac": OFF_MAP}]
-        server.state.bridges = [{"id": BRIDGE, "chassis_id": CHASSIS, "name": "RouterOS-C"}]
-        server.state.pseudo_switches = [{"id": PSEUDO, "switch": "10.0.0.2", "port": "Gi0/9"}]
-        server.state.offline_groups = [{"id": OFFLINE, "switch": "10.0.0.2", "port": "Gi0/5"}]
-        server.state.external_networks = []
-        server.state.trunk_groups = []
+        server.rt.state.hosts = [{"mac": HOST, "switch": "10.0.0.2", "port": "Gi0/3"}]
+        server.rt.state.unlocated = [{"mac": OFF_MAP}]
+        server.rt.state.bridges = [{"id": BRIDGE, "chassis_id": CHASSIS, "name": "RouterOS-C"}]
+        server.rt.state.pseudo_switches = [{"id": PSEUDO, "switch": "10.0.0.2", "port": "Gi0/9"}]
+        server.rt.state.offline_groups = [{"id": OFFLINE, "switch": "10.0.0.2", "port": "Gi0/5"}]
+        server.rt.state.external_networks = []
+        server.rt.state.trunk_groups = []
         self.clear()
 
     def tearDown(self):
         for key, value in self._saved.items():
-            setattr(server.state, key, value)
+            setattr(server.rt.state, key, value)
         self.clear()
 
     def clear(self):
-        with server.db._lock, server.db._conn:
-            server.db._conn.execute("DELETE FROM notes")
+        with server.rt.db._lock, server.rt.db._conn:
+            server.rt.db._conn.execute("DELETE FROM notes")
 
     def put(self, node_id, label="", note=""):
         return call(server.app, "PUT", "/api/notes/" + node_id,
@@ -117,7 +117,7 @@ class ApiTest(MapTest):
         self.put(PSEUDO, "Room 214")
         self.put(PSEUDO, "Room 214", "A note")
         call(server.app, "DELETE", "/api/notes/" + PSEUDO)
-        events = [e for e in server.db.journal(10) if e["event"] == "note_changed"][:3]
+        events = [e for e in server.rt.db.journal(10) if e["event"] == "note_changed"][:3]
         self.assertEqual([json.loads(e["details"]) for e in events][::-1], [
             {"label": "Room 214", "note": False}, {"note": True}, {"deleted": True},
         ])
@@ -138,7 +138,7 @@ class ApiTest(MapTest):
         listed = self.listed()
         self.assertNotIn(PSEUDO, listed)
         self.assertEqual(listed[BRIDGE]["label"], "Room 214")
-        event = server.db.journal(1)[0]
+        event = server.rt.db.journal(1)[0]
         self.assertEqual((event["event"], json.loads(event["details"])),
                          ("note_moved", {"from": PSEUDO, "to": BRIDGE}))
         # …and on a node without a note, with no question asked
@@ -152,13 +152,13 @@ class WithoutANodeTest(MapTest):
 
     def test_one_scan_without_the_node_is_not_without_a_node(self):
         self.put(PSEUDO, "Room 214")
-        server.state.pseudo_switches = []
+        server.rt.state.pseudo_switches = []
         self.scan()
         self.assertEqual(self.listed()[PSEUDO]["state"], "present")
 
     def test_three_scans_are(self):
         self.put(PSEUDO, "Room 214")
-        server.state.pseudo_switches = []
+        server.rt.state.pseudo_switches = []
         for _ in range(notes.MISSING_SCANS):
             self.scan()
         note = self.listed()[PSEUDO]
@@ -167,11 +167,11 @@ class WithoutANodeTest(MapTest):
 
     def test_the_node_comes_back_and_takes_its_note(self):
         self.put(PSEUDO, "Room 214")
-        saved = server.state.pseudo_switches
-        server.state.pseudo_switches = []
+        saved = server.rt.state.pseudo_switches
+        server.rt.state.pseudo_switches = []
         for _ in range(notes.MISSING_SCANS + 2):
             self.scan()
-        server.state.pseudo_switches = saved
+        server.rt.state.pseudo_switches = saved
         self.scan()
         note = self.listed()[PSEUDO]
         self.assertEqual((note["state"], note["missing_since"]), ("present", None))
@@ -180,14 +180,14 @@ class WithoutANodeTest(MapTest):
 
     def test_never_deleted_by_moonlan(self):
         self.put(PSEUDO, "Room 214")
-        server.state.pseudo_switches = []
+        server.rt.state.pseudo_switches = []
         for _ in range(50):
             self.scan()
         self.assertIn(PSEUDO, self.listed())
 
     def test_a_note_without_a_node_moves(self):
         self.put(PSEUDO, "Room 214")
-        server.state.pseudo_switches = []
+        server.rt.state.pseudo_switches = []
         for _ in range(notes.MISSING_SCANS):
             self.scan()
         answer = call(server.app, "POST", f"/api/notes/{PSEUDO}/move",
@@ -210,9 +210,9 @@ class OfflineGroupTest(MapTest):
     def setUp(self):
         super().setUp()
         # named by day, while the switch without SNMP was on the map
-        server.state.pseudo_switches.append({"id": STAND_IN, "switch": "10.0.0.2", "port": "Gi0/5"})
+        server.rt.state.pseudo_switches.append({"id": STAND_IN, "switch": "10.0.0.2", "port": "Gi0/5"})
         self.assertEqual(self.put(STAND_IN, "Room 305", "Off at night").status, 200)
-        server.state.pseudo_switches.pop()
+        server.rt.state.pseudo_switches.pop()
 
     def scan(self):
         asyncio.run(server._reconcile_notes())
@@ -227,7 +227,7 @@ class OfflineGroupTest(MapTest):
         self.assertEqual(group["note_key"], STAND_IN)
 
     def test_not_while_the_switch_without_snmp_is_drawn(self):
-        server.state.pseudo_switches.append({"id": STAND_IN, "switch": "10.0.0.2", "port": "Gi0/5"})
+        server.rt.state.pseudo_switches.append({"id": STAND_IN, "switch": "10.0.0.2", "port": "Gi0/5"})
         self.assertNotIn("note", self.group())
         self.assertNotIn("note_key", self.group())
 
@@ -236,7 +236,7 @@ class OfflineGroupTest(MapTest):
             self.scan()
         self.assertEqual(self.listed()[STAND_IN]["state"], "present")
         # the group goes too: then it is without a node, as before
-        server.state.offline_groups = []
+        server.rt.state.offline_groups = []
         for _ in range(notes.MISSING_SCANS):
             self.scan()
         self.assertEqual(self.listed()[STAND_IN]["state"], "missing")
@@ -265,7 +265,7 @@ class TrunkTest(MapTest):
 
     def setUp(self):
         super().setUp()
-        server.state.trunk_groups = [{"id": TRUNK, "switch": "10.0.0.1", "port": "Gi0/24"}]
+        server.rt.state.trunk_groups = [{"id": TRUNK, "switch": "10.0.0.1", "port": "Gi0/24"}]
 
     def test_no_name_behind_a_trunk(self):
         answer = self.put(TRUNK, "Test")
@@ -285,7 +285,7 @@ class TrunkTest(MapTest):
 
     def test_an_old_name_is_without_a_node_at_once(self):
         # written by v0.8.0, when a group behind a trunk could be named
-        server.db.set_note(TRUNK, "Test", "", "manual", "", 1.0)
+        server.rt.db.set_note(TRUNK, "Test", "", "manual", "", 1.0)
         note = self.listed()[TRUNK]
         self.assertEqual((note["state"], note["retired"]), ("missing", True))
         # not on the map, though the group is
@@ -299,7 +299,7 @@ class TrunkTest(MapTest):
         self.assertEqual(self.listed(), {})
 
     def test_an_old_name_moves_to_a_real_place(self):
-        server.db.set_note(TRUNK, "Test", "Kept", "manual", "", 1.0)
+        server.rt.db.set_note(TRUNK, "Test", "Kept", "manual", "", 1.0)
         answer = call(server.app, "POST", f"/api/notes/{TRUNK}/move", json_body={"to": PSEUDO})
         self.assertEqual(answer.status, 200)
         self.assertEqual(self.listed()[PSEUDO]["note"], "Kept")
@@ -386,7 +386,7 @@ class ImportTest(MapTest):
         self.assertEqual(listed[BRIDGE]["note"], "Two\nlines")
         printer = listed["host:02:00:5e:10:00:01"]
         self.assertEqual((printer["state"], printer["source"]), ("not_found", "import"))
-        event = server.db.journal(1)[0]
+        event = server.rt.db.journal(1)[0]
         self.assertEqual((event["event"], json.loads(event["details"])),
                          ("notes_imported", {"written": 4, "skipped": 0, "errors": 0}))
 

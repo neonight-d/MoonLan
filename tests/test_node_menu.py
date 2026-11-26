@@ -197,32 +197,32 @@ class ServiceTest(unittest.TestCase):
 
     def setUp(self):
         self._saved = (
-            server.state.switches, server.state.hosts, server.state.bridges,
-            server.state.pseudo_switches, server.tools, server.jobs,
-            server.config.context_menu.links,
-            dict(server.config.switch_web_scheme),
+            server.rt.state.switches, server.rt.state.hosts, server.rt.state.bridges,
+            server.rt.state.pseudo_switches, server.rt.tools, server.rt.jobs,
+            server.rt.config.context_menu.links,
+            dict(server.rt.config.switch_web_scheme),
         )
-        server.state.switches = [
+        server.rt.state.switches = [
             {"ip": "10.0.0.1", "name": "core", "mac": "02:00:00:00:00:01"},
             {"ip": "10.0.0.2", "name": "edge", "mac": "02:00:00:00:00:02"},
         ]
-        server.state.hosts = [
+        server.rt.state.hosts = [
             {"mac": HOST_MAC, "switch": "10.0.0.2", "port": "Gi0/3"},
             {"mac": QUIET_MAC, "switch": "10.0.0.2", "port": "Gi0/4"},
         ]
-        server.state.bridges = []
-        server.state.pseudo_switches = [
+        server.rt.state.bridges = []
+        server.rt.state.pseudo_switches = [
             {"id": "pseudo:10.0.0.2:Gi0/9", "switch": "10.0.0.2",
              "port": "Gi0/9"},
         ]
         now = 1_790_000_000.0
-        with server.db._lock, server.db._conn:
-            server.db._conn.execute(
+        with server.rt.db._lock, server.rt.db._conn:
+            server.rt.db._conn.execute(
                 "INSERT OR REPLACE INTO hosts (mac, ip, name, first_seen, "
                 "last_seen, ping_up, last_ping_ok) VALUES (?,?,?,?,?,?,?)",
                 (HOST_MAC, "10.0.0.50", "pc-01", now, now, 1, now),
             )
-            server.db._conn.execute(
+            server.rt.db._conn.execute(
                 "INSERT OR REPLACE INTO hosts (mac, ip, name, first_seen, "
                 "last_seen) VALUES (?,?,?,?,?)",
                 (QUIET_MAC, "", "", now, now),
@@ -236,11 +236,11 @@ class ServiceTest(unittest.TestCase):
                 "rtt min/avg/max/mdev = 1.0/2.0/3.0/0.5 ms\n"
             ), False
 
-        server.tools = {"ping": "/bin/ping",
+        server.rt.tools = {"ping": "/bin/ping",
                         "traceroute": ("traceroute", "/bin/traceroute")}
-        server.jobs = probes.Jobs(server.tools, fake_runner)
-        server.config.switch_web_scheme["10.0.0.2"] = "https"
-        server.config.context_menu.links, _ = menu.parse_links([
+        server.rt.jobs = probes.Jobs(server.rt.tools, fake_runner)
+        server.rt.config.switch_web_scheme["10.0.0.2"] = "https"
+        server.rt.config.context_menu.links, _ = menu.parse_links([
             {"label": "Inventory", "url": "https://inv.local/?mac={mac}",
              "applies_to": ["host"]},
             {"label": "Winbox", "url": "winbox://{ip}",
@@ -248,13 +248,13 @@ class ServiceTest(unittest.TestCase):
         ], ALLOWED)
 
     def tearDown(self):
-        (server.state.switches, server.state.hosts, server.state.bridges,
-         server.state.pseudo_switches, server.tools, server.jobs,
-         server.config.context_menu.links, web) = self._saved
-        server.config.switch_web_scheme.clear()
-        server.config.switch_web_scheme.update(web)
-        with server.db._lock, server.db._conn:
-            server.db._conn.execute(
+        (server.rt.state.switches, server.rt.state.hosts, server.rt.state.bridges,
+         server.rt.state.pseudo_switches, server.rt.tools, server.rt.jobs,
+         server.rt.config.context_menu.links, web) = self._saved
+        server.rt.config.switch_web_scheme.clear()
+        server.rt.config.switch_web_scheme.update(web)
+        with server.rt.db._lock, server.rt.db._conn:
+            server.rt.db._conn.execute(
                 "DELETE FROM hosts WHERE mac IN (?, ?)", (HOST_MAC, QUIET_MAC)
             )
 
@@ -299,7 +299,7 @@ class ServiceTest(unittest.TestCase):
             )
             if isinstance(answer, dict):
                 # let the job finish inside this loop
-                job = server.jobs.get(answer["id"])
+                job = server.rt.jobs.get(answer["id"])
                 while not job.finished:
                     await asyncio.sleep(0.01)
                 return job.as_dict()
@@ -347,7 +347,7 @@ class ServiceTest(unittest.TestCase):
         self.assertEqual(response.status_code, 400)
 
     def test_a_missing_tool_is_said_so(self):
-        server.tools = {"ping": "/bin/ping", "traceroute": None}
+        server.rt.tools = {"ping": "/bin/ping", "traceroute": None}
         response = self._start("traceroute", ["sw:10.0.0.1"])
         self.assertEqual(response.status_code, 503)
         self.assertIn(b"traceroute", response.body)
@@ -363,8 +363,8 @@ class ServiceTest(unittest.TestCase):
             await release.wait()
             return 0, "", False
 
-        server.jobs = probes.Jobs(server.tools, slow_runner)
-        limit = server.config.context_menu.max_running
+        server.rt.jobs = probes.Jobs(server.rt.tools, slow_runner)
+        limit = server.rt.config.context_menu.max_running
 
         async def scenario():
             started = []

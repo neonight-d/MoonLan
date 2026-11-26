@@ -167,7 +167,7 @@ class CollectorTest(unittest.TestCase):
 
 class ReportTest(unittest.TestCase):
     def setUp(self):
-        server._identity_reported.clear()
+        server.rt._identity_reported.clear()
 
     def lines(self, found: RouterIdentity) -> list[str]:
         with self.assertLogs("moonlan", "INFO") as logs:
@@ -377,12 +377,12 @@ class RouterScanCase(unittest.IsolatedAsyncioTestCase):
         self.network = RouterNetwork()
         self._get_collector = server.get_collector
         server.get_collector = lambda: self.network
-        c = server.config
+        c = server.rt.config
         self._saved = (
             c.switches, c.routers, c.new_host_confirm_scans,
             c.filter_suspect_macs, c.unmanaged_threshold,
             c.thresholds.corruption_hamming_bits, c.host_grace_hours,
-            server.first_scan_done,
+            server.rt.first_scan_done,
         )
         c.switches = [CORE, ACCESS]
         c.routers = [ROUTER]
@@ -391,55 +391,55 @@ class RouterScanCase(unittest.IsolatedAsyncioTestCase):
         c.unmanaged_threshold = 3
         c.thresholds.corruption_hamming_bits = 8
         c.host_grace_hours = 24
-        server.first_scan_done = True
-        server.switch_data.clear()
-        server.prev_pseudo_ports = set()
-        server._identity_reported.clear()
+        server.rt.first_scan_done = True
+        server.rt.switch_data.clear()
+        server.rt.prev_pseudo_ports = set()
+        server.rt._identity_reported.clear()
         for table in ("hosts", "journal", "notes", "layout", "bridges",
                       "lldp_neighbors"):
-            server.db._conn.execute(f"DELETE FROM {table}")
-        server.db._conn.execute("DELETE FROM alarms WHERE type = 'new_mac'")
-        server.db._conn.commit()
+            server.rt.db._conn.execute(f"DELETE FROM {table}")
+        server.rt.db._conn.execute("DELETE FROM alarms WHERE type = 'new_mac'")
+        server.rt.db._conn.commit()
         now = time.time()
-        server.db.seed_host(MEMBER, ACCESS, LAG, 1, first_seen=now - 6 * 86400,
+        server.rt.db.seed_host(MEMBER, ACCESS, LAG, 1, first_seen=now - 6 * 86400,
                             last_seen=now - 60, seen_count=500)
-        server.db.seed_host(OLD, ACCESS, "Gi0/21", 1,
+        server.rt.db.seed_host(OLD, ACCESS, "Gi0/21", 1,
                             first_seen=now - 300 * 86400,
                             last_seen=now - 3600, seen_count=9000)
-        server.db._conn.execute(
+        server.rt.db._conn.execute(
             "INSERT INTO hosts (mac, switch_ip, port, vlan, first_seen, "
             "last_seen, seen_count, confirmed) VALUES (?, ?, ?, 10, ?, ?, 40, 0)",
             (BOND, ACCESS, LAG, now - 6 * 86400, now - 60),
         )
-        server.db._conn.commit()
-        server.db.set_note("host:" + MEMBER, "Gateway", "", "manual",
+        server.rt.db._conn.commit()
+        server.rt.db.set_note("host:" + MEMBER, "Gateway", "", "manual",
                            "admin", now - 3600)
-        server.db.set_node_position("host:" + MEMBER, 120.0, -40.0, True)
+        server.rt.db.set_node_position("host:" + MEMBER, 120.0, -40.0, True)
 
     def tearDown(self):
         server.get_collector = self._get_collector
-        c = server.config
+        c = server.rt.config
         (
             c.switches, c.routers, c.new_host_confirm_scans,
             c.filter_suspect_macs, c.unmanaged_threshold,
             c.thresholds.corruption_hamming_bits, c.host_grace_hours,
-            server.first_scan_done,
+            server.rt.first_scan_done,
         ) = self._saved
-        server.state.scanning = False
-        server.prev_pseudo_ports = set()
-        server.switch_data.clear()
+        server.rt.state.scanning = False
+        server.rt.prev_pseudo_ports = set()
+        server.rt.switch_data.clear()
 
     def row(self, mac: str):
-        return server.db.hosts_by_mac().get(mac)
+        return server.rt.db.hosts_by_mac().get(mac)
 
     def hosts(self) -> dict[str, dict]:
-        return {h["mac"]: h for h in server.state.as_dict()["hosts"]}
+        return {h["mac"]: h for h in server.rt.state.as_dict()["hosts"]}
 
     def drawn(self) -> set[str]:
         return {m for m, h in self.hosts().items() if not h.get("merged_into")}
 
     def events(self, event: str, mac: str | None = None) -> list[dict]:
-        rows = server.db._conn.execute(
+        rows = server.rt.db._conn.execute(
             "SELECT * FROM journal WHERE event = ?", (event,)
         ).fetchall()
         return [dict(r) for r in rows if mac is None or r["mac"] == mac]
@@ -453,7 +453,7 @@ class WithoutIdentityTest(RouterScanCase):
         await server.run_scan()
         self.assertFalse(self.row(BOND)["confirmed"])
         self.assertEqual(
-            server.suspect_by_port[(ACCESS, LAG)],
+            server.rt.suspect_by_port[(ACCESS, LAG)],
             [{"mac": BOND, "sample": MEMBER, "distance": 2}],
         )
         self.assertEqual(self.drawn(), {MEMBER, OLD})
@@ -470,7 +470,7 @@ class WithIdentityTest(RouterScanCase):
         row = self.row(BOND)
         self.assertTrue(row["confirmed"])
         self.assertEqual(row["corrupt_of"], "")
-        self.assertNotIn((ACCESS, LAG), server.suspect_by_port)
+        self.assertNotIn((ACCESS, LAG), server.rt.suspect_by_port)
         self.assertNotIn("suspect_corrupt", self.hosts()[BOND])
 
     async def test_one_node_and_the_rest_drawn_as_it(self):
@@ -481,7 +481,7 @@ class WithIdentityTest(RouterScanCase):
         self.assertEqual(hosts[MEMBER]["merged_into"], "host:" + BOND)
         # the port it left: no grey host there
         self.assertEqual(hosts[OLD]["merged_into"], "host:" + BOND)
-        self.assertEqual(server.state.as_dict()["offline_groups"], [])
+        self.assertEqual(server.rt.state.as_dict()["offline_groups"], [])
         # and the records stay
         self.assertIsNotNone(self.row(OLD))
         self.assertIsNotNone(self.row(MEMBER))
@@ -513,10 +513,10 @@ class WithIdentityTest(RouterScanCase):
     async def test_the_note_and_the_pin_follow_the_node_once(self):
         await server.run_scan()
         node_id = "host:" + BOND
-        note = server.db.note(node_id)
+        note = server.rt.db.note(node_id)
         self.assertEqual(note["label"], "Gateway")
-        self.assertIsNone(server.db.note("host:" + MEMBER))
-        layout = server.db.layout()
+        self.assertIsNone(server.rt.db.note("host:" + MEMBER))
+        layout = server.rt.db.layout()
         self.assertEqual(
             (layout[node_id]["x"], layout[node_id]["y"],
              layout[node_id]["pinned"]),
@@ -539,26 +539,26 @@ class WithIdentityTest(RouterScanCase):
 
     async def test_a_node_with_a_note_of_its_own_keeps_it(self):
         now = time.time()
-        server.db.set_note("host:" + BOND, "Core router", "", "manual",
+        server.rt.db.set_note("host:" + BOND, "Core router", "", "manual",
                            "admin", now)
-        server.db.set_node_position("host:" + BOND, 5.0, 6.0, True)
+        server.rt.db.set_node_position("host:" + BOND, 5.0, 6.0, True)
         for _ in range(notes.MISSING_SCANS):
             await server.run_scan()
-        self.assertEqual(server.db.note("host:" + BOND)["label"], "Core router")
+        self.assertEqual(server.rt.db.note("host:" + BOND)["label"], "Core router")
         self.assertEqual(self.events("note_moved"), [])
         self.assertEqual(self.events("layout_pinned"), [])
-        self.assertEqual(server.db.layout()["host:" + BOND]["x"], 5.0)
+        self.assertEqual(server.rt.db.layout()["host:" + BOND]["x"], 5.0)
         # the member's note is a note without a node now
-        left = server.db.note("host:" + MEMBER)
+        left = server.rt.db.note("host:" + MEMBER)
         self.assertEqual(left["label"], "Gateway")
         self.assertEqual(notes.state(left), "missing")
 
     async def test_no_new_mac_for_an_interface_of_the_router(self):
-        server.db.delete_hosts([BOND])
+        server.rt.db.delete_hosts([BOND])
         await server.run_scan()
         self.assertTrue(self.row(BOND)["confirmed"])
         self.assertEqual(self.events("new_mac", BOND), [])
-        alarms = server.db._conn.execute(
+        alarms = server.rt.db._conn.execute(
             "SELECT COUNT(*) AS n FROM alarms WHERE type = 'new_mac'"
         ).fetchone()["n"]
         self.assertEqual(alarms, 0)
@@ -576,11 +576,11 @@ class WithIdentityTest(RouterScanCase):
         )
 
     async def test_a_record_marked_as_a_copy_is_unmarked(self):
-        server.db._conn.execute(
+        server.rt.db._conn.execute(
             "UPDATE hosts SET corrupt_of = ?, confirmed = 1 WHERE mac = ?",
             (MEMBER, BOND),
         )
-        server.db._conn.commit()
+        server.rt.db._conn.commit()
         with self.assertLogs("moonlan", "INFO") as logs:
             await server.run_scan()
         self.assertEqual(self.row(BOND)["corrupt_of"], "")
@@ -607,7 +607,7 @@ class RegressionTest(RouterScanCase):
         await server.run_scan()
         self.assertTrue(self.row(self.COPY)["confirmed"])
         self.assertIn(self.COPY, self.drawn())
-        self.assertNotIn((ACCESS, "Gi0/7"), server.suspect_by_port)
+        self.assertNotIn((ACCESS, "Gi0/7"), server.rt.suspect_by_port)
 
     async def test_a_real_copy_on_a_device_port_is_still_found(self):
         await server.run_scan()
@@ -619,7 +619,7 @@ class RegressionTest(RouterScanCase):
             await server.run_scan()
         self.assertFalse(self.row(self.COPY)["confirmed"])
         self.assertEqual(
-            server.suspect_by_port[(ACCESS, "Gi0/7")],
+            server.rt.suspect_by_port[(ACCESS, "Gi0/7")],
             [{"mac": self.COPY, "sample": self.SAMPLE, "distance": 2}],
         )
         self.assertNotIn(self.COPY, self.drawn())

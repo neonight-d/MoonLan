@@ -192,7 +192,7 @@ class LiveTest(unittest.TestCase):
             await asyncio.sleep(0.05)
             self.assertFalse(task.done())
             interval[0] = 0.01  # due already, counted from the same start
-            server.interval_changed["scan_interval_minutes"].set()
+            server.rt.interval_changed["scan_interval_minutes"].set()
             await asyncio.wait_for(task, 1)
             # only on request: asleep until the interval changes
             interval[0] = None
@@ -201,7 +201,7 @@ class LiveTest(unittest.TestCase):
             await asyncio.sleep(0.05)
             self.assertFalse(task.done())
             interval[0] = 0.0
-            server.interval_changed["scan_interval_minutes"].set()
+            server.rt.interval_changed["scan_interval_minutes"].set()
             await asyncio.wait_for(task, 1)
 
         asyncio.run(run())
@@ -211,27 +211,27 @@ class Snapshot:
     """The service's settings as they were, put back after a test"""
 
     def __init__(self, test):
-        self.rows = server.db.settings()
-        self.values = {s.key: settings.current(server.config, s.key)
+        self.rows = server.rt.db.settings()
+        self.values = {s.key: settings.current(server.rt.config, s.key)
                        for s in settings.SETTINGS}
         test.addCleanup(self.restore)
 
     def restore(self):
-        with server.db._lock, server.db._conn:
-            server.db._conn.execute("DELETE FROM settings")
+        with server.rt.db._lock, server.rt.db._conn:
+            server.rt.db._conn.execute("DELETE FROM settings")
         for key, row in self.rows.items():
-            server.db.save_settings({key: row["value"]}, row["updated_at"],
+            server.rt.db.save_settings({key: row["value"]}, row["updated_at"],
                                     row["updated_by"])
         for key, value in self.values.items():
-            settings.apply(server.config, key, value)
-        server.flap_tracker.window_seconds = (
-            server.config.thresholds.flap_window_minutes * 60)
+            settings.apply(server.rt.config, key, value)
+        server.rt.flap_tracker.window_seconds = (
+            server.rt.config.thresholds.flap_window_minutes * 60)
 
 
 class ApiTest(unittest.TestCase):
     def setUp(self):
         Snapshot(self)
-        self.accounts = server.accounts
+        self.accounts = server.rt.accounts
         self.clean()
         self.addCleanup(self.clean)
 
@@ -251,8 +251,8 @@ class ApiTest(unittest.TestCase):
         return call(server.app, "PUT", "/api/settings", json_body=body, cookie=cookie)
 
     def test_no_secret_in_the_answer(self):
-        email = server.config.notifications.email
-        telegram = server.config.notifications.telegram
+        email = server.rt.config.notifications.email
+        telegram = server.rt.config.notifications.telegram
         with mock.patch.multiple(email, password="SMTP-PASSWORD-1", username="mailer-acct",
                                  smtp_host="mail.example.local", enabled=True), \
                 mock.patch.multiple(telegram, bot_token="1:BOT-TOKEN-2", enabled=True):
@@ -279,35 +279,35 @@ class ApiTest(unittest.TestCase):
         self.assertEqual(answer.json()["errors"], {"no_such_setting": {"code": "unknown"}})
 
     def test_all_or_nothing(self):
-        before = server.config.unmanaged_threshold
+        before = server.rt.config.unmanaged_threshold
         answer = self.put({"unmanaged_threshold": before + 1, "ping_interval_seconds": 1})
         self.assertEqual(answer.status, 400)
-        self.assertEqual(server.config.unmanaged_threshold, before)
-        self.assertNotIn("unmanaged_threshold", server.db.settings())
+        self.assertEqual(server.rt.config.unmanaged_threshold, before)
+        self.assertNotIn("unmanaged_threshold", server.rt.db.settings())
 
     def test_saved_applied_journalled(self):
-        server.interval_changed["scan_interval_minutes"].clear()
-        before = len(server.db.journal(10000))
+        server.rt.interval_changed["scan_interval_minutes"].clear()
+        before = len(server.rt.db.journal(10000))
         answer = self.put({"offline_group_threshold": 3, "scan_interval_minutes": 7,
                            "thresholds.flap_window_minutes": 20})
         self.assertEqual(answer.status, 200)
-        self.assertEqual(server.config.offline_group_threshold, 3)
-        self.assertTrue(server.interval_changed["scan_interval_minutes"].is_set())
-        self.assertEqual(server.flap_tracker.window_seconds, 1200)
-        event = server.db.journal(5)[0]
+        self.assertEqual(server.rt.config.offline_group_threshold, 3)
+        self.assertTrue(server.rt.interval_changed["scan_interval_minutes"].is_set())
+        self.assertEqual(server.rt.flap_tracker.window_seconds, 1200)
+        event = server.rt.db.journal(5)[0]
         self.assertEqual(event["event"], "settings_changed")
         changes = json.loads(event["details"])["changes"]
         self.assertIn({"key": "offline_group_threshold", "from": 2, "to": 3}, changes)
         self.assertEqual(len(changes), 3)
         # one entry for one save
-        self.assertEqual(len(server.db.journal(10000)) - before, 1)
+        self.assertEqual(len(server.rt.db.journal(10000)) - before, 1)
 
     def test_back_to_the_default(self):
         self.put({"offline_group_threshold": 5})
         answer = call(server.app, "DELETE", "/api/settings/offline_group_threshold")
         self.assertEqual(answer.status, 200)
-        self.assertEqual(server.config.offline_group_threshold, 2)
-        self.assertNotIn("offline_group_threshold", server.db.settings())
+        self.assertEqual(server.rt.config.offline_group_threshold, 2)
+        self.assertNotIn("offline_group_threshold", server.rt.db.settings())
         self.assertEqual(call(server.app, "DELETE", "/api/settings/nope").status, 404)
 
     def test_roles(self):
@@ -322,7 +322,7 @@ class ApiTest(unittest.TestCase):
         self.assertEqual(seen.status, 200)
         self.assertFalse(seen.json()["can_edit"])
         self.assertTrue(call(server.app, "GET", "/api/settings", cookie=admin).json()["can_edit"])
-        self.assertEqual(server.config.offline_group_threshold, 3)
+        self.assertEqual(server.rt.config.offline_group_threshold, 3)
 
     def test_people_are_not_shown_to_a_viewer(self):
         self.put({"notifications.email.mail_to": ["noc@example.local"]})
@@ -343,9 +343,9 @@ class ApiTest(unittest.TestCase):
     def test_a_test_to_the_shared_recipients(self):
         self.assertEqual(call(server.app, "POST", "/api/settings/test/email").json(),
                          {"error": "channel_off", "why": "off"})
-        email = server.config.notifications.email
+        email = server.rt.config.notifications.email
         with mock.patch.multiple(email, enabled=True, smtp_host="mail.example.local"), \
-                mock.patch.object(server.notifier, "send_each", return_value=[]) as sent:
+                mock.patch.object(server.rt.notifier, "send_each", return_value=[]) as sent:
             self.assertEqual(call(server.app, "POST", "/api/settings/test/email").json(),
                              {"error": "no_recipients"})
             self.put({"notifications.email.mail_to": ["a@example.local", "b@example.local"]})

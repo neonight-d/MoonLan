@@ -188,17 +188,17 @@ class ScanStatesTest(unittest.IsolatedAsyncioTestCase):
         self.collector = StubCollector()
         self._get_collector = server.get_collector
         server.get_collector = lambda: self.collector
-        self._routers = server.config.routers
-        server.config.routers = ["10.0.0.254"]
-        server.switch_data.clear()
-        server.alarm_engine._snmp_fails.clear()
+        self._routers = server.rt.config.routers
+        server.rt.config.routers = ["10.0.0.254"]
+        server.rt.switch_data.clear()
+        server.rt.alarm_engine._snmp_fails.clear()
         for table in ("hosts", "journal", "alarms", "notes", "switch_readings"):
-            server.db._conn.execute(f"DELETE FROM {table}")
-        server.db._conn.commit()
-        server.alarm_engine._active.clear()
+            server.rt.db._conn.execute(f"DELETE FROM {table}")
+        server.rt.db._conn.commit()
+        server.rt.alarm_engine._active.clear()
         self.raised: list[tuple[str, str]] = []
-        self._raise = server.alarm_engine._raise
-        self._clear = server.alarm_engine._clear
+        self._raise = server.rt.alarm_engine._raise
+        self._clear = server.rt.alarm_engine._clear
 
         async def record_raise(alarm_type, subject, message, **kwargs):
             if alarm_type == "switch_down":
@@ -208,27 +208,27 @@ class ScanStatesTest(unittest.IsolatedAsyncioTestCase):
             if alarm_type == "switch_down":
                 self.raised.append(("clear", subject))
 
-        server.alarm_engine._raise = record_raise
-        server.alarm_engine._clear = record_clear
+        server.rt.alarm_engine._raise = record_raise
+        server.rt.alarm_engine._clear = record_clear
 
     def tearDown(self):
         server.get_collector = self._get_collector
-        server.config.routers = self._routers
-        server.alarm_engine._raise = self._raise
-        server.alarm_engine._clear = self._clear
-        server.state.scanning = False
+        server.rt.config.routers = self._routers
+        server.rt.alarm_engine._raise = self._raise
+        server.rt.alarm_engine._clear = self._clear
+        server.rt.state.scanning = False
 
     async def scan(self):
         with self.assertLogs("moonlan", "INFO"):
             await server.run_scan()
-        return {sw["ip"]: sw for sw in server.state.as_dict()["switches"]}
+        return {sw["ip"]: sw for sw in server.rt.state.as_dict()["switches"]}
 
     def row(self, mac):
-        return server.db.hosts_by_mac().get(mac)
+        return server.rt.db.hosts_by_mac().get(mac)
 
     async def test_a_full_poll_is_saved(self):
         await self.scan()
-        rows = server.db.switch_readings()
+        rows = server.rt.db.switch_readings()
         self.assertIn(CORE, rows)
         self.assertEqual(rows[CORE]["format"], READING_FORMAT)
         saved = json.loads(rows[CORE]["data"])
@@ -244,7 +244,7 @@ class ScanStatesTest(unittest.IsolatedAsyncioTestCase):
         await self.scan()
         await self.scan()            # DEVICE confirmed
         seen = self.row(DEVICE)
-        polled_at = server.switch_data[EDGE].polled_at
+        polled_at = server.rt.switch_data[EDGE].polled_at
 
         self.collector.silent = {EDGE}
         drawn = await self.scan()
@@ -253,7 +253,7 @@ class ScanStatesTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(drawn[EDGE]["polled_at"], polled_at)
         self.assertGreater(drawn[EDGE]["down_since"], 0)
         # its branch is drawn from the reading…
-        topo = server.state.as_dict()
+        topo = server.rt.state.as_dict()
         self.assertIn(
             frozenset({CORE, EDGE}),
             {frozenset({link["a"], link["b"]}) for link in topo["links"]},
@@ -279,7 +279,7 @@ class ScanStatesTest(unittest.IsolatedAsyncioTestCase):
         self.assertGreater(self.row(DEVICE)["last_seen"], seen["last_seen"])
 
     async def test_never_read_in_full_is_an_empty_node_on_its_port(self):
-        server.db.set_note(
+        server.rt.db.set_note(
             "sw:" + QUIET, "Annex", "", "manual", "", time.time() - 86400
         )
         for _ in range(4):
@@ -296,7 +296,7 @@ class ScanStatesTest(unittest.IsolatedAsyncioTestCase):
             quiet["attached"],
             {"switch": CORE, "port": "Gi0/9", "mac": QUIET_MAC},
         )
-        topo = server.state.as_dict()
+        topo = server.rt.state.as_dict()
         # …and that MAC is the switch, not a dot beside it
         self.assertNotIn(QUIET_MAC, {h["mac"] for h in topo["hosts"]})
         self.assertNotIn(QUIET_MAC, {h["mac"] for h in topo["unlocated"]})
@@ -307,7 +307,7 @@ class ScanStatesTest(unittest.IsolatedAsyncioTestCase):
         ])
         # its name is on the map, not under "Notes without a node"
         self.assertIn("sw:" + QUIET, server._noted_node_ids())
-        self.assertFalse(server.db.note("sw:" + QUIET).get("missing_since"))
+        self.assertFalse(server.rt.db.note("sw:" + QUIET).get("missing_since"))
         # /api/polling: it answered — not "reachable: false"
         polling = {
             row["ip"]: row for row in (await server.api_polling())["switches"]
@@ -343,20 +343,20 @@ class StartupTest(unittest.IsolatedAsyncioTestCase):
     """Which saved readings come back at the start, and which do not"""
 
     def setUp(self):
-        server.switch_data.clear()
-        server.db._conn.execute("DELETE FROM switch_readings")
-        server.db._conn.commit()
-        self._days = server.config.host_retention_days
-        server.config.host_retention_days = 30
+        server.rt.switch_data.clear()
+        server.rt.db._conn.execute("DELETE FROM switch_readings")
+        server.rt.db._conn.commit()
+        self._days = server.rt.config.host_retention_days
+        server.rt.config.host_retention_days = 30
 
     def tearDown(self):
-        server.config.host_retention_days = self._days
-        server.switch_data.clear()
+        server.rt.config.host_retention_days = self._days
+        server.rt.switch_data.clear()
 
     def save(self, ip: str, age_days: float = 0, fmt: int = READING_FORMAT):
         sw = switch(ip, f"sw-{ip}", 50)
         sw.polled_at = time.time() - age_days * 86400
-        server.db.save_switch_reading(
+        server.rt.db.save_switch_reading(
             ip, sw.polled_at, fmt, "test", json.dumps(sw.to_dict())
         )
 
@@ -368,30 +368,30 @@ class StartupTest(unittest.IsolatedAsyncioTestCase):
         with self.assertLogs("moonlan", "INFO") as logged:
             await server.restore_readings()
         text = "\n".join(logged.output)
-        self.assertEqual(server.switch_data[CORE].map_state, "restored")
-        self.assertIsNone(server.switch_data[CORE].answered)
+        self.assertEqual(server.rt.switch_data[CORE].map_state, "restored")
+        self.assertIsNone(server.rt.switch_data[CORE].answered)
         # nothing came back for these two: empty, not restored
-        self.assertEqual(server.switch_data[EDGE].map_state, "never")
-        self.assertEqual(server.switch_data[QUIET].map_state, "never")
+        self.assertEqual(server.rt.switch_data[EDGE].map_state, "never")
+        self.assertEqual(server.rt.switch_data[QUIET].map_state, "never")
         self.assertIn(f"saved reading of {EDGE} is in an older format — ignored", text)
         self.assertIn("older than host_retention_days", text)
         # deleted, in one line
-        self.assertNotIn("10.9.9.9", server.db.switch_readings())
+        self.assertNotIn("10.9.9.9", server.rt.db.switch_readings())
         self.assertEqual(
             len([line for line in logged.output if "10.9.9.9" in line]), 1
         )
-        drawn = {sw["ip"]: sw for sw in server.state.as_dict()["switches"]}
+        drawn = {sw["ip"]: sw for sw in server.rt.state.as_dict()["switches"]}
         self.assertEqual(drawn[CORE]["state"], "restored")
         # the rest have nothing: empty nodes, not missing ones
         self.assertEqual(drawn[EDGE]["state"], "never")
         self.assertEqual(drawn[EDGE]["over_budget_scans"], 0)
 
     async def test_retention_zero_keeps_any_age(self):
-        server.config.host_retention_days = 0
+        server.rt.config.host_retention_days = 0
         self.save(CORE, age_days=400)
         with self.assertLogs("moonlan", "INFO"):
             await server.restore_readings()
-        self.assertEqual(server.switch_data[CORE].map_state, "restored")
+        self.assertEqual(server.rt.switch_data[CORE].map_state, "restored")
 
 
 PAGE = r"""
@@ -526,7 +526,7 @@ server.get_collector = lambda: Agent()
 
 
 def picture():
-    topo = server.state.as_dict()
+    topo = server.rt.state.as_dict()
     return {
         "switches": sorted(
             [sw["ip"], sw["name"], sw["ports_total"], sw["ports_up"], sw["state"]]
@@ -543,12 +543,12 @@ def picture():
 def inventory():
     return {
         mac: [row["last_seen"], row["seen_count"]]
-        for mac, row in server.db.hosts_by_mac().items()
+        for mac, row in server.rt.db.hosts_by_mac().items()
     }
 
 
 def new_macs():
-    return server.db._conn.execute(
+    return server.rt.db._conn.execute(
         "SELECT COUNT(*) FROM journal WHERE event = 'new_mac'"
     ).fetchone()[0]
 

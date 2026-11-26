@@ -99,12 +99,12 @@ class Agent(SnmpCollector):
 
 class CutTest(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
-        self._report = dict(server.poll_report)
+        self._report = dict(server.rt.poll_report)
         module.RESUME_PAUSE = 0
 
     def tearDown(self):
-        server.poll_report.clear()
-        server.poll_report.update(self._report)
+        server.rt.poll_report.clear()
+        server.rt.poll_report.update(self._report)
 
     async def test_cut_in_a_walk_then_a_full_poll(self):
         agent = Agent()
@@ -185,7 +185,7 @@ class CutTest(unittest.IsolatedAsyncioTestCase):
 
     async def test_a_poll_with_no_answer_changes_nothing(self):
         agent = Agent()
-        server.poll_report[IP] = {"cut_at": {"oid": "1.2.3"}, "slowest_walks": []}
+        server.rt.poll_report[IP] = {"cut_at": {"oid": "1.2.3"}, "slowest_walks": []}
 
         async def silent(host, oid):
             return None
@@ -201,7 +201,7 @@ class CutTest(unittest.IsolatedAsyncioTestCase):
         finally:
             module.diagnose_silence = real
         self.assertFalse(data.reachable)
-        self.assertEqual(server.poll_report[IP]["cut_at"], {"oid": "1.2.3"})
+        self.assertEqual(server.rt.poll_report[IP]["cut_at"], {"oid": "1.2.3"})
 
 
 class OutsideAPollTest(unittest.TestCase):

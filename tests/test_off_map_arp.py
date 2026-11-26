@@ -48,11 +48,11 @@ def mark(*, ip="", last_seen=0.0, last_arp=0.0, last_ping_ok=0.0, uplink_only=No
 
 class RecentTest(unittest.TestCase):
     def setUp(self):
-        self._grace = server.config.host_grace_hours
-        server.config.host_grace_hours = 72
+        self._grace = server.rt.config.host_grace_hours
+        server.rt.config.host_grace_hours = 72
 
     def tearDown(self):
-        server.config.host_grace_hours = self._grace
+        server.rt.config.host_grace_hours = self._grace
 
     def test_arp_without_an_address_is_not_presence(self):
         host, now = mark(last_arp=HOUR, last_seen=200 * HOUR)

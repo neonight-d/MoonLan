@@ -27,11 +27,11 @@ class SignInCase(unittest.TestCase):
         logger = logging.getLogger("moonlan")
         self.addCleanup(logger.setLevel, logger.level)
         logger.setLevel(logging.ERROR)
-        self.db = server.accounts
+        self.db = server.rt.accounts
         self.clean()
         self.addCleanup(self.clean)
-        server.sign_in._tickets.clear()
-        server.sign_in.throttle = signin.Throttle()
+        server.rt.sign_in._tickets.clear()
+        server.rt.sign_in.throttle = signin.Throttle()
         # the admin that switches sign-in on
         self.add("anton", "admin", totp=True)
 
@@ -87,7 +87,7 @@ class PasswordStepTest(SignInCase):
         self.assertTrue(any("Max-Age=0" in h or "max-age=0" in h.lower()
                             for h in out.header("set-cookie")))
         self.assertEqual(self.me(cookie).status, 401)
-        events = [e["event"] for e in server.db.journal(5)]
+        events = [e["event"] for e in server.rt.db.journal(5)]
         self.assertIn("login", events)
         self.assertIn("logout", events)
 
@@ -209,7 +209,7 @@ class CodeStepTest(SignInCase):
 
     def test_a_ticket_lives_five_minutes(self):
         ticket = self.login("anton").json()["ticket"]
-        for entry in server.sign_in._tickets.values():
+        for entry in server.rt.sign_in._tickets.values():
             entry.expires = time.time() - 1
         self.assertEqual(self.code(ticket, self.code_now("anton")).json(),
                          {"error": "ticket_expired"})
@@ -378,7 +378,7 @@ class ProtectionTest(SignInCase):
         # the right password does not open it either
         self.assertEqual(self.login("vera", client="10.0.3.1").status, 423)
         self.assertGreater(self.db.user("vera")["locked_until"], time.time())
-        event = server.db.journal(1)[0]
+        event = server.rt.db.journal(1)[0]
         self.assertEqual((event["event"], event["mac"]),
                          ("account_locked", "vera"))
 
@@ -535,7 +535,7 @@ class BindingTest(SignInCase):
         # the others still work
         ticket = self.login("anton").json()["ticket"]
         self.assertEqual(self.code(ticket, codes[5]).status, 200)
-        login = server.db.journal(1)[0]
+        login = server.rt.db.journal(1)[0]
         self.assertEqual(login["event"], "login")
         self.assertIn('"recovery_left": 6', login["details"])
 
@@ -563,7 +563,7 @@ class AccountsApiTest(SignInCase):
         self.assertIsNone(auth.password_problem("vera", password))
         cookie = cookie_of(self.login("vera", password))
         self.assertEqual(self.me(cookie).json()["step"], "password")
-        event = server.db.journal(5)
+        event = server.rt.db.journal(5)
         added = next(e for e in event if e["event"] == "user_added")
         self.assertEqual((added["mac"], added["user"]), ("vera", "anton"))
 

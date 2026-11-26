@@ -42,7 +42,7 @@ async def states():
 def down_alarm():
     return any(
         a["type"] == "switch_down" and a["subject"] == demo.DOWN_SWITCH
-        for a in server.db.alarms(True)
+        for a in server.rt.db.alarms(True)
     )
 
 
@@ -53,11 +53,11 @@ async def journal(group=None):
 
 async def run():
     out = {"scans": []}
-    demo.seed_notes(server.db)
-    demo.seed_reading(server.db)
+    demo.seed_notes(server.rt.db)
+    demo.seed_reading(server.rt.db)
     await server.restore_readings()
     out["restored"] = await states()
-    out["hosts_before_scan"] = len(server.db.hosts_by_mac())
+    out["hosts_before_scan"] = len(server.rt.db.hosts_by_mac())
     for n in range(1, 6):
         await server.run_scan()
         await server.run_counters()
@@ -65,15 +65,15 @@ async def run():
         out["scans"].append({
             "states": await states(),
             "down_alarm": down_alarm(),
-            "unconfirmed": len(server.db.unconfirmed_macs()),
-            "new_mac_alarms": server.db._conn.execute(
+            "unconfirmed": len(server.rt.db.unconfirmed_macs()),
+            "new_mac_alarms": server.rt.db._conn.execute(
                 "SELECT COUNT(*) FROM alarms WHERE type = 'new_mac'"
             ).fetchone()[0],
         })
         if n == 1:
             out["first"] = topo
             out["orphans"] = [
-                key for key, row in server.db.notes().items()
+                key for key, row in server.rt.db.notes().items()
                 if row.get("missing_since")
             ]
             out["status"] = await server.api_status()

@@ -210,15 +210,15 @@ class ClearWordsTest(unittest.IsolatedAsyncioTestCase):
 
 class ProvenanceTest(unittest.TestCase):
     def tearDown(self):
-        server.readings_from_database.discard(IP)
-        server.switch_data.pop(IP, None)
+        server.rt.readings_from_database.discard(IP)
+        server.rt.switch_data.pop(IP, None)
 
     def test_a_full_poll_ends_the_saved_reading(self):
-        server.readings_from_database.add(IP)
+        server.rt.readings_from_database.add(IP)
         result = SwitchData(ip=IP, reachable=True)
         settled = server._settle(IP, result, time.time())
         self.assertEqual(settled.state, STATE_FRESH)
-        self.assertNotIn(IP, server.readings_from_database)
+        self.assertNotIn(IP, server.rt.readings_from_database)
 
 
 if __name__ == "__main__":

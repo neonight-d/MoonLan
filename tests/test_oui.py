@@ -332,18 +332,18 @@ class ServiceTest(Folder):
         super().setUp()
         write_sample(self.folder)
         self.use(oui.Registry.load(self.folder))
-        saved = (server.state.switches, server.state.hosts,
-                 server.state.unlocated, server.state.bridges)
+        saved = (server.rt.state.switches, server.rt.state.hosts,
+                 server.rt.state.unlocated, server.rt.state.bridges)
         self.addCleanup(self.restore, saved)
-        server.state.switches = [
+        server.rt.state.switches = [
             {"ip": "10.0.0.1", "name": "core", "mac": "10:ff:e0:00:00:aa"},
         ]
-        server.state.hosts = [
+        server.rt.state.hosts = [
             {"mac": mac, "switch": "10.0.0.1", "port": f"Gi0/{n}"}
             for n, mac in enumerate((GIGA, *MERCUSYS, PHONE, NOBODY), 1)
         ]
-        server.state.unlocated = []
-        server.state.bridges = [
+        server.rt.state.unlocated = []
+        server.rt.state.bridges = [
             {"id": "bridge:08:8a:f1:00:00:09", "chassis_id": "08:8a:f1:00:00:09",
              "name": "ap-hall", "switch": "10.0.0.1", "port": "Gi0/9"},
             {"id": "bridge:router-7", "chassis_id": "router-7",
@@ -351,13 +351,13 @@ class ServiceTest(Folder):
         ]
 
     def use(self, registry):
-        patch = mock.patch.object(server, "vendors", registry)
+        patch = mock.patch.object(server.rt, "vendors", registry)
         patch.start()
         self.addCleanup(patch.stop)
 
     def restore(self, saved):
-        (server.state.switches, server.state.hosts, server.state.unlocated,
-         server.state.bridges) = saved
+        (server.rt.state.switches, server.rt.state.hosts, server.rt.state.unlocated,
+         server.rt.state.bridges) = saved
 
     def topology(self):
         return call(server.app, "GET", "/api/topology").json()
@@ -392,8 +392,8 @@ class ServiceTest(Folder):
     def test_the_service_starts_without_a_register(self):
         # the configuration the tests run with has no register: the
         # service imported, answers, and says in one line what to do
-        self.assertFalse(oui.Registry.load(server.config.oui_folder()).loaded)
-        self.use(oui.Registry.load(server.config.oui_folder()))
+        self.assertFalse(oui.Registry.load(server.rt.config.oui_folder()).loaded)
+        self.use(oui.Registry.load(server.rt.config.oui_folder()))
         self.assertEqual(call(server.app, "GET", "/api/health").status, 200)
         with self.assertLogs("moonlan", "INFO") as logged:
             server._log_config()
@@ -411,13 +411,13 @@ class ServiceTest(Folder):
                          sorted(MERCUSYS))
 
     def test_the_journal_names_the_maker(self):
-        with server.db._lock, server.db._conn:
-            server.db._conn.execute(
+        with server.rt.db._lock, server.rt.db._conn:
+            server.rt.db._conn.execute(
                 "INSERT INTO journal (ts, event, mac, details) "
                 "VALUES (?, 'new_mac', ?, '10.0.0.1 / Gi0/1')",
                 (time.time() + 3600, GIGA),
             )
-        self.addCleanup(lambda: server.db._conn.execute(
+        self.addCleanup(lambda: server.rt.db._conn.execute(
             "DELETE FROM journal WHERE mac = ?", (GIGA,)))
         events = call(server.app, "GET", "/api/journal?limit=5").json()
         event = next(e for e in events["events"] if e["mac"] == GIGA)

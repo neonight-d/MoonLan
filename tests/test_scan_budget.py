@@ -63,11 +63,11 @@ class ScanBudgetTest(unittest.IsolatedAsyncioTestCase):
         self.collector = StubCollector()
         self._get_collector = server.get_collector
         server.get_collector = lambda: self.collector
-        server.switch_data.clear()
+        server.rt.switch_data.clear()
 
     def tearDown(self):
         server.get_collector = self._get_collector
-        server.state.scanning = False
+        server.rt.state.scanning = False
 
     async def test_scan_finishes_on_budget_without_the_slow_two(self):
         started = time.monotonic()
@@ -83,7 +83,7 @@ class ScanBudgetTest(unittest.IsolatedAsyncioTestCase):
         # six switches on the map from this scan; the slow two have no
         # reading anywhere and are empty nodes, not missing (v0.8.7)
         drawn = {
-            sw["ip"]: sw["state"] for sw in server.state.as_dict()["switches"]
+            sw["ip"]: sw["state"] for sw in server.rt.state.as_dict()["switches"]
         }
         self.assertEqual(
             {ip for ip, state in drawn.items() if state == "fresh"},
@@ -100,7 +100,7 @@ class ScanBudgetTest(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(any("10.0.0.3" in line for line in over))
         self.assertTrue(any("10.0.0.7" in line for line in over))
         # …and the interface can say the same thing without journalctl
-        progress = server.state.scan_progress()
+        progress = server.rt.state.scan_progress()
         self.assertFalse(progress["scanning"])
         self.assertEqual(progress["scan_total"], 8)
         self.assertEqual(progress["scan_done"], 8)
@@ -119,13 +119,13 @@ class ScanBudgetTest(unittest.IsolatedAsyncioTestCase):
         async def record_scan(reachable, names):
             seen.append(dict(reachable))
 
-        original = server.alarm_engine.on_scan
-        server.alarm_engine.on_scan = record_scan
+        original = server.rt.alarm_engine.on_scan
+        server.rt.alarm_engine.on_scan = record_scan
         try:
             with self.assertLogs("moonlan", "WARNING"):
                 await server.run_scan()
         finally:
-            server.alarm_engine.on_scan = original
+            server.rt.alarm_engine.on_scan = original
         self.assertEqual(len(seen), 1)
         self.assertNotIn("10.0.0.3", seen[0])
         self.assertNotIn("10.0.0.7", seen[0])
@@ -146,7 +146,7 @@ class ScanBudgetTest(unittest.IsolatedAsyncioTestCase):
             if "did not finish its poll within" in line
         ])
         first = {
-            sw["ip"]: sw for sw in server.state.as_dict()["switches"]
+            sw["ip"]: sw for sw in server.rt.state.as_dict()["switches"]
         }
         self.assertFalse(first["10.0.0.3"]["over_budget"])
         taken_at = first["10.0.0.3"]["polled_at"]
@@ -156,7 +156,7 @@ class ScanBudgetTest(unittest.IsolatedAsyncioTestCase):
         with self.assertLogs("moonlan", "WARNING"):
             await server.run_scan()
         second = {
-            sw["ip"]: sw for sw in server.state.as_dict()["switches"]
+            sw["ip"]: sw for sw in server.rt.state.as_dict()["switches"]
         }
         self.assertEqual(len(second), 8)
         self.assertTrue(second["10.0.0.3"]["over_budget"])
@@ -179,12 +179,12 @@ class StaleSwitchTest(unittest.IsolatedAsyncioTestCase):
         self.collector = StubCollector()
         self._get_collector = server.get_collector
         server.get_collector = lambda: self.collector
-        server.switch_data.clear()
-        self._scans = server.config.stale_switch_scans
-        server.config.stale_switch_scans = 3
+        server.rt.switch_data.clear()
+        self._scans = server.rt.config.stale_switch_scans
+        server.rt.config.stale_switch_scans = 3
         self.raised: list[tuple[str, str, str]] = []
-        self._raise = server.alarm_engine._raise
-        self._clear = server.alarm_engine._clear
+        self._raise = server.rt.alarm_engine._raise
+        self._clear = server.rt.alarm_engine._clear
 
         # switch_stale only: every other alarm path runs too, and the
         # point here is what this one says
@@ -196,16 +196,16 @@ class StaleSwitchTest(unittest.IsolatedAsyncioTestCase):
             if alarm_type == "switch_stale":
                 self.raised.append(("clear", subject, message))
 
-        server.alarm_engine._raise = record_raise
-        server.alarm_engine._clear = record_clear
-        server.alarm_engine._stale_switches.clear()
+        server.rt.alarm_engine._raise = record_raise
+        server.rt.alarm_engine._clear = record_clear
+        server.rt.alarm_engine._stale_switches.clear()
 
     def tearDown(self):
         server.get_collector = self._get_collector
-        server.alarm_engine._raise = self._raise
-        server.alarm_engine._clear = self._clear
-        server.config.stale_switch_scans = self._scans
-        server.state.scanning = False
+        server.rt.alarm_engine._raise = self._raise
+        server.rt.alarm_engine._clear = self._clear
+        server.rt.config.stale_switch_scans = self._scans
+        server.rt.state.scanning = False
 
     async def test_the_streak_is_counted_and_then_said_out_loud(self):
         self.collector.delay = 0.0
@@ -215,7 +215,7 @@ class StaleSwitchTest(unittest.IsolatedAsyncioTestCase):
         for _ in range(2):
             with self.assertLogs("moonlan", "WARNING"):
                 await server.run_scan()
-        drawn = {sw["ip"]: sw for sw in server.state.as_dict()["switches"]}
+        drawn = {sw["ip"]: sw for sw in server.rt.state.as_dict()["switches"]}
         self.assertEqual(drawn["10.0.0.3"]["over_budget_scans"], 2)
         # …but two is under the threshold, so nothing has been claimed
         self.assertEqual(self.raised, [])
@@ -251,7 +251,7 @@ class StaleSwitchTest(unittest.IsolatedAsyncioTestCase):
         )
         # the server says how each switch came out of the scan (v0.8.9)
         self.assertEqual({r[2] for r in cleared}, {"a full poll finished again"})
-        drawn = {sw["ip"]: sw for sw in server.state.as_dict()["switches"]}
+        drawn = {sw["ip"]: sw for sw in server.rt.state.as_dict()["switches"]}
         self.assertEqual(drawn["10.0.0.3"]["over_budget_scans"], 0)
         self.assertFalse(drawn["10.0.0.3"]["over_budget"])
         self.assertGreater(drawn["10.0.0.3"]["polled_at"], 0)
@@ -269,14 +269,14 @@ class CountersStarvationTest(unittest.IsolatedAsyncioTestCase):
     """
 
     def setUp(self):
-        self._interval = server.config.counters_interval_seconds
-        server.config.counters_interval_seconds = 4  # wait budget: 2 s
+        self._interval = server.rt.config.counters_interval_seconds
+        server.rt.config.counters_interval_seconds = 4  # wait budget: 2 s
         # No poll data from whatever ran before: this test is about the
         # lock, and a leftover SwitchData sends it into loop detection
-        server.switch_data.clear()
+        server.rt.switch_data.clear()
 
     def tearDown(self):
-        server.config.counters_interval_seconds = self._interval
+        server.rt.config.counters_interval_seconds = self._interval
 
     async def test_it_waits_for_a_scan_that_is_nearly_done(self):
         polled: list[str] = []

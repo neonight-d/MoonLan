@@ -388,7 +388,7 @@ class ServiceTest(unittest.IsolatedAsyncioTestCase):
         agent = Agent(loop_forever(TABLE))
         async for _row in agent._walk(HOST, TABLE):
             pass
-        with mock.patch.object(server, "_collector", agent):
+        with mock.patch.object(server.rt, "_collector", agent):
             data = await server.api_skipped_oids()
         self.assertEqual(data["paused"], [])
         self.assertEqual([f["oid"] for f in data["walk_faults"]], [TABLE])

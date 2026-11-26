@@ -84,8 +84,8 @@ class StartupLineTest(unittest.TestCase):
 
     def line(self, text):
         public, problems = https.parse_public_url(text)
-        with mock.patch.object(server, "public_url", public), \
-                mock.patch.object(server, "public_url_problems", problems), \
+        with mock.patch.object(server.rt, "public_url", public), \
+                mock.patch.object(server.rt, "public_url_problems", problems), \
                 self.assertLogs("moonlan", "INFO") as logged:
             server._log_public_url()
         return "\n".join(logged.output)
@@ -215,18 +215,18 @@ class CertificateAtStartupTest(unittest.TestCase):
         logger = logging.getLogger("moonlan")
         self.addCleanup(logger.setLevel, logger.level)
         logger.setLevel(logging.ERROR)   # a raised alarm is a log line
-        with server.db._lock, server.db._conn:
-            server.db._conn.execute("DELETE FROM alarms")
-        server.alarm_engine._active.clear()
+        with server.rt.db._lock, server.rt.db._conn:
+            server.rt.db._conn.execute("DELETE FROM alarms")
+        server.rt.alarm_engine._active.clear()
 
     def startup(self, days, names=("example.local",), public="https://example.local"):
         cert, key, _ = make_certificate(self.tmp.name, names, days)
         parsed, _ = https.parse_public_url(public)
         patches = [
-            mock.patch.object(server.config, "listen_tls_cert", cert),
-            mock.patch.object(server.config, "listen_tls_key", key),
-            mock.patch.object(server, "public_url", parsed),
-            mock.patch.object(server, "certificate", None),
+            mock.patch.object(server.rt.config, "listen_tls_cert", cert),
+            mock.patch.object(server.rt.config, "listen_tls_key", key),
+            mock.patch.object(server.rt, "public_url", parsed),
+            mock.patch.object(server.rt, "certificate", None),
         ]
         for patch in patches:
             patch.start()
@@ -236,7 +236,7 @@ class CertificateAtStartupTest(unittest.TestCase):
         return "\n".join(logged.output)
 
     def active(self):
-        return [row["type"] for row in server.db.alarms(True, 100)]
+        return [row["type"] for row in server.rt.db.alarms(True, 100)]
 
     def test_a_good_certificate(self):
         text = self.startup(365)
@@ -253,7 +253,7 @@ class CertificateAtStartupTest(unittest.TestCase):
         text = self.startup(10)
         asyncio.run(server.check_certificate_end())
         self.assertEqual(self.active(), ["tls_cert_expiring"])
-        message = server.db.alarms(True, 1)[0]["message"]
+        message = server.rt.db.alarms(True, 1)[0]["message"]
         self.assertIn("restart MoonLan", message)
         # replaced and restarted: a process serving a good one clears it
         self.startup(365)
@@ -266,7 +266,7 @@ class CertificateAtStartupTest(unittest.TestCase):
 
     def test_a_key_others_can_read(self):
         self.startup(365)
-        os.chmod(server.config.listen_tls_key, 0o640)
+        os.chmod(server.rt.config.listen_tls_key, 0o640)
         with self.assertLogs("moonlan", "INFO") as logged:
             server._log_certificate()
         self.assertTrue(any("chmod 600" in line for line in logged.output))
@@ -316,10 +316,10 @@ class ProxyTest(unittest.TestCase):
         logger = logging.getLogger("moonlan")
         self.addCleanup(logger.setLevel, logger.level)
         logger.setLevel(logging.ERROR)
-        self.db = server.accounts
+        self.db = server.rt.accounts
         self.clean()
         self.addCleanup(self.clean)
-        server.sign_in.throttle = signin.Throttle()
+        server.rt.sign_in.throttle = signin.Throttle()
         self.db.add_user("anton", "admin", auth.hash_password(PASSWORD))
         self.db.enable_totp("anton", auth.new_totp_secret(), "")
         self.db.add_user("vera", "user", auth.hash_password(PASSWORD))
@@ -356,7 +356,7 @@ class ProxyTest(unittest.TestCase):
 
     def test_the_public_address_is_the_map(self):
         public, _ = https.parse_public_url("https://example.local")
-        with mock.patch.object(server.sign_in, "public_url", public):
+        with mock.patch.object(server.rt.sign_in, "public_url", public):
             # a proxy that does not say https: the public address decides
             self.assertEqual(self.pin(server.app, PROXY, {}), 200)
             # the map opened by address keeps working with a password
@@ -436,11 +436,11 @@ class SecureCookieCase(unittest.TestCase):
         logger = logging.getLogger("moonlan")
         self.addCleanup(logger.setLevel, logger.level)
         logger.setLevel(logging.ERROR)
-        self.db = server.accounts
+        self.db = server.rt.accounts
         self.clean()
         self.addCleanup(self.clean)
-        server.sign_in._tickets.clear()
-        server.sign_in.throttle = signin.Throttle()
+        server.rt.sign_in._tickets.clear()
+        server.rt.sign_in.throttle = signin.Throttle()
         self.db.add_user("anton", "admin", auth.hash_password(PASSWORD))
         self.db.enable_totp("anton", auth.new_totp_secret(), "")
         self.db.add_user("vera", "user", auth.hash_password(PASSWORD))
@@ -452,7 +452,7 @@ class SecureCookieCase(unittest.TestCase):
 
     def public(self, text):
         public, _ = https.parse_public_url(text)
-        patch = mock.patch.object(server.sign_in, "public_url", public)
+        patch = mock.patch.object(server.rt.sign_in, "public_url", public)
         patch.start()
         self.addCleanup(patch.stop)
 
@@ -599,9 +599,9 @@ class TransportTest(unittest.TestCase):
 
     def line(self, transport, public=None, hsts=0):
         public, _ = https.parse_public_url(public or "")
-        with mock.patch.object(server, "transport", transport), \
-                mock.patch.object(server, "public_url", public), \
-                mock.patch.object(server.config, "listen_hsts_max_age", hsts), \
+        with mock.patch.object(server.rt, "transport", transport), \
+                mock.patch.object(server.rt, "public_url", public), \
+                mock.patch.object(server.rt.config, "listen_hsts_max_age", hsts), \
                 self.assertLogs("moonlan", "INFO") as logged:
             server._log_transport()
         return "\n".join(logged.output)
@@ -616,7 +616,7 @@ class TransportTest(unittest.TestCase):
         self.assertIn("password is refused", self.line("http", PUBLIC))
 
     def test_the_clear_text_warning_only_over_http(self):
-        db = server.accounts
+        db = server.rt.accounts
         with db._lock, db._conn:
             db._conn.execute("DELETE FROM users")
         db.add_user("anton", "admin", auth.hash_password(PASSWORD))
@@ -624,7 +624,7 @@ class TransportTest(unittest.TestCase):
         for transport, warned in (("http", True), ("tls", False),
                                   ("proxy", False)):
             with self.subTest(transport=transport):
-                sign_in = signin.SignIn(db, server.db, server.config.auth,
+                sign_in = signin.SignIn(db, server.rt.db, server.rt.config.auth,
                                         None, transport)
                 with self.assertLogs("moonlan", "INFO") as logged:
                     sign_in.log_state()

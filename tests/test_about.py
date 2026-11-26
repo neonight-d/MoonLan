@@ -22,7 +22,7 @@ class ApiTest(unittest.TestCase):
     def ask(self, who, sign_in_on=True):
         token = signin._current.set(who)
         try:
-            with mock.patch.object(server.sign_in, "sign_in_on", lambda: sign_in_on):
+            with mock.patch.object(server.rt.sign_in, "sign_in_on", lambda: sign_in_on):
                 return asyncio.run(server.api_about())
         finally:
             signin._current.reset(token)

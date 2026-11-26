@@ -137,8 +137,8 @@ class EveryEventHasAGroupTest(unittest.TestCase):
 
 class ApiTest(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
-        server.db._conn.execute("DELETE FROM journal")
-        server.db._conn.commit()
+        server.rt.db._conn.execute("DELETE FROM journal")
+        server.rt.db._conn.commit()
         now = time.time()
         # 250 events, the pings among them most of all, as on the network
         self.ids = {}
@@ -148,8 +148,8 @@ class ApiTest(unittest.IsolatedAsyncioTestCase):
                      "settings_changed" if n == 77 else
                      "something_new" if n == 99 else
                      "host_down" if n % 2 else "host_up")
-            server.db.add_event(now - 250 + n, event, f"aa:bb:cc:00:00:{n % 256:02x}")
-        rows = server.db._conn.execute("SELECT id, event FROM journal").fetchall()
+            server.rt.db.add_event(now - 250 + n, event, f"aa:bb:cc:00:00:{n % 256:02x}")
+        rows = server.rt.db._conn.execute("SELECT id, event FROM journal").fetchall()
         for row in rows:
             self.ids.setdefault(row["event"], []).append(row["id"])
 
@@ -233,11 +233,11 @@ class ApiTest(unittest.IsolatedAsyncioTestCase):
 class IndexTest(unittest.TestCase):
     def test_the_event_id_index_is_there(self):
         indexes = {
-            row[1] for row in server.db._conn.execute("PRAGMA index_list(journal)")
+            row[1] for row in server.rt.db._conn.execute("PRAGMA index_list(journal)")
         }
         self.assertIn("journal_event_id", indexes)
         plan = " ".join(
-            str(tuple(row)) for row in server.db._conn.execute(
+            str(tuple(row)) for row in server.rt.db._conn.execute(
                 "EXPLAIN QUERY PLAN SELECT id FROM journal WHERE event = ? "
                 "AND id < ? ORDER BY id DESC LIMIT ?", ("host_up", 10 ** 9, 101)
             )
