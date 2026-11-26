@@ -8,7 +8,9 @@ import hashlib
 import json
 import logging
 import socket
+import sys
 import time
+import types
 from collections import Counter
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -39,7 +41,7 @@ from .routers import (
     own_macs as router_own_macs,
     place as place_routers,
 )
-from .runtime import rt
+from .runtime import FIELDS, rt
 from .startup import CERT_WARN_DAYS  # noqa: F401 (moved)
 from .snmp_collector import (
     READING_FORMAT,
@@ -64,6 +66,40 @@ from .topology import (
 )
 
 log = logging.getLogger("moonlan")
+
+
+# The state of the process is in rt (runtime.py) since v0.8.13. A name of
+# it asked of this module fails loudly: server.db = fake would otherwise
+# set an attribute nothing reads any more, and the test that did it would
+# pass checking nothing. Reading is refused by __getattr__ (PEP 562),
+# writing and deleting by the class of the module; a write is never
+# passed on to rt, since patch.object deletes the attribute on the way
+# out and would not put the value back.
+def _moved_to_rt(name: str) -> AttributeError:
+    return AttributeError(
+        f"server.{name} moved to the runtime: use server.rt.{name}"
+    )
+
+
+def __getattr__(name: str):
+    if name in FIELDS:
+        raise _moved_to_rt(name)
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
+
+class _StrictModule(types.ModuleType):
+    def __setattr__(self, name: str, value) -> None:
+        if name in FIELDS:
+            raise _moved_to_rt(name)
+        super().__setattr__(name, value)
+
+    def __delattr__(self, name: str) -> None:
+        if name in FIELDS:
+            raise _moved_to_rt(name)
+        super().__delattr__(name)
+
+
+sys.modules[__name__].__class__ = _StrictModule
 
 WEB_DIR = Path(__file__).resolve().parent.parent / "web"
 
