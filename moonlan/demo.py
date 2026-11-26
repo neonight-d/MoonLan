@@ -166,6 +166,7 @@ from .loopdetect import (
     judge_port,
     map_ports,
 )
+from .routers import RouterIdentity, identity_from_tables
 from .stp import OID_STP_PORT_STATE, StpData, StpPort
 from .snmp_collector import (
     OID_IF_DESCR,
@@ -287,10 +288,38 @@ UPLINK_PORTS = {("10.0.0.10", f"Gi0/{UPLINK_PORT}")}
 # operator actually reaches the box at, out of the many it announces
 ROUTER_ADDRESSES = {ROUTER_CHASSIS: ROUTER_IPS[0]}
 
+# The router of v0.8.11, in `routers:` and on a LACP pair of
+# access-sw-1 (a D-Link: the trunk is a synthetic port, members
+# Gi0/15+Gi0/16). In the first scan it is still on Gi0/20, under the MAC
+# of ether2, and only its second member's cable is in the pair. From the
+# second scan on it is on the pair: its bond took ether4's MAC, two bits
+# from ether5's, and none of its own MACs ever gets an IP — a router's
+# own addresses are not in its ARP table. Without what it says about
+# itself the bond's MAC was a damaged copy of ether5's and left the map,
+# ether5 was drawn instead, and LLDP — still naming the router by
+# ether2's MAC — gave its name to nobody. With it: one node, the bond,
+# with the router's name and address, and "Router interfaces" in the card.
+LAG_ROUTER_IP = "10.1.20.1"
+LAG_ROUTER_TRUNK = 15                 # bridge-port of the synthetic port
+LAG_ROUTER_MEMBERS = (15, 16)
+LAG_ROUTER_OLD_PORT = 20              # where it was in the first scan
+LAG_ROUTER_BOND = "02:ee:20:00:00:05"   # bond1, ether4 and the VLANs
+LAG_ROUTER_MEMBER = "02:ee:20:00:00:06"  # ether5, two bits away
+LAG_ROUTER_OLD = "02:ee:20:00:00:2a"    # ether2, LLDP's chassis ID
+LAG_ROUTER_SPARE = "02:ee:20:00:00:41"  # ether1, never plugged in
+LAG_ROUTER_MACS = (
+    LAG_ROUTER_BOND, LAG_ROUTER_MEMBER, LAG_ROUTER_OLD, LAG_ROUTER_SPARE,
+)
+LAG_ROUTER_NAME = "RouterOS-GW"
+LAG_ROUTER_MGMT = "10.1.21.1"         # what its LLDP announces
+# named by the operator in the first scan, when ether2 was the router
+LAG_ROUTER_NOTE = (f"host:{LAG_ROUTER_OLD}", "Main gateway",
+                   "Moved onto the LACP pair Gi0/15+Gi0/16.")
+
 # What a `routers:` section would hold for this network. The port to
 # this device must never be read as a way OUT of the network — it is
 # the middle of it.
-ROUTERS = [ROUTER_IPS[0]]
+ROUTERS = [ROUTER_IPS[0], LAG_ROUTER_IP]
 
 # access-sw-4 stands in for the HPE 1820: its agent fills
 # lldpRemSysCapEnabled for nobody at all. A neighbour there that
@@ -419,10 +448,24 @@ def _old_copies() -> list[str]:
     return copies
 
 
-def router_identities() -> list:
-    """What the routers of ROUTERS say about themselves (v0.8.11): none
-    of them answers yet."""
-    return []
+def router_identities() -> list[RouterIdentity]:
+    """What the routers of ROUTERS say about themselves (v0.8.11).
+
+    The router on access-sw-1's LACP pair answers ifPhysAddress, ifName,
+    ifType and ipAdEntIfIndex. The MikroTik on core-sw Gi0/21 answers
+    none of them, the way an agent with those tables closed would: its
+    MAC carries its address through ARP, as before v0.8.11.
+    """
+    return [identity_from_tables(
+        LAG_ROUTER_IP,
+        phys={1: LAG_ROUTER_SPARE, 2: LAG_ROUTER_OLD, 4: LAG_ROUTER_BOND,
+              5: LAG_ROUTER_MEMBER, 10: LAG_ROUTER_BOND,
+              20: LAG_ROUTER_BOND, 21: LAG_ROUTER_BOND},
+        names={1: "ether1", 2: "ether2", 4: "ether4", 5: "ether5",
+               10: "bond1", 20: "vlan-mgt", 21: "vlan-office"},
+        types={1: 6, 2: 6, 4: 6, 5: 6, 10: 161, 20: 135, 21: 135},
+        ip_index={LAG_ROUTER_IP: 20, LAG_ROUTER_MGMT: 21},
+    ), RouterIdentity(address=ROUTER_IPS[0])]
 
 
 def _rand_mac(prefix: str = "00:4d:4c") -> str:
@@ -512,6 +555,8 @@ def seed_notes(db) -> None:
     db.set_note(node_id, label, note, "manual", "", now - 3 * 86400)
     node_id, label, note = NEVER_NOTE
     db.set_note(node_id, label, note, "manual", "", now - 2 * 86400)
+    node_id, label, note = LAG_ROUTER_NOTE
+    db.set_note(node_id, label, note, "manual", "", now - 3 * 3600)
 
 
 def demo_network(advance: bool = True) -> list[SwitchData]:
@@ -618,6 +663,15 @@ def demo_network(advance: bool = True) -> list[SwitchData]:
         macs += _corrupt_copies(_scan_count)
     for mac in macs:
         connect_host(ray1, CORRUPT_PORT, 8, mac)
+
+    # The router of v0.8.11: on Gi0/12 in the first scan, on the LACP
+    # pair from the second on (see LAG_ROUTER_IP)
+    lag_router_trunk = _synthetic_trunk(ray1, LAG_ROUTER_TRUNK, LAG_ROUTER_MEMBERS)
+    connect_host(ray1, lag_router_trunk, 1, LAG_ROUTER_MEMBER)
+    if _scan_count >= 2:
+        connect_host(ray1, lag_router_trunk, 1, LAG_ROUTER_BOND)
+    else:
+        connect_host(ray1, LAG_ROUTER_OLD_PORT, 1, LAG_ROUTER_OLD)
 
     # Seen on the core's trunk to ray3 and on ray3's own uplink, on no
     # host port anywhere: it is placed on the trunk with the better
@@ -970,6 +1024,15 @@ def _add_lldp(core, ray1, ray2, ray3, ray4, core_port_to_ray) -> None:
         # several neighbours on one port never did.
         _neighbor(12, _iface_mac(ray3), "Gi0/1", sys_name=ray3.sys_name,
                   caps={"bridge"}),
+        # The router of v0.8.11: `router` and no bridge, under the MAC of
+        # ether2 wherever it is — on Gi0/20 in the first scan, then on
+        # Gi0/16, a member of the LACP pair whose FDB is on the pair
+        _neighbor(
+            LAG_ROUTER_OLD_PORT if _scan_count < 2 else LAG_ROUTER_MEMBERS[1],
+            LAG_ROUTER_OLD, "vlan-mgt", sys_name=LAG_ROUTER_NAME,
+            sys_desc="RouterOS x86 6.49.10", caps={"router"},
+            mgmt_ips=[LAG_ROUTER_MGMT],
+        ),
     ]
     # A neighbour with the optional TLVs switched off, the way a
     # DES-3526 ships: a bare MAC with no name and no capabilities. The
@@ -1244,6 +1307,8 @@ def enrich_db(db: Database, hosts: list[dict]) -> None:
         ROUTER_CHASSIS,
         EDGE_ROUTER_CHASSIS, UPLINK_CHASSIS, *UPLINK_HOST_MACS, *CAMERAS,
         *UPLINK_ONLY_MACS, *BEYOND_TRUNK_MACS,
+        # no ARP table has a router's own addresses: that is v0.8.11
+        *LAG_ROUTER_MACS,
     )
     hosts = [h for h in hosts if h["mac"] not in fixed]
     for mac, ip, name in (

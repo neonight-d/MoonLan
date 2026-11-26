@@ -57,6 +57,33 @@ Devices whose ARP tables are used to associate IP addresses with MAC
 addresses. This is especially useful for hosts that are visible in
 routing infrastructure but not directly visible on a switch port.
 
+Since v0.8.11 MoonLan also asks each of them what it is. On every
+scan, together with the ARP table, it reads:
+
+| Table | OID | What for |
+|---|---|---|
+| ARP (`ipNetToMediaPhysAddress`) | 1.3.6.1.2.1.4.22.1.2 | the IPs of the hosts, by MAC |
+| `ifPhysAddress` | 1.3.6.1.2.1.2.2.1.6 | the router's own MACs |
+| `ifName`, `ifDescr` where `ifName` is empty | 1.3.6.1.2.1.31.1.1.1.1, 1.3.6.1.2.1.2.2.1.2 | what each MAC is called: `bond1`, `ether5` |
+| `ifType` | 1.3.6.1.2.1.2.2.1.3 | which interface a shared MAC is named after: a bond before its members, a port before a VLAN |
+| `ipAdEntIfIndex` (`ipAddrTable`) | 1.3.6.1.2.1.4.20.1.2 | which interface each of its own addresses is on |
+
+A router's own addresses are never in its own ARP table, so before
+v0.8.11 its own MACs came into the inventory without an IP — and a
+bond's MAC a bit or two away from its member's could be taken for a
+damaged copy (see DIAGNOSTICS.md, "A damaged copy that is not one").
+With these tables every MAC of the router carries its address from
+`routers:`, none of them is ever a copy or a new device, and the
+router is one node on the map, whichever of its MACs the switches see
+(see FEATURES.md, "A router with several MACs").
+
+The access is the same SNMP read access as for ARP: the community of
+`snmp:` (or the entry's own), read-only, with the interfaces table and
+the IP address table in its view. On RouterOS, a read-only community
+covers all of it. A router that does not answer these tables works as
+before, through ARP alone; the log says so once, at INFO, and says it
+again only when that changes.
+
 ### context_menu
 
 Node-menu actions and operator-defined links. URLs are validated
@@ -137,7 +164,7 @@ fails on a key the loader knows and this page does not.
 | Key | Default | Meaning |
 |---|---|---|
 | `switches` | `[]` | Managed switches: addresses, or mappings with `ip:` and per-switch settings (see above). |
-| `routers` | `[]` | Devices with an ARP table — the source of host IPs. |
+| `routers` | `[]` | Devices with an ARP table — the source of host IPs; their own interfaces (v0.8.11) make each one node on the map. |
 | `db_path` | `moonlan.db` | SQLite file: hosts, journal, alarms, layout, accounts. |
 
 ### Map and inventory rules

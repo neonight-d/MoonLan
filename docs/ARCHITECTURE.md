@@ -38,9 +38,17 @@ A walk is a run of GETNEXT requests, and `_walk` holds the agent to RFC 3416 §4
 - **What came, stays.** The rows read before a fault are kept (`truncated` when there are any), the walk is not resumed — the agent would answer the same — and it is not a dead-OID strike: it costs one request now, not a timeout. One WARNING per host and OID in the life of the process, one INFO when it walks normally again; `/api/skipped-oids` lists the faults.
 - **The budget is the only clock.** There is no time limit per walk: a legitimately slow table — the MAC table of a big switch — would be cut short silently and its hosts would leave the map. Every walk of a full poll is timed instead, and a poll the budget cancels says which walk it was cut in (`cut_at` in `/api/polling`); the walk the cancellation lands in keeps its record "running" for the server to read. Only `collect()`'s own walks are timed, so a counters cycle that takes the host the moment a cancelled poll lets go of it cannot overwrite that record.
 
+#### A router's identity (v0.8.11)
+
+For each router of `routers:` the collector reads, with its ARP table, `ifPhysAddress`, `ifName` (or `ifDescr` where it is empty), `ifType` and `ipAdEntIfIndex` — all through `_walk`, with every rule above. moonlan/routers.py turns them into a `RouterIdentity`: each of the router's MACs with the names of the interfaces that have it (the one it is called by first: a bond before its members, a port before a VLAN), each of its own IPs with the MAC of its interface, and the MAC of the interface the `routers:` address is on. A router that answers no `ifPhysAddress` has an empty identity, and nothing below changes for it. The identity lives for one scan; the service does not store it.
+
+The server uses it in four places, all in `_build_map`. A router's own MACs join the MACs ARP vouches for (`with_ip`): never copy candidates, never held back, confirmed at once without `new_mac` (`upsert_hosts(vouched=…)`), and what the copy rules did to them before is undone (`Database.vouch_for`). `routers.place()` picks one node per router — an LLDP bridge that is the router, or the router's MAC on the map, the interface of its `routers:` address first — and every other MAC of the router is merged into it (`merged_into`), whether it is on that port, on another one or only in the database. An LLDP neighbour is the router when its chassis ID is one of the router's MACs or its addresses are the router's; on the node's port its data goes onto the node. A note or a pinned position on a merged MAC moves to the node once, when the node has none (journal user `@moonlan`).
+
 ### Topology
 
 moonlan/topology.py converts observations into links, hosts, pseudo-switches, bridges, groups, and placement decisions. Evidence has different strength: explicit LLDP agreement, validated direct FDB relationship, one-way/FDB inference, and approximate/trunk placement. The UI keeps that distinction visible.
+
+LLDP arrives on a physical port, and the devices behind an aggregate are on the aggregate. `detect_bridges()` puts a neighbour heard on a member on the aggregate's port (`aggregate_port()`, both kinds: IEEE8023-LAG-MIB and the synthetic D-Link trunk), keeping the member in `member_port`, so everything matched by (switch, port) — a bridge taking over a pseudo-switch, a bridge and its own MAC as one node, the LLDP data of a non-bridge on its host, `uplink_ports` — sees one port (v0.8.11). The ports panel reads the LLDP table itself and keeps showing a neighbour on its member's row. `normalized_fdb()` resolves both kinds of aggregate the same way.
 
 ### Monitoring
 
@@ -93,7 +101,10 @@ The web layer is static HTML/CSS/JavaScript. The browser refreshes API data and 
    than `unmanaged_threshold` hosts are visible behind one port, they
    are grouped under a "Switch without SNMP" node.
 5. Host IPs are taken from the ARP tables of the `routers` devices
-   (`ipNetToMediaPhysAddress`), names via reverse DNS.
+   (`ipNetToMediaPhysAddress`), names via reverse DNS. Each router
+   also reports its own interfaces — `ifPhysAddress`, `ifName`,
+   `ipAddrTable` — and is drawn as one node whichever of its MACs the
+   switches see (v0.8.11).
 6. All hosts with an IP and all switches are pinged regularly; status
    and last-reply time are visible in the list, on the map and in the
    device card.
@@ -106,7 +117,9 @@ The web layer is static HTML/CSS/JavaScript. The browser refreshes API data and 
    the local port table (`lldpRemLocalPortNum` is not an ifIndex), ports
    carrying forwarded LLDP frames are excluded, links both devices
    announce override the inference, and neighbours with the `bridge`
-   capability that belong to no polled switch become named nodes.
+   capability that belong to no polled switch become named nodes. A
+   neighbour heard on a member of an aggregate is placed on the
+   aggregate, where the devices behind it are.
    BRIDGE-MIB `dot1dStp*` is read alongside and judged before use.
 9. Hosts, the event journal, alarms and the last full reading of
    every switch are stored in SQLite (`moonlan.db`), so `first_seen`,

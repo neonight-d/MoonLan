@@ -6,6 +6,69 @@ for before the next one started.
 
 Русская версия — [CHANGELOG_RU.md](CHANGELOG_RU.md).
 
+## v0.8.11 — 2026-11-26
+
+A router on LACP: its own MACs, LLDP behind an aggregate, no false
+damaged copy. The refactoring waits a version: the production network
+found a bug. A router of `routers:`, the one all traffic goes through,
+moved from a single port of a switch onto a LACP pair of the same
+switch, and left the map. Its bond's MAC, the source of all its
+traffic, was on neither the map nor "Not on map"; the MAC of the
+bond's second member was drawn in its place, and the operator named it
+after the router; no node had the router's name, and the MAC of the
+port it had left stayed grey there.
+
+**A router of `routers:` says which MACs are its own.** On every scan,
+with the ARP table, MoonLan reads from each router `ifPhysAddress`,
+`ifName` (`ifDescr` where it is empty), `ifType` and `ipAdEntIfIndex`
+— through the same guarded walks as everything else. A router's own
+addresses are never in its own ARP table, so until now its own MACs
+had no IP, and the bond's MAC, two bits from the member's confirmed a
+few days before, was held back as a damaged copy. Now every MAC a
+router reports as its own:
+- carries the router's address from `routers:` (ARP is the fallback);
+- vouches for itself as an IP does: never a copy candidate, never held
+  back, confirmed at once without `new_mac`; a copy mark or a hold
+  already in the database is undone on the first scan, with one INFO
+  line;
+- is drawn as one node per router: the MAC of the interface the
+  `routers:` address is on, where the switches see it, or else another
+  of its MACs they see. Its other MACs — on the same port, on another
+  one, or only in the database — are drawn as that node, and their
+  records stay. An LLDP bridge that is the router is its node instead.
+
+The node's card has a new section, "Router interfaces": each MAC by
+the name of the interface it belongs to, `bond1 · 02:ee:… (on the
+map)`, `ether5 · …`, `ether2 · …`, and the MACs no switch table ever
+had in one line under them. A name, a note or a pin left on one of the
+router's MACs moves to the node once, when the node has none of its
+own; the journal records it as a note moved and a node pinned, by
+MoonLan. A router that answers none of these tables works as before,
+through ARP; the log says so once.
+
+**LLDP behind an aggregate is on the aggregate.** LLDP arrives on a
+physical member, while the devices behind an aggregate are on the
+aggregate, so for a neighbour behind a LAG nothing matched by switch
+and port worked: a bridge did not take over the pseudo-switch of its
+port, its own MAC stayed a second node, a non-bridge's name reached no
+host. The neighbour is now on the aggregate, both kinds — IEEE
+8023-LAG-MIB and the synthetic D-Link trunk — with the member kept for
+whoever needs it. The ports panel still shows it on the member's row.
+And an LLDP neighbour is the router when its chassis ID is one of the
+router's MACs or its addresses are the router's: the router on LACP
+announced itself under the MAC of the port it had left.
+
+**diag.** `diag --host <MAC>` says first, in one line, what settles a
+case of this kind: `an interface of router 10.1.0.1 (bond1)`, or `held
+back as a possible damaged copy of <sample> (N bits)`. `diag
+--topology` gives an aggregate the state the ports panel gives it — up
+while one member is — instead of printing `[LAG … DOWN]` with both
+members working.
+
+The demo has the router: on access-sw-1 Gi0/20 in the first scan, on
+the pair Gi0/15+Gi0/16 from the second, with the bond two bits from
+its member and LLDP under a third MAC.
+
 ## v0.8.10 — 2026-11-24
 
 Two fingers move the map, a correction about UTF-8 logs. From the

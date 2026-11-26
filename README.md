@@ -293,6 +293,7 @@ See **[CONTRIBUTING.md](CONTRIBUTING.md)**.
 | v0.8.8 ✓ | A walk that cannot loop, where a poll's budget went, diag over HTTPS, the mobile version zooms only the map |
 | v0.8.9 ✓ | A long press keeps its menu in the mobile version, alarm texts that stay true, UTF-8 logs |
 | v0.8.10 ✓ | Two fingers move the map in the mobile version, a correction about UTF-8 logs |
+| v0.8.11 ✓ | A router on LACP: one node with its own MACs, LLDP behind an aggregate, no false damaged copy |
 | v0.9 | Windows computer inventory (WMI/WinRM) |
 
 Every version so far: [CHANGELOG.md](CHANGELOG.md).

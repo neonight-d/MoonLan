@@ -45,6 +45,24 @@ the spot, and a one-line verdict — for example, that no switch reports
 the MAC, it was last seen on a port eight hours ago, and the address
 still answers because ARP now maps it to a different device.
 
+Two lines come first when they apply (v0.8.11), because each settles
+the case by itself:
+
+```
+an interface of router 10.1.0.1 (bond1)
+held back as a possible damaged copy of 02:ee:00:00:10:06 (2 bits)
+```
+
+The first: a router of `routers:` reports the MAC as its own, named
+after the interface it belongs to — the service draws that router as
+one node and never takes the MAC for a copy (see "A damaged copy that
+is not one" below). The second: the service keeps the MAC unconfirmed
+and off the map by the damaged-copy rules — no IP, not accepted by the
+database, within `corruption_hamming_bits` of an address it accepted
+on a switch whose table has the MAC — and names the address and the
+distance. A record already marked as a copy says
+`marked as a damaged copy of …` instead.
+
 `--fdb` dumps the switch's MAC table row by row: raw OID, the length of
 its suffix, the address it yields, the bridge-port and ifIndex, and
 whether the row was accepted or rejected and why. It is the way to
@@ -402,6 +420,39 @@ held back as a copy — it shows in the ⚠ list of its port with the
 address it is taken for a copy of. `filter_suspect_macs: false` draws
 such addresses anyway, a smaller `corruption_hamming_bits` narrows the
 match, and `--fdb` always shows what was matched against what.
+
+### A damaged copy that is not one
+
+The case that rule cannot see: a router. Its own addresses are never
+in its own ARP table, so its own MACs never get an IP, and a router
+has several MACs a bit or two apart — the ports of one network card,
+a bond and its members. A router moved onto a LACP pair looked like
+this, on the pair's port in the "Ports" panel and nowhere on the map:
+
+```
+suspect_macs: [{mac: 02:ee:00:00:10:05, sample: 02:ee:00:00:10:06, distance: 2}]
+```
+
+`…:05` was the bond, the source of all the router's traffic; `…:06`, the
+bond's second member, had been confirmed a few days earlier. The bond
+was held back as its damaged copy, the member was drawn in its place,
+and the router's LLDP — sent under the MAC of the port it had left —
+named nobody.
+
+Since v0.8.11 MoonLan asks each router of `routers:` for its own MACs
+([routers](CONFIGURATION.md#routers)). A MAC a router reports as its
+own vouches for itself the way an IP does: it is never a candidate,
+never held back, confirmed at once without `new_mac`, and a copy mark
+or a hold it already had is undone on the first scan, with one INFO
+line in the log:
+
+```
+Own MACs of routers in routers: are not damaged copies, and are devices now: 02:ee:00:00:10:05 (bond1 of 10.1.0.1, was held back as a possible copy)
+```
+
+`diag --host` on such a MAC says `an interface of router …` and nothing
+about copies. A router that does not answer `ifPhysAddress` gets none
+of this — the log says so once — and its MACs are judged as before.
 
 ## Sharing a diagnostic report
 

@@ -365,6 +365,28 @@ Everything MoonLan does, as of v0.8.9 — the list the README used to carry. The
   its own port (they usually are) is drawn once, with its IP, its name
   and its ping state, instead of once as a named bridge and once as a
   bare MAC beside itself.
+- A router with several MACs, one node (v0.8.11). A router of
+  `routers:` has many: a bond and its members, a VLAN interface on
+  each, the port it was plugged into last month. MoonLan reads them
+  from the router itself (`ifPhysAddress`, `ifName`, `ipAddrTable`, see
+  [routers](CONFIGURATION.md#routers)) and draws the router once: as
+  the MAC of the interface its `routers:` address is on, where the
+  switches see it, or else as another of its MACs the switches see.
+  Its other MACs on that port, on another port or only in the
+  database are drawn as that node, not as hosts of their own — no grey
+  dot left on the port it was moved from — and their records stay.
+  The node carries the address from `routers:` under its name, the
+  LLDP data of the router on its port even when LLDP names it by
+  another of its MACs, and in its card "Router interfaces": each MAC
+  by the name of the interface it belongs to (`bond1 · 02:ee:… (on the
+  map)`, `ether5 · …`, `ether2 · …`), with the MACs no switch table
+  ever had in one line under them. A router's own MAC is never taken
+  for a damaged copy and never raises `new_mac`. A name, a note or a
+  pin left on one of its MACs moves to the node once, when the node
+  has none of its own, and the journal says MoonLan moved it. LLDP
+  behind an aggregate is matched on the aggregate: a neighbour heard
+  on one member of a LAG is on the same port as the devices behind
+  the LAG.
 - Honest spanning-tree status: a switch with STP disabled still answers
   every `dot1dStp*` object — priority 0, cost 0, itself as the root —
   and MoonLan refuses to draw a root out of that. The "STP" panel gives
