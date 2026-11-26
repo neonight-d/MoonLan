@@ -327,6 +327,26 @@ def _lag_info(sw: SwitchData, port: int) -> tuple[list[str], list[bool], int]:
     return names, states, speed
 
 
+def port_up(sw: SwitchData, if_index: int) -> bool:
+    """A port's state as the ports panel shows it (v0.8.11).
+
+    An aggregate is up while one of its members is: a synthetic port
+    has no state of its own at all (its oper_up stays False), and an
+    IEEE8023-LAG-MIB aggregate's says less than its members do.
+    `diag --topology` printed [LAG Gi0/1+Gi0/2 DOWN] with both
+    members working.
+    """
+    if if_index < 0:
+        members = sw.lag_groups.get(-if_index, [])
+    else:
+        members = [m for m, agg in sw.lag_members.items() if agg == if_index]
+    known = [sw.ports[m] for m in members if m in sw.ports]
+    if known:
+        return any(port.oper_up for port in known)
+    port = sw.ports.get(if_index)
+    return bool(port and port.oper_up)
+
+
 def _make_link(
     a: SwitchData, pa: int | None, b: SwitchData, pb: int | None,
     source: str = "fdb",

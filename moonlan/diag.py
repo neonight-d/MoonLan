@@ -70,10 +70,13 @@ from .config import (
 from .snmpval import as_octets, is_octets
 from .textio import use_utf8
 from .corruption import (
-    candidates, find_suspects, sample_mac, samples_by_switch,
+    candidates, find_suspects, hamming_distance, sample_mac,
+    samples_by_switch,
 )
+from .routers import RouterIdentity, own_macs as router_own_macs
 from .counters import CounterStore, Sample
 from .topology import (
+    port_up,
     detect_bridges,
     drop_impossible_links,
     suspect_uplink_ports,
@@ -508,9 +511,11 @@ async def run_topology_view(community: str, timeout: int, cfg) -> None:
     # link whose ports are down, or whose source is a guess, or that
     # only exists because nothing better was available, reads very
     # differently from one both devices confirmed.
+    # an aggregate by its members, as the ports panel shows it (v0.8.11)
     oper = {
         sw.ip: {
-            (p.name or str(p.if_index)): p.oper_up for p in sw.ports.values()
+            (p.name or str(p.if_index)): port_up(sw, p.if_index)
+            for p in sw.ports.values()
         }
         for sw in switches
     }
@@ -1986,6 +1991,16 @@ async def run_host_diag(
 
     collector = _make_collector(community, timeout)
 
+    # a router's own MAC first (v0.8.11): it settles the case at once
+    identities = [
+        await collector.collect_router_identity(router)
+        for router in cfg.routers
+    ]
+    vouched = set(router_own_macs(identities))
+    line = router_interface_line(identities, mac)
+    if line:
+        print(f"\n{line}")
+
     # Which MACs identify a switch: a port carrying one is a trunk, and
     # a device seen only on trunks is behind equipment nobody polls
     switch_macs: set[str] = set()
@@ -1995,6 +2010,7 @@ async def run_host_diag(
 
     print("\nMAC tables of the switches:")
     seen_on: list[str] = []
+    seen_switches: set[str] = set()
     trunk_only = True
     for switch in cfg.switches:
         if not mac:
@@ -2019,6 +2035,7 @@ async def run_host_diag(
             state = f"REJECTED ({row['reason']})" if row["reason"] else "accepted"
             trunk = row["bridge_port"] in trunks
             if not row["reason"]:
+                seen_switches.add(switch)
                 seen_on.append(
                     f"{switch} port {name}" + (" (a trunk)" if trunk else "")
                 )
@@ -2029,6 +2046,14 @@ async def run_host_diag(
                 + (", trunk port — another switch is behind it" if trunk else "")
             )
             print(f"      OID {row['oid']}")
+
+    line = copy_line(
+        mac, {r["mac"]: r for r in rows}, sorted(seen_switches), vouched,
+        cfg.host_grace_hours * 3600, time.time(),
+        cfg.thresholds.corruption_hamming_bits,
+    ) if mac else ""
+    if line:
+        print(f"\n{line}")
 
     print("\nARP tables of the routers:")
     arp_says_ip = ""
@@ -2061,6 +2086,61 @@ async def run_host_diag(
         record, mac, ip, seen_on, arp_says_mac, replied,
         trunk_only and bool(seen_on),
     ))
+
+
+def router_interface_line(identities: list[RouterIdentity], mac: str) -> str:
+    """"an interface of router 10.1.0.1 (bond1)" when a router of
+    `routers:` reports the MAC as its own; "" otherwise (v0.8.11)."""
+    owner = router_own_macs(identities).get(mac) if mac else None
+    if owner is None:
+        return ""
+    return f"an interface of router {owner.address} ({owner.name(mac)})"
+
+
+def _bits(n: int) -> str:
+    return f"{n} bit" if n == 1 else f"{n} bits"
+
+
+def copy_line(
+    mac: str, db_rows: dict[str, dict], switches: list[str],
+    vouched: set[str], grace_seconds: float, now: float, max_bits: int,
+) -> str:
+    """What the damaged-copy rules make of the MAC, in one line (v0.8.11).
+
+    "held back as a possible damaged copy of <sample> (N bits)": the
+    service keeps it unconfirmed and off the map, by the same rules —
+    an address the database has not accepted, without an IP and not a
+    router's own, within max_bits of an accepted one on a switch whose
+    table has it. A record already marked says so instead. "" — none
+    of it.
+    """
+    record = db_rows.get(mac) or {}
+    if record.get("corrupt_of") and mac not in vouched:
+        sample = record["corrupt_of"]
+        return (
+            f"marked as a damaged copy of {sample} "
+            f"({_bits(hamming_distance(mac, sample))}): off the map, and "
+            f"deleted at the next daily cleanup"
+        )
+    if not db_rows or not switches or max_bits <= 0:
+        return ""
+    if mac not in candidates([mac], db_rows, vouched):
+        return ""
+    samples = samples_by_switch([], db_rows, vouched, grace_seconds, now)
+    found = find_suspects(
+        [{"mac": mac, "switch": switch, "port": ""} for switch in switches],
+        {mac}, samples, max_bits,
+    )
+    if not found:
+        return ""
+    nearest = min(
+        (s for suspects in found.values() for s in suspects),
+        key=lambda s: (s["distance"], s["sample"]),
+    )
+    return (
+        f"held back as a possible damaged copy of {nearest['sample']} "
+        f"({_bits(nearest['distance'])})"
+    )
 
 
 def _host_summary(
