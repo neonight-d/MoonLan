@@ -10,7 +10,7 @@ needs of the process it reads from rt (runtime.py) when it runs.
 """
 
 # server.py includes the router of each, in its own order
-from . import actions, alarms, layout, notes, settings, system  # noqa: F401
+from . import actions, alarms, layout, notes, settings, system, topology  # noqa: F401
 
 
 def include(app, router) -> None:
