@@ -21,6 +21,7 @@ from . import (
     notes, oui, pinger, probes, routes, settings, signin, startup, stp,
     subscriptions,
 )
+from .about import STARTED_AT
 from .alarms import AlarmEngine
 from .config import Config, load_config
 from .db import Database
@@ -34,6 +35,7 @@ from .derived import (
     _subject_inbound_errors,
     _sum_known,
     _uplink_ports,
+    configured_switches,
 )
 from .housekeeping import (  # noqa: F401 (moved)
     CERT_ALARM_DAYS,
@@ -76,7 +78,6 @@ from .routes.notes import (  # noqa: F401 (moved)
     _stand_in,
 )
 from .routes.system import (  # noqa: F401 (moved)
-    STARTED_AT,
     VERSIONED_ASSETS,
     WEB_DIR,
     RevalidatedStaticFiles,
@@ -492,13 +493,6 @@ async def _counters_locked(collector: SnmpCollector, ip: str):
         return samples, oper, columns, loop
     finally:
         lock.release()
-
-
-def configured_switches() -> list[str]:
-    """The switches the map is about: `switches:` in config.yaml, or the
-    demo's own network. Each of them is on the map whatever it answers
-    (v0.8.7) — from this scan, from a reading, or as an empty node."""
-    return list(demo.SWITCH_IPS) if rt.config.demo else list(rt.config.switches)
 
 
 def _settle(ip: str, result, now: float) -> SwitchData:

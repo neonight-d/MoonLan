@@ -12,7 +12,6 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
-import time
 from pathlib import Path
 
 from fastapi import APIRouter
@@ -20,6 +19,7 @@ from fastapi.responses import HTMLResponse, Response
 from fastapi.staticfiles import StaticFiles
 
 from .. import __version__, about, oui, signin
+from ..about import STARTED_AT
 from ..runtime import rt
 from .common import _refuse
 
@@ -29,10 +29,9 @@ router = APIRouter()
 WEB_DIR = Path(__file__).resolve().parent.parent.parent / "web"
 
 
-# For About (v0.8.1): when this process started, and the commit it was
+# For About (v0.8.1): the commit this process was
 # started from — read once, as a pull after the start changes .git and
 # not the code that is running
-STARTED_AT = time.time()
 BUILD = about.build_hash()
 COPYRIGHT = about.copyright_line(about.license_text())
 

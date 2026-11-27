@@ -7,6 +7,9 @@ components are the versions installed, not the ones requirements.txt
 allows — the first thing asked in a bug report. Their licences are a
 table here: package metadata gives a licence in five different ways or
 not at all, and tests/test_about.py holds the table to requirements.txt.
+
+When the process started is here too (v0.8.14): About shows it, and so
+does the map, for a switch that has not answered since.
 """
 
 from __future__ import annotations
@@ -19,6 +22,9 @@ import time
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
+
+# For About (v0.8.1): when this process started
+STARTED_AT = time.time()
 
 # (shown as, distribution, licence as SPDX says it)
 COMPONENTS = (

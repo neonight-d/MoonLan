@@ -87,7 +87,6 @@ MOVED = {
     },
     "routes.system": {
         "WEB_DIR": None,
-        "STARTED_AT": None,
         "VERSIONED_ASSETS": None,
         "RevalidatedStaticFiles": None,
         "api_about": None,

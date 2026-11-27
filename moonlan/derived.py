@@ -4,7 +4,8 @@ The helpers that the routes taken out of server.py need and that the
 scan, still in server.py, needs as well: the uplink ports, the window
 of MAC copies and the inbound errors of a subject, whether a host is
 monitored, the LAG groups of a switch, sums and rounding for the
-counters, how long rates stay shown, the loop report of a switch.
+counters, how long rates stay shown, the loop report of a switch, the
+switches the map is about.
 Moved out of server.py word for word (docs/ARCHITECTURE.md): the state
 is read as rt.X when they run. Nothing here imports moonlan.server.
 """
@@ -149,3 +150,10 @@ def _loop_report(sw: SwitchData | None) -> dict:
         "index_mismatch": loop.index_mismatch,
         "truncated": loop.truncated,
     }
+
+
+def configured_switches() -> list[str]:
+    """The switches the map is about: `switches:` in config.yaml, or the
+    demo's own network. Each of them is on the map whatever it answers
+    (v0.8.7) — from this scan, from a reading, or as an empty node."""
+    return list(demo.SWITCH_IPS) if rt.config.demo else list(rt.config.switches)
