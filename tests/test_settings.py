@@ -13,7 +13,7 @@ from unittest import mock
 
 import service_fixture  # noqa: F401  (sets MOONLAN_CONFIG first)
 from asgi_client import call
-from moonlan import auth, server, settings, signin
+from moonlan import auth, lifecycle, server, settings, signin
 from moonlan.alarms import AlarmEngine
 from moonlan.config import Config, load_config
 from moonlan.db import Database
@@ -187,7 +187,7 @@ class LiveTest(unittest.TestCase):
     def test_a_new_interval_wakes_a_sleeping_loop(self):
         async def run():
             interval = [600.0]
-            task = asyncio.create_task(server.sleep_interval(
+            task = asyncio.create_task(lifecycle.sleep_interval(
                 "scan_interval_minutes", lambda: interval[0]))
             await asyncio.sleep(0.05)
             self.assertFalse(task.done())
@@ -196,7 +196,7 @@ class LiveTest(unittest.TestCase):
             await asyncio.wait_for(task, 1)
             # only on request: asleep until the interval changes
             interval[0] = None
-            task = asyncio.create_task(server.sleep_interval(
+            task = asyncio.create_task(lifecycle.sleep_interval(
                 "scan_interval_minutes", lambda: interval[0]))
             await asyncio.sleep(0.05)
             self.assertFalse(task.done())

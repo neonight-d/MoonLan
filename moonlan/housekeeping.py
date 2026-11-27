@@ -5,8 +5,8 @@ the certificate this process serves, and the numbers of the leak watch.
 Moved out of server.py word for word, the first stage of taking it
 apart (docs/ARCHITECTURE.md): what a function needs from the process it
 reads from rt (runtime.py) when it is called. The loops that run these
-stay in server.py for now. Nothing here keeps state, and nothing here
-imports moonlan.server.
+are in lifecycle.py. Nothing here keeps state, and nothing here imports
+moonlan.server.
 """
 
 from __future__ import annotations

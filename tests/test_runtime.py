@@ -155,8 +155,7 @@ class MovedNameTest(unittest.TestCase):
         self.assertNotIn("no_such_name", vars(server))
 
     def test_the_poller_says_where_it_went(self):
-        # run_scan joins once the loops and /api/scan leave server.py
-        for name in ("get_collector",):
+        for name in ("run_scan", "get_collector"):
             hint = (f"server.{name} moved to moonlan.poller: "
                     f"use moonlan.poller.{name}")
             with self.subTest(name):

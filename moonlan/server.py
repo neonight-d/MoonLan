@@ -6,9 +6,7 @@ import asyncio
 import inspect
 import logging
 import sys
-import time
 import types
-from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 
@@ -19,22 +17,8 @@ from . import (
 from .alarms import AlarmEngine
 from .config import Config, load_config
 from .db import Database
-from .housekeeping import (
-    CERT_CHECK_SECONDS,
-    CLEANUP_SECONDS,
-    RESOURCE_LOG_SECONDS,
-    check_certificate_end,
-    drop_unpinned_positions,
-    hide_confirmed_copies,
-    purge_copies,
-    purge_invalid_macs,
-    purge_journal,
-    purge_old_hosts,
-    resource_usage,
-)
-from .mapping.upkeep import purge_layout
+from .lifecycle import lifespan
 from .notify import Notifier
-from .poller import restore_readings, run_counters, run_ping, run_scan
 # the modules of routes, included below as routes.<module>; notes and
 # settings are moonlan's own modules here
 from .routes import actions, alarms, layout, polling, system, topology  # noqa: F401
@@ -72,12 +56,6 @@ from .routes.topology import (  # noqa: F401 (moved)
     api_switch_ports,
 )
 from .runtime import FIELDS, rt
-from .startup import (
-    _log_certificate,
-    _log_config,
-    configure_logging,
-    start_redirect_listener,
-)
 from .snmp_collector import (
     SnmpCollector,
     SwitchData,
@@ -313,167 +291,9 @@ rt.interval_changed = {
 }
 
 
-async def sleep_interval(key: str, seconds) -> None:
-    """Sleeps until the next run is due: `seconds()` after the sleep
-    began. A changed interval wakes it, and the due time is counted
-    again from the same start — a shorter one may be due at once.
-    `seconds()` None — only on request: until the interval changes."""
-    began = time.monotonic()
-    changed = rt.interval_changed[key]
-    while True:
-        changed.clear()
-        interval = seconds()
-        if interval is None:
-            await changed.wait()
-            continue
-        left = began + interval - time.monotonic()
-        if left <= 0:
-            return
-        try:
-            await asyncio.wait_for(changed.wait(), left)
-        except asyncio.TimeoutError:
-            return
-
-
-def _scan_seconds() -> float | None:
-    # 0 — only on request (the Actions menu, /api/scan), as documented;
-    # before v0.8.4 it meant once an hour
-    interval = rt.config.scan_interval_minutes
-    return interval * 60 if interval > 0 else None
-
-
-async def periodic_scan() -> None:
-    while True:
-        try:
-            await run_scan()
-        except Exception as exc:
-            # The map from the previous scan stays on screen; what
-            # changes is that the header now says the last attempt
-            # failed, and with what
-            rt.state.scan_failed(exc)
-            log.exception("Network scan failed")
-        await sleep_interval("scan_interval_minutes", _scan_seconds)
-
-
-async def periodic_ping() -> None:
-    while True:
-        try:
-            await run_ping()
-        except Exception:
-            log.exception("Ping monitoring failed")
-        await sleep_interval(
-            "ping_interval_seconds", lambda: max(rt.config.ping_interval_seconds, 1)
-        )
-
-
 # What each switch's loop detection last said, so the same line is not
 # repeated every minute for a network where nothing is happening
 rt._loop_logged: dict[str, str] = {}
-
-
-async def periodic_counters() -> None:
-    while True:
-        try:
-            await run_counters()
-        except Exception:
-            log.exception("Counter polling failed")
-        await sleep_interval(
-            "counters_interval_seconds",
-            lambda: max(rt.config.counters_interval_seconds, 5),
-        )
-
-
-async def periodic_cleanup() -> None:
-    while True:
-        await asyncio.sleep(CLEANUP_SECONDS)
-        try:
-            await purge_old_hosts()
-            await purge_journal()
-            await purge_copies()
-            await rt.alarm_engine.clear_missing_hosts(
-                set(await asyncio.to_thread(rt.db.hosts_by_mac))
-            )
-            if rt.layout_purged:
-                # the map exists: a scan has run since the start
-                await purge_layout()
-        except Exception:
-            log.exception("Cleanup failed")
-
-
-async def periodic_resource_log() -> None:
-    while True:
-        await asyncio.sleep(RESOURCE_LOG_SECONDS)
-        try:
-            fds, rss = resource_usage()
-            # INFO on purpose: the leak watch must be visible in
-            # journalctl at the default log level
-            log.info("open fds: %d, rss: %d kB", fds, rss)
-        except OSError:
-            pass  # not a Linux /proc — skip silently
-
-
-async def periodic_certificate_check() -> None:
-    while True:
-        await asyncio.sleep(CERT_CHECK_SECONDS)
-        try:
-            await check_certificate_end()
-        except Exception:
-            log.exception("Certificate check failed")
-
-
-@asynccontextmanager
-async def lifespan(app: FastAPI):
-    configure_logging()
-    _log_config()
-    if rt.config.demo:
-        log.info("MoonLan started in DEMO mode (virtual network)")
-        await asyncio.to_thread(demo.seed_notes, rt.db)
-        await asyncio.to_thread(demo.seed_reading, rt.db)
-        await asyncio.to_thread(demo.seed_stale_alarm, rt.db)
-    elif not rt.config.switches:
-        log.warning(
-            "No switches are configured in config.yaml. Add addresses to "
-            "the switches section or start with MOONLAN_DEMO=1."
-        )
-    await asyncio.to_thread(rt.sign_in.log_state)
-    await asyncio.to_thread(
-        rt.sign_in.write_console_token, rt.config.users_db_path() + ".console"
-    )
-    await purge_invalid_macs()
-    await purge_old_hosts()
-    await purge_journal()
-    await purge_copies()
-    await hide_confirmed_copies()
-    await drop_unpinned_positions()
-    await rt.alarm_engine.load()
-    await rt.alarm_engine.clear_missing_hosts(
-        set(await asyncio.to_thread(rt.db.hosts_by_mac))
-    )
-    # the map from the readings saved before the restart, at once
-    try:
-        await restore_readings()
-    except Exception:
-        log.exception("Restoring the saved switch readings failed")
-    _log_certificate()
-    await check_certificate_end()
-    # a Telegram link made just before a restart still works
-    if await asyncio.to_thread(rt.accounts.waiting_links, time.time()):
-        rt.personal.ensure_polling()
-    redirect = await start_redirect_listener()
-    tasks = [
-        asyncio.create_task(periodic_scan()),
-        asyncio.create_task(periodic_ping()),
-        asyncio.create_task(periodic_counters()),
-        asyncio.create_task(periodic_resource_log()),
-        asyncio.create_task(periodic_certificate_check()),
-        asyncio.create_task(periodic_cleanup()),
-    ]
-    yield
-    for task in tasks:
-        task.cancel()
-    if redirect is not None:
-        redirect.close()
-    rt.sign_in.remove_console_token()
 
 
 # a key that looks copied raises an alarm like anything on the network
