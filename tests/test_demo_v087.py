@@ -27,12 +27,13 @@ from pathlib import Path
 SCRIPT = r"""
 import asyncio, json, logging
 from moonlan import demo, poller, server
+from moonlan.routes import topology as routes_topology
 
 logging.getLogger("moonlan").setLevel(logging.ERROR)
 
 
 async def topology():
-    return json.loads((await server.api_topology()).body)
+    return json.loads((await routes_topology.api_topology()).body)
 
 
 async def states():

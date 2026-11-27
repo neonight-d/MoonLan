@@ -31,6 +31,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from service_fixture import SWITCHES  # noqa: E402
 
 from moonlan import diag, poller, server, snmp_collector  # noqa: E402
+from moonlan.routes import topology as routes_topology  # noqa: E402
 from moonlan.mapping import switches  # noqa: E402
 from moonlan.snmp_collector import (  # noqa: E402
     OID_BRIDGE_ADDRESS,
@@ -287,7 +288,7 @@ class ServiceTest(unittest.IsolatedAsyncioTestCase):
         )
         with self.assertLogs("moonlan", "WARNING"):
             await poller.run_scan()
-        answer = json.loads((await server.api_topology()).body)
+        answer = json.loads((await routes_topology.api_topology()).body)
         self.assertEqual(_negative_numbers(answer), [])
         on_access = [h for h in answer["hosts"] if h["switch"] == ACCESS]
         self.assertNotIn(PHANTOM_MAC, {h["mac"] for h in on_access})

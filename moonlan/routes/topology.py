@@ -2,10 +2,10 @@
 
 /api/switch/{ip}/ports — the ports panel of a switch: its counters,
 loop detection, LLDP, MAC copies — and /api/stp, /api/search,
-/api/skipped-oids, /api/status. /api/topology, /api/polling and
-/api/scan stay in server.py with the poller for now. Moved out of
-server.py word for word (docs/ARCHITECTURE.md); the state is read as
-rt.X when a route runs. Nothing here imports moonlan.server.
+/api/skipped-oids, /api/status — and since v0.8.14 /api/topology, the
+map itself, with the load and LAG of its links. Moved out of server.py
+word for word (docs/ARCHITECTURE.md); the state is read as rt.X when a
+route runs. Nothing here imports moonlan.server.
 """
 
 from __future__ import annotations
@@ -15,8 +15,9 @@ import time
 from collections import Counter
 
 from fastapi import APIRouter, Query
+from fastapi.responses import JSONResponse
 
-from .. import __version__, counters
+from .. import __version__, counters, oui
 from ..derived import (
     _effective_monitored,
     _lag_groups,
@@ -27,10 +28,13 @@ from ..derived import (
     _uplink_ports,
 )
 from ..housekeeping import resource_usage
+from ..mapping.hosts import _mark_recent, _merge_db_fields
 from ..runtime import rt
 from ..snmp_collector import SwitchData
+from ..startup import _config_missing
 from ..topology import port_name
 from .common import _copy_samples
+from .notes import _attach_notes
 
 router = APIRouter()
 
@@ -376,3 +380,137 @@ async def api_status() -> dict:
         "open_fds": open_fds,
         "rss_kb": rss_kb,
     }
+
+
+def _refresh_link_lag(link: dict) -> None:
+    """Recomputes LAG member states, active count and speed from the
+    latest port data, so a member going down between topology rebuilds
+    is reflected on the edge without waiting for the next scan."""
+    lag = link.get("lag")
+    if not lag or not lag.get("members"):
+        return
+    lag = dict(lag)  # the caller passes a copy of the link, not of lag
+    active_counts: list[int] = []
+    speeds: dict[str, int] = {}
+    for side in ("a", "b"):
+        sw = rt.switch_data.get(link[side])
+        names = lag.get(f"{side}_members")
+        if sw is None or not names:
+            continue
+        by_name = {p.name: p for p in sw.ports.values() if p.name}
+        states = [bool(by_name.get(n) and by_name[n].oper_up) for n in names]
+        lag[f"{side}_states"] = states
+        active_counts.append(sum(states))
+        speeds[side] = sum(
+            by_name[n].speed_mbps
+            for n, up in zip(names, states) if up and n in by_name
+        )
+    if not active_counts:
+        return
+    lag["active"] = min(active_counts)
+    link["lag"] = lag
+    if len(speeds) == 2:
+        link["speed_mbps"] = min(speeds.values())
+    elif speeds:
+        link["speed_mbps"] = next(iter(speeds.values()))
+
+
+def _link_load(link: dict) -> dict | None:
+    """Current traffic through a link, summed over LAG members.
+
+    Prefers the A side (the parent in the tree); falls back to the B
+    side with in/out flipped. in_mbps/out_mbps are from A's viewpoint:
+    out = toward B (downstream).
+    """
+    lag = link.get("lag") or {}
+    for side, flip in (("a", False), ("b", True)):
+        sw = rt.switch_data.get(link[side])
+        if sw is None:
+            continue
+        rates = rt.counter_store.current(link[side], max_age=_rates_hide_age())
+        if not rates:
+            continue
+        names = lag.get(f"{side}_members") or [link[f"{side}_port"]]
+        by_name = {p.name: p.if_index for p in sw.ports.values() if p.name}
+        found = [
+            rates[by_name[n]]
+            for n in names
+            if n in by_name and by_name[n] in rates
+        ]
+        if not found:
+            continue
+        in_mbps = _sum_known(r.in_mbps for r in found)
+        out_mbps = _sum_known(r.out_mbps for r in found)
+        if in_mbps is None and out_mbps is None:
+            continue  # this side knows nothing; try the other one
+        if flip:  # B's in is A's out and vice versa
+            in_mbps, out_mbps = out_mbps, in_mbps
+        # The oldest of the measurements this number is made of: an
+        # edge label is as fresh as its stalest member, and the tooltip
+        # has to be able to say so.
+        age = round(max(time.time() - r.ts for r in found))
+        return {
+            "in_mbps": _round(in_mbps),
+            "out_mbps": _round(out_mbps),
+            "age_seconds": age,
+        }
+    return None
+
+
+@router.get("/api/topology")
+async def api_topology() -> JSONResponse:
+    topo = rt.state.as_dict()
+    # Fresh DB data: ping is updated more often than SNMP polls happen
+    db_hosts = await asyncio.to_thread(rt.db.hosts_by_mac)
+    hosts = [dict(h) for h in topo["hosts"]]
+    _merge_db_fields(hosts, db_hosts)
+    topo["hosts"] = hosts
+    unlocated = [dict(h) for h in topo.get("unlocated", [])]
+    _merge_db_fields(unlocated, db_hosts)
+    _mark_recent(unlocated, db_hosts, time.time())
+    topo["unlocated"] = unlocated
+    # a bridge node answers "is it up?" like any other device
+    bridges = []
+    for bridge in topo.get("bridges", []):
+        bridge = dict(bridge)
+        if oui.normalize(bridge["chassis_id"]):
+            # its maker by the chassis MAC; a chassis id that is a name
+            # or a local address says nothing about who made it
+            bridge.update(rt.vendors.fields(bridge["chassis_id"]))
+        row = db_hosts.get(bridge["chassis_id"], {})
+        if row:
+            bridge["ip"] = row.get("ip", "") or bridge.get("mgmt_ip", "")
+            bridge["ping_up"] = bool(row.get("ping_up", 0))
+            bridge["last_ping_ok"] = row.get("last_ping_ok", 0)
+        bridges.append(bridge)
+    topo["bridges"] = bridges
+    # no config.yaml: the empty map says where it goes (v0.8.3)
+    missing = _config_missing()
+    if missing:
+        topo["config_missing"] = missing
+    topo["switches"] = [
+        {
+            **sw,
+            **(rt.vendors.fields(sw["mac"]) if sw.get("mac") else {}),
+            "ping_up": rt.switch_ping.get(sw["ip"], {}).get("ping_up", False),
+            "last_ping_ok": rt.switch_ping.get(sw["ip"], {}).get("last_ping_ok", 0),
+            # loop detection is polled at the counters cadence, not by
+            # the scan the rest of this map comes from, so it is
+            # attached per request rather than baked into the topology
+            "loop": _loop_report(rt.switch_data.get(sw["ip"])),
+        }
+        for sw in topo["switches"]
+    ]
+    # Live trunk load on the edges; recomputed on every request so the
+    # periodic UI refresh picks it up without a topology rebuild
+    links = []
+    for link in topo["links"]:
+        link = dict(link)
+        _refresh_link_lag(link)
+        load = _link_load(link)
+        if load:
+            link["load"] = load
+        links.append(link)
+    topo["links"] = links
+    _attach_notes(topo, await asyncio.to_thread(rt.db.notes))
+    return JSONResponse(topo)

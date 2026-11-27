@@ -1,10 +1,11 @@
 """Names and notes on nodes (v0.8.13).
 
 /api/notes — reading, importing and exporting them, writing, deleting
-and moving one — and the node ids that carry a note, which the
-reconciling of notes in server.py needs too. Moved out of server.py
-word for word (docs/ARCHITECTURE.md); the state is read as rt.X when a
-route runs. Nothing here imports moonlan.server.
+and moving one — and the notes put on the nodes of /api/topology. The
+node ids that carry a note are in mapping/upkeep.py, which the scan
+needs too. Moved out of server.py word for word (docs/ARCHITECTURE.md);
+the state is read as rt.X when a route runs. Nothing here imports
+moonlan.server.
 """
 
 from __future__ import annotations
@@ -242,3 +243,41 @@ async def api_move_note(node_id: str, body: NoteMove):
     )
     await _journal_note("note_moved", target, {"from": source, "to": target})
     return {"node_id": target, "note": notes.public(row)}
+
+
+def _attach_notes(topo: dict, rows: dict[str, dict]) -> None:
+    """Every node with a name or a note carries it as `note`. A device
+    off the map has the note of the same device on it.
+
+    The nodes are copied, not written to: the lists are the ones the
+    state keeps, and a note set on one of them stayed there after the
+    note was deleted, until the next scan replaced the list.
+
+    An offline group stands in for the switch without SNMP of its port
+    (v0.8.1). When every device of a room is off for the night, the
+    room's switch without SNMP is not drawn and an offline group is;
+    the group carries the room's name, and `note_key` says where the
+    name is kept. Where that switch is drawn — some devices still
+    answer — the name is on it, and the group hangs off it anyway."""
+    if not rows:
+        return
+
+    def noted(node: dict, key: str) -> dict:
+        row = rows.get(key)
+        return {**node, "note": notes.public(row)} if row else node
+
+    topo["switches"] = [noted(sw, "sw:" + sw["ip"]) for sw in topo["switches"]]
+    for key in ("hosts", "unlocated"):
+        topo[key] = [noted(h, "host:" + h["mac"]) for h in topo.get(key) or ()]
+    # not groups behind a trunk: they take no names (v0.8.1)
+    for key in ("bridges", "pseudo_switches", "external_networks"):
+        topo[key] = [noted(n, n.get("id", "")) for n in topo.get(key) or ()]
+    drawn = {node["id"] for node in topo.get("pseudo_switches") or ()}
+    groups = []
+    for group in topo.get("offline_groups") or ():
+        key = _stand_in(group["id"])
+        row = rows.get(key)
+        if row and key not in drawn:
+            group = {**group, "note": notes.public(row), "note_key": key}
+        groups.append(group)
+    topo["offline_groups"] = groups

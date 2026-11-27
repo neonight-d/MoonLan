@@ -11,22 +11,14 @@ import types
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
-from fastapi.responses import JSONResponse
 
 from . import (
-    __version__, counters, demo, https, notes, oui, probes, routes, settings,
-    signin, subscriptions,
+    __version__, counters, demo, https, oui, probes, routes, settings, signin,
+    subscriptions,
 )
 from .alarms import AlarmEngine
 from .config import Config, load_config
 from .db import Database
-from .derived import (
-    _loop_report,
-    _rates_hide_age,
-    _round,
-    _sum_known,
-    configured_switches,
-)
 from .housekeeping import (
     CERT_CHECK_SECONDS,
     CLEANUP_SECONDS,
@@ -40,19 +32,12 @@ from .housekeeping import (
     purge_old_hosts,
     resource_usage,
 )
-from .mapping.hosts import (
-    _mark_recent,
-    _merge_db_fields,
-)
-from .mapping.upkeep import (
-    _stand_in,
-    purge_layout,
-)
+from .mapping.upkeep import purge_layout
 from .notify import Notifier
 from .poller import restore_readings, run_counters, run_ping, run_scan
 # the modules of routes, included below as routes.<module>; notes and
 # settings are moonlan's own modules here
-from .routes import actions, alarms, layout, system, topology  # noqa: F401
+from .routes import actions, alarms, layout, polling, system, topology  # noqa: F401
 from .routes import notes as notes_routes, settings as settings_routes  # noqa: F401
 from .routes.actions import (  # noqa: F401 (moved)
     ActionBody,
@@ -88,14 +73,12 @@ from .routes.topology import (  # noqa: F401 (moved)
 )
 from .runtime import FIELDS, rt
 from .startup import (
-    _config_missing,
     _log_certificate,
     _log_config,
     configure_logging,
     start_redirect_listener,
 )
 from .snmp_collector import (
-    STATE_NEVER,
     SnmpCollector,
     SwitchData,
 )
@@ -429,81 +412,6 @@ async def periodic_resource_log() -> None:
             pass  # not a Linux /proc — skip silently
 
 
-def _refresh_link_lag(link: dict) -> None:
-    """Recomputes LAG member states, active count and speed from the
-    latest port data, so a member going down between topology rebuilds
-    is reflected on the edge without waiting for the next scan."""
-    lag = link.get("lag")
-    if not lag or not lag.get("members"):
-        return
-    lag = dict(lag)  # the caller passes a copy of the link, not of lag
-    active_counts: list[int] = []
-    speeds: dict[str, int] = {}
-    for side in ("a", "b"):
-        sw = rt.switch_data.get(link[side])
-        names = lag.get(f"{side}_members")
-        if sw is None or not names:
-            continue
-        by_name = {p.name: p for p in sw.ports.values() if p.name}
-        states = [bool(by_name.get(n) and by_name[n].oper_up) for n in names]
-        lag[f"{side}_states"] = states
-        active_counts.append(sum(states))
-        speeds[side] = sum(
-            by_name[n].speed_mbps
-            for n, up in zip(names, states) if up and n in by_name
-        )
-    if not active_counts:
-        return
-    lag["active"] = min(active_counts)
-    link["lag"] = lag
-    if len(speeds) == 2:
-        link["speed_mbps"] = min(speeds.values())
-    elif speeds:
-        link["speed_mbps"] = next(iter(speeds.values()))
-
-
-def _link_load(link: dict) -> dict | None:
-    """Current traffic through a link, summed over LAG members.
-
-    Prefers the A side (the parent in the tree); falls back to the B
-    side with in/out flipped. in_mbps/out_mbps are from A's viewpoint:
-    out = toward B (downstream).
-    """
-    lag = link.get("lag") or {}
-    for side, flip in (("a", False), ("b", True)):
-        sw = rt.switch_data.get(link[side])
-        if sw is None:
-            continue
-        rates = rt.counter_store.current(link[side], max_age=_rates_hide_age())
-        if not rates:
-            continue
-        names = lag.get(f"{side}_members") or [link[f"{side}_port"]]
-        by_name = {p.name: p.if_index for p in sw.ports.values() if p.name}
-        found = [
-            rates[by_name[n]]
-            for n in names
-            if n in by_name and by_name[n] in rates
-        ]
-        if not found:
-            continue
-        in_mbps = _sum_known(r.in_mbps for r in found)
-        out_mbps = _sum_known(r.out_mbps for r in found)
-        if in_mbps is None and out_mbps is None:
-            continue  # this side knows nothing; try the other one
-        if flip:  # B's in is A's out and vice versa
-            in_mbps, out_mbps = out_mbps, in_mbps
-        # The oldest of the measurements this number is made of: an
-        # edge label is as fresh as its stalest member, and the tooltip
-        # has to be able to say so.
-        age = round(max(time.time() - r.ts for r in found))
-        return {
-            "in_mbps": _round(in_mbps),
-            "out_mbps": _round(out_mbps),
-            "age_seconds": age,
-        }
-    return None
-
-
 async def periodic_certificate_check() -> None:
     while True:
         await asyncio.sleep(CERT_CHECK_SECONDS)
@@ -592,157 +500,7 @@ routes.include(app, routes.layout.router)
 routes.include(app, routes.actions.router)
 routes.include(app, routes.alarms.router)
 routes.include(app, routes.topology.router)
-
-
-@app.get("/api/topology")
-async def api_topology() -> JSONResponse:
-    topo = rt.state.as_dict()
-    # Fresh DB data: ping is updated more often than SNMP polls happen
-    db_hosts = await asyncio.to_thread(rt.db.hosts_by_mac)
-    hosts = [dict(h) for h in topo["hosts"]]
-    _merge_db_fields(hosts, db_hosts)
-    topo["hosts"] = hosts
-    unlocated = [dict(h) for h in topo.get("unlocated", [])]
-    _merge_db_fields(unlocated, db_hosts)
-    _mark_recent(unlocated, db_hosts, time.time())
-    topo["unlocated"] = unlocated
-    # a bridge node answers "is it up?" like any other device
-    bridges = []
-    for bridge in topo.get("bridges", []):
-        bridge = dict(bridge)
-        if oui.normalize(bridge["chassis_id"]):
-            # its maker by the chassis MAC; a chassis id that is a name
-            # or a local address says nothing about who made it
-            bridge.update(rt.vendors.fields(bridge["chassis_id"]))
-        row = db_hosts.get(bridge["chassis_id"], {})
-        if row:
-            bridge["ip"] = row.get("ip", "") or bridge.get("mgmt_ip", "")
-            bridge["ping_up"] = bool(row.get("ping_up", 0))
-            bridge["last_ping_ok"] = row.get("last_ping_ok", 0)
-        bridges.append(bridge)
-    topo["bridges"] = bridges
-    # no config.yaml: the empty map says where it goes (v0.8.3)
-    missing = _config_missing()
-    if missing:
-        topo["config_missing"] = missing
-    topo["switches"] = [
-        {
-            **sw,
-            **(rt.vendors.fields(sw["mac"]) if sw.get("mac") else {}),
-            "ping_up": rt.switch_ping.get(sw["ip"], {}).get("ping_up", False),
-            "last_ping_ok": rt.switch_ping.get(sw["ip"], {}).get("last_ping_ok", 0),
-            # loop detection is polled at the counters cadence, not by
-            # the scan the rest of this map comes from, so it is
-            # attached per request rather than baked into the topology
-            "loop": _loop_report(rt.switch_data.get(sw["ip"])),
-        }
-        for sw in topo["switches"]
-    ]
-    # Live trunk load on the edges; recomputed on every request so the
-    # periodic UI refresh picks it up without a topology rebuild
-    links = []
-    for link in topo["links"]:
-        link = dict(link)
-        _refresh_link_lag(link)
-        load = _link_load(link)
-        if load:
-            link["load"] = load
-        links.append(link)
-    topo["links"] = links
-    _attach_notes(topo, await asyncio.to_thread(rt.db.notes))
-    return JSONResponse(topo)
-
-
-def _attach_notes(topo: dict, rows: dict[str, dict]) -> None:
-    """Every node with a name or a note carries it as `note`. A device
-    off the map has the note of the same device on it.
-
-    The nodes are copied, not written to: the lists are the ones the
-    state keeps, and a note set on one of them stayed there after the
-    note was deleted, until the next scan replaced the list.
-
-    An offline group stands in for the switch without SNMP of its port
-    (v0.8.1). When every device of a room is off for the night, the
-    room's switch without SNMP is not drawn and an offline group is;
-    the group carries the room's name, and `note_key` says where the
-    name is kept. Where that switch is drawn — some devices still
-    answer — the name is on it, and the group hangs off it anyway."""
-    if not rows:
-        return
-
-    def noted(node: dict, key: str) -> dict:
-        row = rows.get(key)
-        return {**node, "note": notes.public(row)} if row else node
-
-    topo["switches"] = [noted(sw, "sw:" + sw["ip"]) for sw in topo["switches"]]
-    for key in ("hosts", "unlocated"):
-        topo[key] = [noted(h, "host:" + h["mac"]) for h in topo.get(key) or ()]
-    # not groups behind a trunk: they take no names (v0.8.1)
-    for key in ("bridges", "pseudo_switches", "external_networks"):
-        topo[key] = [noted(n, n.get("id", "")) for n in topo.get(key) or ()]
-    drawn = {node["id"] for node in topo.get("pseudo_switches") or ()}
-    groups = []
-    for group in topo.get("offline_groups") or ():
-        key = _stand_in(group["id"])
-        row = rows.get(key)
-        if row and key not in drawn:
-            group = {**group, "note": notes.public(row), "note_key": key}
-        groups.append(group)
-    topo["offline_groups"] = groups
-
-
-async def _scan_once() -> None:
-    """A manual scan, recording a failure the same way the loop does."""
-    try:
-        await run_scan()
-    except Exception as exc:
-        rt.state.scan_failed(exc)
-        log.exception("Network scan failed")
-
-
-@app.post("/api/scan")
-async def api_scan() -> dict:
-    if signin.actor():
-        log.info("Network scan requested by %s", signin.actor())
-    asyncio.create_task(_scan_once())
-    return {"status": "started"}
-
-
-@app.get("/api/polling")
-async def api_polling() -> dict:
-    """When each switch was last polled in full, and how long it took.
-
-    A poll budget set by eye is a budget set wrong. These are the
-    numbers to set it from, and they live in this process, so
-    `diag --config` asks for them rather than guessing.
-    """
-    return {
-        "counters_interval_seconds": rt.config.counters_interval_seconds,
-        "switches": [
-            {
-                "ip": ip,
-                "name": (sw.sys_name or ip) if sw else "",
-                "budget_seconds": rt.config.host_budget(ip),
-                "polled_at": sw.polled_at if sw else 0.0,
-                "poll_seconds": round(sw.poll_seconds, 1) if sw else 0.0,
-                "over_budget_scans": sw.over_budget_scans if sw else 0,
-                # Where the map's data on it comes from, and whether it
-                # answered in this scan: true, false or null — not
-                # known (v0.8.7). `reachable` was the default of an
-                # empty reading, false for a switch that answered and
-                # ran out of time; it is kept, and now means `answered`.
-                "state": sw.map_state if sw else STATE_NEVER,
-                "answered": sw.answered if sw else None,
-                "reachable": bool(sw and sw.answered),
-                # where the time of the poll went (v0.8.8)
-                "cut_at": rt.poll_report.get(ip, {}).get("cut_at"),
-                "slowest_walks": rt.poll_report.get(ip, {}).get("slowest_walks", []),
-            }
-            for ip, sw in (
-                (ip, rt.switch_data.get(ip)) for ip in configured_switches()
-            )
-        ],
-    }
+routes.include(app, routes.polling.router)
 
 
 # The static web UI comes last so it does not shadow /api/*

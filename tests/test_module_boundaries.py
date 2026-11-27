@@ -40,7 +40,7 @@ NEW_MODULES = [
     "startup", "housekeeping",
     "runtime", "derived", "routes", "routes.common", "routes.system",
     "routes.settings", "routes.notes", "routes.layout", "routes.actions",
-    "routes.alarms", "routes.topology",
+    "routes.alarms", "routes.topology", "routes.polling",
 ]
 
 # Every name they took that server.py keeps, and how: the signature the
@@ -48,12 +48,6 @@ NEW_MODULES = [
 # or None for a name re-exported as it is — a constant, or since stage 2
 # a function, which reads rt itself and needs no wrapper
 MOVED = {
-    "derived": {
-        "_sum_known": None,
-        "_rates_hide_age": None,
-        "_round": None,
-        "_loop_report": None,
-    },
     "routes.system": {
         "WEB_DIR": None,
         "VERSIONED_ASSETS": None,

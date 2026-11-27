@@ -22,6 +22,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from service_fixture import SWITCHES  # noqa: E402
 
 from moonlan import diag, poller, server  # noqa: E402
+from moonlan.routes import polling as routes_polling  # noqa: E402
 from moonlan import snmp_collector as module  # noqa: E402
 from moonlan.lldp import OID_LLDP_REM_MAN_ADDR_IF_SUBTYPE  # noqa: E402
 from moonlan.snmp_collector import (  # noqa: E402
@@ -129,7 +130,7 @@ class CutTest(unittest.IsolatedAsyncioTestCase):
         # the cut walk is where the time went, and it is the slowest
         self.assertEqual(result.walks[0]["oid"], OID_IF_NAME)
 
-        polling = await server.api_polling()
+        polling = await routes_polling.api_polling()
         row = next(r for r in polling["switches"] if r["ip"] == IP)
         self.assertEqual(row["cut_at"]["oid"], OID_IF_NAME)
         self.assertEqual(row["cut_at"]["rows"], 3)
@@ -140,7 +141,7 @@ class CutTest(unittest.IsolatedAsyncioTestCase):
                        OID_IF_HIGH_SPEED: 0.01, OID_IF_OPER_STATUS: 0.005}
         data = await poller._collect_within_budget(agent, IP, 10)
         self.assertTrue(data.reachable)
-        polling = await server.api_polling()
+        polling = await routes_polling.api_polling()
         row = next(r for r in polling["switches"] if r["ip"] == IP)
         self.assertIsNone(row["cut_at"])
         walks = row["slowest_walks"]

@@ -27,6 +27,8 @@ from pathlib import Path
 SCRIPT = r"""
 import asyncio, json, logging
 from moonlan import demo, poller, server
+from moonlan.routes import polling
+from moonlan.routes import topology
 
 logging.getLogger("moonlan").setLevel(logging.ERROR)
 
@@ -46,12 +48,12 @@ async def run():
     await poller.run_scan()
     out["after"] = [(a["subject"], a["message"]) for a in stale()]
     await poller.run_scan()
-    out["polling"] = (await server.api_polling())["switches"]
+    out["polling"] = (await polling.api_polling())["switches"]
     out["raised"] = sum(
         1 for e in server.rt.db.journal(1000)
         if e["event"] == "alarm_raised" and "switch_stale" in e["details"]
     )
-    topo = json.loads((await server.api_topology()).body)
+    topo = json.loads((await topology.api_topology()).body)
     out["unlocated"] = topo["unlocated"]
     print(json.dumps(out))
 

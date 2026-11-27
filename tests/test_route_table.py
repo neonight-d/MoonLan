@@ -1,7 +1,8 @@
 """The routes of the app, frozen (v0.8.13).
 
 Stage 3 of taking server.py apart moved 43 of its 46 routes into
-moonlan/routes/. What the app serves did not change, and must not by
+moonlan/routes/, stage 4 (v0.8.14) the other three, and server.py
+declares none. What the app serves did not change, and must not by
 accident: the same methods, paths and handlers as before the move
 (a071646), each its own entry in app.routes — the guard finds the
 rights of a request by the path of the route that will serve it
@@ -113,10 +114,6 @@ GET    /redoc                               redoc_html
 HEAD   /redoc                               redoc_html
 """
 
-# What stays in server.py until the poller leaves it (stage 4)
-IN_SERVER = {("GET", "/api/topology"), ("GET", "/api/polling"), ("POST", "/api/scan")}
-
-
 def table() -> set[tuple[str, str, str]]:
     return {
         (method, route.path, route.name)
@@ -151,7 +148,7 @@ class RouteTableTest(unittest.TestCase):
         )
         self.assertEqual(server.WEB_DIR, ROOT / "web")
 
-    def test_only_the_poller_routes_are_declared_in_server(self):
+    def test_no_route_is_declared_in_server(self):
         tree = ast.parse((ROOT / "moonlan" / "server.py").read_text(encoding="utf-8"))
         declared = set()
         for node in ast.walk(tree):
@@ -160,7 +157,7 @@ class RouteTableTest(unittest.TestCase):
                         and isinstance(deco.func.value, ast.Name)
                         and deco.func.value.id == "app"):
                     declared.add((deco.func.attr.upper(), deco.args[0].value))
-        self.assertEqual(declared, IN_SERVER)
+        self.assertEqual(declared, set())
 
     def test_every_module_of_routes_is_in_the_app(self):
         served = {id(route) for route in server.app.routes}
@@ -175,7 +172,7 @@ class RouteTableTest(unittest.TestCase):
                 for route in module.router.routes:
                     self.assertIn(id(route), served, route.path)
                     self.assertEqual(route.endpoint.__module__, module.__name__)
-        self.assertEqual(modules, 7)
+        self.assertEqual(modules, 8)
 
     def test_the_order_between_modules_decides_nothing(self):
         """No path a route of one module answers is matched by a route

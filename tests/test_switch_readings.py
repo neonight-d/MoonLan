@@ -41,6 +41,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from service_fixture import SWITCHES  # noqa: E402,F401
 
 from moonlan import demo, poller, server  # noqa: E402
+from moonlan.routes import polling as routes_polling  # noqa: E402
 from moonlan.mapping import upkeep  # noqa: E402
 from moonlan.lldp import LldpNeighbor  # noqa: E402
 from moonlan.snmp_collector import (  # noqa: E402
@@ -311,7 +312,7 @@ class ScanStatesTest(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(server.rt.db.note("sw:" + QUIET).get("missing_since"))
         # /api/polling: it answered — not "reachable: false"
         polling = {
-            row["ip"]: row for row in (await server.api_polling())["switches"]
+            row["ip"]: row for row in (await routes_polling.api_polling())["switches"]
         }
         self.assertIs(polling[QUIET]["answered"], True)
         self.assertEqual(polling[QUIET]["state"], "never")
@@ -334,7 +335,7 @@ class ScanStatesTest(unittest.IsolatedAsyncioTestCase):
         drawn = await self.scan()
         self.assertIsNone(drawn[QUIET]["answered"])
         polling = {
-            row["ip"]: row for row in (await server.api_polling())["switches"]
+            row["ip"]: row for row in (await routes_polling.api_polling())["switches"]
         }
         self.assertIsNone(polling[QUIET]["answered"])
         self.assertFalse(polling[QUIET]["reachable"])
