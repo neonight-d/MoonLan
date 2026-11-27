@@ -5,7 +5,8 @@ made when that module is imported and never replaced, filled by
 server.py at its own import, read as rt.X when the code runs. What is
 left of the old names in server is a loud refusal: server.db = fake
 would otherwise set an attribute nothing reads any more, and the test
-that did it would pass checking nothing.
+that did it would pass checking nothing. Since v0.8.14 the same goes for
+every name server.py does not have: the refusal says where it lives.
 
 Run with:  python -m unittest discover -s tests
 """
@@ -24,6 +25,10 @@ from moonlan import runtime, server  # noqa: E402
 
 PACKAGE = Path(__file__).resolve().parent.parent / "moonlan"
 HINT = "server.db moved to the runtime: use server.rt.db"
+# a function that lives only in a module of routes since v0.8.13
+ROUTED = "_may_change_settings"
+ROUTED_HINT = ("server._may_change_settings moved to moonlan.routes.settings: "
+               "use moonlan.routes.settings._may_change_settings")
 
 # Fields that stay None in the tests' configuration: no public address,
 # no certificate, no demo; the last two are made when first needed
@@ -79,6 +84,60 @@ class StrictModuleTest(unittest.TestCase):
             str(caught.exception),
             "module 'moonlan.server' has no attribute 'no_such_name'",
         )
+
+
+class MovedNameTest(unittest.TestCase):
+    """A name server.py does not have: refused with its address, read
+    or written, and the attribute never appears (v0.8.14)"""
+
+    def assert_refused(self, caught):
+        self.assertEqual(str(caught.exception), ROUTED_HINT)
+        self.assertNotIn(ROUTED, vars(server))
+
+    def test_reading_says_where_it_lives(self):
+        with self.assertRaises(AttributeError) as caught:
+            getattr(server, ROUTED)
+        self.assert_refused(caught)
+        self.assertFalse(hasattr(server, ROUTED))
+
+    def test_writing_and_deleting_are_refused(self):
+        with self.assertRaises(AttributeError) as caught:
+            setattr(server, ROUTED, lambda on: True)
+        self.assert_refused(caught)
+        with self.assertRaises(AttributeError) as caught:
+            delattr(server, ROUTED)
+        self.assert_refused(caught)
+
+    def test_patching_is_refused(self):
+        # patch.object reads with a default first and raises its own
+        # "does not have the attribute": the address is not in it
+        with self.assertRaises(AttributeError):
+            with mock.patch.object(server, ROUTED, lambda on: True):
+                pass
+        self.assertNotIn(ROUTED, vars(server))
+        # create=True gets past the read and stops at the write
+        with self.assertRaises(AttributeError) as caught:
+            with mock.patch.object(server, ROUTED, lambda on: True, create=True):
+                pass
+        self.assert_refused(caught)
+
+    def test_an_unknown_name_is_refused_plainly(self):
+        with self.assertRaises(AttributeError) as caught:
+            server.no_such_name = 1
+        self.assertEqual(
+            str(caught.exception),
+            "server.py has no no_such_name: patch it in the module it lives in",
+        )
+        self.assertNotIn("no_such_name", vars(server))
+
+    def test_names_of_server_itself_are_as_before(self):
+        log = server.log
+        server.log = "patched"
+        try:
+            self.assertEqual(server.log, "patched")
+        finally:
+            server.log = log
+        self.assertIs(server.log, log)
 
 
 class RuntimeTest(unittest.TestCase):

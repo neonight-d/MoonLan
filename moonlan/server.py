@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import inspect
 import json
 import logging
 import socket
@@ -117,35 +118,63 @@ from .topology import (
 log = logging.getLogger("moonlan")
 
 
-# The state of the process is in rt (runtime.py) since v0.8.13. A name of
-# it asked of this module fails loudly: server.db = fake would otherwise
-# set an attribute nothing reads any more, and the test that did it would
-# pass checking nothing. Reading is refused by __getattr__ (PEP 562),
-# writing and deleting by the class of the module; a write is never
-# passed on to rt, since patch.object deletes the attribute on the way
-# out and would not put the value back.
+# The state of the process is in rt (runtime.py) since v0.8.13, and what
+# server.py was taken apart into lives in its own modules. A name this
+# module does not have fails loudly: server.db = fake or
+# server.get_collector = stub would otherwise set an attribute nothing
+# reads, and the test that did it would pass checking nothing — or poll
+# switches for real. Reading is refused by __getattr__ (PEP 562), writing
+# and deleting by the class of the module; the refusal says where the
+# name lives. A write is never passed on, since patch.object deletes the
+# attribute on the way out and would not put the value back. Assignments
+# at the top of this file write into its namespace directly, past both.
 def _moved_to_rt(name: str) -> AttributeError:
     return AttributeError(
         f"server.{name} moved to the runtime: use server.rt.{name}"
     )
 
 
+def _moved(name: str) -> AttributeError | None:
+    """Where a function or class of that name lives: the loaded MoonLan
+    module that defines it. Looked up, not listed."""
+    for module_name, module in sorted(sys.modules.items()):
+        if module is None or (module_name != "moonlan"
+                              and not module_name.startswith("moonlan.")):
+            continue
+        found = vars(module).get(name)
+        if ((inspect.isfunction(found) or inspect.isclass(found))
+                and found.__module__ == module_name):
+            return AttributeError(
+                f"server.{name} moved to {module_name}: "
+                f"use {module_name}.{name}"
+            )
+    return None
+
+
 def __getattr__(name: str):
     if name in FIELDS:
         raise _moved_to_rt(name)
-    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+    raise _moved(name) or AttributeError(
+        f"module {__name__!r} has no attribute {name!r}"
+    )
 
 
 class _StrictModule(types.ModuleType):
     def __setattr__(self, name: str, value) -> None:
-        if name in FIELDS:
-            raise _moved_to_rt(name)
+        self._refuse_unless_here(name)
         super().__setattr__(name, value)
 
     def __delattr__(self, name: str) -> None:
+        self._refuse_unless_here(name)
+        super().__delattr__(name)
+
+    def _refuse_unless_here(self, name: str) -> None:
         if name in FIELDS:
             raise _moved_to_rt(name)
-        super().__delattr__(name)
+        if name not in vars(self):
+            raise _moved(name) or AttributeError(
+                f"server.py has no {name}: patch it in the module it lives in"
+            )
 
 
 sys.modules[__name__].__class__ = _StrictModule
