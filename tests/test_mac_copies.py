@@ -27,7 +27,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from service_fixture import SWITCHES  # noqa: E402,F401
 
-from moonlan import corruption, server  # noqa: E402
+from moonlan import corruption, housekeeping, server  # noqa: E402
 from moonlan.snmp_collector import PortInfo, SwitchData  # noqa: E402
 
 CORE, ACCESS = SWITCHES[0], SWITCHES[1]
@@ -472,7 +472,7 @@ class OldCopiesScanTest(ScanCase):
         ).fetchall()
 
     async def test_off_the_map_in_one_entry_and_gone_after_the_cleanup(self):
-        await server.hide_confirmed_copies()
+        await housekeeping.hide_confirmed_copies()
         (event,) = self.events()
         self.assertEqual(event["mac"], SAMPLE)
         data = json.loads(event["details"])
@@ -489,7 +489,7 @@ class OldCopiesScanTest(ScanCase):
                          {(ACCESS, "Gi0/5"): 1})
         self.assertEqual(len(self.events()), 1)     # not once a scan
 
-        await server.purge_copies()
+        await housekeeping.purge_copies()
         self.assertEqual(set(server.rt.db.hosts_by_mac()), {SAMPLE})
         self.assertEqual(len(self.events()), 1)
         self.assertEqual(server.rt.db._conn.execute(
@@ -503,7 +503,7 @@ class OldCopiesScanTest(ScanCase):
         self.assertEqual(self.drawn(), {SAMPLE})
 
     async def test_back_in_the_table_it_is_still_a_copy(self):
-        await server.hide_confirmed_copies()
+        await housekeeping.hide_confirmed_copies()
         self.collector.access.update({mac: 5 for mac in HUNDRED[:3]})
         await server.run_scan()
         self.assertEqual(self.drawn(), {SAMPLE})
@@ -514,20 +514,20 @@ class OldCopiesScanTest(ScanCase):
         self.assertEqual(server.rt.state.as_dict()["pseudo_switches"], [])
 
     async def test_an_ip_takes_it_back(self):
-        await server.hide_confirmed_copies()
+        await housekeeping.hide_confirmed_copies()
         server.rt.db.set_ips({HUNDRED[0]: "10.0.99.50"})
         self.assertEqual(server.rt.db.hosts_by_mac()[HUNDRED[0]]["corrupt_of"], "")
-        await server.purge_copies()
+        await housekeeping.purge_copies()
         self.assertIn(HUNDRED[0], server.rt.db.hosts_by_mac())
 
     async def test_with_the_filter_off_nothing_is_marked_or_removed(self):
         server.rt.config.filter_suspect_macs = False
-        await server.hide_confirmed_copies()
+        await housekeeping.hide_confirmed_copies()
         await server.run_scan()
         self.assertEqual(self.events(), [])
         self.assertTrue(set(HUNDRED) <= self.drawn())
         server.rt.db.mark_copies(SAMPLE, HUNDRED)
-        await server.purge_copies()
+        await housekeeping.purge_copies()
         self.assertEqual(len(server.rt.db.hosts_by_mac()), 101)
 
 

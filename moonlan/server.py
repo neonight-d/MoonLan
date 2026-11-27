@@ -17,9 +17,8 @@ from fastapi import FastAPI
 from fastapi.responses import JSONResponse
 
 from . import (
-    __version__, corruption, counters, demo, housekeeping, https, loopdetect,
-    notes, oui, pinger, probes, routes, settings, signin, startup, stp,
-    subscriptions,
+    __version__, corruption, counters, demo, https, loopdetect, notes, oui,
+    pinger, probes, routes, settings, signin, stp, subscriptions,
 )
 from .about import STARTED_AT
 from .alarms import AlarmEngine
@@ -37,13 +36,19 @@ from .derived import (
     _uplink_ports,
     configured_switches,
 )
-from .housekeeping import (  # noqa: F401 (moved)
-    CERT_ALARM_DAYS,
+from .housekeeping import (
     CERT_CHECK_SECONDS,
     CLEANUP_SECONDS,
     RESOURCE_LOG_SECONDS,
+    check_certificate_end,
+    drop_unpinned_positions,
+    hide_confirmed_copies,
+    purge_copies,
+    purge_invalid_macs,
+    purge_journal,
+    purge_old_hosts,
+    resource_usage,
 )
-from .journal import JOURNAL_GROUPS
 from .notify import Notifier
 from .routers import (
     RouterIdentity,
@@ -94,7 +99,13 @@ from .routes.topology import (  # noqa: F401 (moved)
     api_switch_ports,
 )
 from .runtime import FIELDS, rt
-from .startup import CERT_WARN_DAYS  # noqa: F401 (moved)
+from .startup import (
+    _config_missing,
+    _log_certificate,
+    _log_config,
+    configure_logging,
+    start_redirect_listener,
+)
 from .snmp_collector import (
     READING_FORMAT,
     OverBudget,
@@ -2637,11 +2648,6 @@ async def periodic_counters() -> None:
         )
 
 
-def resource_usage() -> tuple[int, int]:
-    """Moved to housekeeping.resource_usage."""
-    return housekeeping.resource_usage()
-
-
 async def periodic_cleanup() -> None:
     while True:
         await asyncio.sleep(CLEANUP_SECONDS)
@@ -2746,65 +2752,6 @@ def _link_load(link: dict) -> dict | None:
     return None
 
 
-def _config_missing() -> dict | None:
-    """Moved to startup._config_missing."""
-    return startup._config_missing(config=rt.config)
-
-
-def _log_config() -> None:
-    """Moved to startup._log_config."""
-    startup._log_config(
-        config=rt.config, db=rt.db, tools=rt.tools, vendors=rt.vendors,
-        settings_loaded=rt.settings_loaded, public_url=rt.public_url,
-        public_url_problems=rt.public_url_problems,
-        trusted_proxies=rt.trusted_proxies,
-        trusted_proxy_problems=rt.trusted_proxy_problems, transport=rt.transport,
-    )
-
-
-def _setting_problem(error: dict) -> str:
-    """Moved to startup._setting_problem."""
-    return startup._setting_problem(error)
-
-
-def _log_settings() -> None:
-    """Moved to startup._log_settings."""
-    startup._log_settings(settings_loaded=rt.settings_loaded, db=rt.db)
-
-
-def _log_public_url() -> None:
-    """Moved to startup._log_public_url."""
-    startup._log_public_url(
-        config=rt.config, public_url=rt.public_url,
-        public_url_problems=rt.public_url_problems,
-        trusted_proxies=rt.trusted_proxies,
-        trusted_proxy_problems=rt.trusted_proxy_problems, transport=rt.transport,
-    )
-
-
-def _log_transport() -> None:
-    """Moved to startup._log_transport."""
-    startup._log_transport(
-        config=rt.config, public_url=rt.public_url,
-        trusted_proxies=rt.trusted_proxies, transport=rt.transport,
-    )
-
-
-def _log_certificate() -> None:
-    """Moved to startup._log_certificate."""
-    found = startup._log_certificate(config=rt.config, public_url=rt.public_url)
-    if found is not None:
-        rt.certificate = found
-
-
-async def check_certificate_end() -> None:
-    """Moved to housekeeping.check_certificate_end."""
-    await housekeeping.check_certificate_end(
-        certificate=rt.certificate, public_url=rt.public_url, config=rt.config,
-        alarm_engine=rt.alarm_engine,
-    )
-
-
 async def periodic_certificate_check() -> None:
     while True:
         await asyncio.sleep(CERT_CHECK_SECONDS)
@@ -2814,53 +2761,9 @@ async def periodic_certificate_check() -> None:
             log.exception("Certificate check failed")
 
 
-async def start_redirect_listener():
-    """Moved to startup.start_redirect_listener."""
-    return await startup.start_redirect_listener(
-        config=rt.config, public_url=rt.public_url
-    )
-
-
-async def drop_unpinned_positions() -> None:
-    """Moved to housekeeping.drop_unpinned_positions."""
-    await housekeeping.drop_unpinned_positions(db=rt.db)
-
-
-async def purge_invalid_macs() -> None:
-    """Moved to housekeeping.purge_invalid_macs."""
-    await housekeeping.purge_invalid_macs(db=rt.db)
-
-
-async def purge_old_hosts() -> None:
-    """Moved to housekeeping.purge_old_hosts."""
-    await housekeeping.purge_old_hosts(config=rt.config, db=rt.db)
-
-
-async def purge_journal() -> None:
-    """Moved to housekeeping.purge_journal."""
-    await housekeeping.purge_journal(
-        config=rt.config, db=rt.db, JOURNAL_GROUPS=JOURNAL_GROUPS
-    )
-
-
 def _marked_copies(db_rows: dict[str, dict]) -> set[str]:
     """Records marked as damaged copies (v0.8.5)."""
     return {mac for mac, row in db_rows.items() if row.get("corrupt_of")}
-
-
-async def hide_confirmed_copies(vouched: set[str] | None = None) -> None:
-    """Moved to housekeeping.hide_confirmed_copies."""
-    await housekeeping.hide_confirmed_copies(vouched, config=rt.config, db=rt.db)
-
-
-async def purge_copies() -> None:
-    """Moved to housekeeping.purge_copies."""
-    await housekeeping.purge_copies(config=rt.config, db=rt.db)
-
-
-def configure_logging() -> None:
-    """Moved to startup.configure_logging."""
-    startup.configure_logging()
 
 
 @asynccontextmanager

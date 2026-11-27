@@ -48,32 +48,6 @@ NEW_MODULES = [
 # or None for a name re-exported as it is — a constant, or since stage 2
 # a function, which reads rt itself and needs no wrapper
 MOVED = {
-    "startup": {
-        "configure_logging": "() -> None",
-        "_config_missing": "() -> dict | None",
-        "_log_config": "() -> None",
-        "_setting_problem": "(error: dict) -> str",
-        "_log_settings": "() -> None",
-        "_log_public_url": "() -> None",
-        "_log_transport": "() -> None",
-        "_log_certificate": "() -> None",
-        "start_redirect_listener": "async ()",
-        "CERT_WARN_DAYS": None,
-    },
-    "housekeeping": {
-        "purge_invalid_macs": "async () -> None",
-        "purge_old_hosts": "async () -> None",
-        "purge_journal": "async () -> None",
-        "hide_confirmed_copies": "async (vouched: set[str] | None = None) -> None",
-        "purge_copies": "async () -> None",
-        "drop_unpinned_positions": "async () -> None",
-        "check_certificate_end": "async () -> None",
-        "resource_usage": "() -> tuple[int, int]",
-        "CERT_ALARM_DAYS": None,
-        "CERT_CHECK_SECONDS": None,
-        "RESOURCE_LOG_SECONDS": None,
-        "CLEANUP_SECONDS": None,
-    },
     "derived": {
         "_uplink_ports": None,
         "_copies_window": None,

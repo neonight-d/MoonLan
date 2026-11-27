@@ -17,7 +17,10 @@ from uvicorn.middleware.proxy_headers import ProxyHeadersMiddleware
 
 import service_fixture  # noqa: F401  (sets MOONLAN_CONFIG first)
 from asgi_client import call
-from moonlan import auth, config as config_module, diag, https, server, signin
+from moonlan import (
+    auth, config as config_module, diag, housekeeping, https, server, signin,
+    startup,
+)
 from moonlan import passkeys as passkeys_module
 
 try:
@@ -87,7 +90,7 @@ class StartupLineTest(unittest.TestCase):
         with mock.patch.object(server.rt, "public_url", public), \
                 mock.patch.object(server.rt, "public_url_problems", problems), \
                 self.assertLogs("moonlan", "INFO") as logged:
-            server._log_public_url()
+            startup._log_public_url()
         return "\n".join(logged.output)
 
     def test_each_case_says_what_follows(self):
@@ -232,7 +235,7 @@ class CertificateAtStartupTest(unittest.TestCase):
             patch.start()
             self.addCleanup(patch.stop)
         with self.assertLogs("moonlan", "INFO") as logged:
-            server._log_certificate()
+            startup._log_certificate()
         return "\n".join(logged.output)
 
     def active(self):
@@ -242,22 +245,22 @@ class CertificateAtStartupTest(unittest.TestCase):
         text = self.startup(365)
         self.assertIn("valid until", text)
         self.assertNotIn("WARNING", text)
-        asyncio.run(server.check_certificate_end())
+        asyncio.run(housekeeping.check_certificate_end())
         self.assertEqual(self.active(), [])
 
     def test_ending_soon(self):
         text = self.startup(20)
         self.assertRegex(text, r"WARNING.*ends on .* in (19|20) day")
-        asyncio.run(server.check_certificate_end())
+        asyncio.run(housekeeping.check_certificate_end())
         self.assertEqual(self.active(), [])      # 20 days: a warning, no alarm
         text = self.startup(10)
-        asyncio.run(server.check_certificate_end())
+        asyncio.run(housekeeping.check_certificate_end())
         self.assertEqual(self.active(), ["tls_cert_expiring"])
         message = server.rt.db.alarms(True, 1)[0]["message"]
         self.assertIn("restart MoonLan", message)
         # replaced and restarted: a process serving a good one clears it
         self.startup(365)
-        asyncio.run(server.check_certificate_end())
+        asyncio.run(housekeeping.check_certificate_end())
         self.assertEqual(self.active(), [])
 
     def test_a_certificate_for_another_name(self):
@@ -268,7 +271,7 @@ class CertificateAtStartupTest(unittest.TestCase):
         self.startup(365)
         os.chmod(server.rt.config.listen_tls_key, 0o640)
         with self.assertLogs("moonlan", "INFO") as logged:
-            server._log_certificate()
+            startup._log_certificate()
         self.assertTrue(any("chmod 600" in line for line in logged.output))
 
 
@@ -603,7 +606,7 @@ class TransportTest(unittest.TestCase):
                 mock.patch.object(server.rt, "public_url", public), \
                 mock.patch.object(server.rt.config, "listen_hsts_max_age", hsts), \
                 self.assertLogs("moonlan", "INFO") as logged:
-            server._log_transport()
+            startup._log_transport()
         return "\n".join(logged.output)
 
     def test_one_line_at_startup(self):

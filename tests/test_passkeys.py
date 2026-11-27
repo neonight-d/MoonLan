@@ -50,8 +50,8 @@ WITHOUT_FIDO2 = textwrap.dedent("""
     logging.getLogger("moonlan").setLevel(logging.INFO)
     sys.path.insert(0, "tests")
     from asgi_client import call
-    from moonlan import passkeys, server
-    server._log_config()
+    from moonlan import passkeys, server, startup
+    startup._log_config()
     # sign-in on: the form is where a key would be offered
     server.rt.accounts.add_user("anton", "admin", "scrypt$unused")
     print(json.dumps({

@@ -4,9 +4,9 @@ The lines the log opens with — the configuration, the settings, the
 public address, the connection, the certificate — and the
 listen.http_redirect_port listener. Moved out of server.py word for
 word, the first stage of taking it apart (docs/ARCHITECTURE.md): what a
-function needs from the process it is given, under the name of the
-server.py global it stands for, so that no body changed. Nothing here
-keeps state, and nothing here imports moonlan.server.
+function needs from the process it reads from rt (runtime.py) when it is
+called. Nothing here keeps state, and nothing here imports
+moonlan.server.
 """
 
 from __future__ import annotations
@@ -18,6 +18,7 @@ from collections import Counter
 from pathlib import Path
 
 from . import https, oui, passkeys, settings
+from .runtime import rt
 from .textio import use_utf8
 
 log = logging.getLogger("moonlan")
@@ -25,10 +26,10 @@ log = logging.getLogger("moonlan")
 CERT_WARN_DAYS = 30
 
 
-def _config_missing(*, config) -> dict | None:
+def _config_missing() -> dict | None:
     """Where config.yaml should be and the example to copy, when it is
     not there; None when it is"""
-    report = config.report
+    report = rt.config.report
     if report is None or report.exists:
         return None
     path = Path(report.path)
@@ -39,11 +40,7 @@ def _config_missing(*, config) -> dict | None:
     }
 
 
-def _log_config(
-    *, config, db, tools, vendors, settings_loaded, public_url,
-    public_url_problems, trusted_proxies, trusted_proxy_problems,
-    transport,
-) -> None:
+def _log_config() -> None:
     """One line on how much of the configuration is actually yours —
     a config.yaml left over from an older version silently overrides
     settings whose defaults have changed since.
@@ -53,7 +50,7 @@ def _log_config(
     the log was the one place that could not say which file and which
     database each of them had opened.
     """
-    report = config.report
+    report = rt.config.report
     if report is None:
         return
     log.info(
@@ -63,16 +60,16 @@ def _log_config(
     if not report.exists:
         # in a container this is the first thing anyone sees (v0.8.3):
         # say where the file goes and what to start it from
-        missing = _config_missing(config=config)
+        missing = _config_missing()
         log.warning(
             "No config.yaml: MoonLan runs on its defaults and polls no "
             "switch. Put one at %s — %s is the template to copy.",
             missing["path"], missing["example"],
         )
     log.info(
-        "Database:    %s%s", Path(db.path).resolve() if db.path != ":memory:"
+        "Database:    %s%s", Path(rt.db.path).resolve() if rt.db.path != ":memory:"
         else "in memory (demo mode)",
-        "" if not config.demo else "  — the real inventory is not touched",
+        "" if not rt.config.demo else "  — the real inventory is not touched",
     )
     # the keys that are Settings now are counted there, not here
     read = [v for v in report.values if v[0] not in settings.MOVED_PATHS]
@@ -92,35 +89,29 @@ def _log_config(
         log.warning("config.yaml switches: %s", problem)
     for problem in report.menu_problems:
         log.warning("config.yaml context_menu: %s", problem)
-    _log_settings(settings_loaded=settings_loaded, db=db)
-    _log_public_url(
-        config=config, public_url=public_url,
-        public_url_problems=public_url_problems,
-        trusted_proxies=trusted_proxies,
-        trusted_proxy_problems=trusted_proxy_problems,
-        transport=transport,
-    )
-    passkeys.log_state(public_url)
-    oui.log_state(vendors)
-    links = config.context_menu.links
+    _log_settings()
+    _log_public_url()
+    passkeys.log_state(rt.public_url)
+    oui.log_state(rt.vendors)
+    links = rt.config.context_menu.links
     if links:
         log.info(
             "Node menu: %d link(s) of your own: %s", len(links),
             ", ".join(link.label for link in links),
         )
-    if config.demo:
+    if rt.config.demo:
         log.info("Node menu: ping and traceroute are simulated in demo mode")
     else:
-        trace = tools.get("traceroute")
+        trace = rt.tools.get("traceroute")
         log.info(
             "Node menu: ping %s, traceroute %s",
-            f"at {tools['ping']}" if tools.get("ping")
+            f"at {rt.tools['ping']}" if rt.tools.get("ping")
             else "NOT FOUND — the Ping item is disabled",
             f"({trace[0]}) at {trace[1]}" if trace
             else "NOT FOUND (neither traceroute nor tracepath) — the "
                  "Traceroute item is disabled",
         )
-    starved = config.starved_counters()
+    starved = rt.config.starved_counters()
     if starved:
         log.warning(
             "Poll budget at or above twice counters_interval_seconds "
@@ -129,19 +120,19 @@ def _log_config(
             "visibly age between scans — the panel shows them with their "
             "age rather than hiding them. Lower host_budget_seconds for "
             "those devices, or raise counters_interval_seconds.",
-            config.counters_interval_seconds, len(starved),
+            rt.config.counters_interval_seconds, len(starved),
             ", ".join(f"{ip} ({budget} s)" for ip, budget in starved),
         )
-    custom = config.custom_switches()
+    custom = rt.config.custom_switches()
     if custom:
         log.info(
             "SNMP settings of their own on %d of %d switch(es): %s. "
             "Everything else is inherited from the snmp: section; "
             "python -m moonlan.diag --config prints which is which.",
-            len(custom), len(config.switches),
+            len(custom), len(rt.config.switches),
             ", ".join(
                 f"{ip} ("
-                + ", ".join(sorted(config.switch_snmp[ip].explicit))
+                + ", ".join(sorted(rt.config.switch_snmp[ip].explicit))
                 + ")"
                 for ip in custom
             ),
@@ -164,12 +155,12 @@ def _setting_problem(error: dict) -> str:
     return code or "not valid"
 
 
-def _log_settings(*, settings_loaded, db) -> None:
+def _log_settings() -> None:
     """What the start did with the settings config.yaml still has
     (v0.8.4): moved into the database, or no longer read."""
-    loaded = settings_loaded
+    loaded = rt.settings_loaded
     counts = Counter(
-        "database" if key in db.settings() else "default"
+        "database" if key in rt.db.settings() else "default"
         for key in settings.BY_KEY
     )
     log.info(
@@ -198,86 +189,80 @@ def _log_settings(*, settings_loaded, db) -> None:
         )
 
 
-def _log_public_url(
-    *, config, public_url, public_url_problems, trusted_proxies,
-    trusted_proxy_problems, transport,
-) -> None:
+def _log_public_url() -> None:
     """Where people are expected to open the map, and what follows."""
-    for problem in public_url_problems + trusted_proxy_problems:
+    for problem in rt.public_url_problems + rt.trusted_proxy_problems:
         log.warning("config.yaml %s — ignored", problem)
-    _log_transport(
-        config=config, public_url=public_url,
-        trusted_proxies=trusted_proxies, transport=transport,
-    )
-    if public_url is None:
+    _log_transport()
+    if rt.public_url is None:
         log.info(
             "Public address: listen.public_url is not set — signing in with "
             "a key is off; everything else works as before"
         )
         return
-    why = https.passkey_problem(public_url)
+    why = https.passkey_problem(rt.public_url)
     if why == "public_url_ip":
         log.warning(
             "Public address: %s is an IP address. A passkey is bound to a "
             "host name, never to an address: signing in with a key is off. "
             "Open the map by name (and set that name here) to use one.",
-            public_url.origin,
+            rt.public_url.origin,
         )
     elif why == "public_url_http":
         log.warning(
             "Public address: %s is plain http. Browsers offer WebAuthn only "
             "to a secure page (https, or localhost): signing in with a key "
-            "is off.", public_url.origin,
+            "is off.", rt.public_url.origin,
         )
     else:
         log.info(
             "Public address: %s — passkeys are bound to %s",
-            public_url.origin, public_url.rp_id,
+            rt.public_url.origin, rt.public_url.rp_id,
         )
 
 
-def _log_transport(*, config, public_url, trusted_proxies, transport) -> None:
+def _log_transport() -> None:
     """One line: how the map reaches people."""
-    if transport == "tls":
+    if rt.transport == "tls":
         log.info("Connection: HTTPS served by MoonLan itself (%s)",
-                 config.listen_tls_cert)
-    elif transport == "proxy":
+                 rt.config.listen_tls_cert)
+    elif rt.transport == "proxy":
         log.info(
             "Connection: behind a reverse proxy (%s) — it holds the HTTPS; "
             "X-Forwarded-For and X-Forwarded-Proto are believed from it alone",
-            ", ".join(trusted_proxies),
+            ", ".join(rt.trusted_proxies),
         )
     else:
         log.info("Connection: plain HTTP — see docs/HTTPS.md")
-        if public_url is not None and public_url.secure:
+        if rt.public_url is not None and rt.public_url.secure:
             log.warning(
                 "listen.public_url is %s, but MoonLan neither serves TLS "
                 "(listen.tls_cert) nor believes a proxy "
                 "(listen.trusted_proxies): every request arrives as plain "
                 "http, and signing in with a password is refused on it",
-                public_url.origin,
+                rt.public_url.origin,
             )
-    if config.listen_hsts_max_age:
+    if rt.config.listen_hsts_max_age:
         log.info("HSTS: max-age=%d on every HTTPS answer",
-                 config.listen_hsts_max_age)
+                 rt.config.listen_hsts_max_age)
 
 
-def _log_certificate(*, config, public_url) -> https.CertInfo | None:
+def _log_certificate() -> None:
     """listen.tls_cert at startup: who it is for, until when, and what
     will go wrong with it — before a browser finds out."""
-    if not config.listen_tls_cert:
+    if not rt.config.listen_tls_cert:
         return
     try:
-        certificate = https.read_certificate(config.listen_tls_cert)
+        rt.certificate = https.read_certificate(rt.config.listen_tls_cert)
     except (OSError, ValueError) as exc:
-        log.error("TLS: could not read %s: %s", config.listen_tls_cert, exc)
+        log.error("TLS: could not read %s: %s", rt.config.listen_tls_cert, exc)
         return
-    days = (certificate.not_after - time.time()) / 86400
-    ends = time.strftime("%Y-%m-%d", time.localtime(certificate.not_after))
+    days = (rt.certificate.not_after - time.time()) / 86400
+    ends = time.strftime("%Y-%m-%d", time.localtime(rt.certificate.not_after))
     log.info(
         "TLS: serving %s — %s; names: %s; valid until %s",
-        config.listen_tls_cert, certificate.subject,
-        ", ".join(certificate.names) or "none", ends,
+        rt.config.listen_tls_cert, rt.certificate.subject,
+        ", ".join(rt.certificate.names) or "none", ends,
     )
     if days < 0:
         log.warning(
@@ -289,29 +274,28 @@ def _log_certificate(*, config, public_url) -> https.CertInfo | None:
             "TLS: the certificate ends on %s, in %d day(s). Replace the file "
             "and restart MoonLan — it is read at startup.", ends, int(days),
         )
-    if public_url and not https.covers(certificate.names, public_url.host):
+    if rt.public_url and not https.covers(rt.certificate.names, rt.public_url.host):
         log.warning(
             "TLS: the certificate does not name %s (it names: %s). Browsers "
             "will not accept it at listen.public_url, and signing in with a "
             "key will not work there.",
-            public_url.host, ", ".join(certificate.names) or "nothing",
+            rt.public_url.host, ", ".join(rt.certificate.names) or "nothing",
         )
-    mode = https.key_mode_too_open(config.listen_tls_key)
+    mode = https.key_mode_too_open(rt.config.listen_tls_key)
     if mode is not None:
         log.warning(
             "TLS: the key %s is readable by others (mode %o) — chmod 600 it",
-            config.listen_tls_key, mode,
+            rt.config.listen_tls_key, mode,
         )
-    return certificate
 
 
-async def start_redirect_listener(*, config, public_url):
+async def start_redirect_listener():
     """listen.http_redirect_port: a port that only sends people to the
     public address. Needs one to send them to."""
-    port = config.listen_http_redirect_port
+    port = rt.config.listen_http_redirect_port
     if not port:
         return None
-    if public_url is None:
+    if rt.public_url is None:
         log.warning(
             "listen.http_redirect_port %d needs listen.public_url to send "
             "people to — not started", port,
@@ -319,12 +303,12 @@ async def start_redirect_listener(*, config, public_url):
         return None
     try:
         listener = await https.serve_redirect(
-            config.listen_host, port, public_url.origin
+            rt.config.listen_host, port, rt.public_url.origin
         )
     except OSError as exc:
         log.error("listen.http_redirect_port %d: %s — not started", port, exc)
         return None
-    log.info("Port %d redirects every request to %s", port, public_url.origin)
+    log.info("Port %d redirects every request to %s", port, rt.public_url.origin)
     return listener
 
 

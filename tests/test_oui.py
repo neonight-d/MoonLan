@@ -29,7 +29,7 @@ from unittest import mock
 
 import service_fixture  # noqa: F401  (sets MOONLAN_CONFIG first)
 from asgi_client import call
-from moonlan import diag, notify, oui, server
+from moonlan import diag, notify, oui, server, startup
 from moonlan.config import Config, load_config
 
 HEADER = "Registry,Assignment,Organization Name,Organization Address\r\n"
@@ -396,7 +396,7 @@ class ServiceTest(Folder):
         self.use(oui.Registry.load(server.rt.config.oui_folder()))
         self.assertEqual(call(server.app, "GET", "/api/health").status, 200)
         with self.assertLogs("moonlan", "INFO") as logged:
-            server._log_config()
+            startup._log_config()
         lines = [line for line in logged.output if "Vendors:" in line]
         self.assertEqual(len(lines), 1)
         self.assertIn("no IEEE register", lines[0])

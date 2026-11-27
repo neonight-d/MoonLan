@@ -23,7 +23,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from service_fixture import SWITCHES  # noqa: E402,F401
 
-from moonlan import diag, journal, server, settings  # noqa: E402
+from moonlan import diag, housekeeping, journal, server, settings  # noqa: E402
 from moonlan.db import Database  # noqa: E402
 
 DAY = 86400
@@ -94,7 +94,7 @@ class CleanupTest(unittest.IsolatedAsyncioTestCase):
             ("new_mac", 400, 2), ("ip_released", 366, 1),
         ])
         with self.assertLogs("moonlan", "INFO") as logged:
-            await server.purge_journal()
+            await housekeeping.purge_journal()
         self.assertEqual(self.count("host_down"), 3)
         self.assertEqual(self.count("host_up"), 2)
         self.assertEqual(self.count("new_mac"), 4)
@@ -115,7 +115,7 @@ class CleanupTest(unittest.IsolatedAsyncioTestCase):
         self.fill([("host_down", 40, 5), ("host_up", 10, 1),
                    ("new_mac", 4000, 3), ("alarm_raised", 900, 2)])
         with self.assertLogs("moonlan", "INFO"):
-            await server.purge_journal()
+            await housekeeping.purge_journal()
         self.assertEqual(self.count("host_down"), 0)
         self.assertEqual(self.count("host_up"), 1)
         self.assertEqual(self.count("new_mac"), 3)
@@ -125,7 +125,7 @@ class CleanupTest(unittest.IsolatedAsyncioTestCase):
         server.rt.config.journal_ping_keep_days = 0
         self.fill([("host_down", 40, 5), ("host_down", 400, 2)])
         with self.assertLogs("moonlan", "INFO"):
-            await server.purge_journal()
+            await housekeeping.purge_journal()
         self.assertEqual(self.count("host_down"), 5)
 
     async def test_both_zero_deletes_nothing(self):
@@ -133,7 +133,7 @@ class CleanupTest(unittest.IsolatedAsyncioTestCase):
         server.rt.config.journal_ping_keep_days = 0
         self.fill([("host_down", 4000, 5), ("new_mac", 4000, 3)])
         with self.assertLogs("moonlan", "INFO"):
-            await server.purge_journal()
+            await housekeeping.purge_journal()
         self.assertEqual(self.count("host_down"), 5)
         self.assertEqual(self.count("new_mac"), 3)
 

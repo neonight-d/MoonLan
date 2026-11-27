@@ -29,7 +29,7 @@ from unittest import mock
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import service_fixture  # noqa: E402,F401  (a config for server)
 
-from moonlan import server  # noqa: E402
+from moonlan import housekeeping, server  # noqa: E402
 from moonlan.alarms import RESTATED_TYPES, STABLE_TYPES, SEVERITIES, AlarmEngine  # noqa: E402
 from moonlan.config import Config  # noqa: E402
 from moonlan.db import Database  # noqa: E402
@@ -181,7 +181,7 @@ class CertificateTest(unittest.IsolatedAsyncioTestCase):
             calls.append((alarm_type, active, message))
         with mock.patch.object(server.rt, "certificate", SimpleNamespace(not_after=ends)), \
                 mock.patch.object(server.rt.alarm_engine, "service_alarm", service_alarm):
-            await server.check_certificate_end()
+            await housekeeping.check_certificate_end()
         (alarm_type, active, message), = calls
         self.assertEqual((alarm_type, active), ("tls_cert_expiring", True))
         self.assertIn("expires on 2026-12-03", message)

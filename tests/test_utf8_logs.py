@@ -71,7 +71,7 @@ class ProcessTest(unittest.TestCase):
         self.assertNotIn(DASH, done.stderr)
 
     def test_the_service_log(self):
-        done = run("from moonlan import server; import logging; server.configure_logging(); "
+        done = run("from moonlan import server, startup; import logging; startup.configure_logging(); "
                    "logging.getLogger('moonlan').warning('a %s b %s c', chr(0x2014), chr(0xa7))",
                    self.tmp, {"MOONLAN_DEMO": "1"})
         self.assertEqual(done.returncode, 0, done.stderr)
