@@ -29,7 +29,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from service_fixture import SWITCHES  # noqa: E402,F401
 
-from moonlan import server  # noqa: E402
+from moonlan import counters, poller, server  # noqa: E402
 from moonlan.config import Config, HostSnmp  # noqa: E402
 from moonlan.snmp_collector import SwitchData  # noqa: E402
 
@@ -61,18 +61,18 @@ class StubCollector:
 class ScanBudgetTest(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
         self.collector = StubCollector()
-        self._get_collector = server.get_collector
-        server.get_collector = lambda: self.collector
+        self._get_collector = poller.get_collector
+        poller.get_collector = lambda: self.collector
         server.rt.switch_data.clear()
 
     def tearDown(self):
-        server.get_collector = self._get_collector
+        poller.get_collector = self._get_collector
         server.rt.state.scanning = False
 
     async def test_scan_finishes_on_budget_without_the_slow_two(self):
         started = time.monotonic()
         with self.assertLogs("moonlan", "WARNING") as logged:
-            await server.run_scan()
+            await poller.run_scan()
         elapsed = time.monotonic() - started
 
         # the budget, not the slow switches, decides when a scan ends
@@ -123,7 +123,7 @@ class ScanBudgetTest(unittest.IsolatedAsyncioTestCase):
         server.rt.alarm_engine.on_scan = record_scan
         try:
             with self.assertLogs("moonlan", "WARNING"):
-                await server.run_scan()
+                await poller.run_scan()
         finally:
             server.rt.alarm_engine.on_scan = original
         self.assertEqual(len(seen), 1)
@@ -140,7 +140,7 @@ class ScanBudgetTest(unittest.IsolatedAsyncioTestCase):
         """
         self.collector.delay = 0.0
         with self.assertLogs("moonlan", "WARNING") as logged:
-            await server.run_scan()
+            await poller.run_scan()
         self.assertFalse([
             line for line in logged.output
             if "did not finish its poll within" in line
@@ -154,7 +154,7 @@ class ScanBudgetTest(unittest.IsolatedAsyncioTestCase):
 
         self.collector.delay = 30.0
         with self.assertLogs("moonlan", "WARNING"):
-            await server.run_scan()
+            await poller.run_scan()
         second = {
             sw["ip"]: sw for sw in server.rt.state.as_dict()["switches"]
         }
@@ -177,8 +177,8 @@ class StaleSwitchTest(unittest.IsolatedAsyncioTestCase):
 
     def setUp(self):
         self.collector = StubCollector()
-        self._get_collector = server.get_collector
-        server.get_collector = lambda: self.collector
+        self._get_collector = poller.get_collector
+        poller.get_collector = lambda: self.collector
         server.rt.switch_data.clear()
         self._scans = server.rt.config.stale_switch_scans
         server.rt.config.stale_switch_scans = 3
@@ -201,7 +201,7 @@ class StaleSwitchTest(unittest.IsolatedAsyncioTestCase):
         server.rt.alarm_engine._stale_switches.clear()
 
     def tearDown(self):
-        server.get_collector = self._get_collector
+        poller.get_collector = self._get_collector
         server.rt.alarm_engine._raise = self._raise
         server.rt.alarm_engine._clear = self._clear
         server.rt.config.stale_switch_scans = self._scans
@@ -210,18 +210,18 @@ class StaleSwitchTest(unittest.IsolatedAsyncioTestCase):
     async def test_the_streak_is_counted_and_then_said_out_loud(self):
         self.collector.delay = 0.0
         with self.assertLogs("moonlan", "WARNING"):
-            await server.run_scan()          # one good scan for a baseline
+            await poller.run_scan()          # one good scan for a baseline
         self.collector.delay = 30.0
         for _ in range(2):
             with self.assertLogs("moonlan", "WARNING"):
-                await server.run_scan()
+                await poller.run_scan()
         drawn = {sw["ip"]: sw for sw in server.rt.state.as_dict()["switches"]}
         self.assertEqual(drawn["10.0.0.3"]["over_budget_scans"], 2)
         # …but two is under the threshold, so nothing has been claimed
         self.assertEqual(self.raised, [])
 
         with self.assertLogs("moonlan", "WARNING"):
-            await server.run_scan()
+            await poller.run_scan()
         raised = [r for r in self.raised if r[0] == "raise"]
         self.assertEqual(
             sorted(r[1] for r in raised), ["10.0.0.3", "10.0.0.7"]
@@ -238,13 +238,13 @@ class StaleSwitchTest(unittest.IsolatedAsyncioTestCase):
         self.collector.delay = 30.0
         for _ in range(3):
             with self.assertLogs("moonlan", "WARNING"):
-                await server.run_scan()
+                await poller.run_scan()
         self.assertTrue([r for r in self.raised if r[0] == "raise"])
         self.raised.clear()
 
         self.collector.delay = 0.0
         with self.assertLogs("moonlan", "WARNING"):
-            await server.run_scan()
+            await poller.run_scan()
         cleared = [r for r in self.raised if r[0] == "clear"]
         self.assertEqual(
             sorted(r[1] for r in cleared), ["10.0.0.3", "10.0.0.7"]
@@ -285,9 +285,9 @@ class CountersStarvationTest(unittest.IsolatedAsyncioTestCase):
             polled.append(ip)
             return {}, {}, {}
 
-        original = server.counters.collect_samples
-        server.counters.collect_samples = fake_samples
-        lock = server.host_lock("10.0.0.5")
+        original = counters.collect_samples
+        counters.collect_samples = fake_samples
+        lock = poller.host_lock("10.0.0.5")
 
         async def hold():
             async with lock:
@@ -297,14 +297,14 @@ class CountersStarvationTest(unittest.IsolatedAsyncioTestCase):
             holder = asyncio.create_task(hold())
             await asyncio.sleep(0)  # let it take the lock
             self.assertTrue(lock.locked())
-            await server._counters_locked(None, "10.0.0.5")
+            await poller._counters_locked(None, "10.0.0.5")
             await holder
         finally:
-            server.counters.collect_samples = original
+            counters.collect_samples = original
         self.assertEqual(polled, ["10.0.0.5"])
 
     async def test_it_gives_up_rather_than_queueing(self):
-        lock = server.host_lock("10.0.0.6")
+        lock = poller.host_lock("10.0.0.6")
 
         async def hold():
             async with lock:
@@ -314,7 +314,7 @@ class CountersStarvationTest(unittest.IsolatedAsyncioTestCase):
         await asyncio.sleep(0)
         started = time.monotonic()
         with self.assertLogs("moonlan", "INFO") as logged:
-            result = await server._counters_locked(None, "10.0.0.6")
+            result = await poller._counters_locked(None, "10.0.0.6")
         elapsed = time.monotonic() - started
         holder.cancel()
         self.assertEqual(result, ({}, {}, {}, None))

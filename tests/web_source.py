@@ -152,13 +152,13 @@ def run_page(test_code, data=None):
 DEMO_SCAN = r"""
 import asyncio, json, logging
 logging.disable(logging.CRITICAL)
-from moonlan import demo, server
+from moonlan import demo, poller, server
 from asgi_client import call
 
 
 async def scan():
     await asyncio.to_thread(demo.seed_notes, server.rt.db)
-    await server.run_scan()
+    await poller.run_scan()
 
 asyncio.run(scan())
 print(json.dumps(call(server.app, "GET", "/api/topology").json()))

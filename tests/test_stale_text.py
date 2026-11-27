@@ -25,7 +25,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import service_fixture  # noqa: E402,F401  (a config for server)
 
-from moonlan import server  # noqa: E402
+from moonlan import poller, server  # noqa: E402
 from moonlan.alarms import AlarmEngine, stale_switch_message  # noqa: E402
 from moonlan.config import Config  # noqa: E402
 from moonlan.db import Database  # noqa: E402
@@ -216,7 +216,7 @@ class ProvenanceTest(unittest.TestCase):
     def test_a_full_poll_ends_the_saved_reading(self):
         server.rt.readings_from_database.add(IP)
         result = SwitchData(ip=IP, reachable=True)
-        settled = server._settle(IP, result, time.time())
+        settled = poller._settle(IP, result, time.time())
         self.assertEqual(settled.state, STATE_FRESH)
         self.assertNotIn(IP, server.rt.readings_from_database)
 

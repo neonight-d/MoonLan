@@ -28,7 +28,7 @@ from moonlan import demo
 
 SCRIPT = r"""
 import asyncio, json, logging, sys
-from moonlan import demo, server
+from moonlan import demo, poller, server
 
 logging.getLogger("moonlan").setLevel(logging.ERROR)
 if sys.argv[1] == "without":
@@ -39,7 +39,7 @@ async def run():
     demo.seed_notes(server.rt.db)
     out = {"scans": []}
     for _ in range(3):
-        await server.run_scan()
+        await poller.run_scan()
         topo = json.loads((await server.api_topology()).body)
         ports = await server.api_switch_ports("10.0.0.21")
         ports = json.loads(ports.body) if hasattr(ports, "body") else ports

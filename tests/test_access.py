@@ -16,7 +16,7 @@ from starlette.routing import Mount
 
 import service_fixture  # noqa: F401  (sets MOONLAN_CONFIG first)
 from asgi_client import call
-from moonlan import access, auth, server, signin, users
+from moonlan import access, auth, probes, server, signin, users
 from moonlan.access import Principal
 
 
@@ -300,7 +300,7 @@ class JobOwnerTest(unittest.TestCase):
     """A ping's result is seen by who started it and by an administrator."""
 
     def setUp(self):
-        self.job = server.probes.Job(
+        self.job = probes.Job(
             id="job1", action="ping", targets=[], owner="vera"
         )
         server.rt.jobs._jobs["job1"] = self.job

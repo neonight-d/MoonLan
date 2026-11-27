@@ -49,11 +49,6 @@ NEW_MODULES = [
 # a function, which reads rt itself and needs no wrapper
 MOVED = {
     "derived": {
-        "_uplink_ports": None,
-        "_copies_window": None,
-        "_subject_inbound_errors": None,
-        "_effective_monitored": None,
-        "_lag_groups": None,
         "_sum_known": None,
         "_rates_hide_age": None,
         "_round": None,

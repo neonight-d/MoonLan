@@ -37,15 +37,15 @@ root = logging.getLogger("moonlan")
 root.addHandler(Grab())
 root.setLevel(logging.INFO)
 root.propagate = False
-from moonlan import demo, server
+from moonlan import demo, poller, server
 from asgi_client import call
 
 
 async def run():
     demo.seed_notes(server.rt.db)
     for _ in range(2):
-        await server.run_scan()
-        await server.run_counters()
+        await poller.run_scan()
+        await poller.run_counters()
 
 asyncio.run(run())
 topo = call(server.app, "GET", "/api/topology").json()

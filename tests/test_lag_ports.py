@@ -30,7 +30,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from service_fixture import SWITCHES  # noqa: E402
 
-from moonlan import diag, server, snmp_collector  # noqa: E402
+from moonlan import diag, poller, server, snmp_collector  # noqa: E402
 from moonlan.mapping import switches  # noqa: E402
 from moonlan.snmp_collector import (  # noqa: E402
     OID_BRIDGE_ADDRESS,
@@ -243,8 +243,8 @@ class ServiceTest(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
         snmp_collector._warned_bridge_ports.clear()
         self.agent = StubAgent()
-        self._get_collector = server.get_collector
-        server.get_collector = lambda: self.agent
+        self._get_collector = poller.get_collector
+        poller.get_collector = lambda: self.agent
         self._stability = server.rt.fdb_stability
         server.rt.fdb_stability = FdbStability()
         server.rt.switch_data.clear()
@@ -254,12 +254,12 @@ class ServiceTest(unittest.IsolatedAsyncioTestCase):
         server.rt.db._conn.commit()
 
     def tearDown(self):
-        server.get_collector = self._get_collector
+        poller.get_collector = self._get_collector
         server.rt.fdb_stability = self._stability
         server.rt.state.scanning = False
 
     async def test_the_link_and_the_group_behind_it_carry_the_names(self):
-        await server.run_scan()
+        await poller.run_scan()
         drawn = server.rt.state.as_dict()
         link = next(
             link for link in drawn["links"]
@@ -286,7 +286,7 @@ class ServiceTest(unittest.IsolatedAsyncioTestCase):
             first_seen=now - 86400, last_seen=now - 600, seen_count=5,
         )
         with self.assertLogs("moonlan", "WARNING"):
-            await server.run_scan()
+            await poller.run_scan()
         answer = json.loads((await server.api_topology()).body)
         self.assertEqual(_negative_numbers(answer), [])
         on_access = [h for h in answer["hosts"] if h["switch"] == ACCESS]
@@ -321,7 +321,7 @@ class ServiceTest(unittest.IsolatedAsyncioTestCase):
             f"pseudo:{CORE_B}:bridge-port 7", "Old", "", "manual", "", now
         )
         with self.assertLogs("moonlan", "INFO") as logged:
-            await server.run_scan()
+            await poller.run_scan()
         rows = server.rt.db.hosts_by_mac()
         self.assertEqual(rows["00:1b:2c:00:00:71"]["port"], "")
         self.assertEqual(rows["00:1b:2c:00:00:72"]["port"], CORE_A_LAG)
@@ -343,7 +343,7 @@ class ServiceTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(lines), 3, lines)   # one per switch
         # the next poll has nothing left to do, and says nothing about it
         with self.assertLogs("moonlan", "INFO") as logged:
-            await server.run_scan()
+            await poller.run_scan()
         self.assertFalse(
             [r for r in logged.records if "before v0.8.6" in r.getMessage()]
         )

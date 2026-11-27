@@ -1,13 +1,13 @@
 """What both the API and the scan derive from the state (v0.8.13).
 
 The helpers that the routes taken out of server.py need and that the
-scan, still in server.py, needs as well: the uplink ports, the window
-of MAC copies and the inbound errors of a subject, whether a host is
-monitored, the LAG groups of a switch, sums and rounding for the
-counters, how long rates stay shown, the loop report of a switch, the
-switches the map is about.
-Moved out of server.py word for word (docs/ARCHITECTURE.md): the state
-is read as rt.X when they run. Nothing here imports moonlan.server.
+poller needs as well: the uplink ports, the window of MAC copies and
+the inbound errors of a subject, whether a host is monitored, the LAG
+groups of a switch, sums and rounding for the counters, how long rates
+stay shown, the loop report of a switch, the switches the map is
+about. Moved out of server.py word for word (docs/ARCHITECTURE.md): the
+state is read as rt.X when they run. Nothing here imports
+moonlan.server.
 """
 
 from __future__ import annotations

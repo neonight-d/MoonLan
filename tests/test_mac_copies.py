@@ -27,7 +27,9 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from service_fixture import SWITCHES  # noqa: E402,F401
 
-from moonlan import corruption, housekeeping, server  # noqa: E402
+from moonlan import (  # noqa: E402
+    corruption, derived, housekeeping, poller, server,
+)
 from moonlan.mapping import hosts as mapping_hosts  # noqa: E402
 from moonlan.snmp_collector import PortInfo, SwitchData  # noqa: E402
 
@@ -169,8 +171,8 @@ class ScanCase(unittest.IsolatedAsyncioTestCase):
 
     def setUp(self):
         self.collector = StubCollector()
-        self._get_collector = server.get_collector
-        server.get_collector = lambda: self.collector
+        self._get_collector = poller.get_collector
+        poller.get_collector = lambda: self.collector
         server.rt.switch_data.clear()
         self._saved = (
             server.rt.config.new_host_confirm_scans,
@@ -198,7 +200,7 @@ class ScanCase(unittest.IsolatedAsyncioTestCase):
         }
 
     def tearDown(self):
-        server.get_collector = self._get_collector
+        poller.get_collector = self._get_collector
         (
             server.rt.config.new_host_confirm_scans,
             server.rt.config.filter_suspect_macs,
@@ -224,12 +226,12 @@ class ScanCase(unittest.IsolatedAsyncioTestCase):
         """The first poll of an empty database: the sample is real."""
         for name, macs in where.items():
             getattr(self.collector, name).update(macs)
-        await server.run_scan()
+        await poller.run_scan()
         self.assertTrue(self.row(SAMPLE)["confirmed"])
 
     async def assert_held(self, mac: str, scans: int = 3) -> None:
         for n in range(scans):
-            await server.run_scan()
+            await poller.run_scan()
             with self.subTest(scan=n + 2):
                 row = self.row(mac)
                 self.assertGreaterEqual(row["seen_count"], n + 1)
@@ -272,9 +274,9 @@ class ScanTest(ScanCase):
         switches are two devices."""
         await self.inventory(core={SAMPLE: 5})
         self.collector.access[COPY] = 7
-        await server.run_scan()
+        await poller.run_scan()
         self.assertFalse(self.row(COPY)["confirmed"])
-        await server.run_scan()
+        await poller.run_scan()
         self.assertTrue(self.row(COPY)["confirmed"])
         self.assertIn(COPY, self.drawn())
         self.assertEqual(server.rt.suspect_by_port, {})
@@ -282,10 +284,10 @@ class ScanTest(ScanCase):
     async def test_an_ip_confirms_however_alike(self):
         await self.inventory(access={SAMPLE: 7})
         self.collector.access[COPY] = 7
-        await server.run_scan()
+        await poller.run_scan()
         self.assertFalse(self.row(COPY)["confirmed"])
         server.rt.db.set_ips({COPY: "10.0.99.87"})
-        await server.run_scan()
+        await poller.run_scan()
         self.assertTrue(self.row(COPY)["confirmed"])
         self.assertIn(COPY, self.drawn())
         self.assertEqual(server.rt.suspect_by_port, {})
@@ -296,8 +298,8 @@ class ScanTest(ScanCase):
         server.rt.config.filter_suspect_macs = False
         await self.inventory(access={SAMPLE: 7})
         self.collector.access[COPY] = 7
-        await server.run_scan()
-        await server.run_scan()
+        await poller.run_scan()
+        await poller.run_scan()
         self.assertTrue(self.row(COPY)["confirmed"])
         host = next(h for h in server.rt.state.as_dict()["hosts"] if h["mac"] == COPY)
         self.assertTrue(host["suspect_corrupt"])
@@ -310,7 +312,7 @@ class ScanTest(ScanCase):
         await self.inventory(access={SAMPLE: 7})
         self.collector.access.update({mac: 7 for mac in COPIES})
         for _ in range(3):
-            await server.run_scan()
+            await poller.run_scan()
             pseudo = {
                 (p["switch"], p["port"])
                 for p in server.rt.state.as_dict()["pseudo_switches"]
@@ -325,8 +327,8 @@ class ScanTest(ScanCase):
         """Twelve bits away is past the threshold: a second device."""
         await self.inventory(access={SAMPLE: 7})
         self.collector.access[FAR] = 7
-        await server.run_scan()
-        await server.run_scan()
+        await poller.run_scan()
+        await poller.run_scan()
         self.assertTrue(self.row(FAR)["confirmed"])
 
 
@@ -481,7 +483,7 @@ class OldCopiesScanTest(ScanCase):
         self.assertEqual(sorted(data["macs"]), HUNDRED)
         self.assertEqual((data["switch"], data["ports"]), (ACCESS, ["Gi0/5", "Gi0/3"]))
 
-        await server.run_scan()
+        await poller.run_scan()
         drawn = server.rt.state.as_dict()
         self.assertEqual(self.drawn(), {SAMPLE})
         self.assertEqual(drawn["offline_groups"], [])
@@ -499,14 +501,14 @@ class OldCopiesScanTest(ScanCase):
 
     async def test_after_every_scan(self):
         """No start in between: the scan finds them itself."""
-        await server.run_scan()
+        await poller.run_scan()
         self.assertEqual(len(self.events()), 1)
         self.assertEqual(self.drawn(), {SAMPLE})
 
     async def test_back_in_the_table_it_is_still_a_copy(self):
         await housekeeping.hide_confirmed_copies()
         self.collector.access.update({mac: 5 for mac in HUNDRED[:3]})
-        await server.run_scan()
+        await poller.run_scan()
         self.assertEqual(self.drawn(), {SAMPLE})
         self.assertEqual(
             sorted(s["mac"] for s in server.rt.suspect_by_port[(ACCESS, "Gi0/5")]),
@@ -524,7 +526,7 @@ class OldCopiesScanTest(ScanCase):
     async def test_with_the_filter_off_nothing_is_marked_or_removed(self):
         server.rt.config.filter_suspect_macs = False
         await housekeeping.hide_confirmed_copies()
-        await server.run_scan()
+        await poller.run_scan()
         self.assertEqual(self.events(), [])
         self.assertTrue(set(HUNDRED) <= self.drawn())
         server.rt.db.mark_copies(SAMPLE, HUNDRED)
@@ -654,7 +656,7 @@ class HintScanTest(ScanCase):
         for _ in range(3):
             # different copies every poll, the way a transmitter makes them
             self.collector.access.update({next(copies): 5, next(copies): 5})
-            await server.run_scan()
+            await poller.run_scan()
         # the client runs a loop of its own: from a thread, beside this one
         alarms = (await asyncio.to_thread(call, server.app, "GET", "/api/alarms")
                   ).json()["alarms"]
@@ -681,9 +683,9 @@ class HintScanTest(ScanCase):
         now = time.time()
         for n, errors in enumerate((0, 100, 300)):
             store.update(ACCESS, {5: Sample(ts=now - (2 - n) * 60, in_errors=errors)})
-        self.assertEqual(server._subject_inbound_errors(f"{ACCESS}:Gi0/5"), 300)
-        self.assertIsNone(server._subject_inbound_errors(f"{ACCESS}:Gi0/9"))
-        self.assertIsNone(server._subject_inbound_errors("192.0.2.1:Gi0/5"))
+        self.assertEqual(derived._subject_inbound_errors(f"{ACCESS}:Gi0/5"), 300)
+        self.assertIsNone(derived._subject_inbound_errors(f"{ACCESS}:Gi0/9"))
+        self.assertIsNone(derived._subject_inbound_errors("192.0.2.1:Gi0/5"))
 
 
 HINT_PAGE = r"""
@@ -763,7 +765,7 @@ class HintWordsTest(unittest.TestCase):
 DEMO_SCANS = r"""
 import asyncio, json, logging
 logging.disable(logging.CRITICAL)
-from moonlan import demo, server
+from moonlan import demo, poller, server
 from asgi_client import call
 
 out = {"scans": []}
@@ -773,7 +775,7 @@ real = {demo.CORRUPT_REAL, demo.CORRUPT_NEIGHBOR}
 
 async def scans():
     for _ in range(14):
-        await server.run_scan()
+        await poller.run_scan()
         rows = server.rt.db.hosts_by_mac()
         topo = server.rt.state.as_dict()
         out["scans"].append({

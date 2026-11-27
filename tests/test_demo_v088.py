@@ -26,7 +26,7 @@ from pathlib import Path
 
 SCRIPT = r"""
 import asyncio, json, logging
-from moonlan import demo, server
+from moonlan import demo, poller, server
 
 logging.getLogger("moonlan").setLevel(logging.ERROR)
 
@@ -41,11 +41,11 @@ async def run():
     demo.seed_reading(server.rt.db)
     demo.seed_stale_alarm(server.rt.db)
     await server.rt.alarm_engine.load()
-    await server.restore_readings()
+    await poller.restore_readings()
     out["before"] = [a["message"] for a in stale()]
-    await server.run_scan()
+    await poller.run_scan()
     out["after"] = [(a["subject"], a["message"]) for a in stale()]
-    await server.run_scan()
+    await poller.run_scan()
     out["polling"] = (await server.api_polling())["switches"]
     out["raised"] = sum(
         1 for e in server.rt.db.journal(1000)

@@ -21,7 +21,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from service_fixture import SWITCHES  # noqa: E402
 
-from moonlan import diag, server  # noqa: E402
+from moonlan import diag, poller, server  # noqa: E402
 from moonlan import snmp_collector as module  # noqa: E402
 from moonlan.lldp import OID_LLDP_REM_MAN_ADDR_IF_SUBTYPE  # noqa: E402
 from moonlan.snmp_collector import (  # noqa: E402
@@ -110,7 +110,7 @@ class CutTest(unittest.IsolatedAsyncioTestCase):
         agent = Agent()
         agent.stall, agent.stall_after = OID_IF_NAME, 3
         with self.assertLogs("moonlan", level="WARNING") as logs:
-            result = await server._collect_within_budget(agent, IP, 0.4)
+            result = await poller._collect_within_budget(agent, IP, 0.4)
         self.assertIsInstance(result, OverBudget)
         self.assertTrue(result.answered)
         cut = result.cut
@@ -138,7 +138,7 @@ class CutTest(unittest.IsolatedAsyncioTestCase):
         agent.stall = ""
         agent.pause = {OID_IF_DESCR: 0.03, OID_IF_NAME: 0.02,
                        OID_IF_HIGH_SPEED: 0.01, OID_IF_OPER_STATUS: 0.005}
-        data = await server._collect_within_budget(agent, IP, 10)
+        data = await poller._collect_within_budget(agent, IP, 10)
         self.assertTrue(data.reachable)
         polling = await server.api_polling()
         row = next(r for r in polling["switches"] if r["ip"] == IP)
@@ -164,7 +164,7 @@ class CutTest(unittest.IsolatedAsyncioTestCase):
             return "core-sw" if oid == OID_SYS_NAME else None
         agent._get = slow
         with self.assertLogs("moonlan", level="WARNING") as logs:
-            result = await server._collect_within_budget(agent, IP, 0.3)
+            result = await poller._collect_within_budget(agent, IP, 0.3)
         self.assertFalse(result.cut["in_walk"])
         self.assertTrue(result.cut["oid"])
         self.assertIn("cut between walks; the last finished was ",
@@ -179,7 +179,7 @@ class CutTest(unittest.IsolatedAsyncioTestCase):
             return "core-sw" if oid == OID_SYS_NAME else None
         agent._get = slow
         with self.assertLogs("moonlan", level="WARNING") as logs:
-            result = await server._collect_within_budget(agent, IP, 0.2)
+            result = await poller._collect_within_budget(agent, IP, 0.2)
         self.assertEqual(result.cut["oid"], "")
         self.assertIn("cut before its first walk", _budget_line(logs))
 
@@ -197,7 +197,7 @@ class CutTest(unittest.IsolatedAsyncioTestCase):
         module.diagnose_silence = nothing
         try:
             with self.assertLogs("moonlan.snmp_collector", level="WARNING"):
-                data = await server._collect_within_budget(agent, IP, 5)
+                data = await poller._collect_within_budget(agent, IP, 5)
         finally:
             module.diagnose_silence = real
         self.assertFalse(data.reachable)

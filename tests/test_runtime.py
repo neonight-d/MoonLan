@@ -12,6 +12,7 @@ Run with:  python -m unittest discover -s tests
 """
 
 import ast
+import asyncio
 import dataclasses
 import sys
 import unittest
@@ -21,7 +22,7 @@ from unittest import mock
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from service_fixture import SWITCHES  # noqa: E402,F401
 
-from moonlan import runtime, server  # noqa: E402
+from moonlan import poller, runtime, server  # noqa: E402
 
 PACKAGE = Path(__file__).resolve().parent.parent / "moonlan"
 HINT = "server.db moved to the runtime: use server.rt.db"
@@ -73,11 +74,34 @@ class StrictModuleTest(unittest.TestCase):
                 self.assertIn(f"use server.rt.{name}", str(caught.exception))
                 self.assertNotIn(name, vars(server))
 
-    def test_other_names_are_as_before(self):
-        original = server.get_collector
-        with mock.patch.object(server, "get_collector", lambda: "patched"):
-            self.assertEqual(server.get_collector(), "patched")
-        self.assertIs(server.get_collector, original)
+    def test_a_stub_collector_goes_where_run_scan_reads_it(self):
+        """poller.get_collector patched is what run_scan calls; patched
+        through server it is refused, not set aside where nothing reads
+        it (v0.8.14)"""
+        class Called(Exception):
+            pass
+
+        class Stub:
+            def begin_scan_cycle(self):
+                raise Called  # the scan asked this collector: enough
+
+        original = poller.get_collector
+        with mock.patch.object(poller, "get_collector", lambda: Stub()):
+            with self.assertRaises(Called):
+                asyncio.run(poller.run_scan())
+        self.assertIs(poller.get_collector, original)
+        with self.assertRaises(AttributeError) as caught:
+            with mock.patch.object(server, "get_collector", lambda: Stub(),
+                                   create=True):
+                pass
+        self.assertEqual(
+            str(caught.exception),
+            "server.get_collector moved to moonlan.poller: "
+            "use moonlan.poller.get_collector",
+        )
+        self.assertNotIn("get_collector", vars(server))
+
+    def test_an_unknown_name_reads_as_before(self):
         with self.assertRaises(AttributeError) as caught:
             server.no_such_name
         self.assertEqual(
@@ -129,6 +153,30 @@ class MovedNameTest(unittest.TestCase):
             "server.py has no no_such_name: patch it in the module it lives in",
         )
         self.assertNotIn("no_such_name", vars(server))
+
+    def test_the_poller_says_where_it_went(self):
+        # run_scan joins once the loops and /api/scan leave server.py
+        for name in ("get_collector",):
+            hint = (f"server.{name} moved to moonlan.poller: "
+                    f"use moonlan.poller.{name}")
+            with self.subTest(name):
+                with self.assertRaises(AttributeError) as caught:
+                    getattr(server, name)
+                self.assertEqual(str(caught.exception), hint)
+                with self.assertRaises(AttributeError) as caught:
+                    setattr(server, name, lambda: None)
+                self.assertEqual(str(caught.exception), hint)
+                with self.assertRaises(AttributeError) as caught:
+                    delattr(server, name)
+                self.assertEqual(str(caught.exception), hint)
+                with self.assertRaises(AttributeError):
+                    with mock.patch.object(server, name, lambda: None):
+                        pass
+                with self.assertRaises(AttributeError) as caught:
+                    with mock.patch.object(server, name, lambda: None, create=True):
+                        pass
+                self.assertEqual(str(caught.exception), hint)
+                self.assertNotIn(name, vars(server))
 
     def test_names_of_server_itself_are_as_before(self):
         log = server.log

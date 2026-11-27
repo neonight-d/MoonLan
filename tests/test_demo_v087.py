@@ -26,7 +26,7 @@ from pathlib import Path
 
 SCRIPT = r"""
 import asyncio, json, logging
-from moonlan import demo, server
+from moonlan import demo, poller, server
 
 logging.getLogger("moonlan").setLevel(logging.ERROR)
 
@@ -55,12 +55,12 @@ async def run():
     out = {"scans": []}
     demo.seed_notes(server.rt.db)
     demo.seed_reading(server.rt.db)
-    await server.restore_readings()
+    await poller.restore_readings()
     out["restored"] = await states()
     out["hosts_before_scan"] = len(server.rt.db.hosts_by_mac())
     for n in range(1, 6):
-        await server.run_scan()
-        await server.run_counters()
+        await poller.run_scan()
+        await poller.run_counters()
         topo = await topology()
         out["scans"].append({
             "states": await states(),

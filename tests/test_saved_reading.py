@@ -36,7 +36,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from service_fixture import SWITCHES  # noqa: E402,F401
 
-from moonlan import server  # noqa: E402
+from moonlan import poller, server  # noqa: E402
 from moonlan.snmp_collector import PortInfo, SwitchData  # noqa: E402
 from moonlan.topology import FdbStability, build_topology  # noqa: E402
 
@@ -160,8 +160,8 @@ class StubCollector:
 class InventoryTest(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
         self.collector = StubCollector()
-        self._get_collector = server.get_collector
-        server.get_collector = lambda: self.collector
+        self._get_collector = poller.get_collector
+        poller.get_collector = lambda: self.collector
         server.rt.switch_data.clear()
         self._budget = server.rt.config.snmp.host_budget_seconds
         server.rt.config.snmp.host_budget_seconds = 1
@@ -171,7 +171,7 @@ class InventoryTest(unittest.IsolatedAsyncioTestCase):
         server.rt.db._conn.commit()
 
     def tearDown(self):
-        server.get_collector = self._get_collector
+        poller.get_collector = self._get_collector
         server.rt.config.snmp.host_budget_seconds = self._budget
         server.rt.state.scanning = False
 
@@ -185,8 +185,8 @@ class InventoryTest(unittest.IsolatedAsyncioTestCase):
         ).fetchone()["n"]
 
     async def test_last_seen_does_not_move_while_nobody_is_looking(self):
-        await server.run_scan()          # one good poll
-        await server.run_scan()          # …and a second, to confirm it
+        await poller.run_scan()          # one good poll
+        await poller.run_scan()          # …and a second, to confirm it
         row = self._row(DEVICE)
         self.assertIsNotNone(row)
         seen_at, count = row["last_seen"], row["seen_count"]
@@ -194,29 +194,29 @@ class InventoryTest(unittest.IsolatedAsyncioTestCase):
         self.collector.slow = True
         for _ in range(3):
             with self.assertLogs("moonlan", "WARNING"):
-                await server.run_scan()
+                await poller.run_scan()
         row = self._row(DEVICE)
         self.assertEqual(row["last_seen"], seen_at)
         self.assertEqual(row["seen_count"], count)
 
         # …and one real poll starts it again
         self.collector.slow = False
-        await server.run_scan()
+        await poller.run_scan()
         row = self._row(DEVICE)
         self.assertGreater(row["last_seen"], seen_at)
         self.assertEqual(row["seen_count"], count + 1)
 
     async def test_a_newcomer_is_not_confirmed_by_repeats_of_one_reading(self):
         """It has to be SEEN twice, not read twice out of one table."""
-        await server.run_scan()
+        await poller.run_scan()
         self.collector.macs = [DEVICE, NEWCOMER]
-        await server.run_scan()          # the newcomer's one sighting
+        await poller.run_scan()          # the newcomer's one sighting
         self.assertEqual(self._journal("new_mac", NEWCOMER), 0)
 
         self.collector.slow = True
         for _ in range(4):
             with self.assertLogs("moonlan", "WARNING"):
-                await server.run_scan()
+                await poller.run_scan()
         row = self._row(NEWCOMER)
         self.assertEqual(row["seen_count"], 1)
         self.assertFalse(row["confirmed"])
@@ -224,17 +224,17 @@ class InventoryTest(unittest.IsolatedAsyncioTestCase):
 
         # one real poll, and it is a device
         self.collector.slow = False
-        await server.run_scan()
+        await poller.run_scan()
         row = self._row(NEWCOMER)
         self.assertTrue(row["confirmed"])
         self.assertEqual(self._journal("new_mac", NEWCOMER), 1)
 
     async def test_the_branch_stays_drawn_throughout(self):
-        await server.run_scan()
+        await poller.run_scan()
         self.collector.slow = True
         for _ in range(3):
             with self.assertLogs("moonlan", "WARNING"):
-                await server.run_scan()
+                await poller.run_scan()
         drawn = server.rt.state.as_dict()
         self.assertIn(
             frozenset({CORE, SLOW}),

@@ -40,7 +40,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from service_fixture import SWITCHES  # noqa: E402,F401
 
-from moonlan import demo, server  # noqa: E402
+from moonlan import demo, poller, server  # noqa: E402
 from moonlan.mapping import upkeep  # noqa: E402
 from moonlan.lldp import LldpNeighbor  # noqa: E402
 from moonlan.snmp_collector import (  # noqa: E402
@@ -187,8 +187,8 @@ class StubCollector:
 class ScanStatesTest(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
         self.collector = StubCollector()
-        self._get_collector = server.get_collector
-        server.get_collector = lambda: self.collector
+        self._get_collector = poller.get_collector
+        poller.get_collector = lambda: self.collector
         self._routers = server.rt.config.routers
         server.rt.config.routers = ["10.0.0.254"]
         server.rt.switch_data.clear()
@@ -213,7 +213,7 @@ class ScanStatesTest(unittest.IsolatedAsyncioTestCase):
         server.rt.alarm_engine._clear = record_clear
 
     def tearDown(self):
-        server.get_collector = self._get_collector
+        poller.get_collector = self._get_collector
         server.rt.config.routers = self._routers
         server.rt.alarm_engine._raise = self._raise
         server.rt.alarm_engine._clear = self._clear
@@ -221,7 +221,7 @@ class ScanStatesTest(unittest.IsolatedAsyncioTestCase):
 
     async def scan(self):
         with self.assertLogs("moonlan", "INFO"):
-            await server.run_scan()
+            await poller.run_scan()
         return {sw["ip"]: sw for sw in server.rt.state.as_dict()["switches"]}
 
     def row(self, mac):
@@ -367,7 +367,7 @@ class StartupTest(unittest.IsolatedAsyncioTestCase):
         self.save(QUIET, age_days=31)
         self.save("10.9.9.9")        # no longer in switches:
         with self.assertLogs("moonlan", "INFO") as logged:
-            await server.restore_readings()
+            await poller.restore_readings()
         text = "\n".join(logged.output)
         self.assertEqual(server.rt.switch_data[CORE].map_state, "restored")
         self.assertIsNone(server.rt.switch_data[CORE].answered)
@@ -391,7 +391,7 @@ class StartupTest(unittest.IsolatedAsyncioTestCase):
         server.rt.config.host_retention_days = 0
         self.save(CORE, age_days=400)
         with self.assertLogs("moonlan", "INFO"):
-            await server.restore_readings()
+            await poller.restore_readings()
         self.assertEqual(server.rt.switch_data[CORE].map_state, "restored")
 
 
@@ -506,7 +506,7 @@ class PageTest(unittest.TestCase):
 
 RESTART = r"""
 import asyncio, copy, json, sys
-from moonlan import demo, server
+from moonlan import demo, poller, server
 from moonlan.snmp_collector import SwitchData
 
 NETWORK = {sw.ip: sw for sw in demo.demo_network()}
@@ -523,7 +523,7 @@ class Agent:
         return copy.deepcopy(NETWORK[host])
 
 
-server.get_collector = lambda: Agent()
+poller.get_collector = lambda: Agent()
 
 
 def picture():
@@ -557,17 +557,17 @@ def new_macs():
 async def run(phase):
     out = {}
     if phase == "before":
-        await server.run_scan()
-        await server.run_scan()
+        await poller.run_scan()
+        await poller.run_scan()
         out["map"] = picture()
     else:
         out["inventory_before"] = inventory()
         out["new_macs_before"] = new_macs()
-        await server.restore_readings()
+        await poller.restore_readings()
         out["map"] = picture()
         out["inventory_after"] = inventory()
         out["new_macs_after"] = new_macs()
-        await server.run_scan()
+        await poller.run_scan()
         out["after_scan"] = picture()
     print(json.dumps(out))
 

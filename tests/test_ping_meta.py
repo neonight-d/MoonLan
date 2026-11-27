@@ -9,7 +9,7 @@ import unittest
 from unittest import mock
 
 import service_fixture  # noqa: F401  (sets MOONLAN_CONFIG first)
-from moonlan import server
+from moonlan import pinger, poller, server
 from moonlan.alarms import AlarmEngine
 from moonlan.db import Database
 from moonlan.notify import Notifier
@@ -57,8 +57,8 @@ class PingMetaTest(unittest.TestCase):
                 mock.patch.object(server.rt, "alarm_engine", engine), \
                 mock.patch.object(server.rt, "fdb_macs",
                                   set(PINGED) | set(NOT_PINGED)), \
-                mock.patch.object(server.pinger, "ping_many", ping_many):
-            asyncio.run(server.run_ping())
+                mock.patch.object(pinger, "ping_many", ping_many):
+            asyncio.run(poller.run_ping())
 
     def scenario(self, whole_inventory: bool):
         db = inventory()

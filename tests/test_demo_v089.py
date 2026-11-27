@@ -24,7 +24,7 @@ from pathlib import Path
 
 SCRIPT = r"""
 import asyncio, json, logging
-from moonlan import demo, server
+from moonlan import demo, poller, server
 
 logging.getLogger("moonlan").setLevel(logging.ERROR)
 
@@ -37,10 +37,10 @@ async def run():
     out = {"texts": {}}
     demo.seed_notes(server.rt.db)
     demo.seed_reading(server.rt.db)
-    await server.restore_readings()
-    await server.run_scan()
+    await poller.restore_readings()
+    await poller.run_scan()
     while demo._ping_cycle < demo.MASS_RECOVER_AT:
-        await server.run_ping()
+        await poller.run_ping()
         out["texts"][demo._ping_cycle] = mass()
     out["raised"] = [
         e["details"] for e in server.rt.db.journal(2000)

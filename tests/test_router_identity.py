@@ -26,7 +26,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from service_fixture import SWITCHES  # noqa: E402,F401
 
-from moonlan import notes, server  # noqa: E402
+from moonlan import notes, poller, server  # noqa: E402
 from moonlan.mapping import router_nodes  # noqa: E402
 from web_source import APP, NODE, run_page  # noqa: E402
 from moonlan.lldp import LldpNeighbor  # noqa: E402
@@ -172,8 +172,8 @@ class ReportTest(unittest.TestCase):
 
     def lines(self, found: RouterIdentity) -> list[str]:
         with self.assertLogs("moonlan", "INFO") as logs:
-            server.log.info("marker")
-            server._report_identity(found)
+            poller.log.info("marker")
+            poller._report_identity(found)
         return [line for line in logs.output if "marker" not in line]
 
     def test_an_empty_identity_is_said_once(self):
@@ -376,8 +376,8 @@ class RouterScanCase(unittest.IsolatedAsyncioTestCase):
 
     def setUp(self):
         self.network = RouterNetwork()
-        self._get_collector = server.get_collector
-        server.get_collector = lambda: self.network
+        self._get_collector = poller.get_collector
+        poller.get_collector = lambda: self.network
         c = server.rt.config
         self._saved = (
             c.switches, c.routers, c.new_host_confirm_scans,
@@ -418,7 +418,7 @@ class RouterScanCase(unittest.IsolatedAsyncioTestCase):
         server.rt.db.set_node_position("host:" + MEMBER, 120.0, -40.0, True)
 
     def tearDown(self):
-        server.get_collector = self._get_collector
+        poller.get_collector = self._get_collector
         c = server.rt.config
         (
             c.switches, c.routers, c.new_host_confirm_scans,
@@ -451,7 +451,7 @@ class WithoutIdentityTest(RouterScanCase):
 
     async def test_the_bond_is_held_back_and_the_member_drawn(self):
         self.network.identity = RouterIdentity(address=ROUTER)
-        await server.run_scan()
+        await poller.run_scan()
         self.assertFalse(self.row(BOND)["confirmed"])
         self.assertEqual(
             server.rt.suspect_by_port[(ACCESS, LAG)],
@@ -467,7 +467,7 @@ class WithoutIdentityTest(RouterScanCase):
 
 class WithIdentityTest(RouterScanCase):
     async def test_the_bond_is_a_device_and_no_copy(self):
-        await server.run_scan()
+        await poller.run_scan()
         row = self.row(BOND)
         self.assertTrue(row["confirmed"])
         self.assertEqual(row["corrupt_of"], "")
@@ -475,7 +475,7 @@ class WithIdentityTest(RouterScanCase):
         self.assertNotIn("suspect_corrupt", self.hosts()[BOND])
 
     async def test_one_node_and_the_rest_drawn_as_it(self):
-        await server.run_scan()
+        await poller.run_scan()
         hosts = self.hosts()
         self.assertEqual(self.drawn(), {BOND})
         self.assertEqual(hosts[BOND]["port"], LAG)
@@ -488,7 +488,7 @@ class WithIdentityTest(RouterScanCase):
         self.assertIsNotNone(self.row(MEMBER))
 
     async def test_the_node_has_the_address_the_name_and_the_interfaces(self):
-        await server.run_scan()
+        await poller.run_scan()
         node = self.hosts()[BOND]
         self.assertEqual(node["router_ip"], ROUTER)
         # LLDP came under the old port's MAC, on the aggregate's member
@@ -508,11 +508,11 @@ class WithIdentityTest(RouterScanCase):
         self.network.lldp = [
             router_neighbour("02:ee:00:00:99:01", ("10.1.2.1",))
         ]
-        await server.run_scan()
+        await poller.run_scan()
         self.assertEqual(self.hosts()[BOND]["lldp"]["sys_name"], "RouterOS-R")
 
     async def test_the_note_and_the_pin_follow_the_node_once(self):
-        await server.run_scan()
+        await poller.run_scan()
         node_id = "host:" + BOND
         note = server.rt.db.note(node_id)
         self.assertEqual(note["label"], "Gateway")
@@ -533,8 +533,8 @@ class WithIdentityTest(RouterScanCase):
         [pinned] = self.events("layout_pinned")
         self.assertEqual(pinned["user"], router_nodes.MOONLAN_ACTOR)
         self.assertEqual(json.loads(pinned["details"])["ids"], [node_id])
-        await server.run_scan()
-        await server.run_scan()
+        await poller.run_scan()
+        await poller.run_scan()
         self.assertEqual(len(self.events("note_moved")), 1)
         self.assertEqual(len(self.events("layout_pinned")), 1)
 
@@ -544,7 +544,7 @@ class WithIdentityTest(RouterScanCase):
                            "admin", now)
         server.rt.db.set_node_position("host:" + BOND, 5.0, 6.0, True)
         for _ in range(notes.MISSING_SCANS):
-            await server.run_scan()
+            await poller.run_scan()
         self.assertEqual(server.rt.db.note("host:" + BOND)["label"], "Core router")
         self.assertEqual(self.events("note_moved"), [])
         self.assertEqual(self.events("layout_pinned"), [])
@@ -556,7 +556,7 @@ class WithIdentityTest(RouterScanCase):
 
     async def test_no_new_mac_for_an_interface_of_the_router(self):
         server.rt.db.delete_hosts([BOND])
-        await server.run_scan()
+        await poller.run_scan()
         self.assertTrue(self.row(BOND)["confirmed"])
         self.assertEqual(self.events("new_mac", BOND), [])
         alarms = server.rt.db._conn.execute(
@@ -566,12 +566,12 @@ class WithIdentityTest(RouterScanCase):
 
     async def test_held_back_is_released_with_one_line(self):
         with self.assertLogs("moonlan", "INFO") as logs:
-            await server.run_scan()
+            await poller.run_scan()
         released = [l for l in logs.output if "are not damaged copies" in l]
         self.assertEqual(len(released), 1)
         self.assertIn(f"{BOND} (bond1 of {ROUTER}, was held back", released[0])
         with self.assertLogs("moonlan", "INFO") as logs:
-            await server.run_scan()
+            await poller.run_scan()
         self.assertEqual(
             [l for l in logs.output if "are not damaged copies" in l], []
         )
@@ -583,7 +583,7 @@ class WithIdentityTest(RouterScanCase):
         )
         server.rt.db._conn.commit()
         with self.assertLogs("moonlan", "INFO") as logs:
-            await server.run_scan()
+            await poller.run_scan()
         self.assertEqual(self.row(BOND)["corrupt_of"], "")
         self.assertIn(BOND, self.drawn())
         self.assertTrue(any(
@@ -598,26 +598,26 @@ class RegressionTest(RouterScanCase):
     COPY = "20:7b:d5:46:92:87"       # two bits away
 
     async def test_neighbouring_macs_with_an_ip_are_two_devices(self):
-        await server.run_scan()
+        await poller.run_scan()
         self.network.access[self.SAMPLE] = 7
-        await server.run_scan()
-        await server.run_scan()
+        await poller.run_scan()
+        await poller.run_scan()
         self.assertTrue(self.row(self.SAMPLE)["confirmed"])
         self.network.access[self.COPY] = 7
         self.network.arp = {self.COPY: "10.1.5.20"}
-        await server.run_scan()
+        await poller.run_scan()
         self.assertTrue(self.row(self.COPY)["confirmed"])
         self.assertIn(self.COPY, self.drawn())
         self.assertNotIn((ACCESS, "Gi0/7"), server.rt.suspect_by_port)
 
     async def test_a_real_copy_on_a_device_port_is_still_found(self):
-        await server.run_scan()
+        await poller.run_scan()
         self.network.access[self.SAMPLE] = 7
-        await server.run_scan()
-        await server.run_scan()
+        await poller.run_scan()
+        await poller.run_scan()
         self.network.access[self.COPY] = 7
         for _ in range(3):
-            await server.run_scan()
+            await poller.run_scan()
         self.assertFalse(self.row(self.COPY)["confirmed"])
         self.assertEqual(
             server.rt.suspect_by_port[(ACCESS, "Gi0/7")],

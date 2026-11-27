@@ -21,7 +21,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from service_fixture import SWITCHES  # noqa: E402
 
-from moonlan import server  # noqa: E402
+from moonlan import poller, server  # noqa: E402
 from moonlan.alarms import AlarmEngine  # noqa: E402
 from moonlan.config import Config  # noqa: E402
 from moonlan.db import Database  # noqa: E402
@@ -117,20 +117,20 @@ class CountersCycleTest(unittest.IsolatedAsyncioTestCase):
         server.rt.db._conn.execute("DELETE FROM alarms")
         server.rt.db._conn.execute("DELETE FROM journal")
         server.rt.db._conn.commit()
-        self._collector = server.get_collector
-        server.get_collector = lambda: _Silent()
-        self._counters = server._counters_locked
+        self._collector = poller.get_collector
+        poller.get_collector = lambda: _Silent()
+        self._counters = poller._counters_locked
 
         async def counters(collector, ip):
             # nothing measured, the loop state as the switch reports it
             return {}, {}, {}, server.rt.switch_data[ip].loop_detection \
                 if ip in server.rt.switch_data else None
 
-        server._counters_locked = counters
+        poller._counters_locked = counters
 
     def tearDown(self):
-        server.get_collector = self._collector
-        server._counters_locked = self._counters
+        poller.get_collector = self._collector
+        poller._counters_locked = self._counters
         server.rt.switch_data.clear()
         server.rt.alarm_engine._active.discard(
             ("loop_detection_disabled", self.ip)
@@ -145,7 +145,7 @@ class CountersCycleTest(unittest.IsolatedAsyncioTestCase):
             "on this switch", time.time() - 60 * 86400,
         )
         server.rt.alarm_engine._active.add(("loop_detection_disabled", self.ip))
-        await server.run_counters()
+        await poller.run_counters()
         active = [a for a in server.rt.db.alarms(True, 50)
                   if a["type"] == "loop_detection_disabled"]
         self.assertEqual(active, [])
@@ -153,7 +153,7 @@ class CountersCycleTest(unittest.IsolatedAsyncioTestCase):
                    if e["event"] == "alarm_cleared"]
         self.assertEqual(len(cleared), 1)
         # …and the next cycle raises nothing new while the tree runs
-        await server.run_counters()
+        await poller.run_counters()
         self.assertEqual(
             [a for a in server.rt.db.alarms(True, 50)
              if a["type"] == "loop_detection_disabled"], [],
@@ -161,7 +161,7 @@ class CountersCycleTest(unittest.IsolatedAsyncioTestCase):
 
     async def test_stp_stopped_raises_it(self):
         self.sw.stp.operating = False
-        await server.run_counters()
+        await poller.run_counters()
         (alarm,) = [a for a in server.rt.db.alarms(True, 50)
                     if a["type"] == "loop_detection_disabled"]
         self.assertIn("not running on this switch", alarm["message"])

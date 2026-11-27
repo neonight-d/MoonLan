@@ -31,7 +31,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from service_fixture import SWITCHES  # noqa: E402,F401
 
-from moonlan import server  # noqa: E402
+from moonlan import poller, server  # noqa: E402
 from moonlan.snmp_collector import PortInfo, SwitchData  # noqa: E402
 from moonlan.stp import StpData, StpPort, judge  # noqa: E402
 
@@ -120,16 +120,16 @@ class RootOnTheMapTest(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
         self.ips = list(server.rt.config.switches)
         self.assertGreaterEqual(len(self.ips), 2)
-        self._get_collector = server.get_collector
-        server.get_collector = lambda: StubCollector(self.ips)
+        self._get_collector = poller.get_collector
+        poller.get_collector = lambda: StubCollector(self.ips)
         server.rt.switch_data.clear()
 
     def tearDown(self):
-        server.get_collector = self._get_collector
+        poller.get_collector = self._get_collector
         server.rt.state.scanning = False
 
     async def test_a_root_its_neighbours_vouch_for_reaches_the_map(self):
-        await server.run_scan()
+        await poller.run_scan()
         drawn = {sw["ip"]: sw for sw in server.rt.state.as_dict()["switches"]}
         root = drawn[self.ips[0]]
         # what the panel says…
@@ -151,7 +151,7 @@ class RootOnTheMapTest(unittest.IsolatedAsyncioTestCase):
         switch's blocking ports mean anything at all, so it was wrong
         in the same breath as the root caption.
         """
-        await server.run_scan()
+        await poller.run_scan()
         drawn = {sw["ip"]: sw for sw in server.rt.state.as_dict()["switches"]}
         panel = {
             entry["ip"]: entry
