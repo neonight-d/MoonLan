@@ -221,7 +221,22 @@ MoonLan/
 │   ├── anonymize.py        # rewriting a diag report so it can be shared
 │   ├── diag.py             # diagnostics CLI
 │   ├── demo.py             # the demo network
-│   └── server.py           # FastAPI application
+│   ├── runtime.py          # the state of the process, one object: rt
+│   ├── startup.py          # what the start says, the redirect port
+│   ├── housekeeping.py     # cleanups, the certificate's end, the leak watch
+│   ├── derived.py          # what the API and the poller derive from rt
+│   ├── journal.py          # the journal's groups
+│   ├── poller.py           # the scan, ping, counters; _build_map
+│   ├── mapping/            # the map, piece by piece
+│   │   ├── build.py        # the steps of one pass from a scan to the map
+│   │   ├── hosts.py        # hosts on the map and in the database
+│   │   ├── switches.py     # switches with no reading, port names, STP
+│   │   ├── bridges.py      # LLDP and the bridges
+│   │   ├── router_nodes.py # a router drawn as one node
+│   │   └── upkeep.py       # notes and saved positions in step with the map
+│   ├── routes/             # the API, one module per subject
+│   ├── lifecycle.py        # lifespan and the periodic loops
+│   └── server.py           # the process put together: rt and the FastAPI app
 ├── tests/
 ├── web/                    # HTML/CSS/JS, English and Russian
 └── docs/
@@ -296,6 +311,7 @@ See **[CONTRIBUTING.md](CONTRIBUTING.md)**.
 | v0.8.11 ✓ | A router on LACP: one node with its own MACs, LLDP behind an aggregate, no false damaged copy |
 | v0.8.12 ✓ | Inside: server.py taken apart, stage 1 — startup and housekeeping, no visible changes |
 | v0.8.13 ✓ | Inside: server.py taken apart, stages 2 and 3 — the runtime and the routes, no visible changes |
+| v0.8.14 ✓ | Inside: server.py taken apart, stages 4 and 5 — the poller, the service's life and the map in steps, no visible changes |
 | v0.9 | Windows computer inventory (WMI/WinRM) |
 
 Every version so far: [CHANGELOG.md](CHANGELOG.md).

@@ -6,6 +6,46 @@ for before the next one started.
 
 Русская версия — [CHANGELOG_RU.md](CHANGELOG_RU.md).
 
+## v0.8.14 — 2026-11-27
+
+Internal: server.py, stages 4 and 5 — no visible changes. This version
+finishes taking server.py apart: what is left of it puts the process
+together, about 300 lines of 3078. The page, the API, the log lines and
+what the service does are those of v0.8.13.
+
+Where things are now:
+
+- **moonlan/poller.py** — everything that asks the network: the
+  collector and the lock per switch, the scan within its budget, the
+  restore of the saved readings, the routers' ARP and identity, ping,
+  the counters, and `_build_map`, which calls the steps of the map;
+- **moonlan/mapping/** — the map, piece by piece: `hosts`, `switches`,
+  `bridges`, `router_nodes`, `upkeep`, and `build` — the 499 lines of
+  `_build_map` as 21 steps that hand each other a `MapPass`;
+- **moonlan/lifecycle.py** — `lifespan` and the six periodic loops;
+- **moonlan/routes/polling.py** — `POST /api/scan` and `GET
+  /api/polling`; `/api/topology` joined routes/topology.py;
+- **moonlan/journal.py** — the journal's groups; `STARTED_AT` is in
+  about.py, `configured_switches` in derived.py;
+- **moonlan/startup.py**, **moonlan/housekeeping.py** — read `rt`
+  themselves, as server.py's functions did in v0.8.11; the wrappers in
+  server.py are gone.
+
+The modules stand in layers — server; lifecycle and routes; the poller;
+the map; derived, startup and housekeeping; the rest — and a module
+imports only from its own layer or below; nothing imports
+moonlan.server. tests/test_module_boundaries.py holds the layers. What
+`_build_map` does to the database, the alarms and the state, and in
+which order, was recorded in four scenarios before the cut and is held
+by tests/test_build_map_effects.py; tests/test_map_steps.py holds what
+each step reads and writes.
+
+For your own scripts: server.py no longer keeps the names that moved.
+`server.run_scan` says where the name lives now — "server.run_scan
+moved to moonlan.poller: use moonlan.poller.run_scan" — and so does an
+assignment like `server.get_collector = stub`, which used to be
+quietly ignored. `server.rt` and `server.app` are where they were.
+
 ## v0.8.13 — 2026-11-27
 
 Internal: server.py, stages 2 and 3 — no visible changes. Stage 1

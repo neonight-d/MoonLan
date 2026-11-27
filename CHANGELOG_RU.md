@@ -6,6 +6,46 @@
 
 English version — [CHANGELOG.md](CHANGELOG.md).
 
+## v0.8.14 — 27.11.2026
+
+Внутреннее: server.py, этапы 4 и 5 — без видимых изменений. Эта версия
+завершает разбор `server.py`: в нём осталась сборка процесса, около 300
+строк из 3078. Страница, API, строки лога и поведение сервиса — те же,
+что в v0.8.13.
+
+Где что теперь:
+
+- **moonlan/poller.py** — всё, что спрашивает сеть: коллектор и
+  блокировка на коммутатор, скан в пределах бюджета, восстановление
+  сохранённых показаний, ARP и удостоверение маршрутизаторов, пинг,
+  счётчики и `_build_map`, который вызывает шаги сборки карты;
+- **moonlan/mapping/** — карта по частям: `hosts`, `switches`,
+  `bridges`, `router_nodes`, `upkeep` и `build` — 499 строк
+  `_build_map` как 21 шаг, передающие друг другу `MapPass`;
+- **moonlan/lifecycle.py** — `lifespan` и шесть периодических циклов;
+- **moonlan/routes/polling.py** — `POST /api/scan` и `GET
+  /api/polling`; `/api/topology` перешёл в `routes/topology.py`;
+- **moonlan/journal.py** — группы журнала; `STARTED_AT` — в
+  `about.py`, `configured_switches` — в `derived.py`;
+- **moonlan/startup.py**, **moonlan/housekeeping.py** — читают `rt`
+  сами, как функции `server.py` в v0.8.11; обёрток в `server.py` больше
+  нет.
+
+Модули стоят слоями — `server`; `lifecycle` и маршруты; опрос; карта;
+`derived`, `startup` и `housekeeping`; всё остальное, — и модуль
+импортирует только из своего слоя или ниже; `moonlan.server` не
+импортирует никто. Слои держит `tests/test_module_boundaries.py`. Что
+`_build_map` делает с базой, тревогами и состоянием и в каком порядке,
+записано в четырёх сценариях до разбиения и держится
+`tests/test_build_map_effects.py`; что каждый шаг читает и пишет —
+`tests/test_map_steps.py`.
+
+Для своих скриптов: `server.py` больше не хранит перенесённых имён.
+`server.run_scan` подскажет, где имя живёт теперь, — «server.run_scan
+moved to moonlan.poller: use moonlan.poller.run_scan», — и так же
+ответит присваивание вроде `server.get_collector = stub`, которое
+раньше молча ничего не делало. `server.rt` и `server.app` на месте.
+
 ## v0.8.13 — 27.11.2026
 
 Внутреннее: server.py, этапы 2 и 3 — без видимых изменений. Этап 1

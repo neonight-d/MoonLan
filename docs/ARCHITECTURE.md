@@ -42,7 +42,7 @@ A walk is a run of GETNEXT requests, and `_walk` holds the agent to RFC 3416 §4
 
 For each router of `routers:` the collector reads, with its ARP table, `ifPhysAddress`, `ifName` (or `ifDescr` where it is empty), `ifType` and `ipAdEntIfIndex` — all through `_walk`, with every rule above. moonlan/routers.py turns them into a `RouterIdentity`: each of the router's MACs with the names of the interfaces that have it (the one it is called by first: a bond before its members, a port before a VLAN), each of its own IPs with the MAC of its interface, and the MAC of the interface the `routers:` address is on. A router that answers no `ifPhysAddress` has an empty identity, and nothing below changes for it. The identity lives for one scan; the service does not store it.
 
-The server uses it in four places, all in `_build_map`. A router's own MACs join the MACs ARP vouches for (`with_ip`): never copy candidates, never held back, confirmed at once without `new_mac` (`upsert_hosts(vouched=…)`), and what the copy rules did to them before is undone (`Database.vouch_for`). `routers.place()` picks one node per router — an LLDP bridge that is the router, or the router's MAC on the map, the interface of its `routers:` address first — and every other MAC of the router is merged into it (`merged_into`), whether it is on that port, on another one or only in the database. An LLDP neighbour is the router when its chassis ID is one of the router's MACs or its addresses are the router's; on the node's port its data goes onto the node. A note or a pinned position on a merged MAC moves to the node once, when the node has none (journal user `@moonlan`).
+The server uses it in four places, all in the steps of the map (moonlan/mapping/build.py). A router's own MACs join the MACs ARP vouches for (`with_ip`): never copy candidates, never held back, confirmed at once without `new_mac` (`upsert_hosts(vouched=…)`), and what the copy rules did to them before is undone (`Database.vouch_for`). `routers.place()` picks one node per router — an LLDP bridge that is the router, or the router's MAC on the map, the interface of its `routers:` address first — and every other MAC of the router is merged into it (`merged_into`), whether it is on that port, on another one or only in the database. An LLDP neighbour is the router when its chassis ID is one of the router's MACs or its addresses are the router's; on the node's port its data goes onto the node. A note or a pinned position on a merged MAC moves to the node once, when the node has none (journal user `@moonlan`).
 
 ### Topology
 
@@ -60,52 +60,112 @@ SQLite stores inventory, layout, alarms, and journal information. WAL mode is us
 
 ### API
 
-moonlan/server.py makes the FastAPI app; its routes are in moonlan/routes/, by subject, but for the three that depend on polling. `/api/topology` combines the latest topology state with fresh database fields when serving the UI.
+moonlan/server.py makes the FastAPI app; its routes are all in moonlan/routes/, by subject — routes/polling.py, the only one that needs the poller, is included last. `/api/topology` combines the latest topology state with fresh database fields when serving the UI.
 
 The /api/health endpoint is intentionally cheap, answers without sign-in, and says only that the process is up and which version it is. /api/status contains deeper operational state and needs a viewer.
 
-#### server.py, taken apart in stages (v0.8.12, v0.8.13)
+#### server.py, taken apart in stages (v0.8.12 – v0.8.14)
 
-server.py grew to nearly 5000 lines: the state of the process, 46 routes, the scan and polling loops, the building of the map, the cleanups and the lines the log opens with. It is being taken apart in stages, and each stage is accepted on one criterion: everything works as before — any visible difference is a bug.
+server.py grew to nearly 5000 lines: the state of the process, 46 routes, the scan and polling loops, the building of the map, the cleanups and the lines the log opens with. It was taken apart in five stages, each accepted on one criterion: everything works as before — any visible difference is a bug.
 
 1. **v0.8.12:** moonlan/startup.py and moonlan/housekeeping.py — leaves with no state of their own.
 2. **v0.8.13:** moonlan/runtime.py — the state of the process in one object, `rt`; the tests moved onto it.
 3. **v0.8.13:** moonlan/routes/ — 43 of the 46 routes, by subject, and moonlan/derived.py for what the routes and the scan both derive from the state.
-4. moonlan/poller.py — the polling loops and the building of the map; the three routes that depend on polling (`/api/topology`, `/api/polling`, `/api/scan`); `lifespan` and the periodic loops, and with them the stage 1 wrappers go.
-5. `_build_map` split into steps, with a test of the order of its side effects.
+4. **v0.8.14:** moonlan/poller.py — everything that asks the network; moonlan/mapping/ — the helpers of the map; the last three routes; moonlan/lifecycle.py — `lifespan` and the periodic loops. The stage 1 functions read `rt` themselves, and their wrappers went.
+5. **v0.8.14:** `_build_map` cut into steps, moonlan/mapping/build.py, with a test of the order of its side effects written before the cut.
 
-Where things are now:
+What is where:
 
+- **moonlan/server.py** — the process put together: filling `rt` at its import, its 41 fields in the order of `Runtime`, and `_demo_probe` for `rt.jobs`; the app, its middleware, `signin.add_routes`, the modules of routes/ in their order, the static page last; the strict module. About 300 lines. uvicorn runs `moonlan.server:app`.
 - **moonlan/runtime.py** — `Runtime`, a dataclass with a field, and its type, for each of the 41 pieces of mutable state the globals of server.py were: the config, the database and the accounts one, the topology state, the public address and the certificate, the sign-in, the notifier and the alarm engine, the readings, counters and flaps of the switches, the flags of the first scan and the cleanup, the collector, the locks… `FIELDS` is their names, the one list; `rt` is the one instance. Nothing from MoonLan is imported there but for the annotations.
-- **moonlan/derived.py** — what both the API and the scan derive from the state: `_uplink_ports`, `_copies_window`, `_subject_inbound_errors`, `_effective_monitored`, `_lag_groups`, `_sum_known`, `_rates_hide_age`, `_round`, `_loop_report`.
+- **moonlan/lifecycle.py** — `lifespan`: what the start does before the first request, in its order, and what the end undoes; the six loops it starts (`periodic_scan`, `periodic_ping`, `periodic_counters`, `periodic_cleanup`, `periodic_resource_log`, `periodic_certificate_check`), `sleep_interval` and `_scan_seconds`.
+- **moonlan/poller.py** — the collector and the lock per switch (`get_collector`, `host_lock`, `loop_profiles`), the scan within its budget (`run_scan`, `_collect_within_budget`, `_settle`), the restore of the saved readings (`restore_readings`), the routers' ARP and identity, ping (`run_ping`), the counters and what they say about loops and flaps (`run_counters`), and `_build_map`, which calls the steps of the map in order.
+- **moonlan/mapping/** — the map, piece by piece; the package imports none of its modules:
+  - `hosts.py` — the hosts on the map and in the database: distorted MACs, the addresses ARP no longer confirms, the devices behind a port and where the database last placed them, the inventory split into the map's hosts, offline groups and the ones off the map, the text of `new_mac`, the fields from the database, reverse DNS;
+  - `switches.py` — a node for every switch with no reading, the old names of synthetic ports, the journal's record of a link taken back, the spanning tree;
+  - `bridges.py` — LLDP for the database, the bridges known or polled, the identity of the device a bridge node is, the node on a port;
+  - `router_nodes.py` — a router drawn as one node (not routers.py, which reads its identity); `MOONLAN_ACTOR`;
+  - `upkeep.py` — the node ids the map draws and what each hangs off, the nodes a note can be on, the reconciling of notes, the cleanup of positions old and gone; the routes of notes and the layout import these from here;
+  - `build.py` — `MapPass` and the steps of one pass from a scan to the map (the table below).
 - **moonlan/routes/** — one module per subject, each with its own `router = APIRouter()`, and what only its routes use:
-  - `system.py` — `/api/health`, `/api/about`, `/api/about/license`, `/` and `/index.html`; `WEB_DIR`, `STARTED_AT`, `BUILD`, `COPYRIGHT`, `VERSIONED_ASSETS`, `RevalidatedStaticFiles`;
+  - `system.py` — `/api/health`, `/api/about`, `/api/about/license`, `/` and `/index.html`; `WEB_DIR`, `BUILD`, `COPYRIGHT`, `VERSIONED_ASSETS`, `RevalidatedStaticFiles`;
   - `settings.py` — `/api/settings…`, `/api/me/notifications…`, `DELETE /api/users/{name}/notifications`;
-  - `notes.py` — `/api/notes…`, and `_noted_node_ids` and `_stand_in`, which server.py needs too;
-  - `layout.py` — `/api/layout…`, and `_layout_anchors` and `_layout_node_ids`, which `purge_layout` in server.py needs too;
+  - `notes.py` — `/api/notes…`, and the notes put on the nodes of `/api/topology` (`_attach_notes`);
+  - `layout.py` — `/api/layout…`;
   - `actions.py` — `/api/node-menu`, `/api/actions…`, `PATCH /api/host/{mac}`;
-  - `alarms.py` — `/api/alarms…`, `/api/journal` and the journal's groups (`JOURNAL_GROUPS`, `JOURNAL_OTHER`, `EVENT_GROUP`);
-  - `topology.py` — `/api/switch/{ip}/ports`, `/api/stp`, `/api/search`, `/api/skipped-oids`, `/api/status`;
+  - `alarms.py` — `/api/alarms…`, `/api/journal`;
+  - `topology.py` — `/api/topology` with the load and LAG of its links, `/api/switch/{ip}/ports`, `/api/stp`, `/api/search`, `/api/skipped-oids`, `/api/status`;
+  - `polling.py` — `POST /api/scan` and `GET /api/polling`, the only routes that need the poller; included last;
   - `common.py` — what more than one of them uses: `_refuse`, `_copy_samples`;
-  - `__init__.py` — `include(app, router)`, which puts each route of a router into `app.routes` as its own entry, in order. Not `app.include_router`: an included router is one opaque entry in `app.routes`, and the guard finds the rights of a request by the path of the route that will serve it (`signin.route_key`), as the test that every route is in the rights table does — the reason `signin.add_routes` adds its routes to the app itself.
-- **moonlan/startup.py** — what the start says, and the port that only redirects: `configure_logging`; `_log_config` with `_config_missing`, `_log_settings` and `_setting_problem`; `_log_public_url` and `_log_transport`; `_log_certificate` (`CERT_WARN_DAYS`), which returns the certificate it read for server.py to keep; `start_redirect_listener`.
+  - `__init__.py` — `include(app, router)` and nothing else: the package imports none of its modules, server.py imports the ones it includes. `include` puts each route of a router into `app.routes` as its own entry, in order. Not `app.include_router`: an included router is one opaque entry in `app.routes`, and the guard finds the rights of a request by the path of the route that will serve it (`signin.route_key`), as the test that every route is in the rights table does — the reason `signin.add_routes` adds its routes to the app itself.
+- **moonlan/derived.py** — what both the API and the poller derive from the state: `_uplink_ports`, `_copies_window`, `_subject_inbound_errors`, `_effective_monitored`, `_lag_groups`, `_sum_known`, `_rates_hide_age`, `_round`, `_loop_report`, `configured_switches`.
+- **moonlan/startup.py** — what the start says, and the port that only redirects: `configure_logging`; `_log_config` with `_config_missing`, `_log_settings` and `_setting_problem`; `_log_public_url` and `_log_transport`; `_log_certificate` (`CERT_WARN_DAYS`), which keeps the certificate it read in `rt.certificate`; `start_redirect_listener`.
 - **moonlan/housekeeping.py** — the cleanups (`purge_invalid_macs`, `purge_old_hosts`, `purge_journal`, `hide_confirmed_copies`, `purge_copies`, `drop_unpinned_positions`), the end of the certificate (`check_certificate_end`, `CERT_ALARM_DAYS`, `CERT_CHECK_SECONDS`), the leak watch's `resource_usage`, and `RESOURCE_LOG_SECONDS` and `CLEANUP_SECONDS`.
-- **moonlan/server.py** — the rest, until stages 4 and 5: filling `rt` at its import; the app, its middleware, `signin.add_routes`, the routers in the order above, the static page last; the three routes that depend on polling, with what only they use (`_attach_notes`, `_link_load`, `_refresh_link_lag`); `lifespan`; the scan, ping and counter loops, `_build_map` and everything it calls (`MOONLAN_ACTOR` among it); the loops that run the cleanups (`periodic_cleanup`, `periodic_certificate_check`, `periodic_resource_log`) and `purge_layout`; the stage 1 wrappers.
+- **moonlan/journal.py** — the journal's groups (`JOURNAL_GROUPS`, `JOURNAL_OTHER`, `EVENT_GROUP`), which the route of the journal and the daily cleanup both read; **moonlan/about.py** keeps `STARTED_AT`, which About and the map's switch cards both show.
+
+The layers. A module imports only from its own layer or below; inside a layer there is no cycle; nothing imports moonlan.server.
+
+| Layer | Modules |
+|---|---|
+| 5 | `server` |
+| 4 | `lifecycle`, `routes.*` — they do not import each other, and of routes only `routes.polling` imports the poller |
+| 3 | `poller` |
+| 2 | `mapping.*` |
+| 1 | `derived`, `startup`, `housekeeping` |
+| 0 | `runtime`, `journal`, `about` and every other module of MoonLan (`config`, `db`, `topology`, `alarms`, …) |
+
+The steps of the map (mapping/build.py), in the order `poller._build_map` calls them. What one step hands another is a field of `MapPass`: the four inputs (`collected`, `arp`, `observe`, `identities`) and what the steps find. Each step is a run of the old body word for word, its comments with it; the one change is `x` → `p.x` for a variable that goes from one step to another.
+
+| # | Step | What it does |
+|---:|---|---|
+| 1 | `keep_readings` | this scan's readings become `rt.switch_data`; the readings worth saving put aside before anything writes into them |
+| 2 | `judge_spanning_tree` | the spanning tree judged across the switches, before the map reads it |
+| 3 | `retire_port_names` | port names from before v0.8.6 renamed or reset in the database |
+| 4 | `vouch_for_routers` | the routers' own MACs out of what the copy rules did to them |
+| 5 | `weigh_addresses` | the database's rows, the scans to confirmation, the MACs that wait, the copy candidates, who does not vote |
+| 6 | `infer_topology` | `build_topology`: switches, links, devices, switches without SNMP, bridges |
+| 7 | `journal_dropped_links` | the links the inference took back, into the journal |
+| 8 | `add_stub_switches` | a node for every switch with no reading |
+| 9 | `find_copies` | the damaged copies among the devices |
+| 10 | `record_sightings` | sightings, ARP, names, confirmations, copies taken off; the new MACs |
+| 11 | `settle_unconfirmed` | what the database has not accepted, off the map; addresses ARP no longer confirms released |
+| 12 | `place_router_nodes` | each router one node |
+| 13 | `assemble_hosts` | the map's devices, offline groups, devices without a place, groups behind trunks |
+| 14 | `write_down` | LLDP, the bridges, the full readings, into the database |
+| 15 | `date_bridges` | since when each bridge is seen, and whether it is known |
+| 16 | `caption_routers` | a router's address on its node; a note or pin on its other MACs moved to it |
+| 17 | `find_uplink_suspects` | ports that look like a way out of the network |
+| 18 | `publish` | the spanning-tree report, and the map published |
+| — | `_build_map` itself | at the start (no `observe`): the log line, and nothing more; in the demo, `run_ping` |
+| 19 | `report_switches` | the switches to the alarms: answered or not, all silent at once, past their budget |
+| 20 | `report_network` | bridges, the spanning tree, copies, new MACs, to the alarms |
+| 21 | `finish_scan` | the first scan done and said, old positions forgotten, notes reconciled |
 
 The state of the process, since stage 2:
 
 - **One `rt`, never replaced.** `rt = Runtime()` is made when moonlan/runtime.py is imported. server.py fills its fields at its own import, in the order it used to assign the globals — `settings.load(config, db)` changes the config in place, so the order matters.
-- **`rt.X` is read when the code runs.** `from .runtime import rt` is how a module gets it; `db = rt.db` at module level is not allowed: it would keep what was there before server.py filled it. The config is never replaced as a whole: the alarm engine and the notifier hold parts of it, and settings.py edits them in place.
-- **The strict module.** A name of the state asked of moonlan.server fails loudly: `server.db`, `server.db = fake` and `patch.object(server, "db", …)` raise AttributeError "server.db moved to the runtime: use server.rt.db" — reading through the module's `__getattr__` (PEP 562), writing and deleting through its class, a `types.ModuleType` with `__setattr__` and `__delattr__`. A write is never passed on to `rt`: `patch.object` deletes the attribute on the way out and would not put the value back. Tests patch `server.rt`: `patch.object(server.rt, "db", …)`.
+- **`rt.X` is read when the code runs.** `from .runtime import rt` is how a module gets it; `db = rt.db` at module level is not allowed: it would keep what was there before server.py filled it. The config is never replaced as a whole: the alarm engine and the notifier hold parts of it, and settings.py edits them in place. The stage 1 functions read `rt` too, since v0.8.14.
+
+The strict module. moonlan.server keeps nothing that moved, and a name it does not have fails loudly — `server.get_collector = stub` would otherwise make an attribute nothing reads, and the test would poll its switches for real:
+
+- reading (the module's `__getattr__`, PEP 562): a field of `Runtime` — "server.db moved to the runtime: use server.rt.db"; a function or class of another MoonLan module — "server.run_scan moved to moonlan.poller: use moonlan.poller.run_scan", the address looked up among the loaded modules by `__module__`, not listed; anything else, the standard message;
+- writing and deleting (the module's class, a `types.ModuleType` with `__setattr__` and `__delattr__`): a field of `Runtime` as above; a name server.py does not have, the same address or "server.py has no X: patch it in the module it lives in"; a name it has, as usual. A write is never passed on: `patch.object` deletes the attribute on the way out and would not put the value back. Assignments at the top of server.py write into its namespace directly, past both.
+
+Tests use names where they live: `poller.get_collector = stub` is what `run_scan` calls, `patch.object(server.rt, "db", …)` replaces the database.
 
 The border, for every stage:
 
-- A module taken out of server.py **never imports moonlan.server** — not at the top, not inside a function, not by name. It imports `rt` and the modules below it: config, db, https, settings and so on. server.py imports them, never the other way round.
-- **The moved code is the old code word for word**, comments included. Since stage 2 a module reads what it needs from `rt`, and the one change allowed in a moved body is `X` → `rt.X` (a `global X` line goes, and `X = …` becomes `rt.X = …`); a route's `@app.<method>(…)` becomes `@router.<method>(…)` with the same arguments. Stage 1 modules are given what they need as parameters named after the globals they stand for. The log is `logging.getLogger("moonlan")`, not `__name__`, so the log lines stay `moonlan: …`.
-- **server.py keeps every name that moved and is called or read through it**: a stage 1 wrapper of the same name and signature, which reads `rt` when it is called (the wrappers go with stage 4), or the name itself, re-exported — a constant, or a function that reads `rt` on its own.
-- A move is a commit of its own, with nothing else in it, so `git diff --color-moved` and `git blame --minimal -C -C` show the code as moved, not rewritten (without `--minimal`, blame does not follow it in a file this size).
+- A module taken out of server.py **never imports moonlan.server** — not at the top, not inside a function, not by name — and keeps to its layer.
+- **The moved code is the old code word for word**, comments included. The changes allowed in a moved body are named by its stage: `X` → `rt.X` (stage 2; a `global X` line goes, `X = …` becomes `rt.X = …`), `@app.<method>(…)` → `@router.<method>(…)` with the same arguments (stage 3), the parameters named after the globals taken off a stage 1 function (stage 4), `x` → `p.x` in a step of the map (stage 5). A caller imports a moved name by name, so its own body does not change. The log is `logging.getLogger("moonlan")`, not `__name__`, so the log lines stay `moonlan: …`.
+- A move is a commit of its own, with nothing else in it, so `git diff --color-moved` and `git blame --minimal -C -C` show the code as moved, not rewritten.
 
-The tests hold it: tests/test_module_boundaries.py — every module of `NEW_MODULES` imports no moonlan.server and none is loaded with it in a clean process, the "moonlan" logger, no module but server.py reads `rt` at its import, and every name of `MOVED` is still in server.py; a new stage adds its modules and names there. tests/test_runtime.py — the strict module, and every field of `Runtime` filled at the import of server in its order. tests/test_route_table.py — the methods, paths and handlers of the app as they were before stage 3, each route its own entry, the static page last, only the three polling routes declared in server.py.
+The tests hold it:
+
+- **tests/test_module_boundaries.py** — every module of `NEW_MODULES` imports no moonlan.server and none is loaded with it in a clean process; every file of routes/ and mapping/ is listed; the "moonlan" logger; no module but server.py reads `rt` at its import; server.py defines only the strict module, its helper and `_demo_probe`, and no route; no function or class of the modules taken out is found through server but `lifespan` and `RevalidatedStaticFiles`, which it imports for itself; the layers, by the imports of every module of moonlan, the check itself checked on sample imports and graphs; one module of routes loads no other.
+- **tests/test_runtime.py** — the strict module, its refusals with their addresses, and every field of `Runtime` filled at the import of server in its order.
+- **tests/test_build_map_effects.py** — what `_build_map` does to the world, in order: every call of `rt.db`, `rt.alarm_engine` and `rt.state`, every log line and every field of `rt` assigned, and the state at the end, in four scenarios (the demo's restore and scans, two SNMP networks), each in a process of its own, held to tests/fixtures/build-map-effects/. Written before the cut; `MOONLAN_RECORD_EFFECTS=1` rewrites the fixtures, a plain run compares.
+- **tests/test_map_steps.py** — each step reads what an earlier one wrote, the fields more than one step writes are listed, no field is written for nobody, the steps are defined in the order they are called.
+- **tests/test_route_table.py** — the methods, paths and handlers of the app as they were before stage 3, each route its own entry, the static page last, none declared in server.py.
 
 ### Sign-in and rights
 
