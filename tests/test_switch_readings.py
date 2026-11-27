@@ -41,6 +41,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from service_fixture import SWITCHES  # noqa: E402,F401
 
 from moonlan import demo, server  # noqa: E402
+from moonlan.mapping import upkeep  # noqa: E402
 from moonlan.lldp import LldpNeighbor  # noqa: E402
 from moonlan.snmp_collector import (  # noqa: E402
     READING_FORMAT,
@@ -306,7 +307,7 @@ class ScanStatesTest(unittest.IsolatedAsyncioTestCase):
             link for link in topo["links"] if QUIET in (link["a"], link["b"])
         ])
         # its name is on the map, not under "Notes without a node"
-        self.assertIn("sw:" + QUIET, server._noted_node_ids())
+        self.assertIn("sw:" + QUIET, upkeep._noted_node_ids())
         self.assertFalse(server.rt.db.note("sw:" + QUIET).get("missing_since"))
         # /api/polling: it answered — not "reachable: false"
         polling = {

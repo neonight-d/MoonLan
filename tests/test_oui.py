@@ -30,6 +30,7 @@ from unittest import mock
 import service_fixture  # noqa: F401  (sets MOONLAN_CONFIG first)
 from asgi_client import call
 from moonlan import diag, notify, oui, server, startup
+from moonlan.mapping import hosts as mapping_hosts
 from moonlan.config import Config, load_config
 
 HEADER = "Registry,Assignment,Organization Name,Organization Address\r\n"
@@ -425,7 +426,7 @@ class ServiceTest(Folder):
 
     def test_a_new_device_is_announced_with_its_maker(self):
         where = {"switch_ip": "10.0.0.1", "port": "Gi0/15"}
-        text = server._new_device_text(GIGA, where)
+        text = mapping_hosts._new_device_text(GIGA, where)
         self.assertEqual(
             text, "new device by GIGA-BYTE TECHNOLOGY CO.,LTD. on core "
                   "(10.0.0.1) Gi0/15"
@@ -434,11 +435,11 @@ class ServiceTest(Folder):
         self.assertIn("GIGA-BYTE TECHNOLOGY CO.,LTD.", notify.format_text(
             "new_mac", GIGA, "info", text, False))
         self.assertIn("random or hand-set address",
-                      server._new_device_text(PHONE, where))
+                      mapping_hosts._new_device_text(PHONE, where))
         self.assertIn("not in the IEEE register",
-                      server._new_device_text(NOBODY, where))
+                      mapping_hosts._new_device_text(NOBODY, where))
         self.use(oui.Registry.load(self.folder / "nowhere"))
-        self.assertEqual(server._new_device_text(GIGA, where),
+        self.assertEqual(mapping_hosts._new_device_text(GIGA, where),
                          "new device on core (10.0.0.1) Gi0/15")
 
     def test_lldp_neighbours_in_the_ports_panel(self):

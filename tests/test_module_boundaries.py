@@ -66,8 +66,6 @@ MOVED = {
         "api_about": None,
     },
     "routes.notes": {
-        "_stand_in": None,
-        "_noted_node_ids": None,
         "_mac_directory": None,
     },
     "routes.layout": {
@@ -75,8 +73,6 @@ MOVED = {
         "Offset": None,
         "LayoutBody": None,
         "LAYOUT_EVENT_IDS": None,
-        "_layout_anchors": None,
-        "_layout_node_ids": None,
         "api_layout": None,
         "api_put_layout": None,
         "api_patch_positions": None,

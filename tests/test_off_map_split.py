@@ -24,6 +24,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from service_fixture import SWITCHES  # noqa: E402,F401
 
 from moonlan import server  # noqa: E402
+from moonlan.mapping import hosts  # noqa: E402
 from web_source import NODE, run_page  # noqa: E402
 
 CORE = SWITCHES[0]
@@ -73,7 +74,7 @@ class RecordsTest(unittest.TestCase):
             # a port the poll had no name for (v0.8.6), seen an hour ago
             RESET: row(RESET, switch=CORE, port="", last_seen=now - HOUR),
         }
-        _hosts, _groups, unlocated, _trunks = server._assemble_hosts(
+        _hosts, _groups, unlocated, _trunks = hosts._assemble_hosts(
             [], rows, [], {CORE},
             uplink_only={UPLINK_ONLY: [(CORE, "Gi0/26")]},
         )

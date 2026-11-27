@@ -6,11 +6,9 @@ import asyncio
 import inspect
 import json
 import logging
-import socket
 import sys
 import time
 import types
-from collections import Counter
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
@@ -18,7 +16,7 @@ from fastapi.responses import JSONResponse
 
 from . import (
     __version__, corruption, counters, demo, https, loopdetect, notes, oui,
-    pinger, probes, routes, settings, signin, stp, subscriptions,
+    pinger, probes, routes, settings, signin, subscriptions,
 )
 from .about import STARTED_AT
 from .alarms import AlarmEngine
@@ -49,10 +47,52 @@ from .housekeeping import (
     purge_old_hosts,
     resource_usage,
 )
+from .mapping.bridges import (
+    _infrastructure,
+    _is_known_bridge,
+    _known_bridge_ids,
+    _lldp_rows,
+    _merge_bridge_identity,
+    _nodes_on_port,
+    _suppressed_bridges,
+)
+from .mapping.hosts import (
+    _apply_suspects,
+    _assemble_hosts,
+    _known_hosts_per_port,
+    _mark_recent,
+    _marked_copies,
+    _merge_db_fields,
+    _new_device_text,
+    _release_unconfirmed_ips,
+    _remembered_locations,
+    _switch_macs,
+    resolve_names,
+)
+from .mapping.router_nodes import (
+    _mark_router_nodes,
+    _merge_router_macs,
+    _release_router_macs,
+    _remembered_router_macs,
+    _router_addresses,
+    _router_nodes_take_over,
+)
+from .mapping.switches import (
+    _dropped_link_details,
+    _judge_stp,
+    _retire_port_names,
+    _stp_report,
+    _stub_switches,
+)
+from .mapping.upkeep import (
+    _purge_layout_once,
+    _reconcile_notes,
+    _stand_in,
+    purge_layout,
+)
 from .notify import Notifier
 from .routers import (
     RouterIdentity,
-    card as router_card,
     own_macs as router_own_macs,
     place as place_routers,
 )
@@ -73,19 +113,13 @@ from .routes.layout import (  # noqa: F401 (moved)
     LayoutBody,
     NodePosition,
     Offset,
-    _layout_anchors,
-    _layout_node_ids,
     api_clear_layout,
     api_delete_node_position,
     api_layout,
     api_patch_positions,
     api_put_layout,
 )
-from .routes.notes import (  # noqa: F401 (moved)
-    _mac_directory,
-    _noted_node_ids,
-    _stand_in,
-)
+from .routes.notes import _mac_directory  # noqa: F401 (moved)
 from .routes.system import (  # noqa: F401 (moved)
     VERSIONED_ASSETS,
     WEB_DIR,
@@ -116,14 +150,11 @@ from .snmp_collector import (
     STATE_UNREACHABLE,
     SnmpCollector,
     SwitchData,
-    is_random_mac,
 )
 from .topology import (
     FdbStability,
     TopologyState,
     build_topology,
-    group_beyond_trunk,
-    lldp_metadata,
     port_name,
     suspect_uplink_ports,
 )
@@ -697,62 +728,6 @@ async def restore_readings() -> None:
     await _build_map(collected, {}, observe=False)
 
 
-def _stub_switches(
-    collected: list[SwitchData], hosts: list[dict]
-) -> list[dict]:
-    """A node for every switch with no full reading anywhere (v0.8.7).
-
-    It used to vanish: no reading, nothing drawn, and its name went to
-    "Notes without a node". It is drawn now with what is known — its
-    address, the note on it — and nothing that is not. Where the MAC
-    of its management address is in another switch's table, it stands
-    on that port, the way a device would.
-    """
-    drawn = {sw.ip for sw in collected if sw.reachable}
-    by_ip = {sw.ip: sw for sw in collected}
-    where = {
-        h["mac"]: h for h in hosts if h.get("switch") and h.get("port")
-    }
-    stubs = []
-    for ip in configured_switches():
-        if ip in drawn:
-            continue
-        sw = by_ip.get(ip) or SwitchData(ip=ip, state=STATE_NEVER)
-        attached = None
-        for mac in sorted(sw.own_macs):
-            host = where.get(mac)
-            if host:
-                attached = {
-                    "switch": host["switch"], "port": host["port"],
-                    "mac": mac,
-                }
-                break
-        stubs.append({
-            "ip": ip,
-            "name": ip,
-            "named": False,
-            "model": "",
-            "mac": "",
-            "descr": "",
-            "stp_operating": False,
-            "stp_root": False,
-            "state": STATE_NEVER,
-            "answered": sw.answered,
-            "down_since": sw.down_since,
-            "over_budget": bool(sw.over_budget),
-            "polled_at": 0.0,
-            "over_budget_scans": sw.over_budget_scans,
-            "ports_total": 0,
-            "ports_up": 0,
-            "port_prefix": "",
-            "attached": attached,
-            # for the card: since when, and against which budget
-            "started_at": STARTED_AT,
-            "budget_seconds": rt.config.host_budget(ip),
-        })
-    return stubs
-
-
 async def _build_map(
     collected: list[SwitchData], arp: dict[str, str], observe: bool,
     identities: list[RouterIdentity] | None = None,
@@ -1254,951 +1229,6 @@ async def _build_map(
         await _reconcile_notes()
 
 
-async def _retire_port_names(collected: list[SwitchData]) -> None:
-    """The old names of synthetic ports, after each full poll (v0.8.6).
-
-    Only a switch read in full this scan: a saved reading is not news
-    about which aggregates exist. "bridge-port N" of an aggregate takes
-    its new name ("LAG 1/25+1/26"); any other "bridge-port N" and every
-    "-N" is reset — see Database.retire_port_names.
-    """
-    for sw in collected:
-        if sw.map_state != STATE_FRESH:
-            continue
-        renames = {
-            f"bridge-port {bridge_port}": sw.ports[-bridge_port].name
-            for bridge_port in sw.lag_groups
-            if -bridge_port in sw.ports and sw.ports[-bridge_port].name
-        }
-        counts = await asyncio.to_thread(
-            rt.db.retire_port_names, sw.ip, renames
-        )
-        if any(counts.values()):
-            log.info(
-                "%s: port names from before v0.8.6 — %d device(s) moved to "
-                "the aggregate's new name, %d reset to no port (listed off "
-                "the map until seen again), %d layout/note key(s) renamed",
-                sw.ip, counts["renamed"], counts["reset"], counts["keys"],
-            )
-
-
-async def _reconcile_notes() -> None:
-    """Marks the notes whose node is not on the map after this scan, and
-    unmarks those whose node is back (a cable put back in its port). A
-    note is "without a node" only after notes.MISSING_SCANS scans in a
-    row; it is never deleted."""
-    changed = await asyncio.to_thread(
-        rt.db.reconcile_notes, _noted_node_ids(), time.time()
-    )
-    if changed["lost"]:
-        log.info(
-            "Notes: %d note(s) whose node has not been on the map for %d "
-            "scans — kept, and listed under \"Notes without a node\": %s",
-            len(changed["lost"]), notes.MISSING_SCANS,
-            ", ".join(sorted(changed["lost"])[:10]),
-        )
-    if changed["back"]:
-        log.info(
-            "Notes: the node of %d note(s) is on the map again: %s",
-            len(changed["back"]), ", ".join(sorted(changed["back"])[:10]),
-        )
-
-
-def _dropped_link_details(dropped: dict) -> str:
-    """The journal's record of a link the inference took back: the
-    link, why ("behind" — LLDP puts one end behind another switch;
-    "cycle" — the weakest edge of a ring nothing explains) and what
-    the reason names. Data, not a sentence (v0.8.2): the page words it
-    in its own language. The log says it in English when it happens."""
-    return json.dumps({
-        key: dropped[key]
-        for key in ("a", "a_port", "b", "b_port", "source", "reason", "behind", "cycle")
-        if dropped.get(key) not in (None, "")
-    })
-
-
-async def _purge_layout_once() -> None:
-    """Forgets positions of nodes that are both old and gone.
-
-    Runs after the first scan of this process, because that is the
-    first moment anything knows which nodes exist — and once a day
-    after it (periodic_cleanup), so a layout_keep_days changed in
-    Settings holds without a restart. A device switched
-    off for the night keeps its place however long the night is; only
-    age decides, and only for something the map no longer has. The
-    same scan says what each node hangs off, so an offset recorded
-    around a pinned node that a device has since left goes too.
-    """
-    if rt.layout_purged:
-        return
-    rt.layout_purged = True
-    await purge_layout()
-
-
-async def purge_layout() -> None:
-    gone = await asyncio.to_thread(
-        rt.db.purge_layout, rt.config.layout_keep_days, _layout_node_ids()
-    )
-    if gone:
-        log.info(
-            "Map layout: forgot the saved position of %d node(s) not seen "
-            "for over %.0f day(s) and no longer on the map: %s",
-            len(gone), rt.config.layout_keep_days,
-            ", ".join(sorted(gone)[:10])
-            + (" and more" if len(gone) > 10 else ""),
-        )
-    moved = await asyncio.to_thread(
-        rt.db.drop_misplaced_offsets, _layout_anchors()
-    )
-    if moved:
-        log.info(
-            "Map layout: forgot the offset of %d node(s) that no longer "
-            "hang off the pinned node it was measured from: %s",
-            len(moved), ", ".join(sorted(moved)[:10])
-            + (" and more" if len(moved) > 10 else ""),
-        )
-
-
-def _lldp_rows(collected: list[SwitchData]) -> list[dict]:
-    """This poll's LLDP neighbours, flattened for the database."""
-    rows: list[dict] = []
-    for sw in collected:
-        if not sw.reachable:
-            continue
-        for neighbor in sw.lldp_neighbors:
-            rows.append({
-                "switch_ip": sw.ip,
-                "local_port": (
-                    port_name(sw, neighbor.local_ifindex)
-                    if neighbor.local_ifindex is not None
-                    else f"lldpLocPortNum {neighbor.local_port_num}"
-                ),
-                "chassis_id": neighbor.chassis_id,
-                "port_id": neighbor.port_id,
-                "port_desc": neighbor.port_desc,
-                "sys_name": neighbor.sys_name,
-                "sys_desc": neighbor.sys_desc,
-                "capabilities": ",".join(sorted(neighbor.cap_enabled)),
-                "mgmt_ip": neighbor.mgmt_ip,
-            })
-    return rows
-
-
-def _per_switch_stp(collected: list[SwitchData]) -> dict:
-    """ip -> StpData for every switch that answered."""
-    return {
-        sw.ip: sw.stp for sw in collected
-        if sw.reachable and sw.stp is not None
-    }
-
-
-def _judge_stp(collected: list[SwitchData]) -> None:
-    """The cross-switch test, run once the whole network is in hand.
-
-    A switch that names itself root is believed only when a neighbour
-    names it too (see stp.judge_network). It mutates the StpData
-    objects in place, so everything downstream — the map, the panel,
-    the alarms — sees the same verdict, provided it runs first.
-    """
-    stp.judge_network(_per_switch_stp(collected))
-
-
-def _stp_report(
-    collected: list[SwitchData], trunk_names: dict[str, list[str]] | None = None
-) -> dict:
-    """Spanning tree of every polled switch plus the network verdict.
-
-    The root, the cost and the root port are reported only for a switch
-    whose tree is actually operating. A switch with STP turned off
-    answers every dot1dStp* object, names itself root and reports cost
-    0 — believing that is how five disabled switches turn into five
-    root bridges (see moonlan/stp.py).
-    """
-    per_switch = _per_switch_stp(collected)
-    verdict = stp.network_verdict(per_switch)
-    trunk_names = trunk_names or {}
-    switches = []
-    for ip, data in sorted(per_switch.items()):
-        sw = rt.switch_data.get(ip)
-        own_macs = sw.own_macs if sw else set()
-        # The VLANs of this switch's trunk ports. Untagged BPDUs are
-        # handled in the VLAN of the port they arrive on, so two
-        # segments whose trunks sit in different VLANs never meet and
-        # form two trees legitimately. With the numbers in front of
-        # them, an operator can tell that case from a real break
-        # without going to the switch.
-        trunk_vlans = sorted({
-            sw.port_pvid[i]
-            for i in (sw.ports if sw else ())
-            if port_name(sw, i) in trunk_names.get(ip, ())
-            and sw.port_pvid.get(i)
-        }) if sw else []
-        switches.append({
-            "ip": ip,
-            "name": sw.sys_name or ip if sw else ip,
-            "supported": data.supported,
-            "operating": data.operating,
-            # the English sentence for an old page; a page of v0.8.2 or
-            # later words the verdict itself from the code and numbers
-            "reason": data.reason,
-            "reason_code": data.reason_code,
-            "reason_params": data.reason_params,
-            "is_root": data.is_root(own_macs),
-            "protocol": data.protocol_name,
-            "version": data.version_name,
-            "priority": data.priority,
-            "designated_root": data.designated_root,
-            # the agent put the priority in the wrong byte and MoonLan
-            # corrected it; the panel says so rather than hiding it
-            "root_nonstandard": data.root_nonstandard,
-            # its neighbours established this, not its own answers:
-            # the numbers beside it are zeros it cannot vouch for
-            "confirmed_root": data.confirmed_root,
-            "root_cost": data.root_cost,
-            "root_port": (
-                port_name(sw, data.ports[data.root_port].if_index)
-                if sw and data.root_port in data.ports
-                and data.ports[data.root_port].if_index is not None
-                else str(data.root_port) if data.root_port else ""
-            ),
-            "top_changes": data.top_changes,
-            "time_since_change": data.time_since_change / 100.0,
-            "sys_uptime": data.sys_uptime / 100.0,
-            "blocking_ports": [
-                p.name or str(p.bridge_port) for p in data.blocking_ports()
-            ],
-            "trunk_vlans": trunk_vlans,
-            # answers dot1dStp* and names no root: shown, but not
-            # counted as a tree of its own
-            "rootless": ip in verdict.get("rootless", ()),
-        })
-    return {"verdict": verdict, "switches": switches}
-
-
-def _infrastructure() -> set[str]:
-    """Addresses of kit that is ours: the switches and the routers.
-
-    In demo mode these come from the demo network, not from the
-    config.yaml that happens to be in the working directory.
-    """
-    if rt.config.demo:
-        return set(rt.switch_data) | set(demo.ROUTERS)
-    return set(rt.config.switches) | set(rt.config.routers)
-
-
-def _router_addresses(
-    arp: dict[str, str], identities: list[RouterIdentity] | None = None,
-) -> dict[str, str]:
-    """MAC -> the address config.routers actually reaches it at.
-
-    A router announces a management address per VLAN interface — the
-    MikroTik behind sw0 Slot0/21 sends 38 — and the first one the walk
-    returns is as likely to be a segment gateway as the address anyone
-    uses. The one in `routers:` is the one the operator types, so that
-    is what goes under the node's name.
-
-    Every MAC a router reports as its own is that router (v0.8.11). ARP
-    is what is left when it reports nothing: a router's own addresses
-    are not in its own ARP table, only in another router's.
-    """
-    found = {
-        mac: identity.address
-        for mac, identity in router_own_macs(identities or ()).items()
-    }
-    listed = set(rt.config.routers)
-    for mac, ip in arp.items():
-        if ip in listed:
-            found.setdefault(mac, ip)
-    if rt.config.demo:
-        for mac, ip in demo.ROUTER_ADDRESSES.items():
-            found.setdefault(mac, ip)
-    return found
-
-
-async def _release_router_macs(own: dict[str, RouterIdentity]) -> None:
-    """A router's own MACs, out of what the damaged-copy rules did to
-    them: the mark of a copy cleared, a record held back confirmed. One
-    INFO line for what was undone; a record that was only new is
-    confirmed without one."""
-    released = await asyncio.to_thread(
-        rt.db.vouch_for, set(own), max(rt.config.new_host_confirm_scans, 1)
-    )
-    undone = [r for r in released if r["was"] != "new"]
-    if not undone:
-        return
-    log.info(
-        "Own MACs of routers in routers: are not damaged copies, and are "
-        "devices now: %s",
-        "; ".join(
-            f"{r['mac']} ({own[r['mac']].name(r['mac'])} of "
-            f"{own[r['mac']].address}, "
-            + (
-                f"was marked a copy of {r['sample']}" if r["was"] == "copy"
-                else "was held back as a possible copy"
-            ) + ")"
-            for r in undone
-        ),
-    )
-
-
-def _remembered_router_macs(
-    own: dict[str, RouterIdentity], db_rows: dict[str, dict],
-    switch_ips: set[str], drawn: set[str],
-) -> dict[str, dict]:
-    """The own MACs of routers the map would draw out of the grace
-    window — the records _assemble_hosts puts on the map grey — as
-    mac -> {switch, port, last_seen}. `drawn` are the MACs this scan
-    has already (and the unconfirmed ones)."""
-    grace = rt.config.host_grace_hours * 3600
-    now = time.time()
-    remembered: dict[str, dict] = {}
-    for mac in own:
-        row = db_rows.get(mac)
-        if row is None or mac in drawn:
-            continue
-        if row["switch_ip"] not in switch_ips or not row["port"]:
-            continue
-        if grace > 0 and now - row["last_seen"] < grace:
-            remembered[mac] = {
-                "switch": row["switch_ip"], "port": row["port"],
-                "last_seen": row["last_seen"],
-            }
-    return remembered
-
-
-def _merge_router_macs(placement, hosts: list[dict], bridges: list[dict]) -> None:
-    """This scan's hosts that are a router's MAC other than its node:
-    drawn as the node. A bridge that is the router no longer counts
-    them among the devices behind it — they are the bridge."""
-    by_id = {bridge["id"]: bridge for bridge in bridges}
-    for host in hosts:
-        target = placement.merged.get(host["mac"])
-        if not target or host.get("merged_into"):
-            continue
-        host["merged_into"] = target
-        bridge = by_id.get(target)
-        if (
-            bridge is not None and bridge.get("host_count")
-            and host.get("via") == target
-        ):
-            bridge["host_count"] -= 1
-
-
-def _mark_router_nodes(
-    placement, hosts: list[dict], bridges: list[dict],
-    db_rows: dict[str, dict],
-) -> None:
-    """The node of each router learns it is one: its address, its
-    interfaces for the card, and — for a host — the LLDP neighbour that
-    is the router on its port, whatever chassis ID that one sent."""
-    by_mac = {host["mac"]: host for host in hosts}
-    by_id = {bridge["id"]: bridge for bridge in bridges}
-    for node in placement.nodes:
-        identity = node.identity
-        target = by_id.get(node.node_id) if node.is_bridge else by_mac.get(node.mac)
-        if target is None:
-            continue
-        target["router_ip"] = identity.address
-        target["router"] = router_card(
-            identity, node.mac, node.seen, identity.macs & set(db_rows),
-        )
-        if node.lldp is not None and not node.is_bridge:
-            target["lldp"] = lldp_metadata(node.lldp)
-
-
-# who the journal says moved a note or a pin that followed a router's
-# node: MoonLan itself, worded by the page like "@console"
-MOONLAN_ACTOR = "@moonlan"
-
-
-async def _router_nodes_take_over(placement) -> None:
-    """A note or a pin on a router's MAC now drawn as its node goes to
-    the node, once (v0.8.11).
-
-    The operator named and pinned the MAC that was on the map; the
-    router is drawn as another one now. Only when the node has none of
-    its own: a node with its own note keeps it, and the note of the
-    merged MAC goes to "Notes without a node" after notes.MISSING_SCANS
-    scans, as any note whose node is gone. Journalled as a note moved
-    and a node pinned by hand are, by MoonLan.
-    """
-    if not placement.nodes:
-        return
-    layout = await asyncio.to_thread(rt.db.layout)
-    stored = await asyncio.to_thread(rt.db.notes)
-    for node in placement.nodes:
-        sources = [
-            "host:" + mac for mac, target in sorted(placement.merged.items())
-            if target == node.node_id
-        ]
-        if node.node_id not in stored:
-            noted = [key for key in sources if key in stored]
-            if noted:
-                # the one written last, if the operator wrote several
-                source = max(noted, key=lambda key: stored[key]["updated_at"])
-                await asyncio.to_thread(
-                    rt.db.move_note, source, node.node_id, MOONLAN_ACTOR,
-                    time.time(),
-                )
-                details = {"from": source, "to": node.node_id}
-                await asyncio.to_thread(
-                    rt.db.add_event, time.time(), "note_moved", node.node_id,
-                    json.dumps(details), MOONLAN_ACTOR,
-                )
-                log.info(
-                    "Note moved from %s to %s by MoonLan: router %s is "
-                    "drawn as %s now", source, node.node_id,
-                    node.identity.address, node.node_id,
-                )
-        if not (layout.get(node.node_id) or {}).get("pinned"):
-            pinned = [key for key in sources if (layout.get(key) or {}).get("pinned")]
-            if pinned:
-                source = max(pinned, key=lambda key: layout[key]["updated_at"] or 0)
-                if await asyncio.to_thread(rt.db.move_position, source, node.node_id):
-                    await asyncio.to_thread(
-                        rt.db.add_event, time.time(), "layout_pinned", "",
-                        json.dumps({
-                            "n": 1, "ids": [node.node_id], "from": source,
-                        }),
-                        MOONLAN_ACTOR,
-                    )
-                    log.info(
-                        "Pinned position moved from %s to %s by MoonLan: "
-                        "router %s is drawn as %s now", source,
-                        node.node_id, node.identity.address, node.node_id,
-                    )
-
-
-def _merge_bridge_identity(
-    bridges: list[dict], hosts: list[dict], db_rows: dict[str, dict]
-) -> None:
-    """Gives a bridge node the identity of the device it IS.
-
-    Two ways the same box shows up twice. Its chassis MAC is in the FDB
-    of the port LLDP found it on — the topology builder already marked
-    that host as merged, and here the bridge picks up its IP, its DNS
-    name and its ping state, so the node answers "is it up?" like any
-    other. And its management address may sit in the inventory under a
-    different MAC (a router announces one per VLAN interface): a host
-    holding such an address on the bridge's own port is the same
-    device, so its node goes too and the card says which addresses
-    came from where.
-    """
-    ip_owner = {
-        row["ip"]: mac for mac, row in db_rows.items() if row["ip"]
-    }
-    for bridge in bridges:
-        row = db_rows.get(bridge["chassis_id"], {})
-        bridge["ip"] = row.get("ip", "") or bridge.get("mgmt_ip", "")
-        bridge["name"] = bridge.get("name") or row.get("name", "")
-        bridge["dns_name"] = row.get("name", "")
-        bridge["ping_up"] = bool(row.get("ping_up", 0))
-        bridge["last_ping_ok"] = row.get("last_ping_ok", 0)
-        if row.get("first_seen"):
-            bridge["first_seen"] = min(
-                bridge.get("first_seen", row["first_seen"]), row["first_seen"]
-            )
-        # the same box under another MAC, on this very port
-        also: list[str] = []
-        for address in bridge.get("mgmt_ips", []):
-            mac = ip_owner.get(address)
-            if not mac or mac == bridge["chassis_id"]:
-                continue
-            twin = db_rows.get(mac, {})
-            if (twin.get("switch_ip"), twin.get("port")) != (
-                bridge["switch"], bridge["port"]
-            ):
-                continue  # same address, but not behind this cable
-            also.append(address)
-            for host in hosts:
-                if host["mac"] == mac:
-                    host["merged_into"] = bridge["id"]
-        bridge["also_ips"] = also
-
-
-def _suppressed_bridges(
-    bridges: list[dict], bridge_rows: dict[str, dict]
-) -> dict[str, str]:
-    """chassis id -> why the configuration says it is not an alarm.
-
-    Covers bridges seen in this scan and bridges only the database
-    remembers: a device behind a port that has since been declared an
-    uplink may not be in LLDP right now, and its alarm would otherwise
-    outlive the setting that answers it. The same applies to a device
-    that turned out to be one of our own polled switches — the alarm
-    for it is closed by this path, with the reason in the journal,
-    rather than waiting for a neighbour that is never going away.
-    """
-    uplinks = _uplink_ports()
-    known = set(rt.config.known_bridges)
-    ours = _polled_identities()
-    located: dict[str, tuple[str, str, str]] = {
-        row["chassis_id"]: (row["switch_ip"], row["port"], row["mgmt_ip"])
-        for row in bridge_rows.values()
-    }
-    located.update({
-        b["chassis_id"]: (b["switch"], b["port"], b.get("mgmt_ip", ""))
-        for b in bridges
-    })
-    suppressed: dict[str, str] = {}
-    for chassis_id, (switch_ip, port, mgmt_ip) in located.items():
-        if (switch_ip, port) in uplinks:
-            suppressed[chassis_id] = (
-                f"{switch_ip} {port} is listed in uplink_ports"
-            )
-        elif chassis_id.lower() in known or (mgmt_ip or "").lower() in known:
-            suppressed[chassis_id] = "listed in known_bridges"
-        elif chassis_id.lower() in ours:
-            suppressed[chassis_id] = ours[chassis_id.lower()]
-        elif (mgmt_ip or "").lower() in ours:
-            suppressed[chassis_id] = ours[mgmt_ip.lower()]
-    return suppressed
-
-
-def _polled_identities() -> dict[str, str]:
-    """Every way a device we already poll can appear in someone's LLDP.
-
-    A switch listed in `switches:` is polled by definition, and so a
-    neighbour reporting it is not "a switch nobody polls". It used to
-    be: an access switch sat in `switches:`, answered every scan, and still
-    carried an unmanaged_bridge_detected alarm for 91 hours, because
-    only `known_bridges` counted as known. Making the operator copy
-    their own switch addresses into a second list to silence that is
-    asking them to work around a bug.
-
-    Returns identity -> why it is ours, lowercased: the configured
-    switch and router addresses, and every MAC each polled switch is
-    known by (bridge base MAC, interface MACs, its management-IP MAC
-    from ARP) — a neighbour may name any of them as the chassis id.
-    """
-    ours: dict[str, str] = {}
-    for ip in _infrastructure():
-        ours[ip.lower()] = (
-            "it is a router MoonLan polls" if ip in set(rt.config.routers)
-            else "it is a switch MoonLan polls"
-        )
-    for ip, sw in rt.switch_data.items():
-        why = f"it is {sw.sys_name or ip}, a switch MoonLan polls"
-        for mac in sw.own_macs:
-            ours[mac.lower()] = why
-        if sw.bridge_mac:
-            ours[sw.bridge_mac.lower()] = why
-    return ours
-
-
-def _known_bridge_ids() -> set[str]:
-    """Chassis ids and addresses that must never raise a bridge alarm."""
-    return set(rt.config.known_bridges) | set(_polled_identities())
-
-
-def _is_known_bridge(bridge: dict) -> bool:
-    """Known by configuration, or one of the devices we poll ourselves."""
-    known = _known_bridge_ids()
-    return (
-        bridge["chassis_id"].lower() in known
-        or bridge.get("mgmt_ip", "").lower() in known
-    )
-
-
-def _apply_suspects(
-    hosts: list[dict], suspects: dict[tuple[str, str], list[dict]]
-) -> None:
-    """Marks the distorted MACs and remembers them for the ports panel."""
-    rt.suspect_by_port.clear()
-    rt.suspect_by_port.update(suspects)
-    flat = {
-        s["mac"]: s for found in suspects.values() for s in found
-    }
-    for host in hosts:
-        found = flat.get(host["mac"])
-        if found:
-            host["suspect_corrupt"] = True
-            host["suspect_of"] = found["sample"]
-    if flat:
-        log.info(
-            "Suspected frame corruption: %d distorted MACs on %d port(s): %s",
-            len(flat), len(suspects),
-            ", ".join(f"{ip} {port}" for ip, port in sorted(suspects)),
-        )
-
-
-def _switch_macs() -> set[str]:
-    """Every MAC belonging to a polled switch — those are nodes of the
-    map, never hosts, even when a router's ARP table lists them."""
-    macs: set[str] = set()
-    for sw in rt.switch_data.values():
-        macs |= sw.own_macs
-        if sw.bridge_mac:
-            macs.add(sw.bridge_mac)
-    return macs
-
-
-async def _release_unconfirmed_ips(db_rows: dict[str, dict]) -> None:
-    """Takes the IP off hosts that no longer own it.
-
-    Pings go by IP while staleness is judged by MAC, so a record whose
-    MAC left every switch table keeps "answering" with whatever device
-    holds that address now — the host looks alive hours after it left.
-    Once ARP has not confirmed the pair for ip_confirm_hours, the
-    address is released and the record stops being pinged. db_rows is
-    updated in place so the rest of this scan sees the change.
-    """
-    hours = rt.config.ip_confirm_hours
-    if hours <= 0:
-        return
-    now = time.time()
-    cutoff = now - hours * 3600
-    released = []
-    for mac, row in db_rows.items():
-        if not row["ip"] or mac in rt.fdb_macs:
-            continue
-        if row["ip_confirmed"] >= cutoff:
-            continue
-        if await asyncio.to_thread(
-            rt.db.release_ip, mac, now,
-            f"not confirmed by ARP for {hours:g} h",
-        ):
-            released.append(mac)
-            row["ip"] = ""
-            row["ip_confirmed"] = 0
-            row["ping_up"] = 0
-    if released:
-        log.info(
-            "Released %d IP addresses of hosts missing from every MAC "
-            "table and unconfirmed by ARP", len(released),
-        )
-
-
-def _nodes_on_port(
-    bridges: list[dict], pseudo_switches: list[dict]
-) -> dict[tuple[str, str], dict]:
-    """(switch, port) -> the node standing on that cable, if any.
-
-    A pseudo-switch wins over a bridge where both are present: that is
-    the case of several bridges behind one unmanaged box, and the live
-    devices stay on the box, so the quiet ones must too.
-
-    A device MoonLan polls itself is never offered as a parent. Groups
-    hang off what is on the cable, and if devices were behind a switch
-    we poll they would be on its downlink ports — believing otherwise
-    is the whole of the v0.6.9 defect. Such a switch is drawn as its
-    own node on the same port instead.
-    """
-    ours = set(_polled_identities())
-    nodes: dict[tuple[str, str], dict] = {}
-    for bridge in bridges:
-        if bridge.get("trunk") or bridge.get("shares_port"):
-            continue
-        if (bridge["chassis_id"].lower() in ours
-                or bridge.get("mgmt_ip", "").lower() in ours):
-            continue
-        nodes[(bridge["switch"], bridge["port"])] = {
-            "id": bridge["id"], "name": bridge["name"],
-        }
-    for pseudo in pseudo_switches:
-        nodes[(pseudo["switch"], pseudo["port"])] = {
-            "id": pseudo["id"], "name": "",
-        }
-    return nodes
-
-
-def _remembered_locations(
-    db_rows: dict[str, dict]
-) -> dict[str, tuple[str, str]]:
-    """MAC -> the (switch, port) the database last placed it at.
-
-    Consulted before a device visible only through a trunk is guessed
-    onto one. What the database remembers is a port a device was
-    actually seen on; a trunk is where its frames happened to pass.
-    """
-    return {
-        mac: (row["switch_ip"], row["port"])
-        for mac, row in db_rows.items()
-        if row["switch_ip"] and row["port"]
-    }
-
-
-def _known_hosts_per_port(
-    db_rows: dict[str, dict], switch_ips: set[str]
-) -> dict[tuple[str, str], int]:
-    """How many devices the database knows behind each port, counting
-    the ones inside the grace window — the same set that stays on the
-    map — so the unmanaged-switch threshold sees the whole group and
-    not only the MACs this particular poll happened to catch."""
-    grace = rt.config.host_grace_hours * 3600
-    now = time.time()
-    counts: Counter = Counter()
-    for row in db_rows.values():
-        if not row["confirmed"]:
-            continue  # not a device yet: it must not push a port over
-                      # the unmanaged-switch threshold
-        if row.get("corrupt_of") and rt.config.filter_suspect_macs:
-            continue  # a damaged copy, never one
-        if row["switch_ip"] in switch_ips and row["port"]:
-            if grace > 0 and now - row["last_seen"] < grace:
-                counts[(row["switch_ip"], row["port"])] += 1
-    return dict(counts)
-
-
-def _mark_recent(
-    unlocated: list[dict], db_rows: dict[str, dict], now: float
-) -> None:
-    """`recent` on every record off the map (v0.8.7): seen by anybody —
-    a switch, ARP, a ping — inside host_grace_hours. "Not on map" is
-    the recent ones, devices that are there now without a place; the
-    rest is "Not seen for a while", an archive of addresses that left.
-    Before, the two were one list of 480, and the two devices that
-    mattered were lost in it.
-
-    `seen_at` is that moment, and `forget_at` when purge_old_hosts
-    deletes the record (None while host_retention_days is 0) — the
-    page words both. Called again on every /api/topology: pings move
-    `last_ping_ok` between scans.
-
-    ARP is a sign of presence only while the record holds an address
-    (v0.8.8). `last_arp` stays when the address goes — to another MAC
-    (set_ips) or nowhere, unconfirmed (release_ip) — and kept 140 of
-    142 records without an IP "recent" for host_grace_hours after the
-    very ARP that showed the device was not there. `seen_at` is still
-    the last sighting of any kind, and `seen_by` says which: "fdb",
-    "arp" or "ping".
-
-    A ping too, since v0.8.9: it goes to the address, and once the
-    address is another device's, the answer is that device's."""
-    grace = rt.config.host_grace_hours * 3600
-    days = rt.config.host_retention_days
-    for host in unlocated:
-        row = db_rows.get(host["mac"], {})
-        fdb = row.get("last_seen", 0) or 0
-        arp = row.get("last_arp", 0) or 0
-        ping = row.get("last_ping_ok", 0) or 0
-        seen = max(fdb, arp, ping)
-        host["seen_at"] = seen
-        host["seen_by"] = (
-            "" if not seen else "fdb" if seen == fdb
-            else "arp" if seen == arp else "ping"
-        )
-        holds_address = bool(host.get("ip") or row.get("ip"))
-        present = max(fdb, max(arp, ping) if holds_address else 0)
-        # seen this very scan, on an uplink: recent by definition
-        host["recent"] = bool(host.get("uplink_only")) or (
-            grace > 0 and now - present < grace
-        )
-        kept_since = max(
-            row.get("last_seen", 0) or 0, row.get("last_arp", 0) or 0
-        )
-        host["forget_at"] = kept_since + days * 86400 if days > 0 else None
-
-
-def _assemble_hosts(
-    fresh: list[dict],
-    db_rows: dict[str, dict],
-    pseudo_switches: list[dict],
-    switch_ips: set[str],
-    unconfirmed: set[str] | None = None,
-    merged: dict[str, str] | None = None,
-    nodes_on_port: dict[tuple[str, str], dict] | None = None,
-    uplink_only: dict[str, list[tuple[str, str]]] | None = None,
-    trunk_names: dict[str, list[str]] | None = None,
-) -> tuple[list[dict], list[dict], list[dict], list[dict]]:
-    """Splits the known inventory into map hosts, offline groups and
-    off-map devices.
-
-    On the map: this scan's FDB hosts, plus hosts whose MAC left the
-    FDB less than host_grace_hours ago, drawn at their last known port
-    (FDB entries age out in minutes — without the grace window a quiet
-    device blinks in and out on every scan) and marked stale. Stale
-    hosts sharing a port are collected under one offline group instead
-    of surrounding the switch with a cloud of grey dots.
-
-    Off the map: everything else the DB knows — devices ARP sees but
-    no switch port ever showed, and hosts whose grace window ran out.
-
-    Unconfirmed MACs are in neither list: they are stored, and nothing
-    more, until enough polls agree that they exist.
-
-    `uplink_only` are MACs every sighting of which was on an uplink.
-    They go off the map whatever the database remembers about them,
-    because what it remembers is an earlier guess at the same question
-    — that is how twenty devices of the rest of the network came to be
-    drawn behind a switch with every port but its uplink dark.
-    """
-    for h in fresh:
-        h["stale"] = False
-    now = time.time()
-    merged = merged or {}
-    grace = rt.config.host_grace_hours * 3600
-    uplink_only = uplink_only or {}
-    known = {h["mac"] for h in fresh} | _switch_macs() | (unconfirmed or set())
-    pseudo_by_port = {(p["switch"], p["port"]): p["id"] for p in pseudo_switches}
-    on_map = list(fresh)
-    unlocated: list[dict] = []
-    for mac, row in db_rows.items():
-        if mac in known:
-            continue
-        host = {
-            "mac": mac,
-            "switch": row["switch_ip"],
-            "port": row["port"],
-            "vlan": row["vlan"],
-            "name": "",
-            "stale": True,
-        }
-        # a device drawn as its bridge node keeps that identity while
-        # it is quiet, instead of reappearing as a bare MAC beside it
-        if mac in merged:
-            host["merged_into"] = merged[mac]
-        if mac in uplink_only:
-            # seen this very scan, and seen nowhere that means anything
-            host["stale"] = False
-            host["unlocated"] = True
-            host["uplink_only"] = True
-            host["seen_on"] = [
-                {"switch": ip, "port": port}
-                for ip, port in uplink_only[mac]
-            ]
-            host["switch"] = ""
-            host["port"] = ""
-            host["off_map"] = "uplink_only"
-            unlocated.append(host)
-            continue
-        # a record with a switch and no port has no place on that switch
-        # (v0.8.6: the ports a poll has no name for are reset to '')
-        located = row["switch_ip"] in switch_ips and bool(row["port"])
-        if located and grace > 0 and now - row["last_seen"] < grace:
-            via = pseudo_by_port.get((row["switch_ip"], row["port"]))
-            if via:
-                host["via"] = via
-            on_map.append(host)
-        else:
-            host["unlocated"] = True
-            # why it is not on the map: a place it had, until the grace
-            # window ran out — or no place at all (ARP only, a port
-            # reset, a switch that is not drawn from a reading)
-            host["off_map"] = "expired" if located else "no_port"
-            unlocated.append(host)
-    _mark_recent(unlocated, db_rows, now)
-    # devices ARP still knows first, then by how recently anything saw them
-    unlocated.sort(
-        key=lambda h: (
-            not db_rows[h["mac"]]["ip"],
-            -max(db_rows[h["mac"]]["last_arp"], db_rows[h["mac"]]["last_seen"]),
-        )
-    )
-    # Devices with no place of their own go first: "we do not know
-    # where this is" is a stronger statement than "this has been quiet
-    # for a while", and the offline grouping below leaves anything that
-    # already has a `via` alone. So one trunk is one node, with the
-    # quiet ones counted inside it rather than standing beside it.
-    silent = {
-        mac for mac, row in db_rows.items()
-        if row.get("ip") and not row.get("ping_up")
-    }
-    trunk_groups = group_beyond_trunk(
-        on_map, trunk_names or {}, rt.config.trunk_group_threshold,
-        nodes_on_port, silent,
-    )
-    return (
-        on_map, _group_offline(on_map, db_rows, nodes_on_port), unlocated,
-        trunk_groups,
-    )
-
-
-def _group_offline(
-    on_map: list[dict],
-    db_rows: dict[str, dict],
-    nodes_on_port: dict[tuple[str, str], dict] | None = None,
-) -> list[dict]:
-    """Collects the stale hosts of one port under a single group node.
-
-    A port whose devices are all offline gets a "temporary location"
-    node — the devices are shown where they were last seen, and one
-    node says so instead of a dozen grey dots. Ports that already have
-    a pseudo-switch keep it: their hosts hang off that node.
-
-    `nodes_on_port` is what build_topology put on each port — a named
-    bridge, or an anonymous pseudo-switch. The group hangs off that
-    node rather than off the switch. Behind sw1 1/27 there were three
-    neighbours of the switch at once: RouterOS-C with 22 live
-    devices, a "switch without SNMP", and an "Offline · 19" of
-    10.1.5.x addresses standing beside them — one segment drawn as
-    three places, with the quiet half apparently somewhere else
-    entirely.
-    """
-    threshold = rt.config.offline_group_threshold
-    if threshold <= 0:
-        return []
-    nodes_on_port = nodes_on_port or {}
-    by_port: dict[tuple[str, str], list[dict]] = {}
-    for host in on_map:
-        if host.get("merged_into"):
-            continue  # it is drawn as its bridge, not as a dot
-        if host["stale"] and not host.get("via"):
-            by_port.setdefault((host["switch"], host["port"]), []).append(host)
-    groups: list[dict] = []
-    for (sw_ip, port), members in sorted(by_port.items()):
-        if len(members) < threshold:
-            continue  # one or two lone dots read fine on their own
-        group_id = f"offline:{sw_ip}:{port}"
-        for host in members:
-            host["via"] = group_id
-        parent = nodes_on_port.get((sw_ip, port))
-        groups.append({
-            "id": group_id,
-            "switch": sw_ip,
-            "port": port,
-            "count": len(members),
-            # the live devices of this port hang off this node too, and
-            # the quiet ones belong in the same place
-            "via": parent["id"] if parent else "",
-            "via_name": parent["name"] if parent else "",
-            "last_seen_max": max(
-                db_rows[m["mac"]]["last_seen"] for m in members
-            ),
-        })
-    return groups
-
-
-def _new_device_text(mac: str, row: dict) -> str:
-    """The text of new_mac — in the alarms, the journal, Telegram and the
-    mail: who made the device and where it came in, so the administrator
-    knows who joined the network without opening the map. "new device by
-    GIGA-BYTE TECHNOLOGY CO.,LTD. on access-sw-1 (10.0.0.21) Gi0/9"."""
-    maker = rt.vendors.lookup(mac)
-    who = {
-        "found": f"new device by {maker.name}",
-        "unregistered": "new device, its maker not in the IEEE register,",
-        "local": "new device with a random or hand-set address",
-    }.get(maker.status, "new device")
-    switch = row.get("switch_ip", "")
-    if not switch:
-        return who
-    name = next((sw["name"] for sw in rt.state.as_dict()["switches"]
-                 if sw["ip"] == switch), "")
-    where = f"{name} ({switch})" if name and name != switch else switch
-    return f"{who} on {where} {row.get('port', '')}".rstrip()
-
-
-def _merge_db_fields(hosts: list[dict], db_hosts: dict[str, dict]) -> None:
-    """Enriches topology hosts with DB fields (IP, name, ping state)."""
-    for h in hosts:
-        row = db_hosts.get(h["mac"], {})
-        h["ip"] = row.get("ip", "")
-        h["name"] = row.get("name", "")
-        h["ping_up"] = bool(row.get("ping_up", 0))
-        h["last_ping_ok"] = row.get("last_ping_ok", 0)
-        h["first_seen"] = row.get("first_seen", 0)
-        h["last_seen"] = row.get("last_seen", 0)
-        h["last_arp"] = row.get("last_arp", 0)
-        h["ip_confirmed"] = row.get("ip_confirmed", 0)
-        h["monitored"] = _effective_monitored(row)
-        # phones and laptops randomize their MAC per network, which is
-        # why one device can leave a trail of one-off entries
-        h["random_mac"] = is_random_mac(h["mac"])
-        # who made it: the name, or why there is none (vendor_status)
-        h.update(rt.vendors.fields(h["mac"]))
-
-
 async def collect_arp(collector: SnmpCollector) -> dict[str, str]:
     """The merged ARP table of all routers: MAC -> IP."""
     tables = await asyncio.gather(
@@ -2269,40 +1299,6 @@ def _report_identity(identity: RouterIdentity) -> None:
 
 # mac -> unix time of the last reverse DNS attempt
 rt._dns_attempts: dict[str, float] = {}
-DNS_RETRY_SECONDS = 3600
-DNS_TIMEOUT = 1.0
-
-
-async def _reverse_dns(ip: str) -> str:
-    try:
-        name, _, _ = await asyncio.wait_for(
-            asyncio.to_thread(socket.gethostbyaddr, ip), timeout=DNS_TIMEOUT
-        )
-        return name
-    except (OSError, asyncio.TimeoutError):
-        return ""
-
-
-async def resolve_names() -> None:
-    """Reverse DNS for hosts with an IP but no name, at most once an hour per host."""
-    now = time.time()
-    candidates = [
-        (mac, ip)
-        for mac, ip in await asyncio.to_thread(rt.db.hosts_without_name)
-        if now - rt._dns_attempts.get(mac, 0) >= DNS_RETRY_SECONDS
-    ]
-    if not candidates:
-        return
-    for mac, _ in candidates:
-        rt._dns_attempts[mac] = now
-    names = await asyncio.gather(*(_reverse_dns(ip) for _, ip in candidates))
-    resolved = 0
-    for (mac, _), name in zip(candidates, names):
-        if name:
-            await asyncio.to_thread(rt.db.set_name, mac, name)
-            resolved += 1
-    if resolved:
-        log.info("Reverse DNS: got %d names out of %d", resolved, len(candidates))
 
 
 # A loop's sleep, cut short when its interval is changed in Settings
@@ -2759,11 +1755,6 @@ async def periodic_certificate_check() -> None:
             await check_certificate_end()
         except Exception:
             log.exception("Certificate check failed")
-
-
-def _marked_copies(db_rows: dict[str, dict]) -> set[str]:
-    """Records marked as damaged copies (v0.8.5)."""
-    return {mac for mac, row in db_rows.items() if row.get("corrupt_of")}
 
 
 @asynccontextmanager

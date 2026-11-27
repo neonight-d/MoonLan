@@ -20,6 +20,7 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
 from .. import signin
+from ..mapping.upkeep import _layout_anchors, _layout_node_ids
 from ..runtime import rt
 
 log = logging.getLogger("moonlan")
@@ -50,37 +51,6 @@ class LayoutBody(BaseModel):
     neighbours: dict[str, dict[str, Offset]] = {}
 
 
-def _layout_anchors() -> dict[str, str]:
-    """node id -> the node it hangs off, as the map draws it.
-
-    The page reads this off the edges it has just built (the first edge
-    into a node); this builds the same edges in the same order from the
-    same topology. Needed here to tell whether an offset recorded around
-    a pinned node still describes the map: a device that moved to
-    another switch has nothing to do with the old one.
-    """
-    topo = rt.state.as_dict()
-    anchors: dict[str, str] = {}
-    for link in topo["links"]:
-        anchors.setdefault("sw:" + link["b"], "sw:" + link["a"])
-    for pseudo in topo.get("pseudo_switches") or ():
-        anchors.setdefault(pseudo["id"], "sw:" + pseudo["switch"])
-    for bridge in topo.get("bridges") or ():
-        anchors.setdefault(bridge["id"], "sw:" + bridge["switch"])
-    for key in ("external_networks", "trunk_groups", "offline_groups"):
-        for group in topo.get(key) or ():
-            anchors.setdefault(
-                group["id"], group.get("via") or "sw:" + group["switch"]
-            )
-    for host in topo["hosts"]:
-        if host.get("merged_into"):
-            continue
-        anchors.setdefault(
-            "host:" + host["mac"], host.get("via") or "sw:" + host["switch"]
-        )
-    return anchors
-
-
 def _current_offsets(saved: dict[str, dict]) -> dict[str, dict]:
     """The saved layout without offsets that no longer describe the map.
 
@@ -101,27 +71,6 @@ def _current_offsets(saved: dict[str, dict]) -> dict[str, dict]:
                 continue
         kept[node_id] = pos
     return kept
-
-
-def _layout_node_ids() -> set[str]:
-    """Every node id the current map draws.
-
-    The same ids the front end uses, built here so the housekeeping and
-    the diagnostics do not have to ask the browser what exists.
-    """
-    topo = rt.state.as_dict()
-    ids = {"sw:" + sw["ip"] for sw in topo["switches"]}
-    # A device drawn AS another node — a bridge that answers LLDP and
-    # is also in somebody's MAC table — has no node of its own, so it
-    # has no position of its own either. Counting it would put two
-    # nodes in "not in the saved layout" that nobody can place.
-    ids |= {
-        "host:" + h["mac"] for h in topo["hosts"] if not h.get("merged_into")
-    }
-    for key in ("pseudo_switches", "bridges", "external_networks",
-                "offline_groups", "trunk_groups"):
-        ids |= {node["id"] for node in topo.get(key) or () if node.get("id")}
-    return ids
 
 
 @router.get("/api/layout")

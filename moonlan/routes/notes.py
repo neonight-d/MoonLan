@@ -19,19 +19,13 @@ from fastapi.responses import JSONResponse, Response
 from pydantic import BaseModel
 
 from .. import notes, signin
+from ..mapping.upkeep import _noted_node_ids, _stand_in
 from ..runtime import rt
 from .common import _refuse
-from .layout import _layout_node_ids
 
 log = logging.getLogger("moonlan")
 
 router = APIRouter()
-
-
-def _stand_in(offline_id: str) -> str:
-    """The switch without SNMP an offline group stands in for: the same
-    switch and port"""
-    return "pseudo:" + offline_id[len("offline:"):]
 
 
 # ---------- names and notes on nodes (v0.8.0) ----------
@@ -45,18 +39,6 @@ class NoteMove(BaseModel):
     to: str
     # the target has a note of its own: replace it (the page asks first)
     replace: bool = False
-
-
-def _noted_node_ids() -> set[str]:
-    """The nodes a note can be written on now: everything on the map,
-    and the devices MoonLan knows that are not on it. An offline group
-    keeps the switch without SNMP of its port present: a night with
-    every device of a room off is not a cable moved."""
-    topo = rt.state.as_dict()
-    ids = {i for i in _layout_node_ids() if not notes.retired(i)}
-    ids |= {"host:" + h["mac"] for h in topo.get("unlocated") or ()}
-    ids |= {_stand_in(g["id"]) for g in topo.get("offline_groups") or ()}
-    return ids
 
 
 async def _note_key_for(node_id: str) -> str:

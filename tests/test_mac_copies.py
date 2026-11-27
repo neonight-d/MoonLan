@@ -28,6 +28,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from service_fixture import SWITCHES  # noqa: E402,F401
 
 from moonlan import corruption, housekeeping, server  # noqa: E402
+from moonlan.mapping import hosts as mapping_hosts  # noqa: E402
 from moonlan.snmp_collector import PortInfo, SwitchData  # noqa: E402
 
 CORE, ACCESS = SWITCHES[0], SWITCHES[1]
@@ -485,7 +486,7 @@ class OldCopiesScanTest(ScanCase):
         self.assertEqual(self.drawn(), {SAMPLE})
         self.assertEqual(drawn["offline_groups"], [])
         self.assertEqual(drawn["unlocated"], [])
-        self.assertEqual(server._known_hosts_per_port(server.rt.db.hosts_by_mac(), {ACCESS}),
+        self.assertEqual(mapping_hosts._known_hosts_per_port(server.rt.db.hosts_by_mac(), {ACCESS}),
                          {(ACCESS, "Gi0/5"): 1})
         self.assertEqual(len(self.events()), 1)     # not once a scan
 

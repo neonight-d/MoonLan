@@ -28,6 +28,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import service_fixture  # noqa: E402,F401  (a config for server)
 
 from moonlan import server  # noqa: E402
+from moonlan.mapping import hosts  # noqa: E402
 from web_source import NODE, run_page  # noqa: E402
 
 HOUR = 3600
@@ -42,7 +43,7 @@ def mark(*, ip="", last_seen=0.0, last_arp=0.0, last_ping_ok=0.0, uplink_only=No
     host = {"mac": MAC, "ip": ip}
     if uplink_only:
         host["uplink_only"] = uplink_only
-    server._mark_recent([host], {MAC: row}, now)
+    hosts._mark_recent([host], {MAC: row}, now)
     return host, now
 
 

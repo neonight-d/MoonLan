@@ -338,6 +338,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from service_fixture import SWITCHES  # noqa: E402,F401
 
 from moonlan import server  # noqa: E402
+from moonlan.mapping import upkeep  # noqa: E402
 
 
 class NodeIdTest(unittest.TestCase):
@@ -367,7 +368,7 @@ class NodeIdTest(unittest.TestCase):
         server.rt.state.bridges = self._bridges
 
     def test_a_host_drawn_as_a_bridge_is_not_a_node_of_its_own(self):
-        ids = server._layout_node_ids()
+        ids = upkeep._layout_node_ids()
         self.assertIn("sw:10.0.0.10", ids)
         self.assertIn("host:aa:bb:cc:00:00:01", ids)
         self.assertIn("bridge:aa:bb:cc:00:00:02", ids)
@@ -580,7 +581,7 @@ class OffsetApiTest(unittest.TestCase):
         self.assertEqual(server.rt.db.layout(), {})
 
     def test_the_anchors_the_server_derives(self):
-        anchors = server._layout_anchors()
+        anchors = upkeep._layout_anchors()
         self.assertEqual(anchors["sw:10.0.0.21"], CORE)
         self.assertEqual(anchors[OFFLINE], CORE)
         self.assertEqual(anchors[TRUNK], "sw:10.0.0.21")

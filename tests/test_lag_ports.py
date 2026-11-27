@@ -31,6 +31,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from service_fixture import SWITCHES  # noqa: E402
 
 from moonlan import diag, server, snmp_collector  # noqa: E402
+from moonlan.mapping import switches  # noqa: E402
 from moonlan.snmp_collector import (  # noqa: E402
     OID_BRIDGE_ADDRESS,
     OID_FDB_PORT,
@@ -355,7 +356,7 @@ class ServiceTest(unittest.IsolatedAsyncioTestCase):
             first_seen=now - 86400, last_seen=now - 600, seen_count=5,
         )
         stale = SwitchData(ip=CORE_B, reachable=True, over_budget=True)
-        await server._retire_port_names([stale])
+        await switches._retire_port_names([stale])
         self.assertEqual(
             server.rt.db.hosts_by_mac()["00:1b:2c:00:00:74"]["port"],
             "bridge-port 25",

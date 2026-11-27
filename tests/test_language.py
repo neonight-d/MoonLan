@@ -14,6 +14,7 @@ import unittest
 
 import service_fixture  # noqa: F401  (sets MOONLAN_CONFIG first)
 from moonlan import server, topology
+from moonlan.mapping import switches
 from moonlan.stp import STATE_FORWARDING, StpData, StpPort, judge, judge_network
 from web_source import APP, INDEX, NODE, function, run_page, strings
 
@@ -101,20 +102,20 @@ class StpReasonTest(unittest.TestCase):
         self.assertIn('t(key) === key) return sw.reason || ""', function("stpReasonText"))
         self.assertIn("td.title = stpReasonText(sw)", function("renderStp"))
         # … and the server puts them in /api/stp
-        report = inspect.getsource(server)
+        report = inspect.getsource(switches)
         self.assertIn('"reason_code": data.reason_code', report)
         self.assertIn('"reason_params": data.reason_params', report)
 
 
 class DroppedLinkTest(unittest.TestCase):
     def test_a_new_entry_is_data(self):
-        details = json.loads(server._dropped_link_details({
+        details = json.loads(switches._dropped_link_details({
             "a": "10.0.0.10", "b": "10.0.0.22", "a_port": "Gi0/2", "b_port": "Gi0/24",
             "source": "fdb", "reason": "behind", "behind": "10.0.0.21",
         }))
         self.assertEqual(details["reason"], "behind")
         self.assertEqual(details["behind"], "10.0.0.21")
-        ring = json.loads(server._dropped_link_details({
+        ring = json.loads(switches._dropped_link_details({
             "a": "10.0.0.10", "b": "10.0.0.22", "a_port": "Gi0/2", "b_port": "Gi0/24",
             "source": "both", "reason": "cycle", "cycle": "10.0.0.10 [Gi0/2] — 10.0.0.22 [Gi0/24]",
         }))

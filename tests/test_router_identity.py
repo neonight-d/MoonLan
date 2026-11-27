@@ -27,6 +27,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from service_fixture import SWITCHES  # noqa: E402,F401
 
 from moonlan import notes, server  # noqa: E402
+from moonlan.mapping import router_nodes  # noqa: E402
 from web_source import APP, NODE, run_page  # noqa: E402
 from moonlan.lldp import LldpNeighbor  # noqa: E402
 from moonlan.routers import (  # noqa: E402
@@ -524,13 +525,13 @@ class WithIdentityTest(RouterScanCase):
         )
         self.assertNotIn("host:" + MEMBER, layout)
         [moved] = self.events("note_moved")
-        self.assertEqual(moved["user"], server.MOONLAN_ACTOR)
+        self.assertEqual(moved["user"], router_nodes.MOONLAN_ACTOR)
         self.assertEqual(
             json.loads(moved["details"]),
             {"from": "host:" + MEMBER, "to": node_id},
         )
         [pinned] = self.events("layout_pinned")
-        self.assertEqual(pinned["user"], server.MOONLAN_ACTOR)
+        self.assertEqual(pinned["user"], router_nodes.MOONLAN_ACTOR)
         self.assertEqual(json.loads(pinned["details"])["ids"], [node_id])
         await server.run_scan()
         await server.run_scan()

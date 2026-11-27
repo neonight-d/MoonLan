@@ -12,6 +12,7 @@ import unittest
 import service_fixture  # noqa: F401  (sets MOONLAN_CONFIG first)
 from asgi_client import call
 from moonlan import access, notes, server
+from moonlan.mapping import upkeep
 from moonlan.access import Principal
 from moonlan.db import Database
 
@@ -148,7 +149,7 @@ class ApiTest(MapTest):
 
 class WithoutANodeTest(MapTest):
     def scan(self):
-        asyncio.run(server._reconcile_notes())
+        asyncio.run(upkeep._reconcile_notes())
 
     def test_one_scan_without_the_node_is_not_without_a_node(self):
         self.put(PSEUDO, "Room 214")
@@ -215,7 +216,7 @@ class OfflineGroupTest(MapTest):
         server.rt.state.pseudo_switches.pop()
 
     def scan(self):
-        asyncio.run(server._reconcile_notes())
+        asyncio.run(upkeep._reconcile_notes())
 
     def group(self):
         topo = call(server.app, "GET", "/api/topology").json()
@@ -293,7 +294,7 @@ class TrunkTest(MapTest):
         self.assertNotIn("note", topo["trunk_groups"][0])
         # kept by every scan, deleted by a person
         for _ in range(notes.MISSING_SCANS + 2):
-            asyncio.run(server._reconcile_notes())
+            asyncio.run(upkeep._reconcile_notes())
         self.assertIn(TRUNK, self.listed())
         self.assertEqual(call(server.app, "DELETE", "/api/notes/" + TRUNK).status, 200)
         self.assertEqual(self.listed(), {})
