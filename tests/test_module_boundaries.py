@@ -369,6 +369,21 @@ class NoCycleTest(unittest.TestCase):
                 self.assertIn(f"moonlan.{name}", loaded)
                 self.assertNotIn("moonlan.server", loaded)
 
+    def test_a_module_of_routes_loads_no_other(self):
+        """routes/__init__.py imports none of its modules (v0.8.14):
+        server.py imports the ones it includes"""
+        done = subprocess.run(
+            [sys.executable, "-c",
+             "import json, sys, moonlan.routes.common; "
+             "print(json.dumps(sorted(m for m in sys.modules "
+             "if m.startswith('moonlan.routes'))))"],
+            cwd=ROOT, env={**os.environ, "PYTHONPATH": str(ROOT)},
+            capture_output=True, text=True, timeout=120,
+        )
+        self.assertEqual(done.returncode, 0, done.stderr[-2000:])
+        self.assertEqual(json.loads(done.stdout.strip().splitlines()[-1]),
+                         ["moonlan.routes", "moonlan.routes.common"])
+
 
 if __name__ == "__main__":
     unittest.main()

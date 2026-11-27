@@ -51,6 +51,10 @@ from .routers import (
     own_macs as router_own_macs,
     place as place_routers,
 )
+# the modules of routes, included below as routes.<module>; notes and
+# settings are moonlan's own modules here
+from .routes import actions, alarms, layout, system, topology  # noqa: F401
+from .routes import notes as notes_routes, settings as settings_routes  # noqa: F401
 from .routes.actions import (  # noqa: F401 (moved)
     ActionBody,
     _node_directory,

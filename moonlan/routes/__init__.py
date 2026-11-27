@@ -7,10 +7,11 @@ before the static page. The routes that need the poller —
 /api/topology, /api/polling, /api/scan — stay in server.py until the
 poller leaves it. Nothing here imports moonlan.server: what a route
 needs of the process it reads from rt (runtime.py) when it runs.
-"""
 
-# server.py includes the router of each, in its own order
-from . import actions, alarms, layout, notes, settings, system, topology  # noqa: F401
+The package imports none of its modules (v0.8.14): server.py imports
+the ones it includes, and importing one module of routes loads only
+what that module needs.
+"""
 
 
 def include(app, router) -> None:
