@@ -5,7 +5,8 @@ the poller (docs/ARCHITECTURE.md): the hosts and their places in
 hosts.py, the switches and the spanning tree in switches.py, LLDP and
 the bridges in bridges.py, a router drawn as one node in
 router_nodes.py, the notes and saved positions kept in step with the
-map in upkeep.py. poller._build_map calls them; start reading there.
+map in upkeep.py; and build.py, the steps of one pass from a scan to
+the map, which poller._build_map calls in order — start reading there.
 The package imports none of its modules, and nothing here imports
 moonlan.server or the poller.
 """

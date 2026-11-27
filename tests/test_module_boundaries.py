@@ -46,7 +46,7 @@ NEW_MODULES = [
     "routes.alarms", "routes.topology", "routes.polling",
     "journal", "poller", "lifecycle", "mapping", "mapping.hosts",
     "mapping.switches", "mapping.bridges", "mapping.router_nodes",
-    "mapping.upkeep",
+    "mapping.upkeep", "mapping.build",
 ]
 
 # What server.py itself defines (v0.8.14): the strict module with the
