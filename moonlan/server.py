@@ -41,6 +41,7 @@ from .housekeeping import (  # noqa: F401 (moved)
     CLEANUP_SECONDS,
     RESOURCE_LOG_SECONDS,
 )
+from .journal import JOURNAL_GROUPS
 from .notify import Notifier
 from .routers import (
     RouterIdentity,
@@ -55,11 +56,7 @@ from .routes.actions import (  # noqa: F401 (moved)
     api_node_menu,
     api_start_action,
 )
-from .routes.alarms import (  # noqa: F401 (moved)
-    EVENT_GROUP,
-    JOURNAL_GROUPS,
-    api_journal,
-)
+from .routes.alarms import api_journal  # noqa: F401 (moved)
 from .routes.layout import (  # noqa: F401 (moved)
     LAYOUT_EVENT_IDS,
     LayoutBody,

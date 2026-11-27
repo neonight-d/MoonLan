@@ -24,7 +24,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from service_fixture import SWITCHES  # noqa: E402,F401
 
-from moonlan import server  # noqa: E402
+from moonlan import journal, server  # noqa: E402
 from asgi_client import call  # noqa: E402
 from web_source import APP, INDEX, NODE, STYLE, function, run_page, strings  # noqa: E402
 
@@ -114,14 +114,14 @@ class EveryEventHasAGroupTest(unittest.TestCase):
         events = written_events()
         orphans = {
             event: where for event, where in events.items()
-            if event not in server.EVENT_GROUP and event not in INTENDED_OTHER
+            if event not in journal.EVENT_GROUP and event not in INTENDED_OTHER
         }
         self.assertEqual(orphans, {}, "events the journal's filters cannot find")
 
     def test_groups_do_not_overlap_and_name_real_events(self):
         events = written_events()
         seen = set()
-        for group, names in server.JOURNAL_GROUPS.items():
+        for group, names in journal.JOURNAL_GROUPS.items():
             for name in names:
                 self.assertNotIn(name, seen, name)
                 seen.add(name)
@@ -132,7 +132,7 @@ class EveryEventHasAGroupTest(unittest.TestCase):
         body = body[:body.index("]);")]
         import re
         page = set(re.findall(r'"([a-z_]+)"', body))
-        self.assertEqual(page, set(server.JOURNAL_GROUPS["users"]))
+        self.assertEqual(page, set(journal.JOURNAL_GROUPS["users"]))
 
 
 class ApiTest(unittest.IsolatedAsyncioTestCase):
@@ -382,7 +382,7 @@ class SourceTest(unittest.TestCase):
 
     def test_the_groups_on_the_page_are_the_servers(self):
         self.assertEqual(
-            set(server.JOURNAL_GROUPS) | {"all"},
+            set(journal.JOURNAL_GROUPS) | {"all"},
             {"all", "alarms", "devices", "ping", "addresses", "map", "users",
              "settings"},
         )

@@ -1,9 +1,8 @@
 """Alarms and the journal (v0.8.13).
 
 /api/alarms — the open ones, with what the page needs to word them —
-clearing one, and /api/journal, with the groups its filters choose
-from, kept here in one place (tests/test_journal.py holds every event
-the code writes to them). Moved out of server.py word for word
+clearing one, and /api/journal, whose filters choose from the groups
+in journal.py. Moved out of server.py word for word
 (docs/ARCHITECTURE.md); the state is read as rt.X when a route runs.
 Nothing here imports moonlan.server.
 """
@@ -18,6 +17,7 @@ from fastapi.responses import JSONResponse
 
 from .. import signin
 from ..derived import _copies_window, _subject_inbound_errors
+from ..journal import EVENT_GROUP, JOURNAL_GROUPS, JOURNAL_OTHER
 from ..runtime import rt
 from .common import _copy_samples
 
@@ -114,45 +114,6 @@ async def api_clear_alarm(alarm_id: int):
     if row is None:
         return JSONResponse({"error": "no such active alarm"}, status_code=404)
     return {"id": alarm_id, "cleared": True}
-
-
-# What the journal's filters on the page choose from (v0.8.6), in one
-# place. Every event the code writes belongs to one of these, or to
-# "other" by being in none of them — tests/test_journal.py reads the
-# code for every add_event and holds this to it.
-JOURNAL_GROUPS: dict[str, tuple[str, ...]] = {
-    "alarms": ("alarm_raised", "alarm_cleared"),
-    "ping": ("host_down", "host_up"),
-    # an address taken off a record ARP no longer confirms (v0.8.7):
-    # two in three device events, and they buried the new devices
-    "addresses": ("ip_released",),
-    "devices": (
-        "new_mac", "hosts_purged", "copies_removed", "monitor_on",
-        "monitor_off",
-    ),
-    "map": (
-        "layout_pinned", "layout_released", "layout_saved",
-        "layout_cleared", "note_changed", "note_moved", "notes_imported",
-        "link_dropped",
-    ),
-    # sign-ins, accounts, keys, one's own notifications: ACCOUNT_EVENTS
-    # of the page
-    "users": (
-        "login", "logout", "account_locked", "user_added", "user_role",
-        "user_password", "user_disabled", "user_enabled",
-        "user_totp_reset", "user_totp_enabled", "user_unlocked",
-        "user_sessions_closed", "user_deleted", "user_passkey_added",
-        "user_passkey_removed", "user_passkeys_reset",
-        "passkey_clone_suspected", "subscription_added",
-        "subscription_removed", "user_notifications_removed",
-    ),
-    "settings": ("settings_changed", "settings_moved"),
-}
-JOURNAL_OTHER = "other"
-EVENT_GROUP: dict[str, str] = {
-    event: group for group, events in JOURNAL_GROUPS.items()
-    for event in events
-}
 
 
 @router.get("/api/journal")

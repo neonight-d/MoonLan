@@ -118,8 +118,6 @@ MOVED = {
         "api_action_state": None,
     },
     "routes.alarms": {
-        "JOURNAL_GROUPS": None,
-        "EVENT_GROUP": None,
         "api_journal": None,
     },
     "routes.topology": {

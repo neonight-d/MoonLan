@@ -745,7 +745,7 @@ An unknown group is refused with 400, `{"error": "unknown_group",
 "groups": [...], "known": [...]}`.
 
 Every event carries its `group`. The groups are kept in one place on
-the server (`JOURNAL_GROUPS` in `moonlan/routes/alarms.py`): `alarms` —
+the server (`JOURNAL_GROUPS` in `moonlan/journal.py`): `alarms` —
 `alarm_raised`, `alarm_cleared`; `ping` — `host_down`, `host_up`;
 `addresses` — `ip_released` (v0.8.7; it was in `devices`); `devices` —
 `new_mac`, `hosts_purged`, `copies_removed`, `monitor_on`,

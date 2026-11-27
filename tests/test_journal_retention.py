@@ -23,7 +23,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from service_fixture import SWITCHES  # noqa: E402,F401
 
-from moonlan import diag, server, settings  # noqa: E402
+from moonlan import diag, journal, server, settings  # noqa: E402
 from moonlan.db import Database  # noqa: E402
 
 DAY = 86400
@@ -31,11 +31,11 @@ DAY = 86400
 
 class GroupTest(unittest.TestCase):
     def test_ip_released_is_an_address_event(self):
-        self.assertEqual(server.JOURNAL_GROUPS["addresses"], ("ip_released",))
-        self.assertEqual(server.EVENT_GROUP["ip_released"], "addresses")
-        self.assertNotIn("ip_released", server.JOURNAL_GROUPS["devices"])
+        self.assertEqual(journal.JOURNAL_GROUPS["addresses"], ("ip_released",))
+        self.assertEqual(journal.EVENT_GROUP["ip_released"], "addresses")
+        self.assertNotIn("ip_released", journal.JOURNAL_GROUPS["devices"])
         # after "ping", in the order of the page's filters
-        groups = list(server.JOURNAL_GROUPS)
+        groups = list(journal.JOURNAL_GROUPS)
         self.assertEqual(groups.index("addresses"), groups.index("ping") + 1)
 
 
