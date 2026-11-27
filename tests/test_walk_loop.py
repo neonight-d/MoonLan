@@ -38,6 +38,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import service_fixture  # noqa: E402,F401  (a config for server)
 
 from moonlan import diag, server  # noqa: E402
+from moonlan.routes import topology  # noqa: E402
 from moonlan import snmp_collector as module  # noqa: E402
 from moonlan.lldp import OID_LLDP_REM_MAN_ADDR_IF_SUBTYPE  # noqa: E402
 from moonlan.snmp_collector import (  # noqa: E402
@@ -389,7 +390,7 @@ class ServiceTest(unittest.IsolatedAsyncioTestCase):
         async for _row in agent._walk(HOST, TABLE):
             pass
         with mock.patch.object(server.rt, "_collector", agent):
-            data = await server.api_skipped_oids()
+            data = await topology.api_skipped_oids()
         self.assertEqual(data["paused"], [])
         self.assertEqual([f["oid"] for f in data["walk_faults"]], [TABLE])
 

@@ -12,6 +12,7 @@ import unittest
 import service_fixture  # noqa: F401  (sets MOONLAN_CONFIG first)
 from asgi_client import call
 from moonlan import access, notes, server
+from moonlan.routes import notes as routes_notes
 from moonlan.mapping import upkeep
 from moonlan.access import Principal
 from moonlan.db import Database
@@ -278,7 +279,7 @@ class TrunkTest(MapTest):
 
     def test_an_import_never_lands_there(self):
         # an import goes by MAC, and a MAC is a device, a switch or a bridge
-        kinds = {key.split(":")[0] for key in server._mac_directory().values()}
+        kinds = {key.split(":")[0] for key in routes_notes._mac_directory().values()}
         self.assertLessEqual(kinds, set(notes.NOTED_KINDS))
         self.assertTrue(notes.retired(TRUNK))
         with self.assertRaises(notes.NoteError):

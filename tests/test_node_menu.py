@@ -182,6 +182,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from service_fixture import SWITCHES  # noqa: E402,F401
 
 from moonlan import server  # noqa: E402
+from moonlan.routes import actions  # noqa: E402
 
 HOST_MAC = "aa:bb:cc:00:00:01"
 QUIET_MAC = "aa:bb:cc:00:00:02"
@@ -261,17 +262,17 @@ class ServiceTest(unittest.TestCase):
     # --- what a node resolves to ---
 
     def test_the_address_comes_from_moonlan_not_from_the_request(self):
-        nodes = server._node_directory()
+        nodes = actions._node_directory()
         self.assertEqual(nodes["host:" + HOST_MAC]["ip"], "10.0.0.50")
         self.assertEqual(nodes["sw:10.0.0.2"]["ip"], "10.0.0.2")
         self.assertEqual(nodes["pseudo:10.0.0.2:Gi0/9"]["kind"], "group")
 
     def test_the_menu_of_an_unknown_node_is_refused(self):
-        response = asyncio.run(server.api_node_menu(id="host:de:ad:be:ef:00:00"))
+        response = asyncio.run(actions.api_node_menu(id="host:de:ad:be:ef:00:00"))
         self.assertEqual(response.status_code, 404)
 
     def test_links_are_filled_in_and_encoded(self):
-        answer = asyncio.run(server.api_node_menu(id="host:" + HOST_MAC))
+        answer = asyncio.run(actions.api_node_menu(id="host:" + HOST_MAC))
         self.assertEqual(
             [c["url"] for c in answer["custom"]],
             ["https://inv.local/?mac=aa%3Abb%3Acc%3A00%3A00%3A01"],
@@ -280,13 +281,13 @@ class ServiceTest(unittest.TestCase):
         self.assertEqual(web["url"], "http://10.0.0.50")
 
     def test_a_switch_can_say_it_is_https(self):
-        answer = asyncio.run(server.api_node_menu(id="sw:10.0.0.2"))
+        answer = asyncio.run(actions.api_node_menu(id="sw:10.0.0.2"))
         web = next(link for link in answer["links"] if link["key"] == "web")
         self.assertEqual(web["url"], "https://10.0.0.2")
         self.assertEqual([c["label"] for c in answer["custom"]], ["Winbox"])
 
     def test_a_link_without_its_value_says_which(self):
-        answer = asyncio.run(server.api_node_menu(id="host:" + QUIET_MAC))
+        answer = asyncio.run(actions.api_node_menu(id="host:" + QUIET_MAC))
         ssh = next(link for link in answer["links"] if link["key"] == "ssh")
         self.assertEqual((ssh["url"], ssh["missing"]), (None, "ip"))
 
@@ -294,8 +295,8 @@ class ServiceTest(unittest.TestCase):
 
     def _start(self, action, nodes):
         async def scenario():
-            answer = await server.api_start_action(
-                server.ActionBody(action=action, nodes=nodes), _FakeRequest()
+            answer = await actions.api_start_action(
+                actions.ActionBody(action=action, nodes=nodes), _FakeRequest()
             )
             if isinstance(answer, dict):
                 # let the job finish inside this loop
@@ -369,12 +370,12 @@ class ServiceTest(unittest.TestCase):
         async def scenario():
             started = []
             for _ in range(limit):
-                started.append(await server.api_start_action(
-                    server.ActionBody(action="ping", nodes=["sw:10.0.0.1"]),
+                started.append(await actions.api_start_action(
+                    actions.ActionBody(action="ping", nodes=["sw:10.0.0.1"]),
                     _FakeRequest(),
                 ))
-            refused = await server.api_start_action(
-                server.ActionBody(action="ping", nodes=["sw:10.0.0.1"]),
+            refused = await actions.api_start_action(
+                actions.ActionBody(action="ping", nodes=["sw:10.0.0.1"]),
                 _FakeRequest(),
             )
             release.set()

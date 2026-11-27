@@ -1,4 +1,14 @@
-"""MoonLan web service: REST API and the static web UI."""
+"""The MoonLan process, put together (v0.8.14).
+
+What the process is made of — the configuration, the database, the
+sign-in, the alarms, what the poller keeps between runs — filled into
+rt (runtime.py) in one place, in the order of Runtime; and the FastAPI
+app: its middleware, the sign-in routes, the modules of routes/ in
+their order, the static page last. uvicorn runs moonlan.server:app,
+and lifespan (lifecycle.py) starts the loops. Everything else lives in
+a module of its own (docs/ARCHITECTURE.md), and nothing imports this
+one; a name asked of it that it does not have says where it lives.
+"""
 
 from __future__ import annotations
 
@@ -23,47 +33,10 @@ from .notify import Notifier
 # settings are moonlan's own modules here
 from .routes import actions, alarms, layout, polling, system, topology  # noqa: F401
 from .routes import notes as notes_routes, settings as settings_routes  # noqa: F401
-from .routes.actions import (  # noqa: F401 (moved)
-    ActionBody,
-    _node_directory,
-    api_action_state,
-    api_node_menu,
-    api_start_action,
-)
-from .routes.alarms import api_journal  # noqa: F401 (moved)
-from .routes.layout import (  # noqa: F401 (moved)
-    LAYOUT_EVENT_IDS,
-    LayoutBody,
-    NodePosition,
-    Offset,
-    api_clear_layout,
-    api_delete_node_position,
-    api_layout,
-    api_patch_positions,
-    api_put_layout,
-)
-from .routes.notes import _mac_directory  # noqa: F401 (moved)
-from .routes.system import (  # noqa: F401 (moved)
-    VERSIONED_ASSETS,
-    WEB_DIR,
-    RevalidatedStaticFiles,
-    api_about,
-)
-from .routes.topology import (  # noqa: F401 (moved)
-    _lldp_dict,
-    api_skipped_oids,
-    api_status,
-    api_switch_ports,
-)
+from .routes.system import WEB_DIR, RevalidatedStaticFiles
 from .runtime import FIELDS, rt
-from .snmp_collector import (
-    SnmpCollector,
-    SwitchData,
-)
-from .topology import (
-    FdbStability,
-    TopologyState,
-)
+from .snmp_collector import SnmpCollector, SwitchData
+from .topology import FdbStability, TopologyState
 
 log = logging.getLogger("moonlan")
 

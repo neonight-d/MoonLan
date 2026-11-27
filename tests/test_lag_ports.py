@@ -399,7 +399,7 @@ class AggregateRowTest(unittest.IsolatedAsyncioTestCase):
         ])
 
     async def _rows(self):
-        answer = await server.api_switch_ports(CORE_B)
+        answer = await routes_topology.api_switch_ports(CORE_B)
         return {p["name"]: p for p in answer["ports"]}
 
     async def test_the_aggregate_is_the_sum_of_its_members(self):
@@ -454,7 +454,7 @@ class AggregateRowTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(rows["Po1"]["speed_mbps"], 2000)
 
     async def test_it_sorts_beside_its_first_member(self):
-        answer = await server.api_switch_ports(CORE_B)
+        answer = await routes_topology.api_switch_ports(CORE_B)
         names = [p["name"] for p in answer["ports"]]
         self.assertEqual(
             names[names.index("1/25"):names.index("1/25") + 3],

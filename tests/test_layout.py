@@ -338,6 +338,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from service_fixture import SWITCHES  # noqa: E402,F401
 
 from moonlan import server  # noqa: E402
+from moonlan.routes import layout  # noqa: E402
 from moonlan.mapping import upkeep  # noqa: E402
 
 
@@ -385,11 +386,11 @@ class OnlyNewApiTest(unittest.TestCase):
         server.rt.db.clear_layout()
 
     def _put(self, nodes, only_new):
-        body = server.LayoutBody(
-            nodes={k: server.NodePosition(**v) for k, v in nodes.items()},
+        body = layout.LayoutBody(
+            nodes={k: layout.NodePosition(**v) for k, v in nodes.items()},
             only_new=only_new,
         )
-        return asyncio.run(server.api_put_layout(body))
+        return asyncio.run(layout.api_put_layout(body))
 
     def test_the_automatic_save_cannot_unpin(self):
         server.rt.db.set_node_position(HOST, 1234, -567, pinned=True)
@@ -414,9 +415,9 @@ class OnlyNewApiTest(unittest.TestCase):
         a node released by an older page or forgotten by age takes its
         row with it just the same."""
         server.rt.db.set_node_position(CORE, 1, 1, pinned=True)
-        before = asyncio.run(server.api_layout())["cleared_at"]
-        answer = asyncio.run(server.api_clear_layout())
-        after = asyncio.run(server.api_layout())["cleared_at"]
+        before = asyncio.run(layout.api_layout())["cleared_at"]
+        answer = asyncio.run(layout.api_clear_layout())
+        after = asyncio.run(layout.api_layout())["cleared_at"]
         self.assertGreater(after, before)
         # the page that reset it gets the same moment, so it does not
         # take its own reset for somebody else's
@@ -424,9 +425,9 @@ class OnlyNewApiTest(unittest.TestCase):
 
     def test_forgetting_one_node_is_not_a_reset(self):
         server.rt.db.set_node_position(CORE, 1, 1, pinned=True)
-        before = asyncio.run(server.api_layout())["cleared_at"]
-        asyncio.run(server.api_delete_node_position(CORE))
-        self.assertEqual(asyncio.run(server.api_layout())["cleared_at"], before)
+        before = asyncio.run(layout.api_layout())["cleared_at"]
+        asyncio.run(layout.api_delete_node_position(CORE))
+        self.assertEqual(asyncio.run(layout.api_layout())["cleared_at"], before)
 
     def test_a_plain_save_still_writes_everything(self):
         """The old form stays for compatibility and for diag."""
@@ -452,10 +453,10 @@ class HandPlacedTest(unittest.TestCase):
         server.rt.state.switches = self._switches
 
     def _patch(self, nodes):
-        body = server.LayoutBody(
-            nodes={k: server.NodePosition(**v) for k, v in nodes.items()}
+        body = layout.LayoutBody(
+            nodes={k: layout.NodePosition(**v) for k, v in nodes.items()}
         )
-        return asyncio.run(server.api_patch_positions(body))
+        return asyncio.run(layout.api_patch_positions(body))
 
     def _entries(self, event, since):
         return [
@@ -488,7 +489,7 @@ class HandPlacedTest(unittest.TestCase):
             self._entries("layout_pinned", since)[0]["details"]
         )
         self.assertEqual(details["n"], 12)
-        self.assertEqual(len(details["ids"]), server.LAYOUT_EVENT_IDS)
+        self.assertEqual(len(details["ids"]), layout.LAYOUT_EVENT_IDS)
 
     def test_released_is_forgotten(self):
         """Only what a person placed is kept (v0.7.3). v0.7.2 kept the
@@ -513,7 +514,7 @@ class HandPlacedTest(unittest.TestCase):
     def test_an_older_page_releasing_by_delete_is_journalled_too(self):
         self._patch({CORE: {"x": 1, "y": 1}})
         since = self._last_id()
-        asyncio.run(server.api_delete_node_position(CORE))
+        asyncio.run(layout.api_delete_node_position(CORE))
         self.assertEqual(len(self._entries("layout_released", since)), 1)
 
 
@@ -541,14 +542,14 @@ class OffsetApiTest(unittest.TestCase):
          server.rt.state.offline_groups, server.rt.state.trunk_groups) = self._saved
 
     def _patch(self, nodes=None, neighbours=None):
-        body = server.LayoutBody(
-            nodes={k: server.NodePosition(**v) for k, v in (nodes or {}).items()},
+        body = layout.LayoutBody(
+            nodes={k: layout.NodePosition(**v) for k, v in (nodes or {}).items()},
             neighbours={
-                anchor: {k: server.Offset(**v) for k, v in around.items()}
+                anchor: {k: layout.Offset(**v) for k, v in around.items()}
                 for anchor, around in (neighbours or {}).items()
             },
         )
-        return asyncio.run(server.api_patch_positions(body))
+        return asyncio.run(layout.api_patch_positions(body))
 
     def test_placing_a_node_records_what_stands_round_it(self):
         answer = self._patch(
@@ -556,7 +557,7 @@ class OffsetApiTest(unittest.TestCase):
             {CORE: {OFFLINE: {"x": -80, "y": 20}}},
         )
         self.assertEqual(answer["neighbours"], {CORE: 1})
-        nodes = asyncio.run(server.api_layout())["nodes"]
+        nodes = asyncio.run(layout.api_layout())["nodes"]
         self.assertEqual(nodes[OFFLINE]["anchor"], CORE)
 
     def test_an_offset_with_somebody_elses_anchor_is_ignored(self):
@@ -565,11 +566,11 @@ class OffsetApiTest(unittest.TestCase):
         nothing about where it belongs now."""
         self._patch({CORE: {"x": 0, "y": 0}, "sw:10.0.0.21": {"x": 300, "y": 0}})
         server.rt.db.set_neighbours(CORE, {TRUNK: {"x": 50, "y": 50}})
-        nodes = asyncio.run(server.api_layout())["nodes"]
+        nodes = asyncio.run(layout.api_layout())["nodes"]
         self.assertNotIn(TRUNK, nodes)
         # …while one measured from its real anchor is taken
         server.rt.db.set_neighbours("sw:10.0.0.21", {TRUNK: {"x": 50, "y": 50}})
-        nodes = asyncio.run(server.api_layout())["nodes"]
+        nodes = asyncio.run(layout.api_layout())["nodes"]
         self.assertEqual(nodes[TRUNK]["anchor"], "sw:10.0.0.21")
 
     def test_releasing_a_node_forgets_its_neighbours_offsets(self):

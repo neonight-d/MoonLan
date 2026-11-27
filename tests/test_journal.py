@@ -25,6 +25,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from service_fixture import SWITCHES  # noqa: E402,F401
 
 from moonlan import journal, server  # noqa: E402
+from moonlan.routes import alarms  # noqa: E402
 from asgi_client import call  # noqa: E402
 from web_source import APP, INDEX, NODE, STYLE, function, run_page, strings  # noqa: E402
 
@@ -155,7 +156,7 @@ class ApiTest(unittest.IsolatedAsyncioTestCase):
 
     async def journal(self, **query) -> dict:
         args = {"limit": 100, "group": None, "before": None, **query}
-        answer = await server.api_journal(**args)
+        answer = await alarms.api_journal(**args)
         if hasattr(answer, "status_code"):
             import json
             return {"status": answer.status_code, **json.loads(answer.body)}

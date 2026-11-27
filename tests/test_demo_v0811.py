@@ -42,7 +42,7 @@ async def run():
     for _ in range(3):
         await poller.run_scan()
         topo = json.loads((await topology.api_topology()).body)
-        ports = await server.api_switch_ports("10.0.0.21")
+        ports = await topology.api_switch_ports("10.0.0.21")
         ports = json.loads(ports.body) if hasattr(ports, "body") else ports
         out["scans"].append({
             "hosts": [h for h in topo["hosts"] if h["mac"] in demo.LAG_ROUTER_MACS],

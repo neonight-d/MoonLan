@@ -27,6 +27,7 @@ from pathlib import Path
 SCRIPT = r"""
 import asyncio, json, logging
 from moonlan import demo, poller, server
+from moonlan.routes import alarms
 from moonlan.routes import topology as routes_topology
 
 logging.getLogger("moonlan").setLevel(logging.ERROR)
@@ -48,7 +49,7 @@ def down_alarm():
 
 
 async def journal(group=None):
-    answer = await server.api_journal(limit=1000, group=group, before=None)
+    answer = await alarms.api_journal(limit=1000, group=group, before=None)
     return answer["events"]
 
 
@@ -77,7 +78,7 @@ async def run():
                 key for key, row in server.rt.db.notes().items()
                 if row.get("missing_since")
             ]
-            out["status"] = await server.api_status()
+            out["status"] = await routes_topology.api_status()
         if n == 3:
             out["silent"] = topo
     out["groups"] = sorted({e["group"] for e in await journal()})

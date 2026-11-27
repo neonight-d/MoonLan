@@ -20,6 +20,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from service_fixture import SWITCHES  # noqa: E402,F401
 
 from moonlan import server  # noqa: E402
+from moonlan.routes import system  # noqa: E402
 
 
 def _request(path: str, headers=()) -> list[dict]:
@@ -90,7 +91,7 @@ class StaticCacheTest(unittest.TestCase):
         """A copy cached before no-cache existed is not re-checked, so
         a changed file must come under a new address."""
         body = _get_body("/")
-        for name in server.VERSIONED_ASSETS:
+        for name in system.VERSIONED_ASSETS:
             digest = hashlib.sha1(
                 (server.WEB_DIR / name).read_bytes()
             ).hexdigest()[:12]

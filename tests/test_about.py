@@ -11,6 +11,7 @@ from unittest import mock
 import service_fixture  # noqa: F401  (sets MOONLAN_CONFIG first)
 from asgi_client import call
 from moonlan import __version__, about, server, signin
+from moonlan.routes import system
 from moonlan.access import Principal
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -23,7 +24,7 @@ class ApiTest(unittest.TestCase):
         token = signin._current.set(who)
         try:
             with mock.patch.object(server.rt.sign_in, "sign_in_on", lambda: sign_in_on):
-                return asyncio.run(server.api_about())
+                return asyncio.run(system.api_about())
         finally:
             signin._current.reset(token)
 

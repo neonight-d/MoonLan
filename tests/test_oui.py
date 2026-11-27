@@ -30,6 +30,7 @@ from unittest import mock
 import service_fixture  # noqa: F401  (sets MOONLAN_CONFIG first)
 from asgi_client import call
 from moonlan import diag, notify, oui, server, startup
+from moonlan.routes import topology
 from moonlan.mapping import hosts as mapping_hosts
 from moonlan.config import Config, load_config
 
@@ -448,10 +449,10 @@ class ServiceTest(Folder):
             sys_name="ap-hall", sys_desc="", cap_enabled=set(),
             cap_known=False, mgmt_ip="", mgmt_ips=[], rows=1,
         )
-        self.assertEqual(server._lldp_dict(neighbour)["vendor"],
+        self.assertEqual(topology._lldp_dict(neighbour)["vendor"],
                          "MERCUSYS TECHNOLOGIES CO., LTD.")
         neighbour.chassis_id = "router-7"
-        self.assertIsNone(server._lldp_dict(neighbour)["vendor"])
+        self.assertIsNone(topology._lldp_dict(neighbour)["vendor"])
 
 
 # ---------- diag ----------

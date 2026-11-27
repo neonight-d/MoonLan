@@ -24,6 +24,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from service_fixture import SWITCHES  # noqa: E402,F401
 
 from moonlan import server  # noqa: E402
+from moonlan.routes import topology  # noqa: E402
 from moonlan.mapping import hosts  # noqa: E402
 from web_source import NODE, run_page  # noqa: E402
 
@@ -127,7 +128,7 @@ class StatusTest(unittest.IsolatedAsyncioTestCase):
             {"mac": "aa:00:00:00:00:02", "recent": False},
             {"mac": "aa:00:00:00:00:03", "recent": False},
         ]
-        status = await server.api_status()
+        status = await topology.api_status()
         # all of them, as before: nobody's script breaks
         self.assertEqual(status["unlocated_count"], 3)
         self.assertEqual(status["unlocated_recent"], 1)

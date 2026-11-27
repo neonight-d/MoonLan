@@ -17,6 +17,7 @@ from starlette.routing import Mount
 import service_fixture  # noqa: F401  (sets MOONLAN_CONFIG first)
 from asgi_client import call
 from moonlan import access, auth, probes, server, signin, users
+from moonlan.routes import actions
 from moonlan.access import Principal
 
 
@@ -310,7 +311,7 @@ class JobOwnerTest(unittest.TestCase):
         token = signin._current.set(who)
         try:
             import asyncio
-            answer = asyncio.run(server.api_action_state("job1"))
+            answer = asyncio.run(actions.api_action_state("job1"))
         finally:
             signin._current.reset(token)
         return getattr(answer, "status_code", 200)
